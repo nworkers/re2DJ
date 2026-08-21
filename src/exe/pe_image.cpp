@@ -234,6 +234,28 @@ bool IsGuestExecutable(const PeImageInfo& info)
     return info.machine == kMachineI386 && info.magic == PeMagic::kPe32 && !info.is_dll;
 }
 
+std::string_view EntryPointSectionName(const PeImageInfo& info)
+{
+    for (const PeSection& section : info.sections)
+    {
+        // A section occupies whichever of its two sizes is larger: raw data can
+        // be padded up to FileAlignment, and virtual size can exceed raw size
+        // when the tail is zero-filled.
+        const std::uint32_t span = std::max(section.virtual_size, section.raw_size);
+        if (info.entry_point_rva >= section.virtual_address &&
+            info.entry_point_rva < section.virtual_address + span)
+        {
+            return section.name;
+        }
+    }
+    return {};
+}
+
+bool HasEntryPointOutsideTextSection(const PeImageInfo& info)
+{
+    return EntryPointSectionName(info) != ".text";
+}
+
 std::string_view MachineName(std::uint16_t machine)
 {
     switch (machine)

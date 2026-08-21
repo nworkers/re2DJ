@@ -28,7 +28,8 @@ The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layo
 
 | Item | Value |
 | --- | --- |
-| 1st SE game executables | `ez2dj.exe` (protected), `ez2dj1.exe` (not protected) |
+| 1st SE game executable | **`ez2dj.exe`** — named by the `shell=` entry in `System.ini` (protected) |
+| 1st SE bring-up build | `ez2dj1.exe` (not protected). Not what the cabinet ran |
 | 3rd game executable | `EZ2DJ.EXE` (protected) |
 | PE magic | PE32 (`0x10B`) throughout |
 | Machine | i386 (`0x014C`) throughout |
@@ -66,15 +67,16 @@ The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, 
 | Asset organisation | **Confirmed** — 1st SE has `Songs/` (68 entries) and a per-screen `System/` |
 | Configuration files | **Confirmed** — `ez2dj.ini`, `System.ini` |
 | Score storage | **Confirmed** — `rank_0.dat` through `rank_2.dat`, 400 bytes each |
-| Guest working directory | **Unresolved** — `SetCurrentDirectoryA` is imported, so it changes during a run |
-| Assumed drive letter | **Unresolved** — needs traced path requests during a run |
+| Guest working directory | **Confirmed (1st SE)** — `\ez2dj`, from `shell=d:\ez2dj\ez2dj.exe` in `System.ini`. `SetCurrentDirectoryA` is imported, so it may still change during a run |
+| Drive letter | **Confirmed (1st SE)** — `D:`, same evidence |
+| 3rd guest path | **Unresolved** — the 3rd dump has no `System.ini` |
 | Asset file formats | **Unresolved** — the file structures under `Songs/` have not been opened yet |
 
 ### 2.4 Hardware boundary — unresolved
 
 | Item | State |
 | --- | --- |
-| Arcade I/O board | **Unresolved** — the 1st SE dump holds `Tdsd.vxd111`, a Windows 9x VxD, but `ez2dj1.exe` imports no `DeviceIoControl` and the `111` suffix suggests the driver is disabled |
+| Arcade I/O board | **Partly confirmed** — the 3rd `EZ2DJ.INI` carries `"UseIOCard" = 1`, so an I/O card is definitely used; the access path is unresolved. The 1st SE dump holds `Tdsd.vxd111`, a Windows 9x VxD, but `ez2dj1.exe` imports no `DeviceIoControl` and the `111` suffix suggests the driver is disabled |
 | Dongle or protection device | **Unresolved** — needs traced failure points during a run |
 | Timer source | **Confirmed** — `timeGetTime` |
 

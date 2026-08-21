@@ -120,6 +120,40 @@ import 목록도 사실상 같다(아래 4절). `ez2dj.exe`는 이 이미지에 
 
 *Inferred: `.data` is 52 KB on disk but about 27 MB in memory, so roughly 27 MB is zero-filled. A static buffer for game assets is the likely purpose, but the only evidence is its size and placement, and real use needs a run to confirm.*
 
+### 확인됨: 캐비닛이 실행하는 것은 `ez2dj.exe`다
+
+1st SE 덤프의 `System.ini` `[boot]` 절에 결정적 항목이 있다.
+
+```ini
+shell=d:\ez2dj\ez2dj.exe
+```
+
+Windows 9x는 `[boot]`의 `shell=` 항목이 가리키는 프로그램을 Explorer 대신 띄운다. 즉 이 한 줄이 아케이드 캐비닛의 부팅 후 진입점을 정의한다. 여기서 세 가지가 동시에 확정된다.
+
+| 항목 | 값 | 근거 |
+| --- | --- | --- |
+| 정식 실행 파일 | `ez2dj.exe` | `shell=` 값의 파일 이름 |
+| 게스트 드라이브 문자 | `D:` | `shell=` 값의 드라이브 |
+| 게스트 작업 디렉터리 | `\ez2dj` | `shell=` 값의 디렉터리 |
+
+드라이브 문자와 작업 디렉터리는 이 문서와 `docs/EXE_DESIGN.*`에서 미확정으로 남아 있던 항목이다.
+
+**`ez2dj1.exe`는 캐비닛이 실행한 것이 아니다.** 보호되지 않아 로더 개발에 유용할 뿐이므로, 그것으로 관찰한 동작을 원본 동작으로 인용하면 안 된다. 이 구분은 타깃 프로파일에 `bring_up_target` 플래그로 기록되어 있다.
+
+*Confirmed: the cabinet runs `ez2dj.exe`. The `[boot]` section of `System.ini` reads `shell=d:\ez2dj\ez2dj.exe`, and Windows 9x launches whatever `shell=` names in place of Explorer, so that single line defines the cabinet's post-boot entry point and fixes the canonical executable, the guest drive letter `D:`, and the guest directory `\ez2dj` at once. The latter two had been unresolved. **`ez2dj1.exe` is not what the cabinet ran** — it is merely unprotected and therefore useful for loader development, so behavior observed through it must not be cited as original behavior. That distinction is recorded on the target profile as a `bring_up_target` flag.*
+
+### 확인됨: 3rd는 I/O 카드를 쓴다
+
+3rd 덤프의 `EZ2DJ.INI`에 `"UseIOCard" = 1`이 있다. 해상도는 `"Window Width" = 640`, `"Window Height" = 480`이고 `"FullScreen" = 1`이다.
+
+*Confirmed: the 3rd dump's `EZ2DJ.INI` carries `"UseIOCard" = 1`, a 640x480 window size, and `"FullScreen" = 1`.*
+
+### 미확정: 3rd의 게스트 경로
+
+3rd 덤프에는 `System.ini`가 없다. 따라서 3rd의 게스트 드라이브 문자와 작업 디렉터리는 확인되지 않았다. 1st SE의 값을 복사해 넣지 않는다.
+
+*Unresolved: the 3rd dump has no `System.ini`, so its guest drive letter and working directory are not confirmed. The 1st SE values are not copied across.*
+
 ### 미확정: Tdsd.vxd111
 
 `Tdsd.vxd111` 파일이 1st SE 덤프에 있다. VxD는 Windows 9x 전용 커널 드라이버이므로 아케이드 I/O 보드 접근 경로일 가능성이 있다. 다만 `ez2dj1.exe`의 import에는 `DeviceIoControl`이 없고, 파일 이름의 `111` 확장자는 이 덤프에서 드라이버가 **비활성화되어 있음**을 시사한다.
@@ -138,13 +172,17 @@ import 목록도 사실상 같다(아래 4절). `ez2dj.exe`는 이 이미지에 
 
 ---
 
-## 5. 확인됨: 도구의 결함 / Confirmed: a defect in the tooling
+## 5. 도구의 결함 / Defects in the tooling
 
-`re2dj --hdd <1st SE dump>`가 기본 타깃으로 **`Test.exe`를 고른다.** 현재 후보 순위가 "게스트 형식 GUI 우선, 같은 등급 안에서는 파일 크기 내림차순"인데, `Test.exe`(1.86 MB)가 `ez2dj.exe`(561 KB)보다 크기 때문이다.
+**해결됨 — 기본 타깃 선택.** `re2dj --hdd <1st SE dump>`가 기본 타깃으로 `Test.exe`를 골랐다. 후보 순위가 파일 크기 내림차순이라 서비스 도구(1.86 MB)가 게임(561 KB)보다 먼저 왔기 때문이다.
 
-크기는 "어느 것이 게임인가"의 근거가 못 된다는 것이 실제 덤프로 드러났다. 올바른 해법은 순위 휴리스틱을 손보는 것이 아니라, 이제 경로가 확인되었으므로 **내장 타깃 프로파일을 추가하는 것**이다. 별도 작업으로 다룬다.
+크기는 "어느 것이 게임인가"의 근거가 못 된다. 순위 휴리스틱을 손보는 대신 **내장 타깃 프로파일**을 추가해 해결했다. 지금은 두 덤프 모두 정확한 기본 타깃(`ez2dj1stse` → `ez2dj.exe`, `ez2dj3rd` → `EZ2DJ.EXE`)을 고른다. 설계는 [20260822-005](../design/20260822-005-built-in-target-profiles.md)에 있다.
 
-*Confirmed defect: `re2dj` selects `Test.exe` by default for the 1st SE dump, because the current ranking breaks ties by descending file size and the service tool is larger than the game. The real dump shows size is not evidence of which file is the game. The fix is not a better heuristic but **built-in target profiles**, which are now possible because the paths are confirmed. That is a separate task.*
+*Resolved: the default target used to be `Test.exe` for the 1st SE dump, because ranking broke ties by descending file size. Size is not evidence of which file is the game, so the fix was built-in target profiles rather than a better heuristic. Both dumps now select correctly.*
+
+**미해결 — 비ASCII 경로 출력.** `re2dj_hdd_probe`가 비ASCII 문자가 든 디렉터리 경로를 콘솔에 깨진 형태로 출력한다. 해석 자체는 정상이고 출력만 깨진다. `std::filesystem::path::string()`이 Windows에서 활성 ANSI 코드 페이지로 변환하기 때문이다.
+
+*Open: `re2dj_hdd_probe` prints a directory path containing non-ASCII characters as mojibake. Resolution itself works and only the output is wrong, because `std::filesystem::path::string()` converts through the active ANSI code page on Windows.*
 
 `re2dj_hdd_probe`가 비ASCII 문자가 든 디렉터리 경로를 콘솔에 깨진 형태로 출력했다. 해석 자체는 정상이었고 출력만 깨졌다. `std::filesystem::path::string()`이 Windows에서 활성 ANSI 코드 페이지로 변환하기 때문이다. 별도로 다룬다.
 

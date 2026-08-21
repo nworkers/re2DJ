@@ -140,10 +140,21 @@ build/linux-x64-debug/bin/re2dj --hdd /path/to/ez2dj_hdd
 
 *It selects a launch target from the scan and prints a summary. Use `--target <id>` to choose a different candidate and `--list-targets` to list candidates only.*
 
-> [!WARNING]
-> 기본 선택은 파일 크기 순이라 서비스 도구가 게임보다 크면 그것이 뽑힙니다. 1st Trax Special Edition 덤프가 그 경우입니다. `--target ez2dj1`로 명시하십시오. 알려진 결함이며 [TODO](docs/TODO.md)에 있습니다.
->
-> *The default breaks ties by file size, so a service tool larger than the game wins — which is the case for the 1st Trax Special Edition dump. Pass `--target ez2dj1` explicitly. This is a known defect listed in [TODO](docs/TODO.md).*
+확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 것은 EZ2DJ 1st Trax Special Edition과 3rd Trax이며, 그 밖의 덤프도 스캔으로 감지됩니다.
+
+*A recognised dump is matched by a built-in profile. EZ2DJ 1st Trax Special Edition and 3rd Trax are built in today; anything else is still found by scanning.*
+
+```text
+targets:
+  * ez2dj1stse             ez2dj.exe                built-in
+    ez2dj1stse_unpacked    ez2dj1.exe               built-in, bring-up only
+    test                   Test.exe                 detected
+    plzpoweroff            PlzPowerOff.exe          detected
+```
+
+`bring-up only`는 캐비닛이 실행한 것이 아니라 보호되지 않아 로더 개발에 쓰는 빌드라는 뜻입니다. 그것으로 관찰한 동작을 원본 동작으로 인용하면 안 됩니다.
+
+*`bring-up only` marks a build the cabinet never ran — it is unprotected and therefore useful for loader development, so behavior observed through it is not original behavior.*
 
 ### 6. 경로 해석 확인 / Check path resolution
 

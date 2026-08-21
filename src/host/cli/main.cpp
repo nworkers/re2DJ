@@ -132,10 +132,12 @@ bool ParseOptions(int argc, char** argv, Options* options)
 
 void PrintProfile(const re2dj::target::TargetProfile& profile, bool selected)
 {
-    std::printf("  %c %-20s %s\n",
+    std::printf("  %c %-22s %-24s %s%s\n",
                 selected ? '*' : ' ',
                 profile.id.c_str(),
-                profile.executable_relative_path.c_str());
+                profile.executable_relative_path.c_str(),
+                profile.detected ? "detected" : "built-in",
+                profile.bring_up_target ? ", bring-up only" : "");
 }
 
 int ResolveOnePath(const re2dj::hdd::HddRoot& root, const std::string& text)
@@ -210,7 +212,7 @@ int main(int argc, char** argv)
 
     const re2dj::hdd::HddScanResult scan = re2dj::hdd::ScanHdd(root);
     const std::vector<re2dj::target::TargetProfile> profiles =
-        re2dj::target::BuildTargetProfiles(scan);
+        re2dj::target::BuildTargetProfiles(root, scan);
 
     std::printf("hdd root   : %s\n", scan.root.string().c_str());
     std::printf("scanned    : %zu directories, %zu files%s\n",
@@ -260,11 +262,22 @@ int main(int argc, char** argv)
     }
 
     std::printf("\nselected target : %s\n", selected->id.c_str());
+    std::printf("display name    : %s\n", selected->display_name.c_str());
     std::printf("executable      : %s\n", selected->executable_relative_path.c_str());
     std::printf("working dir     : %s\n",
                 selected->working_directory_relative_path.empty()
                     ? "<hdd root>"
                     : selected->working_directory_relative_path.c_str());
+    if (selected->guest_drive_letter != '\0')
+    {
+        std::printf("guest path      : %c:%s\n",
+                    selected->guest_drive_letter,
+                    selected->guest_directory.c_str());
+    }
+    else
+    {
+        std::printf("guest path      : <not known for this dump>\n");
+    }
     std::printf("format hint     : %s\n",
                 std::string(re2dj::target::ExecutableFormatHintName(selected->format_hint))
                     .c_str());
@@ -283,8 +296,19 @@ int main(int argc, char** argv)
         std::printf("image base      : 0x%08llx\n",
                     static_cast<unsigned long long>(info.image_base));
         std::printf("entry point rva : 0x%08x\n", info.entry_point_rva);
+        const std::string entry_section(re2dj::exe::EntryPointSectionName(info));
+        std::printf("entry section   : %s%s\n",
+                    entry_section.empty() ? "<outside every section>" : entry_section.c_str(),
+                    re2dj::exe::HasEntryPointOutsideTextSection(info)
+                        ? "  (outside .text - likely a protection stub)"
+                        : "");
         std::printf("sections        : %u\n", static_cast<unsigned>(info.sections.size()));
         break;
+    }
+
+    if (!selected->note.empty())
+    {
+        std::printf("\nnote: %s\n", selected->note.c_str());
     }
 
     if (!options.run)

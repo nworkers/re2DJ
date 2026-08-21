@@ -1,8 +1,6 @@
 #include "re2dj/hdd/hdd_root.h"
 
-#include <chrono>
 #include <cstdint>
-#include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -10,69 +8,14 @@
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/hdd/hdd_scan.h"
 #include "synthetic_pe32.h"
+#include "temporary_tree.h"
 #include "test_support.h"
 
 namespace fs = std::filesystem;
 
-namespace
-{
-
-// A throwaway stand-in for a user's HDD dump. Real dumps never enter the
-// repository, so every fixture the suite needs is built at run time.
-class TemporaryTree
-{
-public:
-    TemporaryTree()
-    {
-        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        root_ = fs::temp_directory_path() /
-                ("re2dj_hdd_test_" + std::to_string(static_cast<long long>(stamp)));
-        std::error_code code;
-        fs::create_directories(root_, code);
-    }
-
-    ~TemporaryTree()
-    {
-        std::error_code code;
-        fs::remove_all(root_, code);
-    }
-
-    TemporaryTree(const TemporaryTree&) = delete;
-    TemporaryTree& operator=(const TemporaryTree&) = delete;
-
-    const fs::path& root() const
-    {
-        return root_;
-    }
-
-    void WriteText(const std::string& relative, const std::string& text) const
-    {
-        const fs::path target = root_ / fs::path(relative);
-        std::error_code code;
-        fs::create_directories(target.parent_path(), code);
-        std::ofstream stream(target, std::ios::binary);
-        stream << text;
-    }
-
-    void WriteBytes(const std::string& relative, const std::vector<std::uint8_t>& bytes) const
-    {
-        const fs::path target = root_ / fs::path(relative);
-        std::error_code code;
-        fs::create_directories(target.parent_path(), code);
-        std::ofstream stream(target, std::ios::binary);
-        stream.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
-    }
-
-private:
-    fs::path root_;
-};
-
-}  // namespace
-
 void RunHddRootTests(re2dj::test::Context& context)
 {
-    const TemporaryTree tree;
+    const re2dj::test::TemporaryTree tree;
 
     std::vector<std::uint8_t> game = re2dj::test::MakeSyntheticPe32Image();
     tree.WriteBytes("EZ2DJ/Ez2dj.exe", game);

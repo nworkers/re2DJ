@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
 
 namespace re2dj::target
@@ -15,6 +16,21 @@ enum class ExecutableFormatHint
     kWin32Pe32,
 };
 
+// How a built-in profile recognises the dump it belongs to.
+//
+// File size and content hashes were rejected as the matching key: both vary per
+// revision and per dump, so either would reject a legitimate dump. A name plus
+// the entries that must sit beside it stays stable across revisions.
+struct TargetFingerprint
+{
+    // File name only, matched case-insensitively against the scan.
+    std::string_view executable_name;
+    // Entries that must resolve in the executable's own directory. These make
+    // two profiles distinguishable even when their executables differ only in
+    // case, which case-insensitive resolution would otherwise hide.
+    std::vector<std::string_view> required_siblings;
+};
+
 // Everything that differs between EZ2DJ versions, kept out of the loader and
 // the HLE layer so both stay version-neutral.
 struct TargetProfile
@@ -22,30 +38,62 @@ struct TargetProfile
     // Short identifier chosen on the command line.
     std::string id;
     std::string display_name;
-    // '/'-separated, relative to the HDD root.
+    // '/'-separated, relative to the HDD root. Filled in when a fingerprint
+    // matches, so it reflects where the executable actually sits.
     std::string executable_relative_path;
-    // Guest current directory, '/'-separated and relative to the HDD root.
+    // Host-side working directory, '/'-separated and relative to the HDD root.
     // Empty means the root itself.
     std::string working_directory_relative_path;
+
+    // The drive letter the guest believes it runs from, or '\0' when the dump
+    // carries no evidence of one. Never guessed.
+    char guest_drive_letter = '\0';
+    // The Win32 directory the guest believes it runs in, for example
+    // "\\ez2dj". Empty when the dump carries no evidence of one.
+    std::string guest_directory;
+
     // Names the set of HLE services this version needs. Empty until real HLE
     // profiles exist.
     std::string hle_profile_id;
     ExecutableFormatHint format_hint = ExecutableFormatHint::kWin32Pe32;
+
     // True when the profile came from a scan rather than the built-in table.
     bool detected = false;
+    // True when this executable is useful for development but is not what the
+    // cabinet actually ran. Recorded on the profile so behavior observed
+    // through it is never cited as original behavior.
+    bool bring_up_target = false;
+    // Human-readable qualification: why this profile exists, or what is not
+    // known about it.
+    std::string note;
 };
 
-// Profiles confirmed against a real dump. Empty for now: AGENTS.md forbids
-// inventing per-version paths before one has been inspected, so detection
-// carries the load until entries can be added with evidence.
-const std::vector<TargetProfile>& GetBuiltInTargetProfiles();
+// Fingerprints for versions confirmed against a real dump, in the order they
+// should be offered. See docs/design/20260822-005-built-in-target-profiles.md.
+struct BuiltInTargetProfile
+{
+    TargetProfile profile;
+    TargetFingerprint fingerprint;
+};
 
-// Builds one profile per plausible game executable found by a scan, ordered the
-// same way the scan ordered its candidates.
-std::vector<TargetProfile> DetectTargetProfiles(const hdd::HddScanResult& scan);
+const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles();
 
-// Built-in profiles first, then detected ones whose id does not collide.
-std::vector<TargetProfile> BuildTargetProfiles(const hdd::HddScanResult& scan);
+// Built-in profiles whose fingerprint matches this dump, with their paths
+// filled in from the match.
+std::vector<TargetProfile> MatchBuiltInTargetProfiles(const hdd::HddRoot& root,
+                                                      const hdd::HddScanResult& scan);
+
+// One profile per plausible game executable found by a scan, ordered the same
+// way the scan ordered its candidates. Executables listed in `claimed_paths`
+// are skipped, so a built-in profile is never duplicated by detection.
+std::vector<TargetProfile> DetectTargetProfiles(
+    const hdd::HddScanResult& scan,
+    const std::vector<std::string>& claimed_paths = {});
+
+// Matching built-in profiles first, then detected ones for whatever is left.
+// The first entry is what the host selects when the user names no target.
+std::vector<TargetProfile> BuildTargetProfiles(const hdd::HddRoot& root,
+                                               const hdd::HddScanResult& scan);
 
 const TargetProfile* FindTargetProfileById(const std::vector<TargetProfile>& profiles,
                                            std::string_view id);

@@ -28,7 +28,8 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 
 | 항목 | 값 |
 | --- | --- |
-| 1st SE 게임 실행 파일 | `ez2dj.exe` (보호됨), `ez2dj1.exe` (보호되지 않음) |
+| 1st SE 게임 실행 파일 | **`ez2dj.exe`** — `System.ini`의 `shell=` 항목이 가리키는 것 (보호됨) |
+| 1st SE bring-up 빌드 | `ez2dj1.exe` (보호되지 않음). 캐비닛이 실행한 것은 아니다 |
 | 3rd 게임 실행 파일 | `EZ2DJ.EXE` (보호됨) |
 | PE magic | PE32 (`0x10B`) — 전부 |
 | machine | i386 (`0x014C`) — 전부 |
@@ -66,15 +67,16 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 | 자산 구성 | **확인됨** — 1st SE는 `Songs/`(68개)와 화면별 `System/` |
 | 설정 파일 | **확인됨** — `ez2dj.ini`, `System.ini` |
 | 점수 저장 | **확인됨** — `rank_0.dat` ~ `rank_2.dat` (각 400 B) |
-| 게스트 작업 디렉터리 | **미확정** — `SetCurrentDirectoryA`를 부르므로 실행 중에 바뀐다 |
-| 드라이브 문자 가정 | **미확정** — 실행 중 경로 요청을 추적해야 한다 |
+| 게스트 작업 디렉터리 | **확인됨(1st SE)** — `\ez2dj`. `System.ini`의 `shell=d:\ez2dj\ez2dj.exe`. 다만 `SetCurrentDirectoryA`를 부르므로 실행 중에 바뀔 수 있다 |
+| 드라이브 문자 | **확인됨(1st SE)** — `D:`. 같은 근거 |
+| 3rd의 게스트 경로 | **미확정** — 3rd 덤프에는 `System.ini`가 없다 |
 | 자산 파일 형식 | **미확정** — `Songs/` 아래 파일 구조는 아직 열어 보지 않았다 |
 
 ### 2.4 하드웨어 경계 — 미확정
 
 | 항목 | 상태 |
 | --- | --- |
-| 아케이드 I/O 보드 | **미확정** — 1st SE 덤프에 `Tdsd.vxd111`(Windows 9x VxD)이 있으나 `ez2dj1.exe`는 `DeviceIoControl`을 import하지 않는다. 확장자 `111`은 비활성화를 시사한다 |
+| 아케이드 I/O 보드 | **부분 확인** — 3rd의 `EZ2DJ.INI`에 `"UseIOCard" = 1`이 있어 I/O 카드 사용은 확실하다. 접근 경로는 미확정이다. 1st SE 덤프에 `Tdsd.vxd111`(Windows 9x VxD)이 있으나 `ez2dj1.exe`는 `DeviceIoControl`을 import하지 않고, 확장자 `111`은 비활성화를 시사한다 |
 | 동글·보호 장치 | **미확정** — 실행 중 실패 지점을 추적해야 한다 |
 | 타이머 소스 | **확인됨** — `timeGetTime` |
 

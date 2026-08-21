@@ -1,5 +1,6 @@
 #include "re2dj/target/target_profile.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <utility>
 
@@ -11,11 +12,15 @@ namespace re2dj::target
 namespace
 {
 
-std::string_view FileStem(std::string_view relative_path)
+std::string_view FileName(std::string_view relative_path)
 {
     const std::size_t slash = relative_path.find_last_of('/');
-    std::string_view name =
-        slash == std::string_view::npos ? relative_path : relative_path.substr(slash + 1);
+    return slash == std::string_view::npos ? relative_path : relative_path.substr(slash + 1);
+}
+
+std::string_view FileStem(std::string_view relative_path)
+{
+    std::string_view name = FileName(relative_path);
     const std::size_t dot = name.find_last_of('.');
     if (dot != std::string_view::npos && dot != 0)
     {
@@ -34,11 +39,101 @@ std::string_view ParentDirectory(std::string_view relative_path)
     return relative_path.substr(0, slash);
 }
 
+std::string JoinRelative(std::string_view directory, std::string_view name)
+{
+    if (directory.empty())
+    {
+        return std::string(name);
+    }
+    std::string joined(directory);
+    joined.push_back('/');
+    joined.append(name);
+    return joined;
+}
+
+bool FingerprintMatches(const hdd::HddRoot& root,
+                        const TargetFingerprint& fingerprint,
+                        std::string_view executable_relative_path)
+{
+    const std::string_view directory = ParentDirectory(executable_relative_path);
+    for (const std::string_view sibling : fingerprint.required_siblings)
+    {
+        std::filesystem::path resolved;
+        if (!root.Resolve(JoinRelative(directory, sibling), &resolved))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
-const std::vector<TargetProfile>& GetBuiltInTargetProfiles()
+const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
 {
-    static const std::vector<TargetProfile> profiles;
+    // Every entry here is backed by an inspected dump. Nothing is added on the
+    // strength of a release list or a wiki page, because a guessed path would
+    // later be cited as fact. See docs/analysis/ez2dj-hdd-layout.md.
+    static const std::vector<BuiltInTargetProfile> profiles = [] {
+        std::vector<BuiltInTargetProfile> table;
+
+        {
+            BuiltInTargetProfile entry;
+            entry.profile.id = "ez2dj1stse";
+            entry.profile.display_name = "EZ2DJ 1st Trax Special Edition";
+            entry.profile.working_directory_relative_path = {};
+            // System.ini in this dump reads "shell=d:\ez2dj\ez2dj.exe", which is
+            // what Windows 98 launches in place of Explorer. That single line
+            // confirms the executable, the drive letter, and the directory.
+            entry.profile.guest_drive_letter = 'D';
+            entry.profile.guest_directory = "\\ez2dj";
+            entry.profile.note =
+                "Launched by the cabinet through the System.ini shell entry. The "
+                "executable is protected: its entry point sits in .gtide, so "
+                "running it needs a backend that tolerates self-modifying code.";
+            entry.fingerprint.executable_name = "ez2dj.exe";
+            entry.fingerprint.required_siblings = {
+                "ez2dj1.exe", "ez2dj.ini", "System.ini", "Songs", "System"};
+            table.push_back(std::move(entry));
+        }
+
+        {
+            BuiltInTargetProfile entry;
+            entry.profile.id = "ez2dj1stse_unpacked";
+            entry.profile.display_name =
+                "EZ2DJ 1st Trax Special Edition (unprotected build)";
+            entry.profile.guest_drive_letter = 'D';
+            entry.profile.guest_directory = "\\ez2dj";
+            entry.profile.bring_up_target = true;
+            entry.profile.note =
+                "Not what the cabinet ran. This 1999-12-24 build is unprotected "
+                "and shares its first five sections with ez2dj.exe, which makes "
+                "it the loader bring-up target. Behavior observed through it is "
+                "not automatically original behavior.";
+            entry.fingerprint.executable_name = "ez2dj1.exe";
+            entry.fingerprint.required_siblings = {
+                "ez2dj.exe", "ez2dj.ini", "Songs", "System"};
+            table.push_back(std::move(entry));
+        }
+
+        {
+            BuiltInTargetProfile entry;
+            entry.profile.id = "ez2dj3rd";
+            entry.profile.display_name = "EZ2DJ 3rd Trax";
+            // This dump carries no System.ini, so the drive letter and guest
+            // directory stay empty rather than being copied from 1st SE.
+            entry.profile.note =
+                "The executable is protected: its entry point sits in .protect. "
+                "The dump has no System.ini, so the guest drive letter and "
+                "directory are not known.";
+            entry.fingerprint.executable_name = "EZ2DJ.EXE";
+            entry.fingerprint.required_siblings = {
+                "EZ2DJ.INI", "FONTKR.DAT", "BG", "Sound", "system"};
+            table.push_back(std::move(entry));
+        }
+
+        return table;
+    }();
     return profiles;
 }
 
@@ -70,7 +165,51 @@ std::string MakeProfileId(std::string_view executable_relative_path)
     return id;
 }
 
-std::vector<TargetProfile> DetectTargetProfiles(const hdd::HddScanResult& scan)
+std::vector<TargetProfile> MatchBuiltInTargetProfiles(const hdd::HddRoot& root,
+                                                      const hdd::HddScanResult& scan)
+{
+    std::vector<TargetProfile> matched;
+    if (!root.is_open())
+    {
+        return matched;
+    }
+
+    for (const BuiltInTargetProfile& candidate : GetBuiltInTargetProfiles())
+    {
+        for (const hdd::ExecutableEntry& entry : scan.executables)
+        {
+            if (!entry.pe_readable || !exe::IsGuestExecutable(entry.pe_info))
+            {
+                continue;
+            }
+            if (!storage::EqualsIgnoreAsciiCase(FileName(entry.relative_path),
+                                                candidate.fingerprint.executable_name))
+            {
+                continue;
+            }
+            if (!FingerprintMatches(root, candidate.fingerprint, entry.relative_path))
+            {
+                continue;
+            }
+
+            TargetProfile profile = candidate.profile;
+            profile.executable_relative_path = entry.relative_path;
+            // The guest runs with the executable's own directory current, which
+            // is what the System.ini shell entry describes for 1st SE.
+            profile.working_directory_relative_path =
+                std::string(ParentDirectory(entry.relative_path));
+            profile.detected = false;
+            matched.push_back(std::move(profile));
+            break;
+        }
+    }
+
+    return matched;
+}
+
+std::vector<TargetProfile> DetectTargetProfiles(
+    const hdd::HddScanResult& scan,
+    const std::vector<std::string>& claimed_paths)
 {
     std::vector<TargetProfile> profiles;
     std::unordered_map<std::string, int> id_uses;
@@ -78,6 +217,13 @@ std::vector<TargetProfile> DetectTargetProfiles(const hdd::HddScanResult& scan)
     for (const hdd::ExecutableEntry& entry : scan.executables)
     {
         if (!entry.pe_readable || !exe::IsGuestExecutable(entry.pe_info))
+        {
+            continue;
+        }
+        const bool claimed = std::find(claimed_paths.begin(),
+                                       claimed_paths.end(),
+                                       entry.relative_path) != claimed_paths.end();
+        if (claimed)
         {
             continue;
         }
@@ -99,16 +245,26 @@ std::vector<TargetProfile> DetectTargetProfiles(const hdd::HddScanResult& scan)
             std::string(ParentDirectory(entry.relative_path));
         profile.format_hint = ExecutableFormatHint::kWin32Pe32;
         profile.detected = true;
+        profile.note = "Detected by scan. No built-in profile matched this dump.";
         profiles.push_back(std::move(profile));
     }
 
     return profiles;
 }
 
-std::vector<TargetProfile> BuildTargetProfiles(const hdd::HddScanResult& scan)
+std::vector<TargetProfile> BuildTargetProfiles(const hdd::HddRoot& root,
+                                               const hdd::HddScanResult& scan)
 {
-    std::vector<TargetProfile> profiles = GetBuiltInTargetProfiles();
-    for (TargetProfile& detected : DetectTargetProfiles(scan))
+    std::vector<TargetProfile> profiles = MatchBuiltInTargetProfiles(root, scan);
+
+    std::vector<std::string> claimed_paths;
+    claimed_paths.reserve(profiles.size());
+    for (const TargetProfile& profile : profiles)
+    {
+        claimed_paths.push_back(profile.executable_relative_path);
+    }
+
+    for (TargetProfile& detected : DetectTargetProfiles(scan, claimed_paths))
     {
         if (FindTargetProfileById(profiles, detected.id) != nullptr)
         {

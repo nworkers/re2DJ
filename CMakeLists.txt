@@ -99,6 +99,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/main.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/synthetic_pe32.cpp
+        tests/unit/temporary_tree.cpp
         tests/unit/target_profile_test.cpp
     )
     target_include_directories(re2dj_unit_tests PRIVATE tests/unit)

@@ -153,15 +153,44 @@ HDD 스캔은 이 판독기를 사용해 각 실행 파일을 분류한다. `mac
 | --- | --- |
 | `id` | 명령행에서 고르는 짧은 식별자 |
 | `display_name` | 사람이 읽는 이름 |
-| `executable_relative_path` | HDD 루트 기준 실행 파일 경로 |
-| `working_directory_relative_path` | 게스트 현재 디렉터리 |
+| `executable_relative_path` | HDD 루트 기준 실행 파일 경로. 지문이 맞을 때 채워진다 |
+| `working_directory_relative_path` | 호스트 쪽 작업 디렉터리 |
+| `guest_drive_letter` | 게스트가 자신이 실행된다고 믿는 드라이브. 근거가 없으면 `' '` |
+| `guest_directory` | 같은 근거의 Win32 디렉터리. 근거가 없으면 빈 문자열 |
 | `hle_profile_id` | 적용할 HLE 서비스 집합 |
+| `detected` | 내장 표가 아니라 스캔에서 나온 것인지 |
+| `bring_up_target` | 캐비닛이 실행한 것이 아니라 개발용인지 |
+| `note` | 사람이 읽는 단서와 한계 |
 
-*Version-specific differences live in `re2dj::target::TargetProfile`, which names the executable path, working directory, and HLE profile relative to the HDD root.*
+*Version-specific differences live in `re2dj::target::TargetProfile`.*
 
-현재 내장 프로파일 목록은 비어 있다. 실제 HDD 덤프를 확인하기 전에 버전별 경로를 추측해 넣지 않는다는 `AGENTS.md`의 원칙을 따른 것이다. 대신 `DetectTargetProfiles()`가 스캔 결과에서 프로파일을 **동적으로 구성한다.** 실제 덤프로 경로가 확인되면 내장 프로파일을 추가한다.
+### 지문으로 덤프를 식별한다 / Dumps are identified by fingerprint
 
-*The built-in profile list is intentionally empty: `AGENTS.md` forbids inventing per-version paths before a real dump is inspected. `DetectTargetProfiles()` builds profiles dynamically from the scan instead. Built-in entries will be added once real dumps confirm the paths.*
+내장 프로파일은 **실행 파일 이름 + 그 옆에 반드시 있어야 하는 항목 목록**으로 덤프를 식별한다. 파일 크기나 해시는 리비전마다 달라져 정상 덤프를 거부하므로 쓰지 않는다.
+
+*A built-in profile identifies a dump by an **executable name plus the entries that must sit beside it**. File size and hashes are rejected as keys because they vary per revision and would reject a legitimate dump.*
+
+| 프로파일 | 실행 파일 | 필수 형제 항목 |
+| --- | --- | --- |
+| `ez2dj1stse` | `ez2dj.exe` | `ez2dj1.exe`, `ez2dj.ini`, `System.ini`, `Songs`, `System` |
+| `ez2dj1stse_unpacked` | `ez2dj1.exe` | `ez2dj.exe`, `ez2dj.ini`, `Songs`, `System` |
+| `ez2dj3rd` | `EZ2DJ.EXE` | `EZ2DJ.INI`, `FONTKR.DAT`, `BG`, `Sound`, `system` |
+
+형제 항목이 필요한 이유는 경로 해석이 대소문자를 무시하기 때문이다. 3rd의 `EZ2DJ.EXE`라는 이름만으로는 1st SE의 `ez2dj.exe`와 구별되지 않는다. 두 지문은 서로소라서 오인이 일어나지 않는다.
+
+*The siblings are required because path resolution is case-insensitive, so the name `EZ2DJ.EXE` alone does not distinguish 3rd from 1st SE. The two fingerprints are disjoint, so neither dump matches the other.*
+
+실행 파일을 스캔 결과에서 찾으므로 사용자가 상위 디렉터리를 지정해도 걸린다. 형제 항목은 그 실행 파일의 디렉터리를 기준으로 확인한다.
+
+*Matching searches the scan, so pointing at a parent directory still works; siblings are checked relative to the matched executable's own directory.*
+
+### 순서와 감지 / Ordering and detection
+
+`BuildTargetProfiles()`는 내장 프로파일 중 지문이 맞는 것을 먼저 놓고, 내장이 가져가지 않은 실행 파일에 대해서만 `DetectTargetProfiles()`를 돌린다. 목록의 첫 항목이 기본 타깃이다.
+
+내장 프로파일이 없는 버전의 덤프도 감지만으로 계속 동작한다. 내장 항목은 **실제로 확인한 덤프에 대해서만** 추가한다.
+
+*`BuildTargetProfiles()` puts fingerprint matches first and runs detection only over the executables no built-in claimed; the first entry is the default target. A dump of a version with no built-in profile still works through detection alone. Built-in entries are added **only for dumps that were actually inspected**.*
 
 ---
 

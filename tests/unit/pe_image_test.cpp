@@ -59,6 +59,33 @@ void RunPeImageTests(re2dj::test::Context& context)
         RE2DJ_CHECK_EQ(context, import_directory->size, std::uint32_t{0x100});
     }
 
+    // The entry point of a normal build lies in .text.
+    RE2DJ_CHECK_EQ(context,
+                   std::string(re2dj::exe::EntryPointSectionName(info)),
+                   std::string(".text"));
+    RE2DJ_CHECK(context, !re2dj::exe::HasEntryPointOutsideTextSection(info));
+
+    // A protector typically appends its stub as a new section and points the
+    // entry there, which is what both protected EZ2DJ builds do (.gtide and
+    // .protect). Moving the entry into .data reproduces that shape.
+    std::vector<std::uint8_t> protected_image = MakeSyntheticPe32Image();
+    PutU32(protected_image, re2dj::test::kSyntheticOptionalOffset + 16, 0x00002100);
+    RE2DJ_CHECK(context,
+                ReadPeImageInfo(protected_image.data(), protected_image.size(), &info, &error));
+    RE2DJ_CHECK_EQ(context,
+                   std::string(re2dj::exe::EntryPointSectionName(info)),
+                   std::string(".data"));
+    RE2DJ_CHECK(context, re2dj::exe::HasEntryPointOutsideTextSection(info));
+
+    // An entry point in no section at all reports an empty name rather than
+    // guessing, and still counts as outside .text.
+    std::vector<std::uint8_t> stray_image = MakeSyntheticPe32Image();
+    PutU32(stray_image, re2dj::test::kSyntheticOptionalOffset + 16, 0x00700000);
+    RE2DJ_CHECK(context,
+                ReadPeImageInfo(stray_image.data(), stray_image.size(), &info, &error));
+    RE2DJ_CHECK(context, re2dj::exe::EntryPointSectionName(info).empty());
+    RE2DJ_CHECK(context, re2dj::exe::HasEntryPointOutsideTextSection(info));
+
     // A DLL is not a launch target even when everything else matches.
     std::vector<std::uint8_t> dll_image = MakeSyntheticPe32Image();
     PutU16(dll_image, kSyntheticFileHeaderOffset + 18, 0x210E);

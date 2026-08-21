@@ -107,6 +107,19 @@ bool ReadPeImageInfo(const std::filesystem::path& path,
 // is not a DLL.
 bool IsGuestExecutable(const PeImageInfo& info);
 
+// Name of the section containing the entry point, or an empty view when the
+// entry point falls outside every section.
+std::string_view EntryPointSectionName(const PeImageInfo& info);
+
+// True when the entry point does not lie in a section named ".text".
+//
+// This is an observation, not a verdict. A packer or protector typically adds
+// its stub as a new section and points the entry there, so this is the cheapest
+// signal that an image will start by rewriting itself. It is still only a
+// signal: a legitimate program may place its entry point elsewhere, and a
+// protected one may leave its entry point inside .text.
+bool HasEntryPointOutsideTextSection(const PeImageInfo& info);
+
 std::string_view MachineName(std::uint16_t machine);
 std::string_view SubsystemName(std::uint16_t subsystem);
 std::string_view MagicName(PeMagic magic);

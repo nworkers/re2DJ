@@ -74,10 +74,23 @@ re2dj --hdd /path/to/ez2dj_hdd
 
 *With several candidates, list them with `--list-targets` and select one with `--target <id>`. A duplicate executable name in a backup folder gets a `_2`-style suffix on the later entry.*
 
-> [!WARNING]
-> **기본 선택을 믿지 마십시오.** 현재 후보 순위는 파일 크기 내림차순이라, 서비스·테스트 도구가 게임보다 크면 그것이 먼저 선택됩니다. EZ2DJ 1st Trax Special Edition 덤프가 정확히 그 경우로, 기본값이 `Test.exe`가 됩니다. 게임은 `--target ez2dj1`(보호되지 않은 빌드) 또는 `--target ez2dj`입니다. 알려진 결함이며 [TODO](../TODO.md)에 기록되어 있습니다.
->
-> ***Do not trust the default selection.** Candidates currently break ties by descending file size, so a service or test tool larger than the game is chosen first. The EZ2DJ 1st Trax Special Edition dump is exactly that case and defaults to `Test.exe`; the game is `--target ez2dj1` (the unprotected build) or `--target ez2dj`. This is a known defect recorded in [TODO](../TODO.md).*
+확인된 덤프는 **내장 프로파일**이 자동으로 잡습니다. 프로파일은 실행 파일 이름과 그 옆에 반드시 있어야 하는 항목들로 덤프를 식별하므로, 상위 디렉터리를 지정해도 걸립니다.
+
+*A recognised dump is matched automatically by a **built-in profile**, which identifies it by the executable name plus the entries that must sit beside it, so pointing at a parent directory still works.*
+
+| 프로파일 | 실행 파일 | 비고 |
+| --- | --- | --- |
+| `ez2dj1stse` | `ez2dj.exe` | 캐비닛이 실제로 실행한 것. 보호되어 있음 |
+| `ez2dj1stse_unpacked` | `ez2dj1.exe` | **캐비닛이 실행한 것이 아님.** 보호되지 않아 로더 개발용 |
+| `ez2dj3rd` | `EZ2DJ.EXE` | 보호되어 있음 |
+
+목록의 `built-in` 표시는 확인된 덤프, `detected` 표시는 스캔으로만 찾은 실행 파일입니다. `bring-up only`가 붙은 항목은 원본 동작의 근거로 삼으면 안 됩니다.
+
+*In the list, `built-in` marks a recognised dump and `detected` marks an executable found only by scanning. An entry flagged `bring-up only` must not be treated as evidence of original behavior.*
+
+`entry section` 줄이 `.text`가 아니면 보호 계층일 가능성이 높습니다. 관찰일 뿐 증명은 아닙니다.
+
+*An `entry section` other than `.text` suggests a protection stub. It is an observation, not proof.*
 
 ---
 

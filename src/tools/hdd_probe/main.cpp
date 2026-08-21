@@ -112,16 +112,24 @@ int main(int argc, char** argv)
                     info.entry_point_rva);
         std::printf("    guest fmt : %s\n",
                     re2dj::exe::IsGuestExecutable(info) ? "yes" : "no");
+        const std::string entry_section(re2dj::exe::EntryPointSectionName(info));
+        std::printf("    entry sect: %s%s\n",
+                    entry_section.empty() ? "<none>" : entry_section.c_str(),
+                    re2dj::exe::HasEntryPointOutsideTextSection(info)
+                        ? "  (outside .text - likely a protection stub)"
+                        : "");
     }
 
     const std::vector<re2dj::target::TargetProfile> profiles =
-        re2dj::target::BuildTargetProfiles(scan);
+        re2dj::target::BuildTargetProfiles(root, scan);
     std::printf("\ntarget profiles: %zu\n", profiles.size());
     for (const re2dj::target::TargetProfile& profile : profiles)
     {
-        std::printf("    %-20s %s\n",
+        std::printf("    %-22s %-24s %s%s\n",
                     profile.id.c_str(),
-                    profile.executable_relative_path.c_str());
+                    profile.executable_relative_path.c_str(),
+                    profile.detected ? "detected" : "built-in",
+                    profile.bring_up_target ? ", bring-up only" : "");
     }
 
     return profiles.empty() ? kExitHddError : kExitOk;
