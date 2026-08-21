@@ -1,0 +1,16 @@
+#include <cstdio>
+
+#include "test_support.h"
+
+int main()
+{
+    re2dj::test::Context context;
+
+    RunGuestPathTests(context);
+    RunPeImageTests(context);
+    RunHddRootTests(context);
+    RunTargetProfileTests(context);
+
+    std::printf("checks: %d, failures: %d\n", context.checks, context.failures);
+    return context.failures == 0 ? 0 : 1;
+}

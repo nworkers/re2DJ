@@ -1,0 +1,87 @@
+# Original Executable Analysis (English)
+
+This document **accumulates** the structure and design confirmed in the original EZ2DJ executable. The Korean edition is [EXE_DESIGN.ko.md](EXE_DESIGN.ko.md), and both carry the same facts.
+
+## Notation
+
+| Marker | Meaning |
+| --- | --- |
+| **Confirmed** | Verified against the real binary or a run. The verification method is recorded with it. |
+| **Inferred** | Reasoned from evidence but not yet verified. The evidence is recorded with it. |
+| **Unresolved** | Not known yet. How to find out is recorded with it. |
+
+Nothing goes in without evidence. When an item is confirmed, its marker changes and the verification method is recorded.
+
+---
+
+## 1. Current state
+
+Two dumps have been inspected: EZ2DJ 1st Trax Special Edition and 3rd Trax. Most of what static analysis can settle is now settled, and what remains needs a run.
+
+The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layout.md) and the [import surface analysis](analysis/ez2dj-import-surface.md). Only conclusions are kept here.
+
+---
+
+## 2. Confirmed items
+
+### 2.1 Executable identification — confirmed
+
+| Item | Value |
+| --- | --- |
+| 1st SE game executables | `ez2dj.exe` (protected), `ez2dj1.exe` (not protected) |
+| 3rd game executable | `EZ2DJ.EXE` (protected) |
+| PE magic | PE32 (`0x10B`) throughout |
+| Machine | i386 (`0x014C`) throughout |
+| Image base | `0x00400000` throughout |
+| Subsystem | Windows GUI (2) throughout |
+| `.reloc` | Present |
+| Build timestamps | `ez2dj1.exe` 1999-12-24, `ez2dj.exe` 2000-01-01, `EZ2DJ.EXE` 2001-09-24 |
+| Protection | Only `ez2dj1.exe` is unprotected; the others hold their entry point in a `.gtide` or `.protect` section |
+
+**`ez2dj1.exe` is the bring-up target for Stages 2 and 3** — the one build that reaches real game code without executing a protection layer first.
+
+### 2.2 Import list — confirmed
+
+**7 DLLs and 144 functions** for `ez2dj1.exe`. The full list and priority order are in the [import surface analysis](analysis/ez2dj-import-surface.md).
+
+| Item | Value |
+| --- | --- |
+| Graphics | **DirectDraw 1–6** (`DirectDrawCreate`) plus GDI DIB sections. **No Direct3D** |
+| Audio | **DirectSound** (ordinal `#1`) plus `winmm` mixer volume |
+| Input | **A single `GetAsyncKeyState`. No DirectInput** |
+| Configuration | `GetPrivateProfile*` and `WritePrivateProfileStringA` — INI files |
+| Registry | `RegFlushKey` only |
+| Character encoding | Every API is the ANSI (`...A`) variant |
+| Threads | `CreateThread`, events, critical sections, TLS — **multithreaded** |
+| Ordinal imports | **Used** (`DSOUND.dll #1`) |
+| Delay imports | Not used |
+
+The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, so per-version HLE profiles are required.
+
+### 2.3 Assets and runtime paths — partly confirmed
+
+| Item | State |
+| --- | --- |
+| HDD directory structure | **Confirmed** — 1st SE and 3rd differ from each other |
+| Asset organisation | **Confirmed** — 1st SE has `Songs/` (68 entries) and a per-screen `System/` |
+| Configuration files | **Confirmed** — `ez2dj.ini`, `System.ini` |
+| Score storage | **Confirmed** — `rank_0.dat` through `rank_2.dat`, 400 bytes each |
+| Guest working directory | **Unresolved** — `SetCurrentDirectoryA` is imported, so it changes during a run |
+| Assumed drive letter | **Unresolved** — needs traced path requests during a run |
+| Asset file formats | **Unresolved** — the file structures under `Songs/` have not been opened yet |
+
+### 2.4 Hardware boundary — unresolved
+
+| Item | State |
+| --- | --- |
+| Arcade I/O board | **Unresolved** — the 1st SE dump holds `Tdsd.vxd111`, a Windows 9x VxD, but `ez2dj1.exe` imports no `DeviceIoControl` and the `111` suffix suggests the driver is disabled |
+| Dongle or protection device | **Unresolved** — needs traced failure points during a run |
+| Timer source | **Confirmed** — `timeGetTime` |
+
+---
+
+## 3. Update rules
+
+* When a new fact is confirmed, update this document and [EXE_DESIGN.ko.md](EXE_DESIGN.ko.md) in the same task.
+* Keep detailed per-topic evidence under `docs/analysis/` and leave only conclusions and links here.
+* Do not transcribe raw byte dumps. Record structures, offsets, and observed behavior.

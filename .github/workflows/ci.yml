@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    # No preset here. The Visual Studio presets pin a generator version that
+    # tracks the developer's local install, while the Ninja preset needs a
+    # developer command prompt. Letting CMake pick the runner's default
+    # generator keeps this job working as the runner image moves.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build/ci -A x64 -DRE2DJ_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/ci --config Debug
+      - name: Test
+        run: ctest --test-dir build/ci -C Debug --output-on-failure
+
+  linux-x64:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        env:
+          CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        run: cmake --preset linux-x64-debug -DRE2DJ_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build --preset linux-x64-debug
+      - name: Test
+        run: ctest --preset linux-x64-debug
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - uses: mymindstorm/setup-emsdk@v14
+      # The Web host cannot run CTest, so this job only proves the shared core
+      # still compiles for WebAssembly. A platform assumption that slips into
+      # the core usually breaks here first.
+      - name: Configure
+        run: cmake --preset web
+      - name: Build
+        run: cmake --build --preset web

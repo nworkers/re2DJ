@@ -1,0 +1,77 @@
+# Build trees. Anchored with a leading slash so the pattern cannot swallow a
+# same-named source directory deeper in the tree.
+/build/
+/out/
+/cmake-build-*/
+/CMakeUserPresets.json
+
+# Original assets. The HDD dump is supplied as a directory path at run time and
+# must never enter the repository. These entries guard against a dump that is
+# extracted or copied into the working tree: a single game directory holds tens
+# of thousands of files, so an accidental `git add -A` is unrecoverable in
+# practice once pushed.
+#
+# Directories a dump commonly lands in. Every one is anchored with a leading
+# slash: an unanchored `hdd/` also matches `src/hdd/` and `include/re2dj/hdd/`,
+# which silently dropped this project's own source from version control.
+/roms/
+/hdd/
+/HDD/
+/dump/
+/dumps/
+/MASTER/
+/ez2dj/
+/EZ2DJ/
+# Disk images and archives a dump arrives as.
+*.img
+*.vhd
+*.vhdx
+*.vmdk
+*.iso
+*.bin
+*.cue
+*.rar
+*.7z
+*.zip
+# Executables and libraries, whether from a dump or a build.
+*.exe
+*.dll
+*.ocx
+*.sys
+*.vxd
+# Game media and data. None of this belongs in source control, and these
+# extensions are what a dump is mostly made of.
+*.wav
+*.mp3
+*.ogg
+*.ez
+*.eza
+*.ezt
+*.bms
+*.avi
+*.mpg
+*.mpeg
+*.bmp
+*.tga
+*.pcx
+*.dat
+
+# Guest write overlay and per-target runtime state. The guest writes its own
+# settings and score data here, so a user's local run never shows up as a
+# repository change.
+/overlay/
+/nvram/
+/cfg/
+
+# Local diagnostics: whole-run captures regenerated on demand.
+re2dj_*.log
+run.txt
+*.tmp
+
+# Editor and toolchain scratch.
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+compile_commands.json
