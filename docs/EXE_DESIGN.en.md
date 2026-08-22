@@ -18,7 +18,7 @@ Nothing goes in without evidence. When an item is confirmed, its marker changes 
 
 Two dumps have been inspected: EZ2DJ 1st Trax Special Edition and 3rd Trax. Most of what static analysis can settle is now settled, and what remains needs a run.
 
-The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layout.md) and the [import surface analysis](analysis/ez2dj-import-surface.md). Only conclusions are kept here.
+The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layout.md), the [executable structures analysis](analysis/ez2dj-exe-structures.md), and the [import surface analysis](analysis/ez2dj-import-surface.md). The structures document owns per-executable PE structure, protection anatomy, and data inventories, and gains a section whenever a new executable is identified. Only conclusions are kept here.
 
 ---
 
@@ -77,7 +77,7 @@ The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, 
 | Item | State |
 | --- | --- |
 | Arcade I/O board | **Partly confirmed** — the 3rd `EZ2DJ.INI` carries `"UseIOCard" = 1`, so an I/O card is definitely used; the access path is unresolved. The 1st SE dump holds `Tdsd.vxd111`, a Windows 9x VxD, but `ez2dj1.exe` imports no `DeviceIoControl` and the `111` suffix suggests the driver is disabled |
-| Dongle or protection device | **Unresolved** — needs traced failure points during a run |
+| Dongle or protection device | **Partially confirmed** — the protection stub opens the `\\.\LPTDI1` parallel-port device right after entry (`CreateFileA`, runtime observation) and `.gdata` holds `\\.\TDSD.VXD` / `\\.\LPTDI0` strings. How a failed check connects to the termination path remains the unresolved item in section 2.5 of the [structures document](analysis/ez2dj-exe-structures.md) |
 | Timer source | **Confirmed** — `timeGetTime` |
 
 ---

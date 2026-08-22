@@ -1,11 +1,13 @@
 #define NOMINMAX
 #include <windows.h>
+#include <psapi.h>
 
 #include "native_pe_image.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -63,6 +65,73 @@ DWORD SectionProtection(std::uint32_t characteristics)
                                                 : PAGE_EXECUTE_READ;
     }
     return (characteristics & kWrite) != 0 ? PAGE_READWRITE : PAGE_READONLY;
+}
+
+std::string DescribeReservationFailure(std::uint32_t base, std::uint32_t size, DWORD error)
+{
+    MEMORY_BASIC_INFORMATION memory = {};
+    std::uintptr_t address = base;
+    const std::uintptr_t end = address + size;
+    SIZE_T queried = 0;
+    while (address < end)
+    {
+        queried = VirtualQuery(reinterpret_cast<const void*>(address), &memory, sizeof(memory));
+        if (queried == 0 || memory.State != MEM_FREE)
+        {
+            break;
+        }
+        const std::uintptr_t next =
+            reinterpret_cast<std::uintptr_t>(memory.BaseAddress) + memory.RegionSize;
+        if (next <= address)
+        {
+            break;
+        }
+        address = next;
+    }
+    char message[256] = {};
+    if (queried == 0 || memory.State == MEM_FREE)
+    {
+        std::snprintf(message,
+                      sizeof(message),
+                      "cannot reserve PE image at 0x%08x size 0x%08x (VirtualAlloc error %lu; no occupied region found; VirtualQuery error %lu)",
+                      base,
+                      size,
+                      static_cast<unsigned long>(error),
+                      static_cast<unsigned long>(GetLastError()));
+    }
+    else
+    {
+        wchar_t mapped_path[MAX_PATH] = {};
+        const DWORD mapped_length = GetMappedFileNameW(GetCurrentProcess(),
+                                                       memory.AllocationBase,
+                                                       mapped_path,
+                                                       MAX_PATH);
+        wchar_t module_path[MAX_PATH] = {};
+        HMODULE module = nullptr;
+        const BOOL has_module = GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            static_cast<LPCWSTR>(memory.AllocationBase),
+            &module);
+        const DWORD module_length = has_module == FALSE
+                                        ? 0
+                                        : GetModuleFileNameW(module, module_path, MAX_PATH);
+        std::snprintf(message,
+                      sizeof(message),
+                      "cannot reserve PE image at 0x%08x size 0x%08x (VirtualAlloc error %lu; occupied 0x%p allocation 0x%p region 0x%zx state 0x%lx protect 0x%lx type 0x%lx mapped %ls module %ls)",
+                      base,
+                      size,
+                      static_cast<unsigned long>(error),
+                      memory.BaseAddress,
+                      memory.AllocationBase,
+                      static_cast<std::size_t>(memory.RegionSize),
+                      static_cast<unsigned long>(memory.State),
+                      static_cast<unsigned long>(memory.Protect),
+                      static_cast<unsigned long>(memory.Type),
+                      mapped_length == 0 ? L"<none>" : mapped_path,
+                      module_length == 0 ? L"<none>" : module_path);
+    }
+    return message;
 }
 
 bool ApplyRelocations(const exe::PeImageInfo& info,
@@ -201,8 +270,7 @@ bool MapNativePeImage(std::span<const std::uint8_t> file,
         image->memory != nullptr || !exe::IsGuestExecutable(info) ||
         info.image_base > (std::numeric_limits<std::uint32_t>::max)() ||
         info.size_of_image == 0 || info.entry_point_rva >= info.size_of_image ||
-        info.size_of_headers > info.size_of_image ||
-        info.size_of_headers > file.size())
+        info.size_of_headers > info.size_of_image || info.size_of_headers > file.size())
     {
         if (error != nullptr)
         {
@@ -210,7 +278,6 @@ bool MapNativePeImage(std::span<const std::uint8_t> file,
         }
         return false;
     }
-
     image->load_base = requested_base == 0
                            ? static_cast<std::uint32_t>(info.image_base)
                            : requested_base;
@@ -233,7 +300,8 @@ bool MapNativePeImage(std::span<const std::uint8_t> file,
     if (image->memory == nullptr ||
         reinterpret_cast<std::uintptr_t>(image->memory) != image->load_base)
     {
-        *error = "cannot reserve the PE image at the requested base";
+        const DWORD allocation_error = GetLastError();
+        *error = DescribeReservationFailure(image->load_base, image->size, allocation_error);
         ReleaseNativePeImage(image);
         return false;
     }

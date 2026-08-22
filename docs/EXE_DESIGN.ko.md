@@ -18,7 +18,7 @@
 
 EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정적 분석으로 확인할 수 있는 항목은 대부분 채워졌고, 실행해야 알 수 있는 항목이 남아 있다.
 
-상세 근거는 [HDD 레이아웃 분석](analysis/ez2dj-hdd-layout.md)과 [import 표면 분석](analysis/ez2dj-import-surface.md)에 있다. 여기에는 결론만 둔다.
+상세 근거는 [HDD 레이아웃 분석](analysis/ez2dj-hdd-layout.md), [실행 파일 구조 분석](analysis/ez2dj-exe-structures.md), [import 표면 분석](analysis/ez2dj-import-surface.md)에 있다. 실행 파일별 PE 구조·보호 계층 해부·데이터 인벤토리는 구조 문서가 담당하며, 새 실행 파일이 확인될 때마다 그 문서에 섹션이 추가된다. 여기에는 결론만 둔다.
 
 ---
 
@@ -77,7 +77,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 | 항목 | 상태 |
 | --- | --- |
 | 아케이드 I/O 보드 | **부분 확인** — 3rd의 `EZ2DJ.INI`에 `"UseIOCard" = 1`이 있어 I/O 카드 사용은 확실하다. 접근 경로는 미확정이다. 1st SE 덤프에 `Tdsd.vxd111`(Windows 9x VxD)이 있으나 `ez2dj1.exe`는 `DeviceIoControl`을 import하지 않고, 확장자 `111`은 비활성화를 시사한다 |
-| 동글·보호 장치 | **미확정** — 실행 중 실패 지점을 추적해야 한다 |
+| 동글·보호 장치 | **부분 확인** — 보호 stub이 진입 직후 `\\.\LPTDI1` 병렬포트 디바이스를 열고(`CreateFileA`, 런타임 관찰) `.gdata`에 `\\.\TDSD.VXD`·`\\.\LPTDI0` 문자열이 있다. 검사 실패가 종료 경로와 어떻게 연결되는지는 [구조 문서](analysis/ez2dj-exe-structures.md) 2.5절의 미확정 항목이다 |
 | 타이머 소스 | **확인됨** — `timeGetTime` |
 
 ---

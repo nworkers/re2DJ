@@ -63,5 +63,6 @@ void RunPeImageTests(re2dj::test::Context& context);
 void RunPeLoaderTests(re2dj::test::Context& context);
 void RunHddRootTests(re2dj::test::Context& context);
 void RunTargetProfileTests(re2dj::test::Context& context);
+void RunVfsFileTableTests(re2dj::test::Context& context);
 
 #endif  // RE2DJ_TESTS_UNIT_TEST_SUPPORT_H_

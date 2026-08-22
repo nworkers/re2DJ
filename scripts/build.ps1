@@ -1,10 +1,10 @@
-# Configure and build re2DJ on a 64-bit Windows host.
+# Configure and build the primary Win32 x86 re2DJ host.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/build.ps1 [-Preset <name>] [-Configuration <cfg>]
 
 param(
-    [string]$Preset = "windows-x64-debug",
+    [string]$Preset = "windows-x86-debug",
     [string]$Configuration = "Debug"
 )
 

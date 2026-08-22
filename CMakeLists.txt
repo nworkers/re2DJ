@@ -27,13 +27,12 @@ option(RE2DJ_BUILD_NATIVE_HELPER_PROBE
 option(RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE
        "Build the Linux i386 native helper feasibility probe" OFF)
 
-# Normal hosts are 64-bit or WebAssembly. A Win32 build is reserved for the
-# native helper probe and is not a supported full-host configuration.
-if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT RE2DJ_BUILD_NATIVE_HELPER_PROBE AND
+# Win32 x86 is the primary Windows-native host during the current bring-up.
+# A non-Windows 32-bit build remains reserved for explicit helper probes.
+if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT WIN32 AND NOT RE2DJ_BUILD_NATIVE_HELPER_PROBE AND
    NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE)
     message(WARNING
-        "Configuring a 32-bit host build. The supported hosts are 64-bit "
-        "Windows, Linux x86-64, and WebAssembly.")
+        "Configuring an unsupported 32-bit non-Windows host build.")
 endif()
 
 if(RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE)
@@ -92,6 +91,8 @@ add_library(re2dj_core STATIC
     src/runtime/address_space.cpp
     src/runtime/pe_loader.cpp
     src/storage/guest_path.cpp
+    src/storage/vfs_roots.cpp
+    src/storage/vfs_file_table.cpp
     src/target/target_profile.cpp
     src/version.cpp
 )
@@ -122,10 +123,39 @@ if(RE2DJ_BUILD_NATIVE_HELPER_PROBE)
         src/platform/windows/native_ipc_helper.cpp
         src/platform/windows/native_pe_image.cpp
     )
-    target_link_libraries(re2dj_native_ipc_helper PRIVATE re2dj_core re2dj_warnings)
-    target_link_options(re2dj_native_ipc_helper PRIVATE /BASE:0x20000000 /DYNAMICBASE:NO)
+    target_link_libraries(re2dj_native_ipc_helper PRIVATE re2dj_core re2dj_warnings Psapi)
+    target_link_options(re2dj_native_ipc_helper PRIVATE
+        /BASE:0x20000000
+        /DYNAMICBASE:NO
+    )
     enable_testing()
     add_test(NAME re2dj_native_helper_probe COMMAND re2dj_native_helper_probe)
+endif()
+
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_library(re2dj_windows_injected_runtime SHARED
+        src/platform/windows/injected_runtime.cpp
+    )
+    target_link_libraries(re2dj_windows_injected_runtime PRIVATE re2dj_warnings)
+    if(RE2DJ_BUILD_TESTS)
+        add_executable(re2dj_windows_vfs_runtime_probe
+            src/tools/windows_vfs_runtime_probe/main.cpp
+        )
+        target_link_libraries(re2dj_windows_vfs_runtime_probe
+            PRIVATE re2dj_windows_injected_runtime re2dj_warnings
+        )
+        add_test(NAME re2dj_windows_vfs_runtime_probe COMMAND re2dj_windows_vfs_runtime_probe)
+    endif()
+    add_executable(re2dj_windows_x86_launcher_probe
+        src/tools/windows_original_process_probe/iat_verifier.cpp
+        src/platform/windows/injected_runtime_loader.cpp
+        src/platform/windows/runtime_export_locator.cpp
+        src/tools/windows_x86_launcher_probe/remote_module_exports.cpp
+        src/tools/windows_x86_launcher_probe/main.cpp
+    )
+    target_link_libraries(re2dj_windows_x86_launcher_probe
+        PRIVATE re2dj_core re2dj_warnings
+    )
 endif()
 
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -141,6 +171,20 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     )
     target_link_libraries(re2dj_native_ipc_host_probe
         PRIVATE re2dj_windows_native_backend re2dj_warnings
+    )
+    add_executable(re2dj_windows_import_observer
+        src/tools/windows_import_observer/main.cpp
+    )
+    target_link_libraries(re2dj_windows_import_observer
+        PRIVATE re2dj_windows_native_backend re2dj_warnings
+    )
+    add_executable(re2dj_windows_original_process_probe
+        src/tools/windows_original_process_probe/iat_verifier.cpp
+        src/tools/windows_original_process_probe/main.cpp
+        src/tools/windows_original_process_probe/runtime_loader.cpp
+    )
+    target_link_libraries(re2dj_windows_original_process_probe
+        PRIVATE re2dj_core re2dj_warnings
     )
 endif()
 
@@ -182,6 +226,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/synthetic_pe32.cpp
         tests/unit/temporary_tree.cpp
         tests/unit/target_profile_test.cpp
+        tests/unit/vfs_file_table_test.cpp
     )
     target_include_directories(re2dj_unit_tests PRIVATE tests/unit)
     target_link_libraries(re2dj_unit_tests PRIVATE re2dj_core re2dj_warnings)

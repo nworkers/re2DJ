@@ -64,6 +64,7 @@
 /cfg/
 
 # Local diagnostics: whole-run captures regenerated on demand.
+/logs/
 re2dj_*.log
 run.txt
 *.tmp

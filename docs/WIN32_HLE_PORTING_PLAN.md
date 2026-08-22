@@ -86,7 +86,7 @@ PE32 이미지를 게스트 주소 공간에 매핑한다.
 
 **완료 / Complete**
 
-직접 인터프리터를 구현하기 전에 교체 가능한 `ExecutionBackend` 경계를 정의하고, Windows x64와 Linux x86-64에서 별도 32비트 helper 프로세스가 원본 x86 코드를 네이티브 실행하면서 import gate를 HLE dispatcher에 연결할 수 있는지 검증한다.
+직접 인터프리터를 구현하기 전에 교체 가능한 `ExecutionBackend` 경계를 정의한다. Windows의 현재 1차 경로는 x86 host process에서 원본 x86 코드를 직접 실행하고 import gate를 HLE dispatcher에 연결하는 것이다. Linux x86-64 helper는 검증 근거로 유지하며 Windows x64는 보류한다.
 
 * `GuestContext`: 범용 레지스터, EFLAGS, 세그먼트 셀렉터, x87, MMX/SSE
 * backend 생명주기, 메모리 접근, 실행/중단, gate dispatch 인터페이스
@@ -96,7 +96,7 @@ PE32 이미지를 게스트 주소 공간에 매핑한다.
 
 **완료 기준:** synthetic PE32가 데스크톱 네이티브 helper에서 gate 하나를 호출하고 정확한 종료 코드로 끝나며, Web 실행 엔진 후보와 라이선스 검토 결과가 문서화된다.
 
-*Define the replaceable `ExecutionBackend` boundary before building a custom interpreter, then validate whether a separate 32-bit helper on Windows x64 and Linux x86-64 can execute original x86 code natively and route an import gate to the HLE dispatcher. Done when a synthetic PE32 calls one gate and exits correctly through the native helper, and Web execution-engine candidates and their licenses are documented.*
+*Define the replaceable `ExecutionBackend` boundary before building a custom interpreter. The primary Windows route is now a same-bitness Win32 launcher and original child; the separate 32-bit helper remains validation evidence for Linux x86-64, while Windows x64 is deferred. Done when a synthetic PE32 calls one gate and exits correctly through the native helper, and Web execution-engine candidates and their licenses are documented.*
 
 **후순위:** Web에서는 x86 코드를 직접 실행할 수 없으므로 재사용 가능한 허용 라이선스 실행 엔진을 우선 검토한다. 적합한 엔진이 없을 때 직접 인터프리터를 같은 `ExecutionBackend` 인터페이스 뒤에 구현한다.
 
@@ -113,6 +113,22 @@ Linux에서도 x86-64 host가 별도 i386 helper를 `fork`/`exec`하고 공용 p
 Web 실행 엔진과 라이선스 조사를 완료했고 v86 CPU 분리성 spike도 끝냈다. v86은 BSD-2-Clause와 필요한 명령 범위를 갖지만 CPU-only build 경계가 없고 PC 장치·MMIO·browser timer/IRQ에 결합되어 있다. 또한 기본 synthetic gate `0xF0000000`은 실행 불가 mapped/MMIO 범위다. 따라서 대규모 fork 없이 `ExecutionBackend`에 연결할 수 없어 채택하지 않는다. TinyEMU 계열은 현재 Web x86 소스의 공개 경계가 확인될 때만 재평가하며, GPL/LGPL 후보는 제외했다. 직접 인터프리터는 후순위로 유지한다.
 
 *The Web execution-engine and license survey is complete, including the v86 CPU-separability spike. v86 is BSD-2-Clause and has the needed instruction coverage, but lacks a CPU-only build boundary and couples CPU operation to PC devices, MMIO, and browser timer/IRQ services. Its default synthetic gate, `0xF0000000`, is also non-executable mapped/MMIO. It therefore cannot connect to `ExecutionBackend` without a substantial fork and will not be adopted. A TinyEMU-family engine is reconsidered only if the publication boundary of its current Web x86 source is confirmed; GPL/LGPL candidates are excluded. A custom interpreter remains deferred.*
+
+Windows x86 launcher는 `DEBUG_ONLY_THIS_PROCESS` child의 entry `0x0043a640`에서 temporary `INT3` breakpoint로 멈춰 `0x00400000` main image와 loader-resolved IAT 7 DLL·144 slot을 확인했다. 이 입력에서 DR0 hardware breakpoint는 context에 남았지만 event가 전달되지 않아 별도 조사 대상으로 남긴다. 다음 Windows 작업은 같은 x86 child에 runtime DLL을 적재하고 IAT handoff를 검증하는 것이다.
+
+*The Windows x86 launcher stopped a `DEBUG_ONLY_THIS_PROCESS` child at entry `0x0043a640` with a temporary `INT3` breakpoint and confirmed the `0x00400000` main image plus seven DLLs and 144 loader-resolved IAT slots. For this input, the DR0 hardware breakpoint remained in context but delivered no event, so it remains a separate investigation. The next Windows task loads the runtime DLL into the same x86 child and verifies IAT handoff.*
+
+같은 정지점에서 primary thread를 suspend한 뒤 remote `LoadLibraryW` thread로 최소 x86 runtime DLL을 적재했고 module base `0x7c130000`을 확인했다. 이제 runtime이 원본 IAT를 HLE thunk로 교체하고 첫 import 호출을 host와 교환하는 handoff를 검증한다.
+
+*At the same stop, the launcher suspended the primary thread, loaded the minimal x86 runtime DLL through a remote `LoadLibraryW` thread, and observed module base `0x7c130000`. The next step verifies handoff in which the runtime replaces original IAT entries with HLE thunks and exchanges the first import call with the host.*
+
+`GetCommandLineA` IAT slot을 runtime log-and-forward thunk로 교체한 뒤 entry를 제한적으로 재개했고, debugger output event를 실제로 수신했다. thunk는 original target으로 tail-jump하므로 관찰 단계에서 API 결과와 caller stack cleanup을 바꾸지 않는다. 이제 다음 작업은 단순 forwarding 대신 첫 최소 HLE API 구현을 선택하고 원본 동작을 계속 관찰하는 것이다.
+
+*After replacing the `GetCommandLineA` IAT slot with a runtime log-and-forward thunk, entry was resumed in a limited run and the expected debugger output event was received. The thunk tail-jumps to the original target, so this observation step does not alter API results or caller stack cleanup. The next task selects the first minimal HLE API instead of simple forwarding and continues observing original behavior.*
+
+사용자 결정으로 첫 실제 HLE API는 `GetCommandLineA`로 정했다. launcher는 target basename `ez2dj1.exe`를 runtime의 process-lifetime ANSI buffer에 쓰고 IAT를 HLE thunk로 교체했다. 제한 실행에서 HLE output event를 수신했으므로, 원본 import가 host 정책의 값을 반환하는 runtime 경로까지 확인됐다.
+
+*By user decision, `GetCommandLineA` is the first real HLE API. The launcher writes target basename `ez2dj1.exe` into the runtime's process-lifetime ANSI buffer and replaces the IAT with the HLE thunk. The limited run received the HLE output event, confirming the runtime path through which an original import returns a host-policy value.*
 
 ---
 
@@ -141,6 +157,10 @@ Web 실행 엔진과 라이선스 조사를 완료했고 v86 CPU 분리성 spike
 **완료 기준:** 게스트가 자산을 읽고 설정 파일을 쓰며, 원본 디렉터리의 내용과 수정 시각이 실행 전후로 동일하다.
 
 *Wire guest file I/O to the HDD directory and the overlay: overlay-first reads, overlay-only writes, handle table, seek, directory enumeration, attributes. Done when the guest reads assets and writes settings while the original directory's contents and timestamps are unchanged.*
+
+현재 공용 경로 resolver와 `VfsFileTable`, Windows x86 runtime의 seven-file-API IAT wrapper가 구현되었다. runtime은 existing-file write 전에 overlay copy를 만들며, synthetic probe가 원본 read와 original-preserving write를 확인한다. directory enumeration, INI HLE, 그리고 원본 entry에서의 first-file-call 관찰은 아직 남아 있다.
+
+*The shared path resolver and `VfsFileTable`, plus the Windows x86 runtime's seven-file-API IAT wrappers, are now implemented. The runtime creates an overlay copy before an existing-file write, and a synthetic probe confirms an original read and an original-preserving write. Directory enumeration, INI HLE, and observation of the first file call from an original entry remain.*
 
 ---
 

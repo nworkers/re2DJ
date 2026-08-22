@@ -170,11 +170,31 @@ ADVAPI32.dll  RegFlushKey
 
 ---
 
-## 9. 미확정 / Unresolved
+## 9. 확인됨: 보호 빌드의 정적 import 표면 / Confirmed: the protected build's static import surface
 
-* 보호된 `ez2dj.exe`와 `EZ2DJ.EXE`가 런타임에 추가로 해석하는 API. 스텁이 `GetProcAddress`로 가져오므로 정적으로는 보이지 않는다.
-* `CreateFileA`가 실제로 여는 경로. `\\.\` 드라이버 경로가 있는지 확인해야 한다.
+**확인됨 — 2026-08-23.** 보호된 `ez2dj.exe`의 import directory는 `.gidata`(RVA `0x01ad8000`)로 옮겨져 있으며, 내용은 8절의 원본 표면 전체에 보호 특화 API를 더한 집합이다. `.gidata`의 IMAGE_IMPORT_DESCRIPTOR와 IAT를 직접 해석해 슬롯 VA까지 확정했다.
+
+추가된 보호 특화 import:
+
+```text
+KERNEL32.dll  DeviceIoControl, _lopen, _lread, _lclose, _lcreat, _llseek, _lwrite,
+              OpenFile, DeleteFileA, MoveFileA, lstrcmpiA, lstrcpyA, lstrlenA,
+              DebugBreak, OutputDebugStringA, FatalAppExitA, UnhandledExceptionFilter,
+              RaiseException, RtlUnwind, IsBadReadPtr, IsBadWritePtr, HeapValidate,
+              CreateMutexA, ReleaseMutex
+```
+
+`.gdata`에는 `\\.\TDSD.VXD`, `\\.\LPTDI0`, `MSVBVM50.DLL`(2회), EUC-KR 메시지 바이트, 해시성 blob이 있다. 런타임 관찰([HDD 레이아웃 분석](ez2dj-hdd-layout.md))에서 `CreateFileA("\\.\LPTDI1")` 병렬포트 열기와 `GetProcAddress(wsock32, "WSAGetLastError")`가 확인됐다. 즉 보호 계층의 동적 해석은 최소화되어 있고(관찰된 것은 WSAGetLastError 하나), 하드웨어·환경 검사는 정적 import와 문자열로 구성된다.
+
+*Confirmed — 2026-08-23. The protected `ez2dj.exe` moves its import directory into `.gidata` (RVA 0x01ad8000) and its content is the full original surface of section 8 plus protection-flavored APIs: DeviceIoControl, the `_l*`/OpenFile legacy file family, DeleteFileA, MoveFileA, lstrcmpiA/lstrcpyA/lstrlenA, DebugBreak, OutputDebugStringA, FatalAppExitA, UnhandledExceptionFilter, RaiseException, RtlUnwind, IsBadReadPtr/IsBadWritePtr, HeapValidate, and mutex APIs. .gdata holds `\\.\TDSD.VXD`, `\\.\LPTDI0`, `MSVBVM50.DLL` (twice), EUC-KR message bytes, and hash-like blobs. Runtime observation (see the HDD layout analysis) confirms a `CreateFileA("\\.\LPTDI1")` parallel-port open and GetProcAddress for only WSAGetLastError, so dynamic resolution is minimal and hardware/environment checks are built from static imports plus strings.*
+
+---
+
+## 10. 미확정 / Unresolved
+
+* 보호된 `ez2dj.exe`와 `EZ2DJ.EXE`가 런타임에 추가로 해석하는 API. 스텁이 `GetProcAddress`로 가져오므로 정적으로는 보이지 않는다. → 1st SE는 관찰상 `WSAGetLastError` 하나뿐. 다른 버전은 미확정.
+* ~~`CreateFileA`가 실제로 여는 경로~~ → **확정됨**: 보호 stub이 `\\.\LPTDI1`을 연다. 게임 본체의 파일 경로는 여전히 미확정.
 * 스레드 개수와 역할.
 * DirectDraw 표면 구성: 표면 개수, 픽셀 포맷, 해상도.
 
-*Unresolved: the APIs the protected builds resolve at run time through `GetProcAddress`; the actual paths `CreateFileA` opens and whether any is a `\\.\` driver path; the thread count and roles; and the DirectDraw surface configuration.*
+*Unresolved: run-time `GetProcAddress` additions by the protected builds — 1st SE observes only WSAGetLastError; other versions are unresolved. The `CreateFileA` path question is now resolved for the protection stub (`\\.\LPTDI1`) but not for the game body. Still open: thread count and roles, and the DirectDraw surface configuration.*

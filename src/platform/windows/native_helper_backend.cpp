@@ -469,7 +469,17 @@ private:
         if (!WriteExact(input_, &header, sizeof(header)) ||
             (payload_size != 0 && !WriteExact(input_, payload, payload_size)))
         {
-            SetError(error, WindowsError("cannot write native helper packet"));
+            const DWORD write_error = GetLastError();
+            std::string message = "cannot write native helper packet (Windows error " +
+                                  std::to_string(write_error) + ")";
+            DWORD exit_code = 0;
+            if (process_.hProcess != nullptr &&
+                WaitForSingleObject(process_.hProcess, 100) == WAIT_OBJECT_0 &&
+                GetExitCodeProcess(process_.hProcess, &exit_code) != FALSE)
+            {
+                message += "; helper exit code " + std::to_string(exit_code);
+            }
+            SetError(error, std::move(message));
             return false;
         }
         return true;

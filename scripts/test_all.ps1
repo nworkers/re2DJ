@@ -1,10 +1,10 @@
-# Build re2DJ and run the full unit test suite on a 64-bit Windows host.
+# Build re2DJ and run the full unit test suite on the primary Win32 x86 host.
 #
 # Warnings are errors here: a warning that only CI rejects is a warning that
 # reaches the default branch first.
 
 param(
-    [string]$Preset = "windows-x64-debug",
+    [string]$Preset = "windows-x86-debug",
     [string]$Configuration = "Debug"
 )
 

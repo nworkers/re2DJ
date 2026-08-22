@@ -7,6 +7,21 @@
   },
   "configurePresets": [
     {
+      "name": "windows-x86-debug",
+      "displayName": "Windows x86 Debug (primary native host)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/windows-x86",
+      "cacheVariables": {
+        "RE2DJ_BUILD_TESTS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
       "name": "windows-x64-debug",
       "displayName": "Windows x64 Debug (MSVC)",
       "generator": "Visual Studio 18 2026",
@@ -108,6 +123,11 @@
   ],
   "buildPresets": [
     {
+      "name": "windows-x86-debug",
+      "configurePreset": "windows-x86-debug",
+      "configuration": "Debug"
+    },
+    {
       "name": "windows-x64-debug",
       "configurePreset": "windows-x64-debug",
       "configuration": "Debug"
@@ -120,7 +140,7 @@
       "name": "windows-x86-native-probe",
       "configurePreset": "windows-x86-native-probe",
       "configuration": "Debug",
-      "targets": ["re2dj_native_helper_probe", "re2dj_native_ipc_helper"]
+      "targets": ["re2dj_native_helper_probe", "re2dj_native_ipc_helper", "re2dj_windows_injected_runtime"]
     },
     {
       "name": "linux-x64-debug",
@@ -141,6 +161,14 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "windows-x86-debug",
+      "configurePreset": "windows-x86-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
     {
       "name": "windows-x64-debug",
       "configurePreset": "windows-x64-debug",

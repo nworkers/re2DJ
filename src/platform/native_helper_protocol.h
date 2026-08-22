@@ -111,4 +111,3 @@ static_assert(sizeof(WriteMemoryResult) == 8);
 }  // namespace re2dj::platform::native_protocol
 
 #endif  // RE2DJ_PLATFORM_NATIVE_HELPER_PROTOCOL_H_
-

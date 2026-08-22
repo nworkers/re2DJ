@@ -10,6 +10,7 @@
 | `test_all.ps1` | 64-bit Windows | 경고를 오류로 하여 build + ctest |
 | `test_windows_native_helper_probe.ps1` | 64-bit Windows + WOW64 | Win32 x86 native helper probe build + ctest |
 | `test_windows_native_ipc_probe.ps1` | 64-bit Windows + WOW64 | x64 host / x86 helper synthetic PE32 IPC integration probe |
+| `stage_windows_native_helper.ps1` | 64-bit Windows + WOW64 | x64 observer와 Win32 helper를 빌드하고 helper를 `helpers/win32/`로 staging |
 | `test_linux_native_helper_probe.sh` | Linux x86-64 + i386 multilib | x64 host / i386 helper native gate IPC integration probe |
 | `build.sh` | Linux x86-64 | configure + build |
 | `test_all.sh` | Linux x86-64 | 경고를 오류로 하여 build + ctest |

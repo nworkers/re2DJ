@@ -13,6 +13,7 @@ int main()
     RunPeLoaderTests(context);
     RunHddRootTests(context);
     RunTargetProfileTests(context);
+    RunVfsFileTableTests(context);
 
     std::printf("checks: %d, failures: %d\n", context.checks, context.failures);
     return context.failures == 0 ? 0 : 1;

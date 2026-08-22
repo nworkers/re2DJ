@@ -15,7 +15,9 @@
 | 문서 | 내용 | 현재 상태 |
 | --- | --- | --- |
 | [ez2dj-hdd-layout.md](ez2dj-hdd-layout.md) | HDD 덤프의 디렉터리 구조와 실행 파일 식별 | 1st SE / 3rd 덤프로 확인됨 |
-| [ez2dj-import-surface.md](ez2dj-import-surface.md) | 원본이 실제로 호출하는 Win32 API 집합과 HLE 우선순위 | `ez2dj1.exe`로 확인됨 |
+| [ez2dj-exe-structures.md](ez2dj-exe-structures.md) | 실행 파일별 PE 구조, 보호 계층 해부, 데이터 인벤토리, 런타임 흐름 | 1st SE 두 파일·3rd 헤더로 확인됨, 런타임은 `ez2dj.exe`만 |
+| [ez2dj-import-surface.md](ez2dj-import-surface.md) | 원본이 실제로 호출하는 Win32 API 집합과 HLE 우선순위 | `ez2dj1.exe`·보호 빌드 `.gidata`로 확인됨 |
+| [windows-original-process-loader.md](windows-original-process-loader.md) | Windows loader가 원본 EXE를 주 이미지로 배치한 관찰 | `ez2dj1.exe` suspended process로 확인됨 |
 
 새 분석 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 
