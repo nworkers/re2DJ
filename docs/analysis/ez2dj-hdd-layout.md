@@ -85,6 +85,12 @@
 | `Test.exe` (1st SE) | `0x0001ada0` | `.text` | — | 없음 |
 | `PlzPowerOff.exe` (1st SE) | `0x00001e6e` | `.text` | — | 없음 |
 
+### 확인됨: ez2dj1.exe는 선호 주소에 고정되어 있다
+
+`ez2dj1.exe`에는 이름이 `.reloc`인 섹션이 있지만 optional header의 base relocation data directory는 `{RVA 0, Size 0}`이다. Stage 2 로더로 선호 주소 `0x00400000` 적재는 성공하고 다른 주소 적재는 재배치 정보 부재로 거부된다. 따라서 이 bring-up 빌드는 현재 확인된 형태 그대로라면 선호 주소에 고정해서 적재해야 한다.
+
+*Confirmed: `ez2dj1.exe` has a section named `.reloc`, but its optional-header base-relocation data directory is `{RVA 0, Size 0}`. The Stage 2 loader maps it successfully at preferred base `0x00400000` and rejects a different base because no relocation records are advertised. This bring-up build must therefore be loaded at its preferred base in the form inspected.*
+
 ### 확인됨: ez2dj.exe와 EZ2DJ.EXE는 보호되어 있다
 
 `ez2dj.exe`의 섹션은 `.text .rdata .data .idata .reloc` 뒤에 **`.gtide` `.gdata` `.gidata`** 세 개가 더 붙어 있고, 진입점이 마지막 코드 섹션 `.gtide` 안에 있다. import 디렉터리도 `.gidata`(`0x01ad8000`)로 옮겨져 있다.

@@ -57,7 +57,10 @@ struct Context
     } while (false)
 
 void RunGuestPathTests(re2dj::test::Context& context);
+void RunAddressSpaceTests(re2dj::test::Context& context);
+void RunExecutionBackendTests(re2dj::test::Context& context);
 void RunPeImageTests(re2dj::test::Context& context);
+void RunPeLoaderTests(re2dj::test::Context& context);
 void RunHddRootTests(re2dj::test::Context& context);
 void RunTargetProfileTests(re2dj::test::Context& context);
 

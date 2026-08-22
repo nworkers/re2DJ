@@ -12,14 +12,14 @@
 flowchart TD
     S0["Stage 0<br/>Repository and rules"] --> S1["Stage 1<br/>HDD input and PE analysis"]
     S1 --> S2["Stage 2<br/>Image loading"]
-    S2 --> S3["Stage 3<br/>x86-32 interpreter"]
-    S3 --> S4["Stage 4<br/>kernel32 / user32 HLE"]
+    S2 --> S3["Stage 3<br/>Execution backend boundary<br/>and native helper prototype"]
+S3 --> S4["Stage 4<br/>Windows-first kernel32 / user32 HLE"]
     S4 --> S5["Stage 5<br/>Virtual file system"]
     S5 --> S6["Stage 6<br/>Graphics HLE"]
     S6 --> S7["Stage 7<br/>Audio and input"]
     S7 --> S8["Stage 8<br/>Linux host"]
-    S8 --> S9["Stage 9<br/>Web host"]
-    S3 -.optional.-> J["JIT backend"]
+    S8 --> S9["Stage 9<br/>Web execution backend"]
+    S9 -.if required.-> I["Deferred custom<br/>x86-32 interpreter"]
 ```
 
 ---
@@ -46,6 +46,8 @@ flowchart TD
 
 ## Stage 2 — 이미지 적재 / Image loading
 
+**완료 / Complete — 2026-08-22**
+
 PE32 이미지를 게스트 주소 공간에 매핑한다.
 
 * 게스트 주소 공간(`AddressSpace`): 평탄한 32비트 공간, 페이지 단위 커밋, 호스트 포인터 비노출
@@ -57,6 +59,10 @@ PE32 이미지를 게스트 주소 공간에 매핑한다.
 **완료 기준:** 원본 실행 파일의 import 목록 전체를 나열하고, 모든 재배치를 적용한 뒤 진입점 주소를 계산해 보고한다. 아직 실행하지 않는다.
 
 *Map the PE32 image into the guest address space: commit pages, copy sections, apply base relocations, bind imports to gate addresses, and note the TLS directory. Done when the full import list is enumerated, every relocation applies, and the entry-point address is computed and reported. Nothing executes yet.*
+
+구현 결과 `re2dj_pe_loader`가 `ez2dj1.exe`를 선호 주소 `0x00400000`에 적재하고 진입점 `0x0043a640`, TLS directory 없음, 7개 DLL의 import 144개와 gate 주소를 보고한다. 이 파일은 `.reloc` 섹션 이름은 갖지만 base relocation data directory가 비어 있어 다른 주소로 재배치할 수 없다. 로더의 `HIGHLOW` 재배치 경로는 synthetic PE32 테스트로 검증한다.
+
+*The implemented `re2dj_pe_loader` maps `ez2dj1.exe` at its preferred `0x00400000` base and reports entry point `0x0043a640`, no TLS directory, and 144 gated imports from seven DLLs. The file has a section named `.reloc` but an empty base-relocation data directory, so it cannot be rebased. The loader's `HIGHLOW` relocation path is verified with a synthetic PE32 test.*
 
 > import 목록이 나오는 순간 **어떤 API를 구현해야 하는지가 확정된다.** Stage 4 이후의 범위는 추측이 아니라 이 목록에서 나온다.
 >
@@ -70,28 +76,43 @@ PE32 이미지를 게스트 주소 공간에 매핑한다.
 > *This list is **already in hand**, obtained by statically parsing the original's import table, so the Stage 4 scope is fixed before the loader exists: 7 DLLs and 144 functions for `ez2dj1.exe`, listed in [EZ2DJ Import Surface](analysis/ez2dj-import-surface.md). Stage 2 is still required not for scoping but for **loading itself** — section mapping, relocation, and gate assignment have to be built.*
 
 > [!IMPORTANT]
-> 첫 적재 대상은 **`ez2dj1.exe`**다. 1st SE 덤프에서 유일하게 보호되지 않은 빌드이므로 언패킹 스텁을 실행하지 않고 진짜 게임 코드에 도달한다. 보호된 `ez2dj.exe`와 3rd의 `EZ2DJ.EXE`는 자기 수정 코드를 실행할 수 있는 backend가 필요하므로 Stage 3 이후로 미룬다.
+> 첫 적재 대상은 **`ez2dj1.exe`**다. 1st SE 덤프에서 유일하게 보호되지 않은 빌드이므로 언패킹 스텁을 실행하지 않고 진짜 게임 코드에 도달한다. 보호된 `ez2dj.exe`와 3rd의 `EZ2DJ.EXE`는 자기 수정 코드를 안전하게 처리하는 backend가 확인된 뒤로 미룬다.
 >
-> *The first load target is **`ez2dj1.exe`**, the only unprotected build in the 1st SE dump, which reaches real game code without running an unpacking stub. The protected builds need a backend that tolerates self-modifying code and wait until after Stage 3.*
+> *The first load target is **`ez2dj1.exe`**, the only unprotected build in the 1st SE dump, which reaches real game code without running an unpacking stub. The protected builds wait until a backend that safely handles self-modifying code has been validated.*
 
 ---
 
-## Stage 3 — x86-32 인터프리터 / x86-32 interpreter
+## Stage 3 — 실행 backend 경계와 네이티브 helper 검증 / Execution backend boundary and native-helper validation
 
-이식 가능한 x86-32 실행 계층을 만든다. 호스트가 64비트이거나 WebAssembly이므로 이 계층 없이는 어떤 호스트에서도 원본 코드가 돌지 않는다.
+**완료 / Complete**
+
+직접 인터프리터를 구현하기 전에 교체 가능한 `ExecutionBackend` 경계를 정의하고, Windows x64와 Linux x86-64에서 별도 32비트 helper 프로세스가 원본 x86 코드를 네이티브 실행하면서 import gate를 HLE dispatcher에 연결할 수 있는지 검증한다.
 
 * `GuestContext`: 범용 레지스터, EFLAGS, 세그먼트 셀렉터, x87, MMX/SSE
-* 명령어 디코더와 실행 루프
-* gate 주소 진입 시 HLE dispatcher로 전달
-* 단일 스레드 우선. 게스트가 스레드를 만들면 Stage 4에서 다룬다.
+* backend 생명주기, 메모리 접근, 실행/중단, gate dispatch 인터페이스
+* 32비트 helper와 64비트 host service 사이의 IPC 또는 thunk 경계
+* gate 주소 진입 시 HLE dispatcher로 전달하는 최소 prototype
+* 처음부터 멀티스레드 게스트 context를 분리할 수 있는 구조
 
-**완료 기준:** 직접 작성한 최소 PE32 테스트 프로그램이 정확한 종료 코드로 끝난다. 원본 실행 파일이 아니라 통제된 입력으로 먼저 검증한다.
+**완료 기준:** synthetic PE32가 데스크톱 네이티브 helper에서 gate 하나를 호출하고 정확한 종료 코드로 끝나며, Web 실행 엔진 후보와 라이선스 검토 결과가 문서화된다.
 
-*Build the portable x86-32 execution layer: guest context, decoder, execution loop, and gate dispatch. Done when a hand-written minimal PE32 test program runs to the correct exit code. Verification uses controlled input before the original executable.*
+*Define the replaceable `ExecutionBackend` boundary before building a custom interpreter, then validate whether a separate 32-bit helper on Windows x64 and Linux x86-64 can execute original x86 code natively and route an import gate to the HLE dispatcher. Done when a synthetic PE32 calls one gate and exits correctly through the native helper, and Web execution-engine candidates and their licenses are documented.*
 
-**선택 사항:** 호스트별 JIT backend. 같은 `ExecutionBackend` 인터페이스 뒤에 붙이며, 인터프리터가 정확성 기준선으로 남는다.
+**후순위:** Web에서는 x86 코드를 직접 실행할 수 없으므로 재사용 가능한 허용 라이선스 실행 엔진을 우선 검토한다. 적합한 엔진이 없을 때 직접 인터프리터를 같은 `ExecutionBackend` 인터페이스 뒤에 구현한다.
 
-*Optional: per-host JIT backends behind the same `ExecutionBackend` interface, with the interpreter remaining the correctness baseline.*
+*Deferred: Web cannot execute x86 code directly, so a reusable execution engine with a permitted license is evaluated first. A custom interpreter is implemented behind the same `ExecutionBackend` interface only if no suitable engine exists.*
+
+현재 `ExecutionBackend` event/reply·memory 경계와 Windows `NativeHelperBackend` adapter가 구현되었다. protocol v3에서 helper는 요청된 non-preferred base에 PE32를 mapping하고 `HIGHLOW` relocation을 적용한 뒤 이름/ordinal native import thunk와 metadata를 구성한다. `Start` 뒤 process-attach TLS callback을 entry point 전에 실행한다. synthetic probe는 preferred `0x10000000` image를 `0x11000000`에 적재하고, 두 import 결과 44에 callback state 7을 더한 result 51과 child 정상 종료를 확인한다. TLS raw storage/index와 thread callback은 멀티스레드 backend 단계에 남아 있다.
+
+*The `ExecutionBackend` event/reply/memory boundary and Windows `NativeHelperBackend` adapter are implemented. Under protocol v3, the helper maps PE32 at a requested non-preferred base, applies `HIGHLOW` relocations, then constructs named/ordinal native import thunks and metadata. After `Start`, process-attach TLS callbacks run before the entry point. The synthetic probe maps a preferred-`0x10000000` image at `0x11000000` and observes result 51 by adding callback state 7 to the two-import result 44, plus clean child exit. TLS raw storage/index and thread callbacks remain coupled to multithreaded backend work.*
+
+Linux에서도 x86-64 host가 별도 i386 helper를 `fork`/`exec`하고 공용 protocol v3로 실제 `__stdcall` gate event를 처리하는 최소 prototype이 구현되었다. host가 helper stack의 인자 41을 읽고 쓴 뒤 EAX 42를 응답하고 process result 42 및 child exit 0을 확인했다. 다음 Linux 작업은 PE32 mapping과 `ExecutionBackend` adapter다.
+
+*Linux now also has a minimal prototype in which an x86-64 host launches a separate i386 helper with `fork`/`exec` and handles a real `__stdcall` gate event over shared protocol v3. The host reads and writes argument 41 on the helper stack, replies with EAX 42, and observes process result 42 plus child exit zero. PE32 mapping and an `ExecutionBackend` adapter are the next Linux tasks.*
+
+Web 실행 엔진과 라이선스 조사를 완료했고 v86 CPU 분리성 spike도 끝냈다. v86은 BSD-2-Clause와 필요한 명령 범위를 갖지만 CPU-only build 경계가 없고 PC 장치·MMIO·browser timer/IRQ에 결합되어 있다. 또한 기본 synthetic gate `0xF0000000`은 실행 불가 mapped/MMIO 범위다. 따라서 대규모 fork 없이 `ExecutionBackend`에 연결할 수 없어 채택하지 않는다. TinyEMU 계열은 현재 Web x86 소스의 공개 경계가 확인될 때만 재평가하며, GPL/LGPL 후보는 제외했다. 직접 인터프리터는 후순위로 유지한다.
+
+*The Web execution-engine and license survey is complete, including the v86 CPU-separability spike. v86 is BSD-2-Clause and has the needed instruction coverage, but lacks a CPU-only build boundary and couples CPU operation to PC devices, MMIO, and browser timer/IRQ services. Its default synthetic gate, `0xF0000000`, is also non-executable mapped/MMIO. It therefore cannot connect to `ExecutionBackend` without a substantial fork and will not be adopted. A TinyEMU-family engine is reconsidered only if the publication boundary of its current Web x86 source is confirmed; GPL/LGPL candidates are excluded. A custom interpreter remains deferred.*
 
 ---
 

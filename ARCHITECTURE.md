@@ -13,9 +13,9 @@
 
 ## 1. 실행 모델 / Execution model
 
-게스트는 32비트 x86 Win32 PE 실행 파일이다. 호스트는 64비트 Windows, Linux x86-64, WebAssembly 세 가지다. 세 호스트 어디에서도 게스트 코드를 호스트 CPU가 직접 실행할 수 없으므로, 실행 backend는 **이식 가능한 x86-32 실행 계층**이 기본 경로다.
+게스트는 32비트 x86 Win32 PE 실행 파일이다. 호스트는 64비트 Windows, Linux x86-64, WebAssembly 세 가지다. x86-64 데스크톱은 별도 32비트 helper에서 네이티브 실행할 수 있지만 WebAssembly는 별도 x86 실행 계층이 필요하다. 이 차이를 `ExecutionBackend` 경계로 격리한다.
 
-*The guest is a 32-bit x86 Win32 PE executable. The hosts are 64-bit Windows, Linux x86-64, and WebAssembly. None of them can execute guest code directly on the host CPU, so the baseline execution backend is a **portable x86-32 execution layer**.*
+*The guest is a 32-bit x86 Win32 PE executable. The hosts are 64-bit Windows, Linux x86-64, and WebAssembly. An x86-64 desktop can execute it natively in a separate 32-bit helper, while WebAssembly needs a separate x86 execution layer. The `ExecutionBackend` boundary isolates that difference.*
 
 HLE 경계는 **Win32 import thunk**다. 로더가 게스트의 import table을 해석할 때, 각 API를 실제 DLL이 아니라 합성 gate 주소로 바인딩한다. 실행 backend가 gate 주소로 제어를 넘기면 C++ 구현이 호출된다.
 
@@ -135,9 +135,9 @@ flowchart TD
 
 *`re2dj::exe::PeImageInfo` reads the DOS header, COFF file header, optional header, section table, and data directories from an original executable.*
 
-이 단계는 **적재하지 않는다.** 파일을 읽어 구조만 보고한다. 실제 적재(섹션 매핑, 재배치, import 바인딩)는 런타임 계층에서 수행하며 아직 구현되지 않았다.
+이 판독기 자체는 **적재하지 않는다.** 파일을 읽어 구조만 보고한다. 실제 적재(섹션 매핑, 재배치, import 바인딩)는 구현된 런타임 계층의 `LoadPe32Image()`가 수행한다.
 
-*This stage does **not** load anything; it reports structure only. Actual loading — section mapping, relocation, import binding — belongs to the runtime layer and is not implemented yet.*
+*This reader does **not** load anything; it reports structure only. The implemented runtime `LoadPe32Image()` performs section mapping, relocation, and import binding.*
 
 HDD 스캔은 이 판독기를 사용해 각 실행 파일을 분류한다. `machine`이 x86(0x014C)이고 magic이 PE32(0x10B)이며 subsystem이 GUI인 항목이 게임 실행 파일 후보다.
 
@@ -155,7 +155,7 @@ HDD 스캔은 이 판독기를 사용해 각 실행 파일을 분류한다. `mac
 | `display_name` | 사람이 읽는 이름 |
 | `executable_relative_path` | HDD 루트 기준 실행 파일 경로. 지문이 맞을 때 채워진다 |
 | `working_directory_relative_path` | 호스트 쪽 작업 디렉터리 |
-| `guest_drive_letter` | 게스트가 자신이 실행된다고 믿는 드라이브. 근거가 없으면 `' '` |
+| `guest_drive_letter` | 게스트가 자신이 실행된다고 믿는 드라이브. 근거가 없으면 `\0` |
 | `guest_directory` | 같은 근거의 Win32 디렉터리. 근거가 없으면 빈 문자열 |
 | `hle_profile_id` | 적용할 HLE 서비스 집합 |
 | `detected` | 내장 표가 아니라 스캔에서 나온 것인지 |
@@ -194,7 +194,7 @@ HDD 스캔은 이 판독기를 사용해 각 실행 파일을 분류한다. `mac
 
 ---
 
-## 7. 계획된 런타임 계층 / Planned runtime layer **[계획]**
+## 7. 런타임 계층 / Runtime layer **[부분 구현됨]**
 
 ```mermaid
 flowchart TD
@@ -204,17 +204,24 @@ flowchart TD
         CTX["GuestContext<br/>GPR / EFLAGS / x87 / SSE"]
         BE["ExecutionBackend<br/>interface"]
     end
-    BE --> INT["Interpreter backend<br/>(all hosts, baseline)"]
-    BE --> JIT["JIT backend<br/>(optional, per host)"]
+    BE --> NAT["NativeHelperBackend<br/>Windows adapter implemented"]
+    BE --> LNX["Linux i386 helper<br/>gate probe implemented"]
+    BE --> WEB["Web execution engine<br/>v86 spike rejected"]
+    WEB -.fallback.-> INT["Custom interpreter<br/>(deferred)"]
     AS --> GATE["Import gate region"]
     GATE --> DISP["HLE dispatcher"]
 ```
 
-* `AddressSpace`는 게스트의 평탄한 4 GiB 주소 공간 중 실제로 커밋된 영역만 호스트 메모리에 둔다. 게스트 주소를 호스트 포인터로 노출하지 않고 `Read8/16/32`, `Write8/16/32` 접근자를 통해서만 다룬다.
-* `ExecutionBackend`는 인터프리터를 기본 구현으로 두고, 호스트별 JIT을 나중에 같은 인터페이스로 붙인다.
-* import gate 영역은 실제 코드가 없는 예약 주소 범위다. 그 주소로의 호출은 backend가 곧바로 HLE dispatcher로 넘긴다.
+* `GuestAddress`는 host pointer로 변환되지 않는 32비트 값 타입이다.
+* `AddressSpace`는 게스트의 평탄한 4 GiB 주소 공간 중 실제로 커밋된 페이지만 호스트 메모리에 둔다. 게스트 주소를 호스트 포인터로 노출하지 않고 `Read8/16/32`, `Write8/16/32` 접근자를 통해서만 다룬다.
+* `LoadPe32Image()`는 헤더와 섹션을 매핑하고 zero-fill한 뒤, `IMAGE_REL_BASED_HIGHLOW` 재배치를 적용하고 이름/ordinal import를 합성 gate에 바인딩한다. 실패 시 호출자가 제공한 주소 공간과 gate 표는 바뀌지 않는다.
+* `ImportGateTable`은 기본적으로 `0xF0000000`부터 16바이트 간격의 주소를 배정한다. 이 범위에는 실제 명령어가 없으며 Stage 3 backend가 HLE dispatcher로 전달한다.
+* `ExecutionBackend` event/reply 인터페이스는 이미지 준비, 실행 시작, event 대기, import 완료 응답, 중단 요청을 분리한다. event에는 backend-local thread ID, guest EIP/ESP와 gate 주소만 담고 host pointer를 넣지 않는다. import 응답은 EAX/EDX, stack 정리 byte 수, 계속/중단 action을 전달한다.
+* Windows `NativeHelperBackend`는 x86 helper process와 anonymous pipe protocol v3를 `ExecutionBackend` 뒤에 캡슐화한다. PImpl 공개 header에는 Windows type이 없고, adapter가 packet 순서, 상태 검증과 child 종료를 소유한다. `native_pe_image`는 requested base mapping, `HIGHLOW` relocation, section protection과 process-attach TLS callback을 담당한다. helper는 PE32의 이름/ordinal import를 순회해 `ImportGateTable`의 synthetic gate마다 실행 가능한 x86 thunk를 만들고 실제 thunk 주소를 IAT에 쓴다. load 뒤 module/name/ordinal/gate metadata를 adapter에 보내 `LoadedPeImage.imports`를 채운다. gate가 멈춘 동안 adapter는 guest memory를 읽고 쓴 뒤 EDX:EAX와 동적 stack 정리 크기를 응답한다. protocol은 event 하나를 직렬 처리하며 TLS storage/index와 병렬 guest thread는 후속 확장이다.
+* OS type을 포함하지 않는 desktop helper protocol v3 header는 `src/platform/native_helper_protocol.h`에 공유한다. Linux 최소 prototype은 x86-64 host가 `fork`/`exec`한 i386 helper의 실제 `__stdcall` gate에서 같은 event/memory/completion packet을 왕복한다. 현재 Linux 경로는 제한된 stack memory와 컴파일된 gate만 검증했으며 PE32 mapping 및 backend adapter는 후속 작업이다.
+* BSD-2-Clause v86 CPU 분리성 spike는 부적합으로 끝났다. 공식 소스에는 CPU-only build 경계가 없고 CPU memory·run loop가 PC 장치, MMIO, browser timer/IRQ에 결합되어 있다. 기본 synthetic gate `0xF0000000`도 v86에서 실행 불가능한 mapped/MMIO 범위다. interpreter와 JIT 양쪽에 gate stop/resume을 새로 넣고 대규모 fork를 유지해야 하므로 채택하지 않는다. TinyEMU 계열은 Web x86 소스 공개 범위를 확인할 때만 재검토하며, 직접 인터프리터는 계속 후순위 fallback이다.
 
-*`AddressSpace` keeps only committed regions of the guest's flat 4 GiB space in host memory and exposes accessors rather than host pointers. `ExecutionBackend` starts as an interpreter and gains per-host JITs behind the same interface. The import gate region is a reserved address range with no real code; a call into it is routed straight to the HLE dispatcher.*
+*`GuestAddress` is a 32-bit value type that cannot become a host pointer. `AddressSpace` keeps only committed pages of the flat 4 GiB guest space in host memory and exposes accessors rather than pointers. `LoadPe32Image()` maps and zero-fills headers and sections, applies `IMAGE_REL_BASED_HIGHLOW` relocations, and binds named or ordinal imports to synthetic gates transactionally. `ImportGateTable` assigns addresses at 16-byte intervals from `0xF0000000`. The implemented `ExecutionBackend` interface separates image preparation, start, event waiting, guest-memory reads/writes, import completion, and stop requests using backend-local thread IDs and guest values only. Windows `NativeHelperBackend` encapsulates the x86 helper process and anonymous-pipe protocol v3 behind that interface; `native_pe_image` owns requested-base mapping, relocations, protection, and process-attach TLS callbacks, while import thunks restore EDX:EAX and dynamic stack cleanup. The OS-independent protocol-v3 header is shared under `src/platform/`. A Linux x86-64 host/i386 helper probe uses the same event/memory/completion packets for a real `__stdcall` gate, but Linux PE32 mapping and its backend adapter remain later work. Protocol v3 serializes one event; TLS storage/index and parallel guest threads remain later extensions. The v86 separability spike rejected adoption: its published source lacks a CPU-only build boundary, couples CPU memory/run control to PC devices and browser services, and treats the default synthetic-gate range as non-executable MMIO. TinyEMU remains conditional on confirming published Web-x86 source scope, while a custom interpreter remains deferred.*
 
 ---
 
@@ -256,7 +263,7 @@ flowchart TD
 | --- | --- | --- |
 | 게스트 실행 형식 | DOS/4GW LE | Win32 PE32 |
 | 환경 경계 | DOS/DPMI interrupt, port I/O | Win32 import thunk |
-| 실행 방식 | 32비트 Win32 호스트에서 네이티브 실행 + VEH 트랩 | 이식 가능한 x86-32 실행 backend |
+| 실행 방식 | 32비트 Win32 호스트에서 네이티브 실행 + VEH 트랩 | 교체 가능한 backend: 데스크톱 native helper 우선, Web 실행 엔진 별도 |
 | 호스트 | Win32 x86 전용 | Windows x64 / Linux x64 / Web |
 | 그래픽 경계 | Glide (`glide2x`) | DirectDraw / Direct3D |
 | 자산 입력 | MAME ROM ZIP + CHD | HDD 디렉터리 경로 |
@@ -270,7 +277,7 @@ flowchart TD
 
 ## 10. 빌드 구성 / Build configuration **[구현됨]**
 
-`CMakeLists.txt`는 하나의 코어 라이브러리 `re2dj_core`와 세 개의 실행 파일을 만든다.
+`CMakeLists.txt`는 공용 코어와 host·분석·검증 실행 파일을 만들며, Win32 전용 preset에서는 native helper probe만 별도 검증할 수 있다.
 
 | 타깃 | 내용 |
 | --- | --- |
@@ -278,7 +285,11 @@ flowchart TD
 | `re2dj` | 명령행 호스트 |
 | `re2dj_hdd_probe` | HDD 디렉터리 스캔 도구 |
 | `re2dj_pe_analyzer` | PE32 헤더 분석 도구 |
+| `re2dj_pe_loader` | PE32 매핑·재배치·import gate 보고 도구 |
 | `re2dj_unit_tests` | CTest에 등록된 단위 테스트 |
+| `re2dj_native_helper_probe` | Win32 x86 / WOW64 네이티브 gate 호출 probe, 선택 target |
+| `re2dj_native_ipc_host_probe` | x64 host 쪽 synthetic PE32 IPC 통합 probe |
+| `re2dj_native_ipc_helper` | Win32 x86 mapper·gate·IPC helper, 선택 target |
 
 외부 의존성은 아직 없다. 그래픽·오디오 backend를 붙일 때 SDL3 같은 zlib/BSD 계열 라이선스 라이브러리를 검토한다.
 

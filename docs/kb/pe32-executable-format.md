@@ -127,11 +127,17 @@ sequenceDiagram
     end
     L->>A: Resolve imports, write gate addresses into the IAT
     L->>A: Apply page protections from section Characteristics
+    L->>A: Invoke process-attach TLS callbacks (directory 9)
+    L->>A: Enter AddressOfEntryPoint
 ```
 
 기준 재배치 블록은 `{PageRVA, BlockSize}` 헤더 뒤에 16비트 항목이 이어지는 구조다. 항목의 상위 4비트가 유형이고 하위 12비트가 페이지 내 오프셋이다. 32비트 이미지에서 실제로 쓰이는 유형은 `IMAGE_REL_BASED_HIGHLOW`(3)와 패딩용 `ABSOLUTE`(0)다.
 
 *A base relocation block is a `{PageRVA, BlockSize}` header followed by 16-bit entries whose top four bits are the type and whose low twelve are the offset within the page. In 32-bit images the types that actually appear are `IMAGE_REL_BASED_HIGHLOW` (3) and the padding `ABSOLUTE` (0).*
+
+PE32 TLS directory의 주소 필드와 callback 배열 항목은 RVA가 아니라 VA다. image가 재배치되면 relocation directory가 이 값도 보정해야 한다. process 시작에서는 import가 해석된 뒤 entry point보다 먼저 null-terminated callback 배열을 순서대로 호출한다. callback 인자는 module base, `DLL_PROCESS_ATTACH`, reserved null이다. callback 실행과 별개로 완전한 TLS 지원에는 raw template, loader가 쓰는 TLS index와 thread별 block이 필요하다.
+
+*PE32 TLS directory address fields and callback-array entries are VAs rather than RVAs, so the relocation directory must adjust them when the image is rebased. During process startup, the loader calls the null-terminated callback array in order after import resolution and before the entry point, passing module base, `DLL_PROCESS_ATTACH`, and null reserved data. Full TLS support additionally requires the raw template, loader-written TLS index, and per-thread blocks.*
 
 ---
 

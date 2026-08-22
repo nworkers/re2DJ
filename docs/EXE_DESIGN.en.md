@@ -35,7 +35,7 @@ The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layo
 | Machine | i386 (`0x014C`) throughout |
 | Image base | `0x00400000` throughout |
 | Subsystem | Windows GUI (2) throughout |
-| `.reloc` | Present |
+| `.reloc` | Section present, but `ez2dj1.exe` has an empty base-relocation data directory and is fixed to its preferred base |
 | Build timestamps | `ez2dj1.exe` 1999-12-24, `ez2dj.exe` 2000-01-01, `EZ2DJ.EXE` 2001-09-24 |
 | Protection | Only `ez2dj1.exe` is unprotected; the others hold their entry point in a `.gtide` or `.protect` section |
 

@@ -42,15 +42,15 @@ re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, EZ2DJ의 원�
 flowchart LR
     HDD["HDD directory<br/>(user-supplied path)"] --> SCAN["HDD scan<br/>+ target profile"]
     SCAN --> PE["PE32 image reader"]
-    PE --> LOAD["Loader<br/>(planned)"]
-    LOAD --> EXEC["x86-32 execution backend<br/>(planned)"]
+    PE --> LOAD["PE32 loader<br/>(implemented)"]
+    LOAD --> EXEC["replaceable execution backend<br/>(planned)"]
     EXEC -->|import gate| HLE["Win32 / DirectX HLE<br/>(planned)"]
     HLE --> PLAT["Platform backend<br/>windows / linux / web"]
 ```
 
-게스트는 32비트 x86이고 지원 호스트는 모두 64비트이거나 WebAssembly입니다. 원본 코드를 호스트 CPU가 직접 실행할 수 있는 경로가 없으므로, 실행 backend는 이식 가능한 x86-32 실행 계층이 기본입니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+x86-64 Windows에서는 32비트 helper backend가 구현되어 있고, Linux에서는 x86-64 host/i386 helper의 native gate IPC prototype이 검증되었습니다. WebAssembly에는 별도 x86 실행 엔진이 필요합니다. 이 경로들은 교체 가능한 `ExecutionBackend` 경계 뒤에 두며, 직접 인터프리터 구현은 후순위 fallback입니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*The guest is 32-bit x86 while every supported host is 64-bit or WebAssembly, so no path exists to run the original code directly on the host CPU. The baseline execution backend is therefore a portable x86-32 execution layer. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*Windows x86-64 has an implemented 32-bit helper backend, and Linux has a validated x86-64 host/i386 helper native-gate IPC prototype. WebAssembly needs a separate x86 execution engine. These paths sit behind a replaceable `ExecutionBackend` boundary, and a custom interpreter is a deferred fallback. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -89,6 +89,14 @@ ctest --preset windows-x64-debug
 cmake --preset linux-x64-debug
 cmake --build --preset linux-x64-debug
 ctest --preset linux-x64-debug
+
+# Windows x86 native-helper feasibility probe under WOW64
+cmake --preset windows-x86-native-probe -DRE2DJ_WARNINGS_AS_ERRORS=ON
+cmake --build --preset windows-x86-native-probe
+ctest --preset windows-x86-native-probe
+
+# Windows x64 host / x86 helper synthetic PE32 IPC integration
+powershell -ExecutionPolicy Bypass -File scripts/test_windows_native_ipc_probe.ps1
 ```
 
 빌드 산출물은 `build/<preset>/bin/`에 생성됩니다.
@@ -176,6 +184,16 @@ build/linux-x64-debug/bin/re2dj_pe_analyzer --hdd /path/to/ez2dj_hdd "EZ2DJ/Ez2d
 PE 헤더, 섹션 테이블, data directory를 출력합니다. 이미지를 적재하지 않으므로 실행 위험이 없습니다.
 
 *It prints the PE headers, section table, and data directories. The image is never loaded, so nothing is executed.*
+
+### 8. 이미지 적재 확인 / Verify image loading
+
+```bash
+build/linux-x64-debug/bin/re2dj_pe_loader --hdd /path/to/ez2dj_hdd "EZ2DJ/ez2dj1.exe"
+```
+
+PE32 이미지를 게스트 주소 공간에 적재하고 진입점, TLS directory, import별 합성 gate 주소를 보고합니다. 원본 코드는 실행하지 않습니다. 마지막 인자로 `0x10000000` 같은 load base를 주면 재배치 가능 여부와 재배치 경로를 확인할 수 있습니다.
+
+*It maps the PE32 image into guest memory and reports the entry point, TLS directory, and synthetic gate address for every import. Original code is not executed. An optional final load base such as `0x10000000` exercises relocation or reports that the image cannot be rebased.*
 
 ---
 

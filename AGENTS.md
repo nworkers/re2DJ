@@ -313,7 +313,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * 절대적으로 필요하지 않으면 게임플레이 로직을 C++로 다시 작성하지 않는다.
 * 모든 하위 시스템은 독립적으로 교체 가능해야 한다.
 * HLE 경계는 **Win32 import thunk 단위**를 기본으로 삼는다. 명령어 단위 트랩은 대체 수단이 없을 때만 사용한다.
-* 게스트는 32비트 x86이고 호스트는 64비트 또는 WebAssembly이므로, 실행 backend는 이식 가능한 x86 실행 계층을 기본 경로로 삼는다. 호스트별 가속 backend는 선택 사항으로 추가한다.
+* 실행 경로는 교체 가능한 `ExecutionBackend` 경계 뒤에 둔다. Windows/Linux 데스크톱은 별도 32비트 네이티브 helper를 먼저 검증하고, Web은 허용 라이선스의 재사용 실행 엔진을 우선 조사한다. 직접 x86 인터프리터는 적합한 엔진이 없을 때 구현하는 후순위 fallback이다.
 * 공용 코어는 Linux, 64-bit Windows, Web에서 모두 빌드되어야 한다. 플랫폼 하나에서만 성립하는 가정을 공용 코어에 넣지 않는다.
 
 ## Architecture Rules
@@ -323,7 +323,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * Do not rewrite gameplay logic into C++ unless absolutely unavoidable.
 * Every subsystem should be replaceable independently.
 * The default HLE boundary is the **Win32 import thunk**. Use instruction-level traps only when no alternative exists.
-* Because the guest is 32-bit x86 while hosts are 64-bit or WebAssembly, the portable x86 execution layer is the baseline backend. Host-specific accelerated backends are optional additions.
+* Put execution paths behind a replaceable `ExecutionBackend` boundary. Validate a separate native 32-bit helper first for Windows/Linux desktops, and evaluate reusable Web execution engines with permitted licenses before writing a custom x86 interpreter. A custom interpreter is a deferred fallback when no suitable engine exists.
 * The shared core must build on Linux, 64-bit Windows, and Web. Do not place single-platform assumptions in the shared core.
 
 ---

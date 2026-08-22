@@ -57,7 +57,19 @@ COM 인터페이스(DirectDraw, Direct3D, DirectSound 등)는 vtable 기반이�
 
 ---
 
-## 3. 모듈 테이블 형태 / Module table shape
+## 3. 데스크톱 native helper thunk / Desktop native-helper thunks
+
+별도 32비트 helper에서 게스트 x86을 네이티브 실행할 때 IAT에는 64비트 host의 synthetic gate 주소를 직접 쓸 수 없습니다. helper 주소 공간에 실행 가능한 import별 thunk를 만들고 IAT에는 그 실제 주소를 씁니다. thunk는 별도의 synthetic gate identity를 bridge에 전달하므로 host dispatcher는 backend 구현 주소가 아니라 `ImportGateTable` metadata로 API를 식별합니다.
+
+*When guest x86 runs natively in a separate 32-bit helper, the IAT cannot directly contain a synthetic gate address owned by the 64-bit host model. Each import gets an executable thunk in the helper address space, and the IAT receives that real address. The thunk separately passes its synthetic gate identity to the bridge, allowing the host dispatcher to identify APIs through `ImportGateTable` metadata rather than backend implementation addresses.*
+
+re2DJ의 직렬 Windows protocol v2 thunk는 bridge에서 돌아온 뒤 guest return address를 꺼내고 host가 지정한 `__stdcall` argument byte 수만큼 ESP를 이동한 후 복귀합니다. bridge의 64비트 정수 반환을 사용하면 MSVC x86 ABI에 따라 EDX:EAX가 함께 복원됩니다. 현재 cleanup slot은 event 하나만 처리하는 직렬 protocol을 전제로 하므로, 병렬 guest thread를 지원할 때 event별 resume frame으로 바꿔야 합니다.
+
+*After its bridge returns, the serialized Windows protocol-v2 thunk pops the guest return address, advances ESP by the host-supplied `__stdcall` argument-byte count, and resumes the guest. Returning a 64-bit integer from the bridge restores EDX:EAX under the MSVC x86 ABI. The current cleanup slot assumes one serialized event and must become a per-event resume frame when parallel guest threads are supported.*
+
+---
+
+## 4. 모듈 테이블 형태 / Module table shape
 
 한 모듈은 다음 항목의 테이블이다.
 
@@ -75,7 +87,7 @@ COM 인터페이스(DirectDraw, Direct3D, DirectSound 등)는 vtable 기반이�
 
 ---
 
-## 4. 문자열과 코드 페이지 / Strings and code pages
+## 5. 문자열과 코드 페이지 / Strings and code pages
 
 원본은 한국어 Windows에서 동작했다. ANSI(`...A`) API에 넘어오는 문자열은 유니코드가 아니라 **CP949(EUC-KR 확장)** 바이트열일 가능성이 높다. 미확정이며 실행 중 관찰로 확인한다.
 
@@ -85,7 +97,7 @@ COM 인터페이스(DirectDraw, Direct3D, DirectSound 등)는 vtable 기반이�
 
 ---
 
-## 5. Wine을 코드로 쓰지 않는 이유 / Why Wine is not used as code
+## 6. Wine을 코드로 쓰지 않는 이유 / Why Wine is not used as code
 
 Wine은 같은 문제를 해결한 성숙한 구현이지만 **LGPL**이다. 프로젝트 라이선스 정책이 전염성 라이선스를 배제하므로 코드 재사용 대상이 아니다. 공개 문서와 API 동작 설명은 참고 자료로 인용할 수 있다.
 

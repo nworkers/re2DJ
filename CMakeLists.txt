@@ -22,14 +22,49 @@ endif()
 
 option(RE2DJ_BUILD_TESTS "Build the unit test suite" ON)
 option(RE2DJ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(RE2DJ_BUILD_NATIVE_HELPER_PROBE
+       "Build the Windows x86 native helper feasibility probe" OFF)
+option(RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE
+       "Build the Linux i386 native helper feasibility probe" OFF)
 
-# The guest is 32-bit x86 while every supported host is 64-bit or WebAssembly.
-# A 32-bit host build is therefore not a supported configuration, and saying so
-# at configure time is cheaper than a confusing failure later.
-if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+# Normal hosts are 64-bit or WebAssembly. A Win32 build is reserved for the
+# native helper probe and is not a supported full-host configuration.
+if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT RE2DJ_BUILD_NATIVE_HELPER_PROBE AND
+   NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE)
     message(WARNING
         "Configuring a 32-bit host build. The supported hosts are 64-bit "
         "Windows, Linux x86-64, and WebAssembly.")
+endif()
+
+if(RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
+        message(FATAL_ERROR
+            "RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE requires a Linux i386 build")
+    endif()
+    add_executable(re2dj_linux_native_ipc_helper_probe
+        src/platform/linux/native_import_thunks.cpp
+        src/platform/linux/native_ipc_helper_probe.cpp
+    )
+    target_compile_options(re2dj_linux_native_ipc_helper_probe
+        PRIVATE -fno-omit-frame-pointer
+    )
+    target_link_libraries(re2dj_linux_native_ipc_helper_probe PRIVATE re2dj_core re2dj_warnings)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    add_library(re2dj_linux_native_backend STATIC
+        src/platform/linux/native_helper_backend.cpp
+    )
+    target_link_libraries(re2dj_linux_native_backend
+        PUBLIC re2dj_core
+        PRIVATE re2dj_warnings
+    )
+    add_executable(re2dj_linux_native_ipc_host_probe
+        src/platform/linux/native_ipc_host_probe.cpp
+    )
+    target_link_libraries(re2dj_linux_native_ipc_host_probe
+        PRIVATE re2dj_linux_native_backend re2dj_warnings
+    )
 endif()
 
 add_library(re2dj_warnings INTERFACE)
@@ -54,6 +89,8 @@ add_library(re2dj_core STATIC
     src/exe/pe_image.cpp
     src/hdd/hdd_root.cpp
     src/hdd/hdd_scan.cpp
+    src/runtime/address_space.cpp
+    src/runtime/pe_loader.cpp
     src/storage/guest_path.cpp
     src/target/target_profile.cpp
     src/version.cpp
@@ -70,6 +107,42 @@ target_compile_definitions(re2dj_core
 )
 
 target_link_libraries(re2dj_core PRIVATE re2dj_warnings)
+
+if(RE2DJ_BUILD_NATIVE_HELPER_PROBE)
+    if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
+        message(FATAL_ERROR
+            "RE2DJ_BUILD_NATIVE_HELPER_PROBE requires a Win32 x86 build")
+    endif()
+    add_executable(re2dj_native_helper_probe
+        src/platform/windows/native_helper_probe.cpp
+    )
+    target_link_libraries(re2dj_native_helper_probe PRIVATE re2dj_warnings)
+    add_executable(re2dj_native_ipc_helper
+        src/platform/windows/native_import_thunks.cpp
+        src/platform/windows/native_ipc_helper.cpp
+        src/platform/windows/native_pe_image.cpp
+    )
+    target_link_libraries(re2dj_native_ipc_helper PRIVATE re2dj_core re2dj_warnings)
+    target_link_options(re2dj_native_ipc_helper PRIVATE /BASE:0x20000000 /DYNAMICBASE:NO)
+    enable_testing()
+    add_test(NAME re2dj_native_helper_probe COMMAND re2dj_native_helper_probe)
+endif()
+
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    add_library(re2dj_windows_native_backend STATIC
+        src/platform/windows/native_helper_backend.cpp
+    )
+    target_link_libraries(re2dj_windows_native_backend
+        PUBLIC re2dj_core
+        PRIVATE re2dj_warnings
+    )
+    add_executable(re2dj_native_ipc_host_probe
+        src/platform/windows/native_ipc_host_probe.cpp
+    )
+    target_link_libraries(re2dj_native_ipc_host_probe
+        PRIVATE re2dj_windows_native_backend re2dj_warnings
+    )
+endif()
 
 # std::filesystem needs no separate link library on GCC 9+, Clang with
 # libstdc++ 9+, MSVC, or Emscripten, which covers every supported host.
@@ -91,13 +164,21 @@ add_executable(re2dj_pe_analyzer
 )
 target_link_libraries(re2dj_pe_analyzer PRIVATE re2dj_core re2dj_warnings)
 
+add_executable(re2dj_pe_loader
+    src/tools/pe_loader/main.cpp
+)
+target_link_libraries(re2dj_pe_loader PRIVATE re2dj_core re2dj_warnings)
+
 if(RE2DJ_BUILD_TESTS)
     enable_testing()
     add_executable(re2dj_unit_tests
+        tests/unit/address_space_test.cpp
+        tests/unit/execution_backend_test.cpp
         tests/unit/guest_path_test.cpp
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp
         tests/unit/pe_image_test.cpp
+        tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp
         tests/unit/temporary_tree.cpp
         tests/unit/target_profile_test.cpp

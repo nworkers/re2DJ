@@ -19,20 +19,20 @@ Game logic must remain in the original 32-bit x86 code. C++ code should focus on
 | 호스트 | 툴체인 | 상태 |
 | --- | --- | --- |
 | 64-bit Windows | MSVC 또는 clang-cl | 1차 개발 호스트 |
-| Linux x86-64 | GCC 또는 Clang | 1차 이식 목표 |
+| Linux x86-64 | GCC 또는 Clang | Windows 단계 완료 후 이식 목표 |
 | Web (WebAssembly) | Emscripten | 2차 이식 목표 |
 
-세 호스트 모두 게스트와 비트 폭이 다르거나(64비트) 명령어 집합 자체가 다르므로(WebAssembly), **원본 x86 코드를 호스트 CPU에서 그대로 실행하는 경로는 존재하지 않는다.** 이 점이 rePIU와의 가장 큰 구조적 차이다.
+x86-64 Windows와 Linux는 별도 32비트 프로세스에서 원본 x86 코드를 CPU로 실행할 수 있으므로 네이티브 helper 경로를 검토한다. 64비트 프로세스 내부에 32비트 코드를 직접 적재할 수는 없으며, WebAssembly는 명령어 집합 자체가 달라 별도 x86 실행 계층이 반드시 필요하다.
 
 ## Target Host Platforms
 
 | Host | Toolchain | Status |
 | --- | --- | --- |
 | 64-bit Windows | MSVC or clang-cl | Primary development host |
-| Linux x86-64 | GCC or Clang | First porting target |
+| Linux x86-64 | GCC or Clang | Porting target after Windows stages |
 | Web (WebAssembly) | Emscripten | Second porting target |
 
-All three hosts differ from the guest either in bit width (64-bit) or in instruction set (WebAssembly), so **no path exists to run the original x86 code directly on the host CPU.** This is the largest structural difference from rePIU.
+Windows and Linux on x86-64 can let the CPU execute original x86 code in a separate 32-bit process, so a native-helper path is evaluated. A 64-bit process cannot directly load 32-bit code, while WebAssembly has a different instruction set and therefore always needs a separate x86 execution layer.
 
 ---
 

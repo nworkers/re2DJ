@@ -35,7 +35,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 | machine | i386 (`0x014C`) — 전부 |
 | image base | `0x00400000` — 전부 |
 | subsystem | Windows GUI (2) — 전부 |
-| `.reloc` | 있음 |
+| `.reloc` | 섹션은 있으나 `ez2dj1.exe`의 base relocation data directory는 비어 있음 — 선호 주소 고정 |
 | 빌드 시각 | `ez2dj1.exe` 1999-12-24, `ez2dj.exe` 2000-01-01, `EZ2DJ.EXE` 2001-09-24 |
 | 보호 여부 | `ez2dj1.exe`만 보호되지 않음. 나머지는 진입점이 `.gtide` / `.protect` 섹션에 있다 |
 

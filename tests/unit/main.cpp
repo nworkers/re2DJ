@@ -6,8 +6,11 @@ int main()
 {
     re2dj::test::Context context;
 
+    RunAddressSpaceTests(context);
+    RunExecutionBackendTests(context);
     RunGuestPathTests(context);
     RunPeImageTests(context);
+    RunPeLoaderTests(context);
     RunHddRootTests(context);
     RunTargetProfileTests(context);
 
