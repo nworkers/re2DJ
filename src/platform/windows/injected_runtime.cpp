@@ -6,11 +6,25 @@
 #include <cstring>
 #include <intrin.h>
 
+#include "re2dj/device/lptdi_challenge_response.h"
+
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_hle_windows_directory[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_hdd_root[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_overlay_root[MAX_PATH] = {};
+// Device-emulation policy: 0 keeps the natural open failure, 1 lets the
+// emulated \\.\ devices open successfully.
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_mock = 0;
+// IOCTL policy: 0 disables synthetic IOCTLs, 1 returns zero bytes, 2 reports
+// the full output size while preserving the buffer, 3 copies configured
+// response-profile bytes, and 4 derives a response for a selected target state.
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_ioctl_mode = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_response_410_size = 0;
+extern "C" __declspec(dllexport) unsigned char g_re2dj_device_response_410[8] = {};
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_response_414_size = 0;
+extern "C" __declspec(dllexport) unsigned char g_re2dj_device_response_414[104] = {};
+extern "C" __declspec(dllexport) unsigned char g_re2dj_device_target_state[8] = {};
 
 namespace
 {
@@ -20,6 +34,7 @@ constexpr char kHleMessage[] = "re2dj:hle:GetCommandLineA";
 constexpr char kWindowsDirectoryMessage[] = "re2dj:hle:GetWindowsDirectoryA";
 constexpr char kCreateFileMessage[] = "re2dj:vfs:CreateFileA";
 constexpr char kFileApiMessage[] = "re2dj:vfs:file-api";
+constexpr char kDeviceIoControlMessage[] = "re2dj:device:DeviceIoControl";
 constexpr char kExitProcessMessage[] = "re2dj:probe:ExitProcess";
 
 bool HasPrefixIgnoreCase(const char* text, const char* prefix)
@@ -96,6 +111,28 @@ bool IsRegularFile(const char* path)
 {
     const DWORD attributes = GetFileAttributesA(path);
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+// Synthetic handles for emulated \\.\ devices live in a reserved range so the
+// file wrappers can recognize them without consulting the host handle table.
+constexpr std::uintptr_t kDeviceMockHandleBase = 0xFEED0000;
+
+bool IsDeviceMockHandle(HANDLE handle)
+{
+    const std::uintptr_t value = reinterpret_cast<std::uintptr_t>(handle);
+    return value > kDeviceMockHandleBase && value <= kDeviceMockHandleBase + 0xff;
+}
+
+// Matches device paths such as \\.\LPTDI1 case-insensitively. A plain prefix
+// test is used because the port digit varies at guest runtime.
+bool HasDeviceMockPrefix(const char* name)
+{
+    constexpr char kPrefix[] = "\\\\.\\lptdi";
+    if (g_re2dj_device_mock == 0 || name == nullptr)
+    {
+        return false;
+    }
+    return _strnicmp(name, kPrefix, sizeof(kPrefix) - 1) == 0;
 }
 
 bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[MAX_PATH])
@@ -184,6 +221,11 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
         SetLastError(ERROR_INVALID_NAME);
         return INVALID_HANDLE_VALUE;
     }
+    if (HasDeviceMockPrefix(name))
+    {
+        SetLastError(ERROR_SUCCESS);
+        return reinterpret_cast<HANDLE>(kDeviceMockHandleBase + 1);
+    }
     char path[MAX_PATH] = {};
     char source[MAX_PATH] = {};
     const bool write = (access & (GENERIC_WRITE | FILE_APPEND_DATA | DELETE)) != 0;
@@ -231,6 +273,15 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
     HANDLE handle, LPVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped)
 {
     OutputDebugStringA(kFileApiMessage);
+    if (IsDeviceMockHandle(handle))
+    {
+        if (transferred != nullptr)
+        {
+            *transferred = 0;
+        }
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
     return ReadFile(handle, buffer, size, transferred, overlapped);
 }
 
@@ -238,6 +289,15 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsWriteFile(
     HANDLE handle, LPCVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped)
 {
     OutputDebugStringA(kFileApiMessage);
+    if (IsDeviceMockHandle(handle))
+    {
+        if (transferred != nullptr)
+        {
+            *transferred = 0;
+        }
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
     return WriteFile(handle, buffer, size, transferred, overlapped);
 }
 
@@ -245,6 +305,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsSetFilePointer(
     HANDLE handle, LONG distance, PLONG distance_high, DWORD method)
 {
     OutputDebugStringA(kFileApiMessage);
+    if (IsDeviceMockHandle(handle))
+    {
+        SetLastError(ERROR_INVALID_FUNCTION);
+        return INVALID_SET_FILE_POINTER;
+    }
     return SetFilePointer(handle, distance, distance_high, method);
 }
 
@@ -252,19 +317,169 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileSize(
     HANDLE handle, LPDWORD high)
 {
     OutputDebugStringA(kFileApiMessage);
+    if (IsDeviceMockHandle(handle))
+    {
+        SetLastError(ERROR_INVALID_FUNCTION);
+        return INVALID_FILE_SIZE;
+    }
     return GetFileSize(handle, high);
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle)
 {
     OutputDebugStringA(kFileApiMessage);
+    if (IsDeviceMockHandle(handle))
+    {
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
     return CloseHandle(handle);
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileType(HANDLE handle)
 {
     OutputDebugStringA(kFileApiMessage);
+    if (IsDeviceMockHandle(handle))
+    {
+        SetLastError(ERROR_SUCCESS);
+        return FILE_TYPE_CHAR;
+    }
     return GetFileType(handle);
+}
+
+extern "C" __declspec(dllexport) BOOL WINAPI Re2djDeviceIoControlMock(
+    HANDLE handle,
+    DWORD control_code,
+    LPVOID input,
+    DWORD input_size,
+    LPVOID output,
+    DWORD output_size,
+    LPDWORD bytes_returned,
+    LPOVERLAPPED overlapped)
+{
+    OutputDebugStringA(kDeviceIoControlMessage);
+    if (IsDeviceMockHandle(handle))
+    {
+        if (g_re2dj_device_ioctl_mode == 4)
+        {
+            if (bytes_returned != nullptr)
+            {
+                *bytes_returned = 0;
+            }
+            if (control_code == 0x9c406410)
+            {
+                if (output == nullptr || output_size < 8)
+                {
+                    SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                    return FALSE;
+                }
+                std::memset(output, 0, 8);
+                if (bytes_returned != nullptr)
+                {
+                    *bytes_returned = 8;
+                }
+                SetLastError(ERROR_SUCCESS);
+                return TRUE;
+            }
+            if (control_code != 0x9c406414)
+            {
+                SetLastError(ERROR_INVALID_FUNCTION);
+                return FALSE;
+            }
+            if (input == nullptr || input_size < 4)
+            {
+                SetLastError(ERROR_INVALID_DATA);
+                return FALSE;
+            }
+            if (output == nullptr || output_size < 104)
+            {
+                SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                return FALSE;
+            }
+            const auto* const input_bytes = static_cast<const unsigned char*>(input);
+            const std::uint32_t seed =
+                static_cast<std::uint32_t>(input_bytes[0]) |
+                (static_cast<std::uint32_t>(input_bytes[1]) << 8) |
+                (static_cast<std::uint32_t>(input_bytes[2]) << 16) |
+                (static_cast<std::uint32_t>(input_bytes[3]) << 24);
+            re2dj::device::LptdiTargetState target_state = {};
+            std::memcpy(target_state.data(),
+                        g_re2dj_device_target_state,
+                        target_state.size());
+            const re2dj::device::LptdiTargetState response =
+                re2dj::device::EncodeLptdiTargetState(seed, target_state);
+            std::memset(output, 0, 104);
+            std::memcpy(static_cast<unsigned char*>(output) + 4,
+                        response.data(),
+                        response.size());
+            if (bytes_returned != nullptr)
+            {
+                *bytes_returned = 104;
+            }
+            SetLastError(ERROR_SUCCESS);
+            return TRUE;
+        }
+        if (g_re2dj_device_ioctl_mode == 3)
+        {
+            const unsigned char* response = nullptr;
+            DWORD response_size = 0;
+            DWORD response_capacity = 0;
+            if (control_code == 0x9c406410)
+            {
+                response = g_re2dj_device_response_410;
+                response_size = g_re2dj_device_response_410_size;
+                response_capacity = sizeof(g_re2dj_device_response_410);
+            }
+            else if (control_code == 0x9c406414)
+            {
+                response = g_re2dj_device_response_414;
+                response_size = g_re2dj_device_response_414_size;
+                response_capacity = sizeof(g_re2dj_device_response_414);
+            }
+            if (bytes_returned != nullptr)
+            {
+                *bytes_returned = 0;
+            }
+            if (response == nullptr || response_size == 0)
+            {
+                SetLastError(ERROR_INVALID_FUNCTION);
+                return FALSE;
+            }
+            if (response_size > response_capacity)
+            {
+                SetLastError(ERROR_INVALID_DATA);
+                return FALSE;
+            }
+            if (output == nullptr || output_size < response_size)
+            {
+                SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                return FALSE;
+            }
+            std::memcpy(output, response, response_size);
+            if (bytes_returned != nullptr)
+            {
+                *bytes_returned = response_size;
+            }
+            SetLastError(ERROR_SUCCESS);
+            return TRUE;
+        }
+        if (bytes_returned != nullptr)
+        {
+            *bytes_returned = g_re2dj_device_ioctl_mode == 2 && output != nullptr
+                                  ? output_size
+                                  : 0;
+        }
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+    return DeviceIoControl(handle,
+                           control_code,
+                           input,
+                           input_size,
+                           output,
+                           output_size,
+                           bytes_returned,
+                           overlapped);
 }
 
 extern "C" __declspec(dllexport) __declspec(noinline) void WINAPI Re2djProbeExitProcess(UINT code)

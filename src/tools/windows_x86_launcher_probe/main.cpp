@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/device/lptdi_challenge_response.h"
+#include "re2dj/device/lptdi_response_profile.h"
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
@@ -113,7 +115,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -127,6 +129,27 @@ bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value,
         written != sizeof(value))
     {
         *error = "cannot patch child memory";
+        return false;
+    }
+    return true;
+}
+
+bool WriteRemoteBytes(HANDLE process,
+                      std::uintptr_t address,
+                      const std::uint8_t* bytes,
+                      std::size_t size,
+                      std::string* error)
+{
+    SIZE_T written = 0;
+    if (bytes == nullptr || size == 0 ||
+        WriteProcessMemory(process,
+                           reinterpret_cast<void*>(address),
+                           bytes,
+                           size,
+                           &written) == FALSE ||
+        written != size)
+    {
+        *error = "cannot copy bytes into child memory";
         return false;
     }
     return true;
@@ -842,14 +865,232 @@ void ScanFaultReferences(HANDLE process, std::uint32_t fault_address)
                      capped ? "true" : "false");
 }
 
+// Finds committed private/image memory locations that store the entry VA.
+// Neighboring dwords are logged with each match so planted runs such as
+// {entry, entry, ...} stand out from isolated references. The walk mirrors
+// ScanFaultReferences with a different match predicate.
+void ScanEntryReferences(HANDLE process, std::uint32_t entry_address)
+{
+    constexpr SIZE_T block_size = 64 * 1024;
+    constexpr std::uint32_t result_limit = 48;
+    std::uint32_t result_count = 0;
+    std::uint32_t run_count = 0;
+    bool capped = false;
+    std::uintptr_t address = 0;
+    while (address < (std::numeric_limits<std::uint32_t>::max)())
+    {
+        MEMORY_BASIC_INFORMATION memory = {};
+        if (VirtualQueryEx(process,
+                           reinterpret_cast<const void*>(address),
+                           &memory,
+                           sizeof(memory)) != sizeof(memory))
+        {
+            break;
+        }
+        const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
+        const std::uintptr_t next = base + memory.RegionSize;
+        if (memory.State == MEM_COMMIT &&
+            (memory.Type == MEM_PRIVATE || memory.Type == MEM_IMAGE) &&
+            (memory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) == 0)
+        {
+            for (SIZE_T offset = 0; offset < memory.RegionSize; offset += block_size)
+            {
+                const SIZE_T remaining = memory.RegionSize - offset;
+                const SIZE_T requested = (std::min)(remaining, block_size);
+                std::vector<std::uint8_t> bytes(requested);
+                SIZE_T copied = 0;
+                if (ReadProcessMemory(process,
+                                      reinterpret_cast<const void*>(base + offset),
+                                      bytes.data(),
+                                      bytes.size(),
+                                      &copied) == FALSE ||
+                    copied < sizeof(std::uint32_t))
+                {
+                    continue;
+                }
+                for (SIZE_T index = 0; index + sizeof(std::uint32_t) <= copied; ++index)
+                {
+                    std::uint32_t value = 0;
+                    std::memcpy(&value, bytes.data() + index, sizeof(value));
+                    if (value != entry_address)
+                    {
+                        continue;
+                    }
+                    if (result_count == result_limit)
+                    {
+                        capped = true;
+                        break;
+                    }
+                    ++result_count;
+                    const std::uintptr_t match_address = base + offset + index;
+                    std::uint32_t previous = 0;
+                    std::uint32_t following = 0;
+                    SIZE_T neighbor_copied = 0;
+                    const bool have_previous =
+                        ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(match_address - 4),
+                                          &previous,
+                                          sizeof(previous),
+                                          &neighbor_copied) != FALSE &&
+                        neighbor_copied == sizeof(previous);
+                    const bool have_following =
+                        ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(match_address + 4),
+                                          &following,
+                                          sizeof(following),
+                                          &neighbor_copied) != FALSE &&
+                        neighbor_copied == sizeof(following);
+                    const bool in_run =
+                        (have_previous && previous == entry_address) ||
+                        (have_following && following == entry_address);
+                    if (in_run)
+                    {
+                        ++run_count;
+                    }
+                    char previous_text[16] = "null";
+                    if (have_previous)
+                    {
+                        std::snprintf(previous_text, sizeof(previous_text), "\"0x%08x\"", previous);
+                    }
+                    char following_text[16] = "null";
+                    if (have_following)
+                    {
+                        std::snprintf(following_text, sizeof(following_text), "\"0x%08x\"", following);
+                    }
+                    RecordDiagnostic("{\"event\":\"fault_entry_reference\",\"address\":\"0x%08x\",\"prev\":%s,\"next\":%s,\"in_run\":%s}",
+                                     static_cast<unsigned>(match_address),
+                                     previous_text,
+                                     following_text,
+                                     in_run ? "true" : "false");
+                }
+                if (capped)
+                {
+                    break;
+                }
+            }
+        }
+        if (capped)
+        {
+            break;
+        }
+        address = next;
+    }
+    RecordDiagnostic("{\"event\":\"fault_entry_summary\",\"entry\":\"0x%08x\",\"matches\":%u,\"runs\":%u,\"capped\":%s}",
+                     entry_address,
+                     result_count,
+                     run_count,
+                     capped ? "true" : "false");
+}
+
 struct ApiWatchPoint
 {
     std::string name;
     int string_arg_index = -1;
+    std::size_t argument_count = 4;
     std::uint8_t original_byte = 0;
 };
 
 using ApiWatchMap = std::map<std::uintptr_t, ApiWatchPoint>;
+
+struct RemoteBufferSnapshot
+{
+    bool readable = false;
+    std::string bytes;
+};
+
+struct PendingDeviceIoControl
+{
+    std::uint32_t return_address = 0;
+    std::uint8_t original_byte = 0;
+    std::array<std::uint32_t, 8> args = {};
+    RemoteBufferSnapshot input_before;
+    RemoteBufferSnapshot output_before;
+    bool have_bytes_returned_before = false;
+    std::uint32_t bytes_returned_before = 0;
+};
+
+struct PostDeviceIoControlTrace
+{
+    std::uint32_t code = 0;
+    std::uint32_t output_address = 0;
+    std::uint32_t output_size = 0;
+    std::uintptr_t allocation_base = 0;
+    std::uint32_t sequence = 0;
+    std::uint32_t remaining = 0;
+    std::uint32_t last_address = 0;
+    std::array<std::uint8_t, 16> last_bytes = {};
+    SIZE_T last_byte_count = 0;
+    bool waiting_for_resume = false;
+    std::uint32_t resume_address = 0;
+    std::uint8_t resume_original_byte = 0;
+};
+
+bool IsSyntheticDeviceHandle(std::uint32_t handle)
+{
+    constexpr std::uint32_t kDeviceMockHandleBase = 0xfeed0000;
+    return handle > kDeviceMockHandleBase && handle <= kDeviceMockHandleBase + 0xff;
+}
+
+void RecordPostDeviceIoControlSample(HANDLE process,
+                                     DWORD thread_id,
+                                     const PostDeviceIoControlTrace& trace,
+                                     const CONTEXT& context,
+                                     const std::uint8_t* restored_first_byte = nullptr)
+{
+    const std::uint32_t registers[] = {
+        context.Eax, context.Ebx, context.Ecx, context.Edx,
+        context.Esi, context.Edi, context.Ebp, context.Esp,
+    };
+    constexpr const char* kRegisterNames[] = {
+        "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+    };
+    std::string aliases;
+    const std::uint64_t output_end =
+        static_cast<std::uint64_t>(trace.output_address) + trace.output_size;
+    for (std::size_t index = 0; index < std::size(registers); ++index)
+    {
+        if (trace.output_size == 0 || registers[index] < trace.output_address ||
+            static_cast<std::uint64_t>(registers[index]) >= output_end)
+        {
+            continue;
+        }
+        if (!aliases.empty())
+        {
+            aliases += ',';
+        }
+        aliases += '"';
+        aliases += kRegisterNames[index];
+        aliases += '"';
+    }
+
+    std::uint8_t instruction[16] = {};
+    SIZE_T copied = 0;
+    ReadProcessMemory(process,
+                      reinterpret_cast<const void*>(context.Eip),
+                      instruction,
+                      sizeof(instruction),
+                      &copied);
+    if (copied != 0 && restored_first_byte != nullptr)
+    {
+        instruction[0] = *restored_first_byte;
+    }
+    char bytes[sizeof(instruction) * 2 + 1] = {};
+    for (SIZE_T index = 0; index < copied; ++index)
+    {
+        std::snprintf(bytes + index * 2, 3, "%02x", instruction[index]);
+    }
+    RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_instruction\",\"thread\":%u,\"code\":\"0x%08x\",\"sequence\":%u,\"address\":\"0x%08x\",\"bytes\":\"%s\",\"regs\":[\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\"],\"output\":\"0x%08x\",\"output_size\":%u,\"output_aliases\":[%s]}",
+                     static_cast<unsigned>(thread_id),
+                     trace.code,
+                     trace.sequence,
+                     static_cast<unsigned>(context.Eip),
+                     bytes,
+                     registers[0], registers[1], registers[2], registers[3],
+                     registers[4], registers[5], registers[6], registers[7],
+                     trace.output_address,
+                     trace.output_size,
+                     aliases.c_str());
+}
 
 // One ANSI string argument is decoded for APIs whose arguments identify what
 // the guest loads, resolves, or opens. Index counts from the first stack
@@ -902,6 +1143,81 @@ bool ReadRemoteAnsiString(HANDLE process,
     return true;
 }
 
+RemoteBufferSnapshot ReadRemoteBufferSnapshot(HANDLE process,
+                                              std::uint32_t address,
+                                              std::uint32_t size)
+{
+    RemoteBufferSnapshot snapshot;
+    if (address == 0 || size == 0)
+    {
+        return snapshot;
+    }
+    constexpr std::size_t kSnapshotLimit = 64;
+    std::uint8_t bytes[kSnapshotLimit] = {};
+    const SIZE_T requested = (std::min)(static_cast<std::size_t>(size), sizeof(bytes));
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(address),
+                          bytes,
+                          requested,
+                          &copied) == FALSE ||
+        copied == 0)
+    {
+        return snapshot;
+    }
+    snapshot.readable = true;
+    snapshot.bytes.resize(copied * 2);
+    for (SIZE_T index = 0; index < copied; ++index)
+    {
+        std::snprintf(snapshot.bytes.data() + index * 2, 3, "%02x", bytes[index]);
+    }
+    return snapshot;
+}
+
+bool ReadRemoteU32(HANDLE process, std::uint32_t address, std::uint32_t* value)
+{
+    SIZE_T copied = 0;
+    return address != 0 && value != nullptr &&
+           ReadProcessMemory(process,
+                             reinterpret_cast<const void*>(address),
+                             value,
+                             sizeof(*value),
+                             &copied) != FALSE &&
+           copied == sizeof(*value);
+}
+
+PendingDeviceIoControl RecordDeviceIoControlEntry(DWORD thread_id,
+                                                   std::uint32_t caller,
+                                                   HANDLE process,
+                                                   const std::uint32_t* args)
+{
+    PendingDeviceIoControl pending;
+    pending.return_address = caller;
+    std::copy_n(args, pending.args.size(), pending.args.begin());
+    pending.input_before = ReadRemoteBufferSnapshot(process, args[2], args[3]);
+    pending.output_before = ReadRemoteBufferSnapshot(process, args[4], args[5]);
+    pending.have_bytes_returned_before =
+        ReadRemoteU32(process, args[6], &pending.bytes_returned_before);
+    RecordDiagnostic("{\"event\":\"device_io_control_entry\",\"thread\":%u,\"caller\":\"0x%08x\",\"handle\":\"0x%08x\",\"code\":\"0x%08x\",\"input\":\"0x%08x\",\"input_size\":%u,\"input_readable\":%s,\"input_bytes\":\"%s\",\"output\":\"0x%08x\",\"output_size\":%u,\"output_readable\":%s,\"output_before\":\"%s\",\"bytes_returned\":\"0x%08x\",\"bytes_returned_before_valid\":%s,\"bytes_returned_before\":%u,\"overlapped\":\"0x%08x\"}",
+                     static_cast<unsigned>(thread_id),
+                     caller,
+                     args[0],
+                     args[1],
+                     args[2],
+                     args[3],
+                     pending.input_before.readable ? "true" : "false",
+                     pending.input_before.bytes.c_str(),
+                     args[4],
+                     args[5],
+                     pending.output_before.readable ? "true" : "false",
+                     pending.output_before.bytes.c_str(),
+                     args[6],
+                     pending.have_bytes_returned_before ? "true" : "false",
+                     pending.bytes_returned_before,
+                     args[7]);
+    return pending;
+}
+
 void RecordApiCall(DWORD thread_id,
                    const ApiWatchPoint& watch,
                    std::uintptr_t breakpoint_address,
@@ -931,6 +1247,33 @@ void RecordApiCall(DWORD thread_id,
     }
 }
 
+bool RecordOriginalInitializerWindow(HANDLE process, std::uintptr_t image_base)
+{
+    constexpr std::uintptr_t kInitializerRva = 0x0005c000;
+    std::uint32_t words[8] = {};
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(image_base + kInitializerRva),
+                          words,
+                          sizeof(words),
+                          &copied) == FALSE ||
+        copied != sizeof(words))
+    {
+        return false;
+    }
+    RecordDiagnostic("{\"event\":\"original_initializer_window\",\"base\":\"0x%08x\",\"words\":[\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\"]}",
+                     static_cast<unsigned>(image_base + kInitializerRva),
+                     words[0],
+                     words[1],
+                     words[2],
+                     words[3],
+                     words[4],
+                     words[5],
+                     words[6],
+                     words[7]);
+    return true;
+}
+
 const char* FindSectionNameForRva(const re2dj::exe::PeImageInfo& info, std::uint32_t rva)
 {
     for (const re2dj::exe::PeSection& section : info.sections)
@@ -948,6 +1291,164 @@ const char* FindSectionNameForRva(const re2dj::exe::PeImageInfo& info, std::uint
         }
     }
     return "";
+}
+
+// Captures enough state to attribute an indirect execute fault to the guest
+// instruction and image-resident pointer table that supplied its target.
+void RecordAccessViolationContext(HANDLE process,
+                                  DWORD thread_id,
+                                  const EXCEPTION_RECORD& record,
+                                  std::uintptr_t image_base,
+                                  const re2dj::exe::PeImageInfo* image_info)
+{
+    const ULONG_PTR access_code = record.NumberParameters >= 1 ? record.ExceptionInformation[0] : 0;
+    const ULONG_PTR access_address =
+        record.NumberParameters >= 2 ? record.ExceptionInformation[1] : 0;
+    const char* access_kind = access_code == 0 ? "read"
+                              : access_code == 1 ? "write"
+                              : access_code == 8 ? "execute"
+                                                 : "unknown";
+    RecordDiagnostic("{\"event\":\"av_access\",\"kind\":\"%s\",\"code\":\"0x%08x\",\"address\":\"0x%08x\"}",
+                     access_kind,
+                     static_cast<unsigned>(access_code),
+                     static_cast<unsigned>(access_address));
+
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT, FALSE, thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
+    const bool have_context = thread != nullptr && GetThreadContext(thread, &context) != FALSE;
+    if (thread != nullptr)
+    {
+        CloseHandle(thread);
+    }
+    if (!have_context)
+    {
+        RecordDiagnostic("{\"event\":\"av_context_error\",\"reason\":\"cannot read fault thread context\"}");
+        return;
+    }
+
+    RecordDiagnostic("{\"event\":\"av_registers\",\"eax\":\"0x%08x\",\"ebx\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"esi\":\"0x%08x\",\"edi\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"eip\":\"0x%08x\",\"flags\":\"0x%08x\"}",
+                     static_cast<unsigned>(context.Eax),
+                     static_cast<unsigned>(context.Ebx),
+                     static_cast<unsigned>(context.Ecx),
+                     static_cast<unsigned>(context.Edx),
+                     static_cast<unsigned>(context.Esi),
+                     static_cast<unsigned>(context.Edi),
+                     static_cast<unsigned>(context.Ebp),
+                     static_cast<unsigned>(context.Esp),
+                     static_cast<unsigned>(context.Eip),
+                     static_cast<unsigned>(context.EFlags));
+
+    constexpr std::size_t kStackWords = 8;
+    std::uint32_t stack[kStackWords] = {};
+    SIZE_T stack_copied = 0;
+    const bool have_stack =
+        ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(context.Esp),
+                          stack,
+                          sizeof(stack),
+                          &stack_copied) != FALSE &&
+        stack_copied >= sizeof(std::uint32_t);
+
+    if (image_info == nullptr)
+    {
+        return;
+    }
+    const std::uintptr_t image_end =
+        image_base + static_cast<std::uintptr_t>(image_info->size_of_image);
+    struct NamedRegister
+    {
+        const char* name;
+        std::uint32_t value;
+    };
+    const NamedRegister registers[] = {
+        {"eax", context.Eax}, {"ebx", context.Ebx}, {"ecx", context.Ecx},
+        {"edx", context.Edx}, {"esi", context.Esi}, {"edi", context.Edi},
+        {"ebp", context.Ebp}, {"esp", context.Esp}, {"eip", context.Eip},
+    };
+    for (const NamedRegister& reg : registers)
+    {
+        if (reg.value < image_base || reg.value >= image_end)
+        {
+            continue;
+        }
+        const std::uintptr_t aligned = reg.value & ~static_cast<std::uintptr_t>(3);
+        const std::uintptr_t start = aligned >= image_base + 8 ? aligned - 8 : image_base;
+        std::uint32_t words[8] = {};
+        SIZE_T copied = 0;
+        const SIZE_T requested = static_cast<SIZE_T>(
+            (std::min)(sizeof(words), static_cast<std::size_t>(image_end - start)));
+        if (ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(start),
+                              words,
+                              requested,
+                              &copied) == FALSE ||
+            copied < sizeof(std::uint32_t))
+        {
+            continue;
+        }
+        const std::size_t word_count = copied / sizeof(std::uint32_t);
+        std::string values;
+        for (std::size_t index = 0; index < word_count; ++index)
+        {
+            char word[16] = {};
+            std::snprintf(word, sizeof(word), "\"0x%08x\"", words[index]);
+            if (index != 0)
+            {
+                values += ',';
+            }
+            values += word;
+        }
+        const std::uint32_t rva = static_cast<std::uint32_t>(reg.value - image_base);
+        RecordDiagnostic("{\"event\":\"av_image_pointer_window\",\"register\":\"%s\",\"address\":\"0x%08x\",\"base\":\"0x%08x\",\"section\":\"%s\",\"words\":[%s]}",
+                         reg.name,
+                         reg.value,
+                         static_cast<unsigned>(start),
+                         FindSectionNameForRva(*image_info, rva),
+                         values.c_str());
+    }
+
+    if (!have_stack)
+    {
+        return;
+    }
+    const std::size_t stack_word_count = stack_copied / sizeof(std::uint32_t);
+    std::set<std::uint32_t> recorded_addresses;
+    for (std::size_t index = 0; index < stack_word_count; ++index)
+    {
+        const std::uint32_t address = stack[index];
+        if (address < image_base || address >= image_end ||
+            !recorded_addresses.insert(address).second)
+        {
+            continue;
+        }
+        const std::uintptr_t start = address >= image_base + 8 ? address - 8 : image_base;
+        std::uint8_t bytes[24] = {};
+        SIZE_T copied = 0;
+        const SIZE_T requested = static_cast<SIZE_T>(
+            (std::min)(sizeof(bytes), static_cast<std::size_t>(image_end - start)));
+        if (ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(start),
+                              bytes,
+                              requested,
+                              &copied) == FALSE ||
+            copied == 0)
+        {
+            continue;
+        }
+        char text[sizeof(bytes) * 2 + 1] = {};
+        for (SIZE_T byte_index = 0; byte_index < copied; ++byte_index)
+        {
+            std::snprintf(text + byte_index * 2, 3, "%02x", bytes[byte_index]);
+        }
+        const std::uint32_t rva = static_cast<std::uint32_t>(address - image_base);
+        RecordDiagnostic("{\"event\":\"av_stack_code_window\",\"index\":%u,\"address\":\"0x%08x\",\"base\":\"0x%08x\",\"section\":\"%s\",\"bytes\":\"%s\"}",
+                         static_cast<unsigned>(index),
+                         address,
+                         static_cast<unsigned>(start),
+                         FindSectionNameForRva(*image_info, rva),
+                         text);
+    }
 }
 
 // Dumps registers, stack, fault page bytes, and the containing allocation's
@@ -1093,6 +1594,18 @@ void RecordIllegalInstructionContext(HANDLE process,
             }
         }
     }
+
+    // Trace where the run-invariant entry value is stored, including planted
+    // consecutive runs that could feed the fault-signature registers.
+    if (image_info != nullptr &&
+        image_base + static_cast<std::uintptr_t>(image_info->entry_point_rva) <=
+            (std::numeric_limits<std::uint32_t>::max)())
+    {
+        ScanEntryReferences(
+            process,
+            static_cast<std::uint32_t>(image_base +
+                                       static_cast<std::uintptr_t>(image_info->entry_point_rva)));
+    }
 }
 
 bool InstallApiTraceBreakpoints(HANDLE process,
@@ -1123,6 +1636,10 @@ bool InstallApiTraceBreakpoints(HANDLE process,
         "GetVersionExA",
         "CreateFileA",
         "FreeLibrary",
+        "DeviceIoControl",
+        "ReadFile",
+        "WriteFile",
+        "CloseHandle",
     };
     bool any_resolved = false;
     for (const char* api : kWatchedApis)
@@ -1162,6 +1679,7 @@ bool InstallApiTraceBreakpoints(HANDLE process,
             ApiWatchPoint watch;
             watch.name = api;
             watch.string_arg_index = ApiStringArgumentIndex(api);
+            watch.argument_count = std::strcmp(api, "DeviceIoControl") == 0 ? 8 : 4;
             SIZE_T copied = 0;
             if (ReadProcessMemory(process,
                                   reinterpret_cast<const void*>(resolution.address),
@@ -1209,10 +1727,60 @@ bool InstallApiTraceBreakpoints(HANDLE process,
     return true;
 }
 
+bool InstallRuntimeApiTraceBreakpoint(HANDLE process,
+                                      std::uintptr_t address,
+                                      const char* name,
+                                      std::size_t argument_count,
+                                      ApiWatchMap* watches,
+                                      std::string* error)
+{
+    if (address == 0 || watches == nullptr || watches->count(address) != 0)
+    {
+        *error = "invalid or duplicate runtime API watch address";
+        return false;
+    }
+    ApiWatchPoint watch;
+    watch.name = name;
+    watch.string_arg_index = ApiStringArgumentIndex(name);
+    watch.argument_count = argument_count;
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(address),
+                          &watch.original_byte,
+                          sizeof(watch.original_byte),
+                          &copied) == FALSE ||
+        copied != sizeof(watch.original_byte))
+    {
+        *error = "cannot read runtime API watch original byte";
+        return false;
+    }
+    const std::uint8_t breakpoint = 0xcc;
+    SIZE_T written = 0;
+    if (WriteProcessMemory(process,
+                           reinterpret_cast<void*>(address),
+                           &breakpoint,
+                           sizeof(breakpoint),
+                           &written) == FALSE ||
+        written != sizeof(breakpoint) ||
+        FlushInstructionCache(process,
+                              reinterpret_cast<const void*>(address),
+                              sizeof(breakpoint)) == FALSE)
+    {
+        *error = "cannot set runtime API watch breakpoint";
+        return false;
+    }
+    RecordDiagnostic("{\"event\":\"api_watch\",\"api\":\"%s\",\"module\":\"injected_runtime\",\"address\":\"0x%08x\",\"status\":\"armed\"}",
+                     name,
+                     static_cast<unsigned>(address));
+    watches->emplace(address, std::move(watch));
+    return true;
+}
+
 bool WaitForExitProcessBreakpoint(HANDLE process,
                                   std::uint32_t exit_target,
                                   bool scan_fault_references,
                                   bool trace,
+                                  std::uint32_t lptdi_post_ioctl_trace_steps,
                                   std::uintptr_t image_base,
                                   const re2dj::exe::PeImageInfo* image_info,
                                   ApiWatchMap* api_watches,
@@ -1220,7 +1788,10 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
 {
     (void)trace;
     std::map<DWORD, std::uintptr_t> pending_api_steps;
+    std::map<DWORD, PendingDeviceIoControl> pending_device_io_controls;
+    std::map<DWORD, PostDeviceIoControlTrace> post_device_io_control_traces;
     std::set<std::uintptr_t> dynamic_module_bases;
+    bool original_initializer_recorded = false;
     bool unload_tail_collecting = false;
     DWORD unload_tail_thread = 0;
     std::vector<InstructionSample> unload_history;
@@ -1229,58 +1800,75 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
     constexpr std::uint32_t kUnloadStepCap = 200000;
     std::uint32_t unload_steps = 0;
     DWORD last_activity_thread = 0;
-    // One-shot software breakpoint planted on a detected syscall stub's
-    // return address so execution can be re-traced after the WOW64 gate
-    // kills single-step reporting.
+    // One-shot-at-a-time software breakpoints planted on detected syscall
+    // stubs' return addresses so execution can be re-traced after WOW64
+    // gates kill single-step reporting. Each consumed breakpoint re-arms the
+    // detector so later stubs (a second gate crossing, for example) are also
+    // caught, bounded by a fire budget.
+    constexpr unsigned kMaxResumeBreakpointFires = 8;
+    unsigned resume_bp_fires = 0;
     bool resume_bp_armed = false;
-    bool resume_bp_consumed = false;
     std::uint32_t resume_bp_address = 0;
     std::uint8_t resume_bp_original = 0;
     std::map<std::pair<std::uintptr_t, std::uintptr_t>, std::string> symbol_cache;
-    // Names the nearest known export for one sampled address. Image regions
-    // resolve through their allocation base; private pages stay unnamed.
-    auto annotate_sample_symbol = [&](InstructionSample& sample) {
+    // Names one sampled or stacked address through its image allocation base
+    // using the nearest export; private pages stay unnamed.
+    auto format_remote_symbol = [&](std::uintptr_t address, std::string* out) {
         MEMORY_BASIC_INFORMATION region = {};
         if (VirtualQueryEx(process,
-                           reinterpret_cast<const void*>(sample.address),
+                           reinterpret_cast<const void*>(address),
                            &region,
                            sizeof(region)) != sizeof(region) ||
             region.Type != MEM_IMAGE ||
             region.AllocationBase == nullptr)
         {
-            return;
+            return false;
         }
         const std::uintptr_t module_base =
             reinterpret_cast<std::uintptr_t>(region.AllocationBase);
-        const auto cached = symbol_cache.find({module_base, sample.address});
+        const auto cached = symbol_cache.find({module_base, address});
         if (cached != symbol_cache.end())
         {
-            sample.symbol = cached->second;
-            return;
+            *out = cached->second;
+            return true;
         }
         re2dj::tools::windows_x86_launcher_probe::RemoteNearestExport nearest = {};
         std::string nearest_error;
-        if (re2dj::tools::windows_x86_launcher_probe::FindRemotePe32NearestExport(
+        if (!re2dj::tools::windows_x86_launcher_probe::FindRemotePe32NearestExport(
                 process,
                 module_base,
-                sample.address,
+                address,
                 &nearest,
                 &nearest_error))
         {
-            char text[288] = {};
-            std::snprintf(text,
-                          sizeof(text),
-                          "%s!%s+0x%x",
-                          nearest.module,
-                          nearest.function,
-                          static_cast<unsigned>(nearest.offset));
-            SanitizeJsonText(text);
-            symbol_cache[{module_base, sample.address}] = text;
+            return false;
+        }
+        char text[288] = {};
+        std::snprintf(text,
+                      sizeof(text),
+                      "%s!%s+0x%x",
+                      nearest.module,
+                      nearest.function,
+                      static_cast<unsigned>(nearest.offset));
+        SanitizeJsonText(text);
+        symbol_cache[{module_base, address}] = text;
+        *out = text;
+        return true;
+    };
+    auto annotate_sample_symbol = [&](InstructionSample& sample) {
+        std::string text;
+        if (format_remote_symbol(sample.address, &text))
+        {
             sample.symbol = text;
         }
     };
+    const std::uint64_t requested_event_cap =
+        128ull + static_cast<std::uint64_t>(lptdi_post_ioctl_trace_steps) * 16ull;
+    const std::uint32_t normal_event_cap = static_cast<std::uint32_t>(
+        (std::min)(requested_event_cap,
+                   static_cast<std::uint64_t>((std::numeric_limits<std::uint32_t>::max)())));
     for (std::uint32_t event_count = 0;
-         event_count < (unload_tail_collecting ? kUnloadStepCap : 128);
+         event_count < (unload_tail_collecting ? kUnloadStepCap : normal_event_cap);
          ++event_count)
     {
         DEBUG_EVENT event = {};
@@ -1326,11 +1914,181 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                         *error = "cannot rearm watched API breakpoint";
                         return false;
                     }
+                    const auto post_trace =
+                        post_device_io_control_traces.find(event.dwThreadId);
+                    if (post_trace != post_device_io_control_traces.end() &&
+                        !post_trace->second.waiting_for_resume)
+                    {
+                        RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_end\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"reason\":\"api_watch\"}",
+                                         static_cast<unsigned>(event.dwThreadId),
+                                         post_trace->second.code,
+                                         post_trace->second.sequence);
+                        post_device_io_control_traces.erase(post_trace);
+                    }
                     if (ContinueDebugEvent(event.dwProcessId,
                                            event.dwThreadId,
                                            DBG_CONTINUE) == FALSE)
                     {
                         *error = "cannot continue watched API rearm step";
+                        return false;
+                    }
+                    continue;
+                }
+                const auto post_trace =
+                    post_device_io_control_traces.find(event.dwThreadId);
+                if (post_trace != post_device_io_control_traces.end() &&
+                    !post_trace->second.waiting_for_resume)
+                {
+                    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                                               FALSE,
+                                               event.dwThreadId);
+                    CONTEXT context = {};
+                    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+                    {
+                        if (thread != nullptr)
+                        {
+                            CloseHandle(thread);
+                        }
+                        *error = "cannot capture LPTDI post-IOCTL trace context";
+                        return false;
+                    }
+                    MEMORY_BASIC_INFORMATION region = {};
+                    const bool same_allocation =
+                        VirtualQueryEx(process,
+                                       reinterpret_cast<const void*>(context.Eip),
+                                       &region,
+                                       sizeof(region)) == sizeof(region) &&
+                        reinterpret_cast<std::uintptr_t>(region.AllocationBase) ==
+                            post_trace->second.allocation_base;
+                    if (!same_allocation)
+                    {
+                        std::uint32_t resume_address = 0;
+                        const PostDeviceIoControlTrace& state = post_trace->second;
+                        if (state.last_byte_count >= 5 && state.last_bytes[0] == 0xe8)
+                        {
+                            resume_address = state.last_address + 5;
+                        }
+                        else if (state.last_byte_count >= 6 && state.last_bytes[0] == 0xff &&
+                                 state.last_bytes[1] == 0x15)
+                        {
+                            resume_address = state.last_address + 6;
+                        }
+                        else if (state.last_byte_count >= 2 && state.last_bytes[0] == 0xff &&
+                                 (state.last_bytes[1] & 0xf8) == 0xd0)
+                        {
+                            resume_address = state.last_address + 2;
+                        }
+                        if (resume_address != 0 &&
+                            SetSoftwareEntryBreakpoint(process,
+                                                       resume_address,
+                                                       &post_trace->second.resume_original_byte,
+                                                       error))
+                        {
+                            context.EFlags &= ~0x100u;
+                            if (SetThreadContext(thread, &context) == FALSE)
+                            {
+                                CloseHandle(thread);
+                                *error = "cannot suspend LPTDI post-IOCTL single step";
+                                return false;
+                            }
+                            if (post_trace->second.resume_original_byte == 0xcc)
+                            {
+                                if (resume_bp_armed && resume_address == resume_bp_address)
+                                {
+                                    post_trace->second.resume_original_byte =
+                                        resume_bp_original;
+                                    post_trace->second.waiting_for_resume = true;
+                                    post_trace->second.resume_address = resume_address;
+                                    resume_bp_armed = false;
+                                    ++resume_bp_fires;
+                                    RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_suspend\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"callee\":\"0x%08x\",\"resume\":\"0x%08x\",\"shared_syscall_breakpoint\":true}",
+                                                     static_cast<unsigned>(event.dwThreadId),
+                                                     post_trace->second.code,
+                                                     post_trace->second.sequence,
+                                                     static_cast<unsigned>(context.Eip),
+                                                     resume_address);
+                                }
+                                else
+                                {
+                                    RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_end\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"reason\":\"resume_breakpoint_collision\",\"address\":\"0x%08x\"}",
+                                                     static_cast<unsigned>(event.dwThreadId),
+                                                     post_trace->second.code,
+                                                     post_trace->second.sequence,
+                                                     resume_address);
+                                    post_device_io_control_traces.erase(post_trace);
+                                }
+                            }
+                            else
+                            {
+                                post_trace->second.waiting_for_resume = true;
+                                post_trace->second.resume_address = resume_address;
+                                RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_suspend\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"callee\":\"0x%08x\",\"resume\":\"0x%08x\"}",
+                                                 static_cast<unsigned>(event.dwThreadId),
+                                                 post_trace->second.code,
+                                                 post_trace->second.sequence,
+                                                 static_cast<unsigned>(context.Eip),
+                                                 resume_address);
+                            }
+                        }
+                        else
+                        {
+                            context.EFlags &= ~0x100u;
+                            if (SetThreadContext(thread, &context) == FALSE)
+                            {
+                                CloseHandle(thread);
+                                *error = "cannot stop LPTDI post-IOCTL single step";
+                                return false;
+                            }
+                            RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_end\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"reason\":\"allocation_exit\",\"address\":\"0x%08x\"}",
+                                             static_cast<unsigned>(event.dwThreadId),
+                                             post_trace->second.code,
+                                             post_trace->second.sequence,
+                                             static_cast<unsigned>(context.Eip));
+                            error->clear();
+                            post_device_io_control_traces.erase(post_trace);
+                        }
+                    }
+                    else
+                    {
+                        RecordPostDeviceIoControlSample(process,
+                                                        event.dwThreadId,
+                                                        post_trace->second,
+                                                        context);
+                        post_trace->second.last_address = context.Eip;
+                        post_trace->second.last_byte_count = 0;
+                        ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(context.Eip),
+                                          post_trace->second.last_bytes.data(),
+                                          post_trace->second.last_bytes.size(),
+                                          &post_trace->second.last_byte_count);
+                        ++post_trace->second.sequence;
+                        --post_trace->second.remaining;
+                        if (post_trace->second.remaining == 0)
+                        {
+                            RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_end\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"reason\":\"step_limit\"}",
+                                             static_cast<unsigned>(event.dwThreadId),
+                                             post_trace->second.code,
+                                             post_trace->second.sequence);
+                            post_device_io_control_traces.erase(post_trace);
+                        }
+                        else
+                        {
+                            context.EFlags |= 0x100;
+                            if (SetThreadContext(thread, &context) == FALSE)
+                            {
+                                CloseHandle(thread);
+                                *error = "cannot rearm LPTDI post-IOCTL single step";
+                                return false;
+                            }
+                        }
+                    }
+                    CloseHandle(thread);
+                    if (ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        *error = "cannot continue LPTDI post-IOCTL single step";
                         return false;
                     }
                     continue;
@@ -1383,7 +2141,8 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                     // after the WOW64 gate can be caught and re-traced.
                     const InstructionSample* previous =
                         unload_history.empty() ? nullptr : &unload_history.back();
-                    if (!resume_bp_armed && previous != nullptr &&
+                    if (!resume_bp_armed && resume_bp_fires < kMaxResumeBreakpointFires &&
+                        previous != nullptr &&
                         sample.byte_count >= 2 && sample.bytes[0] == 0xff &&
                         sample.bytes[1] == 0xd2 &&
                         static_cast<std::uintptr_t>(previous->address) + 5 ==
@@ -1397,7 +2156,6 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                                        error))
                         {
                             resume_bp_armed = true;
-                            resume_bp_consumed = false;
                             resume_bp_address = sample.address + 2;
                             resume_bp_original = original;
                             RecordDiagnostic("{\"event\":\"resume_breakpoint_arm\",\"stub\":\"0x%08x\",\"return\":\"0x%08x\"}",
@@ -1439,7 +2197,227 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             }
             else if (exception_code == EXCEPTION_BREAKPOINT)
             {
-                if (resume_bp_armed && !resume_bp_consumed &&
+                const auto post_resume =
+                    post_device_io_control_traces.find(event.dwThreadId);
+                if (post_resume != post_device_io_control_traces.end() &&
+                    post_resume->second.waiting_for_resume &&
+                    exception_address == post_resume->second.resume_address)
+                {
+                    bool swallowed = false;
+                    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                                               FALSE,
+                                               event.dwThreadId);
+                    CONTEXT context = {};
+                    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+                    {
+                        *error = "cannot capture LPTDI post-IOCTL resume context";
+                    }
+                    else
+                    {
+                        context.Eip = post_resume->second.resume_address;
+                        RecordPostDeviceIoControlSample(
+                            process,
+                            event.dwThreadId,
+                            post_resume->second,
+                            context,
+                            &post_resume->second.resume_original_byte);
+                        post_resume->second.last_address = context.Eip;
+                        post_resume->second.last_byte_count = 0;
+                        ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(context.Eip),
+                                          post_resume->second.last_bytes.data(),
+                                          post_resume->second.last_bytes.size(),
+                                          &post_resume->second.last_byte_count);
+                        if (post_resume->second.last_byte_count != 0)
+                        {
+                            post_resume->second.last_bytes[0] =
+                                post_resume->second.resume_original_byte;
+                        }
+                        ++post_resume->second.sequence;
+                        --post_resume->second.remaining;
+                        const std::uint32_t code = post_resume->second.code;
+                        const std::uint32_t samples = post_resume->second.sequence;
+                        const bool finished = post_resume->second.remaining == 0;
+                        if (!finished)
+                        {
+                            post_resume->second.waiting_for_resume = false;
+                            context.EFlags |= 0x100;
+                        }
+                        SIZE_T written = 0;
+                        swallowed =
+                            WriteProcessMemory(
+                                process,
+                                reinterpret_cast<void*>(post_resume->second.resume_address),
+                                &post_resume->second.resume_original_byte,
+                                sizeof(post_resume->second.resume_original_byte),
+                                &written) != FALSE &&
+                            written == sizeof(post_resume->second.resume_original_byte) &&
+                            FlushInstructionCache(
+                                process,
+                                reinterpret_cast<const void*>(post_resume->second.resume_address),
+                                sizeof(post_resume->second.resume_original_byte)) != FALSE &&
+                            SetThreadContext(thread, &context) != FALSE;
+                        if (swallowed && finished)
+                        {
+                            RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_end\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"reason\":\"step_limit\"}",
+                                             static_cast<unsigned>(event.dwThreadId),
+                                             code,
+                                             samples);
+                            post_device_io_control_traces.erase(post_resume);
+                        }
+                        else if (!swallowed)
+                        {
+                            *error = "cannot swallow LPTDI post-IOCTL resume breakpoint";
+                        }
+                    }
+                    if (thread != nullptr)
+                    {
+                        CloseHandle(thread);
+                    }
+                    if (!swallowed ||
+                        ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+                const auto device_return = pending_device_io_controls.find(event.dwThreadId);
+                if (device_return != pending_device_io_controls.end() &&
+                    exception_address == device_return->second.return_address)
+                {
+                    bool swallowed = false;
+                    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                                               FALSE,
+                                               event.dwThreadId);
+                    CONTEXT context = {};
+                    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+                    {
+                        *error = "cannot capture DeviceIoControl return context";
+                    }
+                    else
+                    {
+                        const PendingDeviceIoControl pending = device_return->second;
+                        const RemoteBufferSnapshot input_after =
+                            ReadRemoteBufferSnapshot(process, pending.args[2], pending.args[3]);
+                        const RemoteBufferSnapshot output_after =
+                            ReadRemoteBufferSnapshot(process, pending.args[4], pending.args[5]);
+                        std::uint32_t bytes_returned_after = 0;
+                        const bool have_bytes_returned_after =
+                            ReadRemoteU32(process, pending.args[6], &bytes_returned_after);
+                        const bool input_unchanged =
+                            pending.input_before.readable == input_after.readable &&
+                            pending.input_before.bytes == input_after.bytes;
+                        const bool output_unchanged =
+                            pending.output_before.readable == output_after.readable &&
+                            pending.output_before.bytes == output_after.bytes;
+                        RecordDiagnostic("{\"event\":\"device_io_control_return\",\"thread\":%u,\"caller\":\"0x%08x\",\"code\":\"0x%08x\",\"eax\":\"0x%08x\",\"success\":%s,\"input_readable\":%s,\"input_after\":\"%s\",\"input_unchanged\":%s,\"output_readable\":%s,\"output_after\":\"%s\",\"output_unchanged\":%s,\"bytes_returned_after_valid\":%s,\"bytes_returned_after\":%u}",
+                                         static_cast<unsigned>(event.dwThreadId),
+                                         pending.return_address,
+                                         pending.args[1],
+                                         static_cast<unsigned>(context.Eax),
+                                         context.Eax != 0 ? "true" : "false",
+                                         input_after.readable ? "true" : "false",
+                                         input_after.bytes.c_str(),
+                                         input_unchanged ? "true" : "false",
+                                         output_after.readable ? "true" : "false",
+                                         output_after.bytes.c_str(),
+                                         output_unchanged ? "true" : "false",
+                                         have_bytes_returned_after ? "true" : "false",
+                                         bytes_returned_after);
+
+                        SIZE_T written = 0;
+                        context.Eip = pending.return_address;
+                        if (lptdi_post_ioctl_trace_steps != 0 &&
+                            IsSyntheticDeviceHandle(pending.args[0]))
+                        {
+                            MEMORY_BASIC_INFORMATION region = {};
+                            if (VirtualQueryEx(process,
+                                               reinterpret_cast<const void*>(pending.return_address),
+                                               &region,
+                                               sizeof(region)) != sizeof(region))
+                            {
+                                *error = "cannot identify LPTDI post-IOCTL caller allocation";
+                            }
+                            else
+                            {
+                                PostDeviceIoControlTrace post_trace;
+                                post_trace.code = pending.args[1];
+                                post_trace.output_address = pending.args[4];
+                                post_trace.output_size = pending.args[5];
+                                post_trace.allocation_base =
+                                    reinterpret_cast<std::uintptr_t>(region.AllocationBase);
+                                post_trace.remaining = lptdi_post_ioctl_trace_steps;
+                                RecordPostDeviceIoControlSample(process,
+                                                                event.dwThreadId,
+                                                                post_trace,
+                                                                context,
+                                                                &pending.original_byte);
+                                post_trace.last_address = context.Eip;
+                                post_trace.last_byte_count = 0;
+                                ReadProcessMemory(process,
+                                                  reinterpret_cast<const void*>(context.Eip),
+                                                  post_trace.last_bytes.data(),
+                                                  post_trace.last_bytes.size(),
+                                                  &post_trace.last_byte_count);
+                                if (post_trace.last_byte_count != 0)
+                                {
+                                    post_trace.last_bytes[0] = pending.original_byte;
+                                }
+                                ++post_trace.sequence;
+                                --post_trace.remaining;
+                                if (post_trace.remaining != 0)
+                                {
+                                    context.EFlags |= 0x100;
+                                    post_device_io_control_traces[event.dwThreadId] = post_trace;
+                                }
+                                else
+                                {
+                                    RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_end\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":1,\"reason\":\"step_limit\"}",
+                                                     static_cast<unsigned>(event.dwThreadId),
+                                                     post_trace.code);
+                                }
+                            }
+                        }
+                        swallowed =
+                            error->empty() && WriteProcessMemory(
+                                process,
+                                reinterpret_cast<void*>(pending.return_address),
+                                &pending.original_byte,
+                                sizeof(pending.original_byte),
+                                &written) != FALSE &&
+                            written == sizeof(pending.original_byte) &&
+                            FlushInstructionCache(
+                                process,
+                                reinterpret_cast<const void*>(pending.return_address),
+                                sizeof(pending.original_byte)) != FALSE &&
+                            SetThreadContext(thread, &context) != FALSE;
+                        if (swallowed)
+                        {
+                            pending_device_io_controls.erase(device_return);
+                        }
+                        else
+                        {
+                            *error = "cannot swallow DeviceIoControl return breakpoint";
+                        }
+                    }
+                    if (thread != nullptr)
+                    {
+                        CloseHandle(thread);
+                    }
+                    if (!swallowed ||
+                        ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+                if (resume_bp_armed &&
                     exception_address == static_cast<std::uintptr_t>(resume_bp_address))
                 {
                     // The thread came back through the gate to the stub's
@@ -1451,7 +2429,8 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                                event.dwThreadId);
                     CONTEXT context = {};
                     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
-                    std::uint32_t stack_words[4] = {};
+                    constexpr std::size_t kResumeStackWords = 64;
+                    std::uint32_t stack_words[kResumeStackWords] = {};
                     SIZE_T copied = 0;
                     const bool captured =
                         thread != nullptr && GetThreadContext(thread, &context) != FALSE &&
@@ -1460,14 +2439,14 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                           stack_words,
                                           sizeof(stack_words),
                                           &copied) != FALSE &&
-                        copied == sizeof(stack_words);
+                        copied >= sizeof(std::uint32_t);
                     if (!captured)
                     {
                         *error = "cannot capture syscall resume context";
                     }
                     else
                     {
-                        RecordDiagnostic("{\"event\":\"syscall_resume_hit\",\"address\":\"0x%08x\",\"eax\":\"0x%08x\",\"ebx\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"esi\":\"0x%08x\",\"edi\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"stack\":[\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\"]}",
+                        RecordDiagnostic("{\"event\":\"syscall_resume_hit\",\"address\":\"0x%08x\",\"eax\":\"0x%08x\",\"ebx\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"esi\":\"0x%08x\",\"edi\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\"}",
                                          resume_bp_address,
                                          static_cast<unsigned>(context.Eax),
                                          static_cast<unsigned>(context.Ebx),
@@ -1476,11 +2455,46 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                          static_cast<unsigned>(context.Esi),
                                          static_cast<unsigned>(context.Edi),
                                          static_cast<unsigned>(context.Ebp),
+                                         static_cast<unsigned>(context.Esp));
+                        const std::size_t word_count = copied / sizeof(std::uint32_t);
+                        std::string words;
+                        words.reserve(word_count * 14);
+                        for (std::size_t index = 0; index < word_count; ++index)
+                        {
+                            char word[16] = {};
+                            std::snprintf(word, sizeof(word), "\"0x%08x\"", stack_words[index]);
+                            if (index != 0)
+                            {
+                                words += ',';
+                            }
+                            words += word;
+                        }
+                        RecordDiagnostic("{\"event\":\"resume_stack\",\"esp\":\"0x%08x\",\"words\":[%s]}",
                                          static_cast<unsigned>(context.Esp),
-                                         stack_words[0],
-                                         stack_words[1],
-                                         stack_words[2],
-                                         stack_words[3]);
+                                         words.c_str());
+                        // Attribute image-range words so the owner of the
+                        // teardown frames becomes visible in the log.
+                        constexpr unsigned kMaxResumeAnnotations = 24;
+                        unsigned annotated = 0;
+                        for (std::size_t index = 0;
+                             index < word_count && annotated < kMaxResumeAnnotations;
+                             ++index)
+                        {
+                            if (stack_words[index] == 0)
+                            {
+                                continue;
+                            }
+                            std::string symbol;
+                            if (!format_remote_symbol(stack_words[index], &symbol))
+                            {
+                                continue;
+                            }
+                            ++annotated;
+                            RecordDiagnostic("{\"event\":\"resume_stack_symbol\",\"index\":%u,\"value\":\"0x%08x\",\"symbol\":\"%s\"}",
+                                             static_cast<unsigned>(index),
+                                             stack_words[index],
+                                             symbol.c_str());
+                        }
                         SIZE_T written = 0;
                         context.Eip = resume_bp_address;
                         context.EFlags |= 0x100;
@@ -1499,7 +2513,8 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                             SetThreadContext(thread, &context) != FALSE;
                         if (swallowed)
                         {
-                            resume_bp_consumed = true;
+                            ++resume_bp_fires;
+                            resume_bp_armed = false;
                         }
                         else
                         {
@@ -1528,16 +2543,18 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                                event.dwThreadId);
                     CONTEXT context = {};
                     context.ContextFlags = CONTEXT_CONTROL;
-                    std::uint32_t stack[5] = {};
+                    std::uint32_t stack[9] = {};
                     SIZE_T copied = 0;
+                    const SIZE_T stack_size =
+                        (watch->second.argument_count + 1) * sizeof(std::uint32_t);
                     const bool captured =
                         thread != nullptr && GetThreadContext(thread, &context) != FALSE &&
                         ReadProcessMemory(process,
                                           reinterpret_cast<const void*>(context.Esp),
                                           stack,
-                                          sizeof(stack),
+                                          stack_size,
                                           &copied) != FALSE &&
-                        copied == sizeof(stack);
+                        copied == stack_size;
                     if (!captured)
                     {
                         *error = "cannot capture watched API call context";
@@ -1550,6 +2567,81 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                       stack[0],
                                       process,
                                       stack + 1);
+                        constexpr std::uintptr_t kOriginalEntryGetVersionCallerRva = 0x0003a66c;
+                        if (!original_initializer_recorded &&
+                            watch->second.name == "GetVersion" &&
+                            stack[0] == image_base + kOriginalEntryGetVersionCallerRva)
+                        {
+                            original_initializer_recorded =
+                                RecordOriginalInitializerWindow(process, image_base);
+                            if (!original_initializer_recorded)
+                            {
+                                RecordDiagnostic("{\"event\":\"original_initializer_window_error\"}");
+                            }
+                        }
+                        if (watch->second.name == "DeviceIoControl" && image_info != nullptr &&
+                            stack[0] >= image_base &&
+                            stack[0] < image_base + image_info->size_of_image)
+                        {
+                            const auto prior_trace =
+                                post_device_io_control_traces.find(event.dwThreadId);
+                            if (prior_trace != post_device_io_control_traces.end() &&
+                                prior_trace->second.waiting_for_resume &&
+                                prior_trace->second.resume_address == stack[0])
+                            {
+                                SIZE_T restored_size = 0;
+                                const bool restored =
+                                    WriteProcessMemory(
+                                        process,
+                                        reinterpret_cast<void*>(stack[0]),
+                                        &prior_trace->second.resume_original_byte,
+                                        sizeof(prior_trace->second.resume_original_byte),
+                                        &restored_size) != FALSE &&
+                                    restored_size ==
+                                        sizeof(prior_trace->second.resume_original_byte) &&
+                                    FlushInstructionCache(
+                                        process,
+                                        reinterpret_cast<const void*>(stack[0]),
+                                        sizeof(prior_trace->second.resume_original_byte)) != FALSE;
+                                if (!restored)
+                                {
+                                    *error = "cannot retire LPTDI trace before next IOCTL";
+                                }
+                                else
+                                {
+                                    RecordDiagnostic("{\"event\":\"lptdi_post_ioctl_trace_end\",\"thread\":%u,\"code\":\"0x%08x\",\"samples\":%u,\"reason\":\"next_ioctl\"}",
+                                                     static_cast<unsigned>(event.dwThreadId),
+                                                     prior_trace->second.code,
+                                                     prior_trace->second.sequence);
+                                    post_device_io_control_traces.erase(prior_trace);
+                                }
+                            }
+                            if (pending_device_io_controls.count(event.dwThreadId) != 0)
+                            {
+                                *error = "overlapping DeviceIoControl return trace on one thread";
+                            }
+                            else
+                            {
+                                PendingDeviceIoControl pending = RecordDeviceIoControlEntry(
+                                    event.dwThreadId, stack[0], process, stack + 1);
+                                if (SetSoftwareEntryBreakpoint(process,
+                                                               pending.return_address,
+                                                               &pending.original_byte,
+                                                               error))
+                                {
+                                    pending_device_io_controls.emplace(event.dwThreadId,
+                                                                       std::move(pending));
+                                }
+                            }
+                            if (!error->empty())
+                            {
+                                if (thread != nullptr)
+                                {
+                                    CloseHandle(thread);
+                                }
+                                return false;
+                            }
+                        }
                         // Restore the original byte, rewind EIP onto the API
                         // entry, and trap-flag one instruction before
                         // rearming on the following single step.
@@ -1596,6 +2688,15 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         }
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT)
         {
+            if (event.u.Exception.dwFirstChance != 0 &&
+                event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+            {
+                RecordAccessViolationContext(process,
+                                             event.dwThreadId,
+                                             event.u.Exception.ExceptionRecord,
+                                             image_base,
+                                             image_info);
+            }
             if (scan_fault_references &&
                 event.u.Exception.dwFirstChance != 0 &&
                 event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION)
@@ -1781,10 +2882,16 @@ int main(int argc, char** argv)
     bool hle_command_line = false;
     bool hle_windows_directory = false;
     bool hle_vfs = false;
+    bool device_mock_lptdi = false;
+    bool device_mock_lptdi_ioctl_success = false;
+    bool device_mock_lptdi_ioctl_full_success = false;
+    std::filesystem::path device_mock_lptdi_response_profile_path;
+    std::string device_mock_lptdi_target_state_hex;
     bool probe_exit_process = false;
     bool break_exit_process = false;
     bool scan_fault_references = false;
     bool api_trace = false;
+    std::uint32_t lptdi_post_ioctl_trace_steps = 0;
     std::filesystem::path runtime_path;
     for (int index = 1; index < argc; ++index)
     {
@@ -1857,6 +2964,67 @@ int main(int argc, char** argv)
             inject_runtime = true;
             software_breakpoint = true;
         }
+        else if (option == "--device-mock-lptdi")
+        {
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--device-mock-lptdi-ioctl-success")
+        {
+            device_mock_lptdi_ioctl_success = true;
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--device-mock-lptdi-ioctl-full-success")
+        {
+            device_mock_lptdi_ioctl_full_success = true;
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--device-mock-lptdi-response-profile" && index + 1 < argc)
+        {
+            device_mock_lptdi_response_profile_path = argv[++index];
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--device-mock-lptdi-target-state" && index + 1 < argc)
+        {
+            device_mock_lptdi_target_state_hex = argv[++index];
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--lptdi-post-ioctl-trace" && index + 1 < argc)
+        {
+            try
+            {
+                lptdi_post_ioctl_trace_steps = static_cast<std::uint32_t>(
+                    std::stoul(argv[++index]));
+            }
+            catch (const std::exception&)
+            {
+                PrintUsage();
+                return 1;
+            }
+            if (lptdi_post_ioctl_trace_steps == 0 ||
+                lptdi_post_ioctl_trace_steps > 4096)
+            {
+                PrintUsage();
+                return 1;
+            }
+            api_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
         else if (option == "--probe-exit-process")
         {
             probe_exit_process = true;
@@ -1891,6 +3059,22 @@ int main(int argc, char** argv)
         PrintUsage();
         return 1;
     }
+    const unsigned device_ioctl_policy_count =
+        (device_mock_lptdi_ioctl_success ? 1u : 0u) +
+        (device_mock_lptdi_ioctl_full_success ? 1u : 0u) +
+        (!device_mock_lptdi_response_profile_path.empty() ? 1u : 0u) +
+        (!device_mock_lptdi_target_state_hex.empty() ? 1u : 0u);
+    if (device_ioctl_policy_count > 1)
+    {
+        PrintUsage();
+        return 1;
+    }
+    if (lptdi_post_ioctl_trace_steps != 0 &&
+        device_ioctl_policy_count == 0)
+    {
+        PrintUsage();
+        return 1;
+    }
     if (instruction_trace && (probe_handoff || hle_command_line || hle_windows_directory ||
                               hle_vfs || probe_exit_process || break_exit_process))
     {
@@ -1901,6 +3085,24 @@ int main(int argc, char** argv)
     g_trace = trace;
 
     std::string error;
+    re2dj::device::LptdiTargetState device_target_state = {};
+    if (!device_mock_lptdi_target_state_hex.empty() &&
+        !re2dj::device::ParseLptdiTargetState(
+            device_mock_lptdi_target_state_hex, &device_target_state, &error))
+    {
+        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        return 1;
+    }
+    re2dj::device::LptdiResponseProfile device_response_profile;
+    if (!device_mock_lptdi_response_profile_path.empty() &&
+        !re2dj::device::ReadLptdiResponseProfile(
+            device_mock_lptdi_response_profile_path,
+            &device_response_profile,
+            &error))
+    {
+        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        return 1;
+    }
     if (inject_runtime && runtime_path.empty() && !FindBundledRuntime(&runtime_path, &error))
     {
         std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
@@ -1947,13 +3149,19 @@ int main(int argc, char** argv)
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      trace ? "true" : "false",
                      software_breakpoint ? "true" : "false",
                      instruction_trace_max_steps,
-                     api_trace ? "true" : "false");
+                     api_trace ? "true" : "false",
+                     device_mock_lptdi ? "true" : "false",
+                     device_mock_lptdi_ioctl_success ? "true" : "false",
+                     device_mock_lptdi_ioctl_full_success ? "true" : "false",
+                     static_cast<unsigned>(device_response_profile.entries.size()),
+                     device_mock_lptdi_target_state_hex.empty() ? "false" : "true",
+                     lptdi_post_ioctl_trace_steps);
     std::string hle_value = executable.filename().string();
     if (hle_windows_directory)
     {
@@ -2110,10 +3318,13 @@ int main(int argc, char** argv)
                                        "CloseHandle",
                                        "GetFileType"};
     bool vfs_prepared = !hle_vfs;
+    std::uint32_t device_ioctl_wrapper_address = 0;
     if (hle_vfs && runtime_loaded)
     {
         std::uint32_t hdd_root_rva = 0;
         std::uint32_t overlay_root_rva = 0;
+        std::uint32_t device_mock_rva = 0;
+        std::uint32_t device_ioctl_mode_rva = 0;
         const std::filesystem::path overlay = std::filesystem::current_path() / "overlays" / target->id;
         vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
                            runtime_path, "g_re2dj_vfs_hdd_root", &hdd_root_rva, &error) &&
@@ -2127,6 +3338,93 @@ int main(int argc, char** argv)
                                        runtime_base + overlay_root_rva,
                                        overlay.string(),
                                        &error);
+        if (vfs_prepared && device_mock_lptdi)
+        {
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_device_mock",
+                               &device_mock_rva,
+                               &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + device_mock_rva,
+                                          1,
+                                           &error);
+        }
+        if (vfs_prepared &&
+            device_ioctl_policy_count != 0)
+        {
+            const std::uint32_t ioctl_mode =
+                !device_mock_lptdi_target_state_hex.empty()
+                    ? 4
+                    : (!device_mock_lptdi_response_profile_path.empty()
+                           ? 3
+                           : (device_mock_lptdi_ioctl_full_success ? 2 : 1));
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_device_ioctl_mode",
+                               &device_ioctl_mode_rva,
+                               &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + device_ioctl_mode_rva,
+                                          ioctl_mode,
+                                          &error);
+        }
+        if (vfs_prepared && !device_mock_lptdi_target_state_hex.empty())
+        {
+            std::uint32_t target_state_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_device_target_state",
+                               &target_state_rva,
+                               &error) &&
+                           WriteRemoteBytes(child.hProcess,
+                                            runtime_base + target_state_rva,
+                                            device_target_state.data(),
+                                            device_target_state.size(),
+                                            &error);
+            if (vfs_prepared)
+            {
+                RecordDiagnostic("{\"event\":\"lptdi_target_state\",\"bytes\":\"%s\"}",
+                                 device_mock_lptdi_target_state_hex.c_str());
+            }
+        }
+        for (const re2dj::device::LptdiResponseEntry& profile_entry :
+             device_response_profile.entries)
+        {
+            if (!vfs_prepared)
+            {
+                break;
+            }
+            const bool first_code =
+                profile_entry.control_code == re2dj::device::kLptdiIoctlCode410;
+            const char* const bytes_export = first_code
+                                                 ? "g_re2dj_device_response_410"
+                                                 : "g_re2dj_device_response_414";
+            const char* const size_export = first_code
+                                                ? "g_re2dj_device_response_410_size"
+                                                : "g_re2dj_device_response_414_size";
+            std::uint32_t bytes_rva = 0;
+            std::uint32_t size_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, bytes_export, &bytes_rva, &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, size_export, &size_rva, &error) &&
+                           WriteRemoteBytes(child.hProcess,
+                                            runtime_base + bytes_rva,
+                                            profile_entry.bytes.data(),
+                                            profile_entry.bytes.size(),
+                                            &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + size_rva,
+                                          static_cast<std::uint32_t>(profile_entry.bytes.size()),
+                                          &error);
+            if (vfs_prepared)
+            {
+                RecordDiagnostic("{\"event\":\"lptdi_response_profile_entry\",\"code\":\"0x%08x\",\"size\":%u}",
+                                 profile_entry.control_code,
+                                 static_cast<unsigned>(profile_entry.bytes.size()));
+            }
+        }
         for (std::size_t index = 0; vfs_prepared && index < std::size(vfs_exports); ++index)
         {
             std::uint32_t export_rva = 0;
@@ -2145,7 +3443,34 @@ int main(int argc, char** argv)
                                           main_image_base + slot_rva,
                                           runtime_base + export_rva,
                                           &error);
+        }
+        if (vfs_prepared &&
+            device_ioctl_policy_count != 0)
+        {
+            std::uint32_t export_rva = 0;
+            std::uint32_t slot_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "_Re2djDeviceIoControlMock@32",
+                               &export_rva,
+                               &error) &&
+                           re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                               info,
+                               file.data(),
+                               file.size(),
+                               "KERNEL32.dll",
+                               "DeviceIoControl",
+                               &slot_rva,
+                               &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          main_image_base + slot_rva,
+                                          runtime_base + export_rva,
+                                          &error);
+            if (vfs_prepared)
+            {
+                device_ioctl_wrapper_address = runtime_base + export_rva;
             }
+        }
     }
     std::uint32_t exit_thunk_rva = 0;
     std::uint32_t exit_slot_rva = 0;
@@ -2201,12 +3526,23 @@ int main(int argc, char** argv)
     bool api_trace_prepared = !api_trace;
     if (api_trace)
     {
-        if (reached && entry_restored && exit_break_prepared &&
+        const bool system_watches_installed =
+            reached && entry_restored && exit_break_prepared &&
             InstallApiTraceBreakpoints(child.hProcess,
                                        kernel32_base,
                                        kernelbase_base,
                                        &api_watches,
-                                       &error))
+                                       &error);
+        const bool runtime_watch_installed =
+            lptdi_post_ioctl_trace_steps == 0 ||
+            (system_watches_installed &&
+             InstallRuntimeApiTraceBreakpoint(child.hProcess,
+                                              device_ioctl_wrapper_address,
+                                              "DeviceIoControl",
+                                              8,
+                                              &api_watches,
+                                              &error));
+        if (system_watches_installed && runtime_watch_installed)
         {
             api_trace_prepared = true;
         }
@@ -2237,12 +3573,27 @@ int main(int argc, char** argv)
     const char* const expected_message = probe_exit_process ? "re2dj:probe:ExitProcess"
                                                              : (hle_vfs ? "re2dj:vfs:CreateFileA"
                                                                         : handoff_message);
+    const auto resume_debuggee = [&]() {
+        if (inject_runtime)
+        {
+            if (ResumeThread(child.hThread) != (std::numeric_limits<DWORD>::max)())
+            {
+                return true;
+            }
+            error = "cannot resume primary thread after runtime injection";
+            return false;
+        }
+        if (ContinueDebugEvent(breakpoint_process_id, breakpoint_thread_id, DBG_CONTINUE) != FALSE)
+        {
+            return true;
+        }
+        error = "cannot continue entry breakpoint debug event";
+        return false;
+    };
     const bool handoff_observed = instruction_trace
                                       ? (entry_restored &&
                                          EnableSingleStep(child.hThread, entry, &error) &&
-                                         ContinueDebugEvent(breakpoint_process_id,
-                                                            breakpoint_thread_id,
-                                                            DBG_CONTINUE) != FALSE &&
+                                         resume_debuggee() &&
                                          WaitForInstructionTrace(child.hProcess,
                                                                  breakpoint_thread_id,
                                                                  instruction_trace_max_steps,
@@ -2251,19 +3602,17 @@ int main(int argc, char** argv)
                                          (handoff_prepared && vfs_prepared && exit_probe_prepared &&
                                           exit_break_prepared && api_trace_prepared &&
                                           (break_exit_process
-                                               ? (ContinueDebugEvent(breakpoint_process_id,
-                                                                     breakpoint_thread_id,
-                                                                     DBG_CONTINUE) != FALSE &&
-                                            WaitForExitProcessBreakpoint(child.hProcess,
-                                                                  exit_break_target,
-                                                                  scan_fault_references,
-                                                                  trace,
-                                                                  main_image_base,
-                                                                  &info,
-                                                                  &api_watches,
-                                                                          &error))
-                                               : (ResumeThread(child.hThread) !=
-                                                          (std::numeric_limits<DWORD>::max)() &&
+                                               ? (resume_debuggee() &&
+                                                  WaitForExitProcessBreakpoint(child.hProcess,
+                                                                               exit_break_target,
+                                                                               scan_fault_references,
+                                                                               trace,
+                                                                               lptdi_post_ioctl_trace_steps,
+                                                                               main_image_base,
+                                                                               &info,
+                                                                               &api_watches,
+                                                                               &error))
+                                               : (resume_debuggee() &&
                                                   WaitForHandoff(child.hProcess,
                                                                  expected_message,
                                                                  trace,

@@ -14,6 +14,8 @@ int main()
     RunHddRootTests(context);
     RunTargetProfileTests(context);
     RunVfsFileTableTests(context);
+    RunLptdiChallengeResponseTests(context);
+    RunLptdiResponseProfileTests(context);
 
     std::printf("checks: %d, failures: %d\n", context.checks, context.failures);
     return context.failures == 0 ? 0 : 1;

@@ -77,7 +77,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 | 항목 | 상태 |
 | --- | --- |
 | 아케이드 I/O 보드 | **부분 확인** — 3rd의 `EZ2DJ.INI`에 `"UseIOCard" = 1`이 있어 I/O 카드 사용은 확실하다. 접근 경로는 미확정이다. 1st SE 덤프에 `Tdsd.vxd111`(Windows 9x VxD)이 있으나 `ez2dj1.exe`는 `DeviceIoControl`을 import하지 않고, 확장자 `111`은 비활성화를 시사한다 |
-| 동글·보호 장치 | **부분 확인** — 보호 stub이 진입 직후 `\\.\LPTDI1` 병렬포트 디바이스를 열고(`CreateFileA`, 런타임 관찰) `.gdata`에 `\\.\TDSD.VXD`·`\\.\LPTDI0` 문자열이 있다. 검사 실패가 종료 경로와 어떻게 연결되는지는 [구조 문서](analysis/ez2dj-exe-structures.md) 2.5절의 미확정 항목이다 |
+| 동글·보호 장치 | **부분 확인** — 보호 stub이 `\\.\LPTDI1`을 열고 4→8바이트, 24→104바이트 IOCTL 두 건을 보낸다. 두 단계 모두 output 첫 DWORD 0이 진행 조건이다. 첫 단계는 최대 3회 반복한다. 두 번째 input DWORD에 `0x01ed4141` 변환을 두 번 적용한 8바이트 mask가 response offset 4~11과 XOR되어 `.data` 복원 상태가 된다. 이 상태의 첫 DWORD는 `0x01ed7296`에 seed되고 같은 변환으로 바이트마다 갱신되며, 하위 바이트가 보호 `.data`에서 빠진다. 최소 target state `0900000000000000`은 정상 initializer를 반복 복원했다. 이는 바이너리 복원값이며 실제 동글 key나 vendor protocol의 확정은 아니다. HASP4 `HaspCode`의 첫 shape 유사성은 있으나 classic HASP 공개 경로·packet과 전체 LPTDI interface가 달라 vendor는 미확정이다 |
 | 타이머 소스 | **확인됨** — `timeGetTime` |
 
 ---

@@ -41,8 +41,27 @@
 
 - `--api-trace` observation: post-entry API flow with stable callers (GetVersion, CreateFileA on `\\.\LPTDI1`, WSOCK32 load/probe/free)
 - Runtime confirmation that the parallel-port device path `\\.\LPTDI1` is opened by the protection stub
+- Failed-open path observed with zero follow-up handle use; successful synthetic open reveals two IOCTL calls
+- Optional `--device-mock-lptdi` import-thunk HLE with reserved synthetic handles and file-wrapper semantics
+- Matched mock-off/on confirmation: failed LPTDI open selects the private-page #UD path, while a successful synthetic open issues two IOCTLs and reaches the original entry at `0x0043a640`
+- Runtime-injected API-trace resume fixed to resume the suspended primary thread instead of continuing an already-released debug event
+- First-chance access-violation diagnostics with access metadata, full registers, image-pointer windows, and return-site code windows
+- Original-initialization AV attributed to `call dword [edx]` at `0x0043b683` consuming corrupt `.data` initializer slot `[0x0045c008]=0x19d521bd`
+- DeviceIoControl entry/return tracing with eight arguments, bounded buffers, EAX, and bytes-returned
+- Two LPTDI IOCTLs confirmed as failed, buffer-preserving calls with run-varying challenge inputs
+- Optional zero-byte IOCTL-success experiment with selective IAT replacement and runtime contract coverage
+- Repeated confirmation that TRUE with no response data avoids the later initializer AV but instead selects the protected stub's early private-page #UD teardown path
+- HASP4/Hardlock/Win32 IOCTL background comparison with explicit vendor-identification boundary
+- Full-size preserving IOCTL-success mode and repeated confirmation that bytes-returned alone does not satisfy the LPTDI check
+- Synthetic-wrapper return tracing and repeatable attribution of the first 8-byte output DWORD: zero comparison at `0x01ed4253`, return load at `0x01ed4279`, and upstream nonzero checks
+- Versioned external LPTDI response-profile parser, validated runtime injection, and repeated proof that first-IOCTL DWORD zero advances to `0x9c406414` while one selects the private-page #UD path
+- Repeated second-response consumption attribution: DWORD0 zero advances, offsets 4–11 are XORed with an eight-byte mask derived from the second-input seed, and changing those bytes changes the initializer AV and `.data` restoration result
+- Runtime-confirmed LPTDI challenge-mask transform, adaptive `--device-mock-lptdi-target-state` responses, and repeated proof that a fixed eight-byte target state removes per-run challenge variation from the initializer AV and `.data` result
+- Protected `.data` byte transform recovered as `state = Advance(state); byte -= low8(state)`, with minimal target state `0900000000000000` repeatedly restoring the normal initializer and eliminating the initializer AV
+- One-shot `original_initializer_window` diagnostic captured at the original entry's first `GetVersion` call
 - Protected `.gidata` static import surface mapped slot-by-slot; dynamic resolution observed for WSAGetLastError only
 - Illegal-instruction caller identified: WOW64 win32k syscall transition inside the DLL-unload tail, not a guest branch
+- Termination path attributed: stub-planted stack block → register restore at `0x01ed2730` → `.gdata` pointer jump → `ret` onto the undecrypted continuation page
 - Raw-run exit code explained as residual EAX register value at the fault
 - `.gtide` confirmed self-modifying with anti-disassembly obfuscation; runtime bytes differ from file bytes
 

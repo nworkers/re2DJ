@@ -7,17 +7,9 @@
 ## 현재 진행 / In progress
 
 - [ ] Windows x86 VFS runtime 연결
-  - [x] `C:\\windows` / `D:\\ez2dj` root mapping
-  - [x] CWD 기준 `overlays/<target-id>` write policy
-  - [x] 공용 `VfsFileTable` (`Open`, `Read`, `Write`, `Seek`, `Size`, `Close`)
-  - [x] runtime file API wrapper build (`CreateFileA` ~ `CloseHandle`)
-  - [x] launcher root configuration export 전달
-  - [x] original IAT에 file API wrapper 연결
-  - [x] synthetic VFS read/copy-on-write/close 검증
-  - [x] development `ez2dj1.exe` entry에서 첫 `CreateFileA` wrapper 관찰
-  - [x] canonical protected `ez2dj.exe`의 post-entry illegal instruction caller 확정 — guest의 직접 branch가 아니라 `FreeLibrary` 유발 DLL 언로드 종반의 WOW64 win32k 시스템 콜 전환 직후 (`--api-trace`, 2026-08-23)
-  - [ ] invalid target 조건 분석 — 64비트 전환이 private RW page에 도달하는 경로와, 종료가 하드웨어 동글·환경 검사 실패인지 현대 WOW64 부정합인지 판별
   - [ ] canonical 실행에서 read/write/close와 overlay 결과를 검증
+- [ ] 보호 해제 후 원본 `.text` 초기화 안정화
+  - [ ] 원본 `.text`에서 첫 자산 파일 API 호출까지 진행
 
 ## 다음 작업 / Next work
 
@@ -30,10 +22,7 @@
 
 - [ ] `Songs/` 아래 자산 파일 형식 분석
 - [ ] 3rd target guest drive and working-directory evidence
-- [ ] `syscall_resume_hit`에서 stack 상단 64 word dump로 `RtlDestroyHeap` 소유 확인(ws2_32 detach 여부)과 힙 핸들–fault allocation 상관
-- [ ] fault 시점 memory에서 `{entry VA ×4}` 식재 패턴을 찾아 안정적 fault 서명(ECX~EDI=entry)의 공급원 추적
-- [ ] 두 번째 게이트의 64비트 처리가 private RW page 전송을 만드는 메커니즘과, 종료가 동글·환경 검사 실패인지 현대 WOW64 부정합인지 판별
-- [ ] HLE 관점 완화 검토 — 보호 stub의 `FreeLibrary("WSOCK32.DLL")` 후킹이나 Winsock probe 대체가 현대 환경 종료를 피할 수 있는지
+- [ ] 실패 경로 continuation buffer(힙 페이지)의 의미 추적 — entry 직후 XOR 루프 대상 버퍼와 `[0x01ed7074]` 플래그 기입 지점
 - [ ] 3rd 보호 빌드(`EZ2DJ.EXE`)의 import 표면과 런타임 흐름
 
 ## 보류 / Deferred
