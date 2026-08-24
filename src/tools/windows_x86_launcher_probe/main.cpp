@@ -22,6 +22,7 @@
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
+#include "re2dj/input/legacy_io_port_bus.h"
 #include "re2dj/target/target_profile.h"
 
 #include "../../platform/windows/injected_runtime_loader.h"
@@ -115,7 +116,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-io-ports|--d3d-init-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -326,6 +327,7 @@ bool WaitForInitialBreakpoint(DWORD* process_id,
                               std::uintptr_t* main_image_base,
                               std::uintptr_t* kernel32_base,
                               std::uintptr_t* kernelbase_base,
+                              std::uintptr_t* user32_base,
                               std::string* error)
 {
     for (std::uint32_t event_count = 0; event_count < 128; ++event_count)
@@ -349,6 +351,7 @@ bool WaitForInitialBreakpoint(DWORD* process_id,
         {
             NoteSystemModuleBase(event, L"kernel32.dll", kernel32_base);
             NoteSystemModuleBase(event, L"kernelbase.dll", kernelbase_base);
+            NoteSystemModuleBase(event, L"user32.dll", user32_base);
             if (event.u.LoadDll.hFile != nullptr)
             {
                 CloseHandle(event.u.LoadDll.hFile);
@@ -550,6 +553,7 @@ bool WaitForEntryBreakpoint(std::uint32_t entry,
                             bool trace,
                             std::uintptr_t* kernel32_base,
                             std::uintptr_t* kernelbase_base,
+                            std::uintptr_t* user32_base,
                             std::string* error)
 {
     (void)trace;
@@ -580,6 +584,7 @@ bool WaitForEntryBreakpoint(std::uint32_t entry,
         {
             NoteSystemModuleBase(event, L"kernel32.dll", kernel32_base);
             NoteSystemModuleBase(event, L"kernelbase.dll", kernelbase_base);
+            NoteSystemModuleBase(event, L"user32.dll", user32_base);
             if (event.u.LoadDll.hFile != nullptr)
             {
                 CloseHandle(event.u.LoadDll.hFile);
@@ -992,6 +997,46 @@ struct ApiWatchPoint
 
 using ApiWatchMap = std::map<std::uintptr_t, ApiWatchPoint>;
 
+struct GuestReturnWatchPoint
+{
+    const char* name = nullptr;
+    std::uint8_t original_byte = 0;
+};
+
+using GuestReturnWatchMap = std::map<std::uintptr_t, GuestReturnWatchPoint>;
+
+bool InstallD3dInitReturnBreakpoints(HANDLE process,
+                                     std::uintptr_t image_base,
+                                     GuestReturnWatchMap* watches,
+                                     std::string* error)
+{
+    struct Stage
+    {
+        std::uint32_t return_rva;
+        const char* name;
+    };
+    constexpr Stage kStages[] = {{0x0001f5de, "direct_draw"},
+                                 {0x0001f5ee, "direct_3d"},
+                                 {0x0001f5fe, "surfaces"},
+                                 {0x0001f60e, "device"},
+                                 {0x0001f61e, "graphics_state"}};
+    for (const Stage& stage : kStages)
+    {
+        GuestReturnWatchPoint watch;
+        watch.name = stage.name;
+        const std::uintptr_t address = image_base + stage.return_rva;
+        if (!SetSoftwareEntryBreakpoint(process, address, &watch.original_byte, error))
+        {
+            return false;
+        }
+        watches->emplace(address, watch);
+        RecordDiagnostic("{\"event\":\"d3d_init_watch\",\"stage\":\"%s\",\"address\":\"0x%08x\",\"status\":\"armed\"}",
+                         stage.name,
+                         static_cast<unsigned>(address));
+    }
+    return true;
+}
+
 struct RemoteBufferSnapshot
 {
     bool readable = false;
@@ -1097,7 +1142,8 @@ void RecordPostDeviceIoControlSample(HANDLE process,
 // argument.
 int ApiStringArgumentIndex(const char* name)
 {
-    if (std::strcmp(name, "LoadLibraryA") == 0 || std::strcmp(name, "CreateFileA") == 0)
+    if (std::strcmp(name, "LoadLibraryA") == 0 || std::strcmp(name, "CreateFileA") == 0 ||
+        std::strcmp(name, "SetCurrentDirectoryA") == 0)
     {
         return 0;
     }
@@ -1141,6 +1187,56 @@ bool ReadRemoteAnsiString(HANDLE process,
     buffer[terminator] = '\0';
     SanitizeJsonText(buffer);
     return true;
+}
+
+void RecordKsndSearchPathState(HANDLE process,
+                               std::uint32_t image_base,
+                               std::uint32_t caller)
+{
+    constexpr std::uint32_t kKsndFailureCallerRva = 0x00024813;
+    constexpr std::uint32_t kSearchPathEntriesRva = 0x0184c0a0;
+    constexpr std::uint32_t kSearchPathCountRva = 0x0184d0e0;
+    constexpr std::uint32_t kSearchPathEntryStride = 0x104;
+    constexpr std::uint32_t kDiagnosticEntryLimit = 32;
+    if (caller != image_base + kKsndFailureCallerRva)
+    {
+        return;
+    }
+
+    std::uint32_t count = 0;
+    SIZE_T copied = 0;
+    const bool count_readable =
+        ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(image_base + kSearchPathCountRva),
+                          &count,
+                          sizeof(count),
+                          &copied) != FALSE &&
+        copied == sizeof(count);
+    const bool capped = count_readable && count > kDiagnosticEntryLimit;
+    RecordDiagnostic("{\"event\":\"ksnd_search_path_state\",\"count_address\":\"0x%08x\",\"count_readable\":%s,\"count\":%u,\"diagnostic_limit\":%u,\"capped\":%s}",
+                     image_base + kSearchPathCountRva,
+                     count_readable ? "true" : "false",
+                     count,
+                     kDiagnosticEntryLimit,
+                     capped ? "true" : "false");
+    if (!count_readable)
+    {
+        return;
+    }
+
+    const std::uint32_t observed_count = (std::min)(count, kDiagnosticEntryLimit);
+    for (std::uint32_t index = 0; index < observed_count; ++index)
+    {
+        const std::uint32_t address = image_base + kSearchPathEntriesRva +
+                                      index * kSearchPathEntryStride;
+        char entry[128] = {};
+        const bool readable = ReadRemoteAnsiString(process, address, entry);
+        RecordDiagnostic("{\"event\":\"ksnd_search_path_entry\",\"index\":%u,\"address\":\"0x%08x\",\"readable\":%s,\"path\":\"%s\"}",
+                         index,
+                         address,
+                         readable ? "true" : "false",
+                         readable ? entry : "");
+    }
 }
 
 RemoteBufferSnapshot ReadRemoteBufferSnapshot(HANDLE process,
@@ -1611,6 +1707,7 @@ void RecordIllegalInstructionContext(HANDLE process,
 bool InstallApiTraceBreakpoints(HANDLE process,
                                 std::uintptr_t kernel32_base,
                                 std::uintptr_t kernelbase_base,
+                                std::uintptr_t user32_base,
                                 ApiWatchMap* watches,
                                 std::string* error)
 {
@@ -1624,6 +1721,7 @@ bool InstallApiTraceBreakpoints(HANDLE process,
     const WatchedModule modules[] = {
         {"kernelbase.dll", kernelbase_base},
         {"kernel32.dll", kernel32_base},
+        {"user32.dll", user32_base},
     };
     constexpr const char* kWatchedApis[] = {
         "LoadLibraryA",
@@ -1640,6 +1738,17 @@ bool InstallApiTraceBreakpoints(HANDLE process,
         "ReadFile",
         "WriteFile",
         "CloseHandle",
+        "SetCurrentDirectoryA",
+        "RegisterClassA",
+        "CreateWindowExA",
+        "ShowCursor",
+        "ShowWindow",
+        "UpdateWindow",
+        "SendMessageA",
+        "PostQuitMessage",
+        "EnumDisplaySettingsA",
+        "ChangeDisplaySettingsExA",
+        "GetAsyncKeyState",
     };
     bool any_resolved = false;
     for (const char* api : kWatchedApis)
@@ -1679,7 +1788,9 @@ bool InstallApiTraceBreakpoints(HANDLE process,
             ApiWatchPoint watch;
             watch.name = api;
             watch.string_arg_index = ApiStringArgumentIndex(api);
-            watch.argument_count = std::strcmp(api, "DeviceIoControl") == 0 ? 8 : 4;
+            watch.argument_count = std::strcmp(api, "CreateWindowExA") == 0 ? 12
+                                   : std::strcmp(api, "DeviceIoControl") == 0 ? 8
+                                                                             : 4;
             SIZE_T copied = 0;
             if (ReadProcessMemory(process,
                                   reinterpret_cast<const void*>(resolution.address),
@@ -1776,6 +1887,98 @@ bool InstallRuntimeApiTraceBreakpoint(HANDLE process,
     return true;
 }
 
+enum class IoPortTrapResult
+{
+    kNotHandled,
+    kHandled,
+    kError,
+};
+
+IoPortTrapResult HandleLegacyIoPortTrap(
+    HANDLE process,
+    DWORD thread_id,
+    const EXCEPTION_RECORD& exception,
+    std::uintptr_t image_base,
+    re2dj::input::LegacyIoPortBus* bus,
+    std::string* error)
+{
+    if (bus == nullptr || exception.ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
+    {
+        return IoPortTrapResult::kNotHandled;
+    }
+
+    constexpr std::uintptr_t kInByteRva = 0x00038987;
+    constexpr std::uintptr_t kOutByteRva = 0x000389ab;
+    const std::uintptr_t address =
+        reinterpret_cast<std::uintptr_t>(exception.ExceptionAddress);
+    const bool is_read = address == image_base + kInByteRva;
+    const bool is_write = address == image_base + kOutByteRva;
+    if (!is_read && !is_write)
+    {
+        return IoPortTrapResult::kNotHandled;
+    }
+
+    std::uint8_t opcode = 0;
+    SIZE_T copied = 0;
+    const std::uint8_t expected_opcode = is_read ? 0xec : 0xee;
+    if (ReadProcessMemory(process,
+                          exception.ExceptionAddress,
+                          &opcode,
+                          sizeof(opcode),
+                          &copied) == FALSE ||
+        copied != sizeof(opcode) || opcode != expected_opcode)
+    {
+        *error = "legacy I/O port trap opcode does not match target profile";
+        return IoPortTrapResult::kError;
+    }
+
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot capture legacy I/O port trap context";
+        return IoPortTrapResult::kError;
+    }
+
+    const std::uint16_t port = static_cast<std::uint16_t>(context.Edx);
+    std::uint8_t value = static_cast<std::uint8_t>(context.Eax);
+    const bool accepted = is_read ? bus->ReadByte(port, &value)
+                                  : bus->WriteByte(port, value);
+    if (!accepted)
+    {
+        CloseHandle(thread);
+        return IoPortTrapResult::kNotHandled;
+    }
+
+    if (is_read)
+    {
+        context.Eax = (context.Eax & 0xffffff00u) | value;
+    }
+    context.Eip += 1;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot advance legacy I/O port trap context";
+        return IoPortTrapResult::kError;
+    }
+    CloseHandle(thread);
+
+    RecordDiagnostic("{\"event\":\"io_port_%s\",\"thread\":%u,\"address\":\"0x%08x\",\"port\":\"0x%03x\",\"width\":1,\"value\":\"0x%02x\"}",
+                     is_read ? "read" : "write",
+                     static_cast<unsigned>(thread_id),
+                     static_cast<unsigned>(address),
+                     static_cast<unsigned>(port),
+                     static_cast<unsigned>(value));
+    return IoPortTrapResult::kHandled;
+}
+
 bool WaitForExitProcessBreakpoint(HANDLE process,
                                   std::uint32_t exit_target,
                                   bool scan_fault_references,
@@ -1783,7 +1986,9 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                   std::uint32_t lptdi_post_ioctl_trace_steps,
                                   std::uintptr_t image_base,
                                   const re2dj::exe::PeImageInfo* image_info,
+                                  GuestReturnWatchMap* guest_return_watches,
                                   ApiWatchMap* api_watches,
+                                  re2dj::input::LegacyIoPortBus* io_port_bus,
                                   std::string* error)
 {
     (void)trace;
@@ -1863,7 +2068,8 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         }
     };
     const std::uint64_t requested_event_cap =
-        128ull + static_cast<std::uint64_t>(lptdi_post_ioctl_trace_steps) * 16ull;
+        (io_port_bus == nullptr ? 128ull : 8192ull) +
+        static_cast<std::uint64_t>(lptdi_post_ioctl_trace_steps) * 16ull;
     const std::uint32_t normal_event_cap = static_cast<std::uint32_t>(
         (std::min)(requested_event_cap,
                    static_cast<std::uint64_t>((std::numeric_limits<std::uint32_t>::max)())));
@@ -1878,6 +2084,31 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             return false;
         }
         TraceDebugEvent(event);
+        if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT)
+        {
+            const IoPortTrapResult io_result = HandleLegacyIoPortTrap(
+                process,
+                event.dwThreadId,
+                event.u.Exception.ExceptionRecord,
+                image_base,
+                io_port_bus,
+                error);
+            if (io_result == IoPortTrapResult::kError)
+            {
+                return false;
+            }
+            if (io_result == IoPortTrapResult::kHandled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue handled legacy I/O port trap";
+                    return false;
+                }
+                continue;
+            }
+        }
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT && api_watches != nullptr)
         {
             last_activity_thread = event.dwThreadId;
@@ -2197,6 +2428,89 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             }
             else if (exception_code == EXCEPTION_BREAKPOINT)
             {
+                const auto guest_return = guest_return_watches->find(exception_address);
+                if (guest_return != guest_return_watches->end())
+                {
+                    bool swallowed = false;
+                    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                                               FALSE,
+                                               event.dwThreadId);
+                    CONTEXT context = {};
+                    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                    constexpr std::uint32_t kObjectRvas[] = {0x01ab7cc0,
+                                                              0x01ab7cc4,
+                                                              0x01ab7ce0,
+                                                              0x01ab7d00,
+                                                              0x01ab7d04,
+                                                              0x01ab7d08,
+                                                              0x01ab7d24,
+                                                              0x01ab7d48};
+                    std::uint32_t objects[std::size(kObjectRvas)] = {};
+                    bool captured = thread != nullptr &&
+                                    GetThreadContext(thread, &context) != FALSE;
+                    for (std::size_t index = 0;
+                         captured && index < std::size(kObjectRvas);
+                         ++index)
+                    {
+                        captured = ReadRemoteU32(
+                            process, image_base + kObjectRvas[index], &objects[index]);
+                    }
+                    if (!captured)
+                    {
+                        *error = "cannot capture Direct3D initialization return context";
+                    }
+                    else
+                    {
+                        RecordDiagnostic("{\"event\":\"d3d_init_return\",\"thread\":%u,\"stage\":\"%s\",\"address\":\"0x%08x\",\"result\":\"0x%08x\",\"success\":%s,\"objects\":{\"d3d_device3\":\"0x%08x\",\"device_aux\":\"0x%08x\",\"d3d3\":\"0x%08x\",\"direct_draw4\":\"0x%08x\",\"primary_surface\":\"0x%08x\",\"surface_aux\":\"0x%08x\"},\"markers\":{\"zbuffer_caps\":\"0x%08x\",\"find_device_passed\":\"0x%08x\"}}",
+                                         static_cast<unsigned>(event.dwThreadId),
+                                         guest_return->second.name,
+                                         static_cast<unsigned>(exception_address),
+                                         static_cast<unsigned>(context.Eax),
+                                         context.Eax == 0 ? "true" : "false",
+                                         objects[0],
+                                         objects[1],
+                                         objects[2],
+                                         objects[3],
+                                         objects[4],
+                                         objects[5],
+                                         objects[6],
+                                         objects[7]);
+                        SIZE_T written = 0;
+                        context.Eip = static_cast<DWORD>(exception_address);
+                        swallowed = WriteProcessMemory(
+                                        process,
+                                        reinterpret_cast<void*>(exception_address),
+                                        &guest_return->second.original_byte,
+                                        sizeof(guest_return->second.original_byte),
+                                        &written) != FALSE &&
+                                    written == sizeof(guest_return->second.original_byte) &&
+                                    FlushInstructionCache(
+                                        process,
+                                        reinterpret_cast<const void*>(exception_address),
+                                        sizeof(guest_return->second.original_byte)) != FALSE &&
+                                    SetThreadContext(thread, &context) != FALSE;
+                        if (swallowed)
+                        {
+                            guest_return_watches->erase(guest_return);
+                        }
+                        else
+                        {
+                            *error = "cannot swallow Direct3D initialization return breakpoint";
+                        }
+                    }
+                    if (thread != nullptr)
+                    {
+                        CloseHandle(thread);
+                    }
+                    if (!swallowed ||
+                        ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        return false;
+                    }
+                    continue;
+                }
                 const auto post_resume =
                     post_device_io_control_traces.find(event.dwThreadId);
                 if (post_resume != post_device_io_control_traces.end() &&
@@ -2543,7 +2857,7 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                                event.dwThreadId);
                     CONTEXT context = {};
                     context.ContextFlags = CONTEXT_CONTROL;
-                    std::uint32_t stack[9] = {};
+                    std::uint32_t stack[13] = {};
                     SIZE_T copied = 0;
                     const SIZE_T stack_size =
                         (watch->second.argument_count + 1) * sizeof(std::uint32_t);
@@ -2824,6 +3138,7 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             CONTEXT context = {};
             context.ContextFlags = CONTEXT_CONTROL;
             std::uint32_t return_address = 0;
+            std::uint32_t wrapper_frame[4] = {};
             SIZE_T copied = 0;
             const bool captured = thread != nullptr && GetThreadContext(thread, &context) != FALSE &&
                                   ReadProcessMemory(process,
@@ -2832,6 +3147,31 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                                     sizeof(return_address),
                                                     &copied) != FALSE &&
                                   copied == sizeof(return_address);
+            constexpr std::uint32_t kControlledExitReturnRva = 0x00024061;
+            const bool controlled_exit = captured &&
+                                         return_address ==
+                                             image_base + kControlledExitReturnRva;
+            SIZE_T frame_copied = 0;
+            const bool frame_readable = controlled_exit &&
+                                        ReadProcessMemory(
+                                            process,
+                                            reinterpret_cast<const void*>(context.Ebp),
+                                            wrapper_frame,
+                                            sizeof(wrapper_frame),
+                                            &frame_copied) != FALSE &&
+                                        frame_copied == sizeof(wrapper_frame);
+            char exit_message[128] = {};
+            const bool message_readable = frame_readable &&
+                                          ReadRemoteAnsiString(
+                                              process, wrapper_frame[2], exit_message);
+            char exit_detail[128] = {};
+            const bool detail_readable = frame_readable &&
+                                         ReadRemoteAnsiString(
+                                             process, wrapper_frame[3], exit_detail);
+            const bool caller_in_image = frame_readable && image_info != nullptr &&
+                                         wrapper_frame[1] >= image_base &&
+                                         wrapper_frame[1] <
+                                             image_base + image_info->size_of_image;
             if (thread != nullptr)
             {
                 CloseHandle(thread);
@@ -2842,6 +3182,25 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 return false;
             }
             RecordDiagnostic("{\"exit_process_return\":\"0x%08x\"}", return_address);
+            if (controlled_exit)
+            {
+                RecordDiagnostic("{\"event\":\"controlled_exit_attribution\",\"wrapper_frame\":\"0x%08x\",\"frame_readable\":%s,\"saved_ebp\":\"0x%08x\",\"caller\":\"0x%08x\",\"caller_in_image\":%s,\"message_pointer\":\"0x%08x\",\"message_readable\":%s,\"message\":\"%s\",\"detail_pointer\":\"0x%08x\",\"detail_readable\":%s,\"detail\":\"%s\"}",
+                                 static_cast<unsigned>(context.Ebp),
+                                 frame_readable ? "true" : "false",
+                                 wrapper_frame[0],
+                                 wrapper_frame[1],
+                                 caller_in_image ? "true" : "false",
+                                 wrapper_frame[2],
+                                 message_readable ? "true" : "false",
+                                 message_readable ? exit_message : "",
+                                 wrapper_frame[3],
+                                 detail_readable ? "true" : "false",
+                                 detail_readable ? exit_detail : "");
+                if (frame_readable)
+                {
+                    RecordKsndSearchPathState(process, image_base, wrapper_frame[1]);
+                }
+            }
             return true;
         }
         if (event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT)
@@ -2882,6 +3241,10 @@ int main(int argc, char** argv)
     bool hle_command_line = false;
     bool hle_windows_directory = false;
     bool hle_vfs = false;
+    bool hle_display_mode = false;
+    bool hle_d3d3 = false;
+    bool hle_io_ports = false;
+    bool d3d_init_trace = false;
     bool device_mock_lptdi = false;
     bool device_mock_lptdi_ioctl_success = false;
     bool device_mock_lptdi_ioctl_full_success = false;
@@ -2962,6 +3325,31 @@ int main(int argc, char** argv)
         {
             hle_vfs = true;
             inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--hle-display-mode")
+        {
+            hle_display_mode = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--hle-d3d3")
+        {
+            hle_d3d3 = true;
+            hle_display_mode = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--hle-io-ports")
+        {
+            hle_io_ports = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--d3d-init-trace")
+        {
+            d3d_init_trace = true;
+            break_exit_process = true;
             software_breakpoint = true;
         }
         else if (option == "--device-mock-lptdi")
@@ -3076,7 +3464,8 @@ int main(int argc, char** argv)
         return 1;
     }
     if (instruction_trace && (probe_handoff || hle_command_line || hle_windows_directory ||
-                              hle_vfs || probe_exit_process || break_exit_process))
+                              hle_vfs || hle_display_mode || hle_d3d3 || hle_io_ports || d3d_init_trace || probe_exit_process ||
+                              break_exit_process))
     {
         PrintUsage();
         return 1;
@@ -3136,6 +3525,29 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "{\"error\":\"cannot resolve valid bring-up target\"}\\n");
         return 2;
     }
+    if (d3d_init_trace && target->id != "ez2dj1stse")
+    {
+        std::fprintf(stderr, "{\"error\":\"Direct3D initialization trace requires ez2dj1stse target\"}\\n");
+        return 2;
+    }
+    if (hle_d3d3 && target->id != "ez2dj1stse")
+    {
+        std::fprintf(stderr, "{\"error\":\"Direct3D3 HLE requires ez2dj1stse target\"}\\n");
+        return 2;
+    }
+    if (hle_io_ports && target->id != "ez2dj1stse")
+    {
+        std::fprintf(stderr, "{\"error\":\"legacy I/O port HLE requires ez2dj1stse target\"}\\n");
+        return 2;
+    }
+    std::filesystem::path vfs_source_root = root.root();
+    if (hle_vfs && !target->working_directory_relative_path.empty() &&
+        !root.ResolveDirectory(target->working_directory_relative_path, &vfs_source_root))
+    {
+        std::fprintf(stderr,
+                     "{\"error\":\"cannot resolve target working directory for VFS mount\"}\\n");
+        return 2;
+    }
     std::vector<std::uint8_t> file;
     if (!ReadFile(executable, &file, &error))
     {
@@ -3149,13 +3561,17 @@ int main(int argc, char** argv)
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"hle_io_ports\":%s,\"d3d_init_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      trace ? "true" : "false",
                      software_breakpoint ? "true" : "false",
                      instruction_trace_max_steps,
                      api_trace ? "true" : "false",
+                     hle_display_mode ? "true" : "false",
+                     hle_d3d3 ? "true" : "false",
+                     hle_io_ports ? "true" : "false",
+                     d3d_init_trace ? "true" : "false",
                      device_mock_lptdi ? "true" : "false",
                      device_mock_lptdi_ioctl_success ? "true" : "false",
                      device_mock_lptdi_ioctl_full_success ? "true" : "false",
@@ -3201,6 +3617,7 @@ int main(int argc, char** argv)
     std::uintptr_t main_image_base = 0;
     std::uintptr_t kernel32_base = 0;
     std::uintptr_t kernelbase_base = 0;
+    std::uintptr_t user32_base = 0;
     const std::uint32_t expected_base = static_cast<std::uint32_t>(info.image_base);
     const std::uint32_t entry = expected_base + info.entry_point_rva;
     std::uint8_t original_entry_byte = 0;
@@ -3209,11 +3626,13 @@ int main(int argc, char** argv)
                                                           &main_image_base,
                                                           &kernel32_base,
                                                           &kernelbase_base,
+                                                          &user32_base,
                                                           &error);
-    RecordDiagnostic("{\"event\":\"system_modules\",\"image_base\":\"0x%08x\",\"kernel32\":\"0x%08x\",\"kernelbase\":\"0x%08x\"}",
+    RecordDiagnostic("{\"event\":\"system_modules\",\"image_base\":\"0x%08x\",\"kernel32\":\"0x%08x\",\"kernelbase\":\"0x%08x\",\"user32\":\"0x%08x\"}",
                      static_cast<unsigned>(main_image_base),
                      static_cast<unsigned>(kernel32_base),
-                     static_cast<unsigned>(kernelbase_base));
+                     static_cast<unsigned>(kernelbase_base),
+                     static_cast<unsigned>(user32_base));
     const bool breakpoint_set = reached_initial && main_image_base == expected_base &&
                                 (software_breakpoint
                                      ? SetSoftwareEntryBreakpoint(child.hProcess,
@@ -3233,6 +3652,7 @@ int main(int argc, char** argv)
                                                 trace,
                                                 &kernel32_base,
                                                 &kernelbase_base,
+                                                &user32_base,
                                                 &error);
     const bool entry_restored = !software_breakpoint || !reached ||
                                 RestoreSoftwareEntryBreakpoint(child.hProcess,
@@ -3303,6 +3723,52 @@ int main(int argc, char** argv)
                                                   main_image_base + hook_slot_rva,
                                                   runtime_base + handoff_thunk_rva,
                                                   &error));
+    bool display_prepared = !hle_display_mode;
+    if (hle_display_mode && runtime_loaded)
+    {
+        std::uint32_t display_thunk_rva = 0;
+        std::uint32_t display_slot_rva = 0;
+        display_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "_Re2djHleChangeDisplaySettingsExA@20",
+                               &display_thunk_rva,
+                               &error) &&
+                           re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                               info,
+                               file.data(),
+                               file.size(),
+                               "USER32.dll",
+                               "ChangeDisplaySettingsExA",
+                               &display_slot_rva,
+                               &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          main_image_base + display_slot_rva,
+                                          runtime_base + display_thunk_rva,
+                                          &error);
+    }
+    bool d3d3_prepared = !hle_d3d3;
+    if (hle_d3d3 && runtime_loaded)
+    {
+        std::uint32_t d3d3_thunk_rva = 0;
+        std::uint32_t d3d3_slot_rva = 0;
+        d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                            runtime_path,
+                            "_Re2djHleDirectDrawCreate@12",
+                            &d3d3_thunk_rva,
+                            &error) &&
+                        re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                            info,
+                            file.data(),
+                            file.size(),
+                            "DDRAW.dll",
+                            "DirectDrawCreate",
+                            &d3d3_slot_rva,
+                            &error) &&
+                        WriteRemoteU32(child.hProcess,
+                                       main_image_base + d3d3_slot_rva,
+                                       runtime_base + d3d3_thunk_rva,
+                                       &error);
+    }
     const char* const vfs_exports[] = {"_Re2djVfsCreateFileA@28",
                                        "_Re2djVfsReadFile@20",
                                        "_Re2djVfsWriteFile@20",
@@ -3332,12 +3798,20 @@ int main(int argc, char** argv)
                            runtime_path, "g_re2dj_vfs_overlay_root", &overlay_root_rva, &error) &&
                        WriteRemoteAnsi(child.hProcess,
                                        runtime_base + hdd_root_rva,
-                                       root.root().string(),
+                                       vfs_source_root.string(),
                                        &error) &&
                        WriteRemoteAnsi(child.hProcess,
                                        runtime_base + overlay_root_rva,
                                        overlay.string(),
                                        &error);
+        if (vfs_prepared)
+        {
+            RecordDiagnostic("{\"event\":\"vfs_mount\",\"dump_root\":\"%s\",\"working_directory\":\"%s\",\"source_root\":\"%s\",\"overlay_root\":\"%s\"}",
+                             root.root().generic_string().c_str(),
+                             target->working_directory_relative_path.c_str(),
+                             vfs_source_root.generic_string().c_str(),
+                             overlay.generic_string().c_str());
+        }
         if (vfs_prepared && device_mock_lptdi)
         {
             vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
@@ -3522,7 +3996,22 @@ int main(int argc, char** argv)
             error = "cannot set ExitProcess software breakpoint";
         }
     }
+    GuestReturnWatchMap d3d_init_watches;
+    bool d3d_init_trace_prepared = !d3d_init_trace;
+    if (d3d_init_trace)
+    {
+        d3d_init_trace_prepared = reached && entry_restored && exit_break_prepared &&
+                                  InstallD3dInitReturnBreakpoints(child.hProcess,
+                                                                  main_image_base,
+                                                                  &d3d_init_watches,
+                                                                  &error);
+        if (!d3d_init_trace_prepared && error.empty())
+        {
+            error = "cannot install Direct3D initialization return breakpoints";
+        }
+    }
     ApiWatchMap api_watches;
+    re2dj::input::LegacyIoPortBus io_port_bus;
     bool api_trace_prepared = !api_trace;
     if (api_trace)
     {
@@ -3531,6 +4020,7 @@ int main(int argc, char** argv)
             InstallApiTraceBreakpoints(child.hProcess,
                                        kernel32_base,
                                        kernelbase_base,
+                                       user32_base,
                                        &api_watches,
                                        &error);
         const bool runtime_watch_installed =
@@ -3550,15 +4040,17 @@ int main(int argc, char** argv)
         {
             error = "cannot install API trace breakpoints";
         }
-        RecordDiagnostic("{\"event\":\"api_trace_ready\",\"watches\":%u,\"prepared\":%s,\"kernel32\":\"0x%08x\",\"kernelbase\":\"0x%08x\"}",
+        RecordDiagnostic("{\"event\":\"api_trace_ready\",\"watches\":%u,\"prepared\":%s,\"kernel32\":\"0x%08x\",\"kernelbase\":\"0x%08x\",\"user32\":\"0x%08x\"}",
                          static_cast<unsigned>(api_watches.size()),
                          api_trace_prepared ? "true" : "false",
                          static_cast<unsigned>(kernel32_base),
-                         static_cast<unsigned>(kernelbase_base));
+                         static_cast<unsigned>(kernelbase_base),
+                         static_cast<unsigned>(user32_base));
     }
     re2dj::tools::windows_original_process_probe::IatVerificationResult iat;
     const bool iat_verified = reached && entry_restored && runtime_loaded && handoff_prepared &&
-                              vfs_prepared && exit_probe_prepared && exit_break_prepared &&
+                              display_prepared && d3d3_prepared && vfs_prepared && exit_probe_prepared &&
+                              exit_break_prepared && d3d_init_trace_prepared &&
                               api_trace_prepared &&
                               re2dj::tools::windows_original_process_probe::VerifySuspendedIat(
                                   child.hProcess,
@@ -3568,11 +4060,13 @@ int main(int argc, char** argv)
                                   file.size(),
                                   &iat,
                                   &error);
-    const bool resume_for_handoff = handoff_requested || hle_vfs || probe_exit_process ||
-                                    break_exit_process;
+    const bool resume_for_handoff = handoff_requested || hle_vfs || hle_display_mode || hle_d3d3 ||
+                                    probe_exit_process || break_exit_process;
     const char* const expected_message = probe_exit_process ? "re2dj:probe:ExitProcess"
                                                              : (hle_vfs ? "re2dj:vfs:CreateFileA"
-                                                                        : handoff_message);
+                                                                : hle_display_mode
+                                                                    ? "re2dj:hle:ChangeDisplaySettingsExA"
+                                                                    : handoff_message);
     const auto resume_debuggee = [&]() {
         if (inject_runtime)
         {
@@ -3599,8 +4093,10 @@ int main(int argc, char** argv)
                                                                  instruction_trace_max_steps,
                                                                  &error))
                                       : (!resume_for_handoff ||
-                                         (handoff_prepared && vfs_prepared && exit_probe_prepared &&
-                                          exit_break_prepared && api_trace_prepared &&
+                                         (handoff_prepared && display_prepared && d3d3_prepared && vfs_prepared &&
+                                          exit_probe_prepared &&
+                                          exit_break_prepared && d3d_init_trace_prepared &&
+                                          api_trace_prepared &&
                                           (break_exit_process
                                                ? (resume_debuggee() &&
                                                   WaitForExitProcessBreakpoint(child.hProcess,
@@ -3610,7 +4106,9 @@ int main(int argc, char** argv)
                                                                                lptdi_post_ioctl_trace_steps,
                                                                                main_image_base,
                                                                                &info,
+                                                                               &d3d_init_watches,
                                                                                &api_watches,
+                                                                               hle_io_ports ? &io_port_bus : nullptr,
                                                                                &error))
                                                : (resume_debuggee() &&
                                                   WaitForHandoff(child.hProcess,
@@ -3640,7 +4138,9 @@ int main(int argc, char** argv)
     }
     CloseHandle(child.hThread);
     CloseHandle(child.hProcess);
-    if (!reached || !entry_restored || !runtime_loaded || !handoff_prepared || !vfs_prepared || !exit_probe_prepared || !exit_break_prepared || !handoff_observed ||
+    if (!reached || !entry_restored || !runtime_loaded || !handoff_prepared ||
+        !display_prepared || !d3d3_prepared || !vfs_prepared || !exit_probe_prepared ||
+        !exit_break_prepared || !d3d_init_trace_prepared || !handoff_observed ||
         !iat_verified)
     {
         PrintDiagnosticError(error);

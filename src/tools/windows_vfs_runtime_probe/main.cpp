@@ -1,5 +1,9 @@
 #define NOMINMAX
+#define CINTERFACE
+#define DIRECT3D_VERSION 0x0600
 #include <windows.h>
+#include <ddraw.h>
+#include <d3d.h>
 
 #include <cstdio>
 #include <cstring>
@@ -32,6 +36,10 @@ extern "C" __declspec(dllimport) DWORD WINAPI Re2djVfsGetFileType(HANDLE handle)
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djDeviceIoControlMock(
     HANDLE handle, DWORD control_code, LPVOID input, DWORD input_size, LPVOID output,
     DWORD output_size, LPDWORD bytes_returned, LPOVERLAPPED overlapped);
+extern "C" __declspec(dllimport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
+    LPCSTR device_name, DEVMODEA* dev_mode, HWND window, DWORD flags, LPVOID reserved);
+extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectDrawCreate(
+    GUID* device_guid, LPDIRECTDRAW* direct_draw, IUnknown* outer);
 
 namespace
 {
@@ -43,6 +51,30 @@ bool Check(bool condition, const char* message)
         std::fprintf(stderr, "%s (error %lu)\\n", message, static_cast<unsigned long>(GetLastError()));
     }
     return condition;
+}
+
+HRESULT CALLBACK CaptureZBufferFormat(DDPIXELFORMAT* format, void* context)
+{
+    bool* const captured = static_cast<bool*>(context);
+    if (format != nullptr && format->dwSize == sizeof(DDPIXELFORMAT) &&
+        (format->dwFlags & DDPF_ZBUFFER) != 0 && format->dwZBufferBitDepth == 16)
+    {
+        *captured = true;
+    }
+    return D3DENUMRET_CANCEL;
+}
+
+HRESULT CALLBACK CaptureTextureFormat(DDPIXELFORMAT* format, void* context)
+{
+    bool* const captured = static_cast<bool*>(context);
+    if (format != nullptr && format->dwSize == sizeof(DDPIXELFORMAT) &&
+        (format->dwFlags & DDPF_RGB) != 0 && format->dwRGBBitCount == 16 &&
+        format->dwRBitMask == 0xf800 && format->dwGBitMask == 0x07e0 &&
+        format->dwBBitMask == 0x001f)
+    {
+        *captured = true;
+    }
+    return D3DENUMRET_CANCEL;
 }
 
 }  // namespace
@@ -87,6 +119,212 @@ int main()
                         "cannot read original through VFS") &&
                   Check(std::string(contents, read) == "original", "VFS read returned wrong original data") &&
                   Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close original VFS handle");
+
+    DEVMODEA guest_mode = {};
+    guest_mode.dmSize = sizeof(guest_mode);
+    guest_mode.dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
+    guest_mode.dmPelsWidth = 640;
+    guest_mode.dmPelsHeight = 480;
+    guest_mode.dmBitsPerPel = 16;
+    SetLastError(ERROR_INVALID_FUNCTION);
+    passed = passed &&
+             Check(Re2djHleChangeDisplaySettingsExA(nullptr,
+                                                     &guest_mode,
+                                                     nullptr,
+                                                     CDS_UPDATEREGISTRY,
+                                                     nullptr) == DISP_CHANGE_SUCCESSFUL,
+                   "logical display mode was not accepted") &&
+             Check(GetLastError() == ERROR_SUCCESS,
+                   "logical display mode did not clear last error");
+
+    DEVMODEA unsupported_mode = guest_mode;
+    unsupported_mode.dmPelsWidth = 1;
+    unsupported_mode.dmPelsHeight = 1;
+    unsupported_mode.dmBitsPerPel = 1;
+    passed = passed &&
+             Check(Re2djHleChangeDisplaySettingsExA("re2dj-invalid-display",
+                                                     &unsupported_mode,
+                                                     nullptr,
+                                                     CDS_TEST,
+                                                     nullptr) != DISP_CHANGE_SUCCESSFUL,
+                   "nonmatching display request did not use host fallback");
+
+    LPDIRECTDRAW direct_draw = nullptr;
+    LPDIRECTDRAW4 direct_draw4 = nullptr;
+    LPDIRECT3D3 direct3d = nullptr;
+    IUnknown* draw_identity = nullptr;
+    IUnknown* d3d_identity = nullptr;
+    passed = passed &&
+             Check(Re2djHleDirectDrawCreate(nullptr, &direct_draw, nullptr) == DD_OK &&
+                       direct_draw != nullptr,
+                   "cannot create DirectDraw HLE facade") &&
+             Check(IDirectDraw_QueryInterface(direct_draw,
+                                              IID_IDirectDraw4,
+                                              reinterpret_cast<void**>(&direct_draw4)) == S_OK &&
+                       direct_draw4 != nullptr,
+                   "DirectDraw4 query failed") &&
+             Check(IDirectDraw_QueryInterface(direct_draw,
+                                              IID_IDirect3D3,
+                                              reinterpret_cast<void**>(&direct3d)) == S_OK &&
+                       direct3d != nullptr,
+                   "Direct3D3 query failed") &&
+             Check(IDirectDraw4_QueryInterface(direct_draw4,
+                                               IID_IUnknown,
+                                               reinterpret_cast<void**>(&draw_identity)) == S_OK &&
+                       draw_identity != nullptr,
+                   "DirectDraw COM identity query failed") &&
+             Check(IDirect3D3_QueryInterface(direct3d,
+                                             IID_IUnknown,
+                                             reinterpret_cast<void**>(&d3d_identity)) == S_OK &&
+                       d3d_identity == draw_identity,
+                   "Direct3D COM identity is inconsistent");
+    if (d3d_identity != nullptr)
+    {
+        IDirectDraw4_Release(reinterpret_cast<LPDIRECTDRAW4>(d3d_identity));
+    }
+    if (draw_identity != nullptr)
+    {
+        IDirectDraw4_Release(reinterpret_cast<LPDIRECTDRAW4>(draw_identity));
+    }
+    if (direct_draw != nullptr)
+    {
+        IDirectDraw_Release(direct_draw);
+        direct_draw = nullptr;
+    }
+
+    D3DFINDDEVICESEARCH search = {};
+    search.dwSize = sizeof(search);
+    search.dwFlags = D3DFDS_HARDWARE;
+    search.bHardware = TRUE;
+    D3DFINDDEVICERESULT result = {};
+    result.dwSize = sizeof(result);
+    bool zbuffer_captured = false;
+    LPDIRECTDRAWSURFACE4 primary = nullptr;
+    LPDIRECTDRAWSURFACE4 back_buffer = nullptr;
+    LPDIRECT3DDEVICE3 device = nullptr;
+    LPDIRECT3DVIEWPORT3 viewport = nullptr;
+    bool texture_format_captured = false;
+    if (direct_draw4 != nullptr && direct3d != nullptr)
+    {
+        passed = passed &&
+                 Check(IDirectDraw4_SetCooperativeLevel(
+                           direct_draw4, GetDesktopWindow(), DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
+                       "logical DirectDraw cooperative level failed") &&
+                 Check(IDirectDraw4_SetDisplayMode(direct_draw4, 640, 480, 16, 0, 0) == DD_OK,
+                       "logical DirectDraw display mode failed") &&
+                 Check(IDirect3D3_FindDevice(direct3d, &search, &result) == DD_OK &&
+                           IsEqualGUID(result.guid, IID_IDirect3DHALDevice),
+                       "virtual hardware FindDevice failed") &&
+                 Check(IDirect3D3_EnumZBufferFormats(direct3d,
+                                                    result.guid,
+                                                    CaptureZBufferFormat,
+                                                    &zbuffer_captured) == DD_OK &&
+                           zbuffer_captured,
+                       "virtual Z-buffer enumeration failed");
+
+        DDSURFACEDESC2 descriptor = {};
+        descriptor.dwSize = sizeof(descriptor);
+        descriptor.dwFlags = DDSD_CAPS | DDSD_BACKBUFFERCOUNT;
+        descriptor.dwBackBufferCount = 1;
+        descriptor.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_COMPLEX |
+                                    DDSCAPS_FLIP | DDSCAPS_VIDEOMEMORY;
+        passed = passed &&
+                 Check(IDirectDraw4_CreateSurface(direct_draw4,
+                                                  &descriptor,
+                                                  &primary,
+                                                  nullptr) == DD_OK &&
+                           primary != nullptr,
+                       "logical primary surface creation failed");
+        DDSCAPS2 back_caps = {};
+        back_caps.dwCaps = DDSCAPS_BACKBUFFER;
+        if (primary != nullptr)
+        {
+            passed = passed &&
+                     Check(IDirectDrawSurface4_GetAttachedSurface(
+                               primary, &back_caps, &back_buffer) == DD_OK &&
+                               back_buffer != nullptr,
+                           "logical back buffer lookup failed");
+        }
+        if (back_buffer != nullptr)
+        {
+            passed = passed &&
+                     Check(IDirect3D3_CreateDevice(direct3d,
+                                                   IID_IDirect3DHALDevice,
+                                                   back_buffer,
+                                                   &device,
+                                                   nullptr) == DD_OK &&
+                               device != nullptr,
+                           "logical Direct3D3 device creation failed");
+        }
+        passed = passed &&
+                 Check(IDirect3D3_CreateViewport(direct3d, &viewport, nullptr) == DD_OK &&
+                           viewport != nullptr,
+                       "logical Direct3D3 viewport creation failed");
+        if (device != nullptr && viewport != nullptr)
+        {
+            D3DDEVICEDESC hardware_caps = {};
+            D3DDEVICEDESC software_caps = {};
+            hardware_caps.dwSize = sizeof(hardware_caps);
+            software_caps.dwSize = sizeof(software_caps);
+            D3DVIEWPORT2 viewport_state = {};
+            viewport_state.dwSize = sizeof(viewport_state);
+            viewport_state.dwWidth = 640;
+            viewport_state.dwHeight = 480;
+            viewport_state.dvClipX = -1.0f;
+            viewport_state.dvClipY = 1.0f;
+            viewport_state.dvClipWidth = 2.0f;
+            viewport_state.dvClipHeight = 2.0f;
+            viewport_state.dvMinZ = 0.0f;
+            viewport_state.dvMaxZ = 1.0f;
+            passed = passed &&
+                     Check(IDirect3DDevice3_GetCaps(device,
+                                                   &hardware_caps,
+                                                   &software_caps) == DD_OK &&
+                               (hardware_caps.dwDeviceRenderBitDepth & DDBD_16) != 0,
+                           "virtual device capabilities failed") &&
+                     Check(IDirect3DDevice3_EnumTextureFormats(device,
+                                                              CaptureTextureFormat,
+                                                              &texture_format_captured) == DD_OK &&
+                               texture_format_captured,
+                           "virtual texture format enumeration failed") &&
+                     Check(IDirect3DDevice3_AddViewport(device, viewport) == DD_OK,
+                           "device viewport attach failed") &&
+                     Check(IDirect3DViewport3_SetViewport2(viewport, &viewport_state) == DD_OK,
+                           "viewport state setup failed") &&
+                     Check(IDirect3DDevice3_SetCurrentViewport(device, viewport) == DD_OK,
+                           "current viewport setup failed") &&
+                     Check(IDirect3DDevice3_SetTexture(device, 0, nullptr) == DD_OK,
+                           "null texture reset failed");
+        }
+    }
+
+    if (device != nullptr)
+    {
+        IDirect3DDevice3_Release(device);
+    }
+    if (viewport != nullptr)
+    {
+        IDirect3DViewport3_Release(viewport);
+    }
+    if (back_buffer != nullptr)
+    {
+        IDirectDrawSurface4_Release(back_buffer);
+    }
+    if (primary != nullptr)
+    {
+        IDirectDrawSurface4_Release(primary);
+    }
+    if (direct3d != nullptr)
+    {
+        IDirect3D3_Release(direct3d);
+    }
+    if (direct_draw4 != nullptr)
+    {
+        passed = passed &&
+                 Check(IDirectDraw4_RestoreDisplayMode(direct_draw4) == DD_OK,
+                       "logical display mode restore failed");
+        IDirectDraw4_Release(direct_draw4);
+    }
 
     handle = Re2djVfsCreateFileA("D:\\ez2dj\\DATA\\ORIGINAL.TXT",
                                   GENERIC_WRITE,

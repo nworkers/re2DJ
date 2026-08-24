@@ -47,7 +47,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 
 | 항목 | 값 |
 | --- | --- |
-| 그래픽 | **DirectDraw 1~6** (`DirectDrawCreate`) + GDI DIB 섹션. **Direct3D 없음** |
+| 그래픽 | **DirectDraw/Direct3D Immediate Mode 계열**. 정적 import는 `DirectDrawCreate`뿐이지만 runtime은 `d3dim.dll`을 적재하고 `QueryInterface(IID_IDirect3D3)`로 Direct3D를 얻는다. 이어 `D3DFDS_HARDWARE`, `bHardware=TRUE`로 `IDirect3D3::FindDevice`를 호출하며 현대 host에서는 `DDERR_NOTFOUND`가 반복됨. 전역 `[0x01eb7cc0]`의 호출 형태는 `IDirect3DDevice3` vtable과 일치함 |
 | 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨 |
 | 입력 | **`GetAsyncKeyState` 하나가 전부. DirectInput 없음** |
 | 설정 | `GetPrivateProfile*` / `WritePrivateProfileStringA` — INI |

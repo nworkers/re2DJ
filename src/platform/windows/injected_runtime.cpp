@@ -35,6 +35,7 @@ constexpr char kWindowsDirectoryMessage[] = "re2dj:hle:GetWindowsDirectoryA";
 constexpr char kCreateFileMessage[] = "re2dj:vfs:CreateFileA";
 constexpr char kFileApiMessage[] = "re2dj:vfs:file-api";
 constexpr char kDeviceIoControlMessage[] = "re2dj:device:DeviceIoControl";
+constexpr char kDisplayModeMessage[] = "re2dj:hle:ChangeDisplaySettingsExA";
 constexpr char kExitProcessMessage[] = "re2dj:probe:ExitProcess";
 
 bool HasPrefixIgnoreCase(const char* text, const char* prefix)
@@ -205,6 +206,27 @@ bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[M
 }
 
 }  // namespace
+
+extern "C" __declspec(dllexport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
+    LPCSTR device_name,
+    DEVMODEA* dev_mode,
+    HWND window,
+    DWORD flags,
+    LPVOID reserved)
+{
+    constexpr DWORD kRequiredFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
+    if (device_name == nullptr && dev_mode != nullptr && window == nullptr &&
+        flags == CDS_UPDATEREGISTRY && reserved == nullptr &&
+        (dev_mode->dmFields & kRequiredFields) == kRequiredFields &&
+        dev_mode->dmPelsWidth == 640 && dev_mode->dmPelsHeight == 480 &&
+        dev_mode->dmBitsPerPel == 16)
+    {
+        OutputDebugStringA(kDisplayModeMessage);
+        SetLastError(ERROR_SUCCESS);
+        return DISP_CHANGE_SUCCESSFUL;
+    }
+    return ChangeDisplaySettingsExA(device_name, dev_mode, window, flags, reserved);
+}
 
 extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     LPCSTR name,

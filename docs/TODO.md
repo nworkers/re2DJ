@@ -9,7 +9,8 @@
 - [ ] Windows x86 VFS runtime 연결
   - [ ] canonical 실행에서 read/write/close와 overlay 결과를 검증
 - [ ] 보호 해제 후 원본 `.text` 초기화 안정화
-  - [ ] 원본 `.text`에서 첫 자산 파일 API 호출까지 진행
+  - [ ] 640×480×16 surface와 최소 fixed-function draw/present를 OpenGL backend로 연결
+  - [ ] `0x0042325c`에서 확인된 `IDirect3DDevice3::DrawPrimitive` HLE와 OpenGL backend 연결
 
 ## 다음 작업 / Next work
 

@@ -59,6 +59,16 @@
 - Runtime-confirmed LPTDI challenge-mask transform, adaptive `--device-mock-lptdi-target-state` responses, and repeated proof that a fixed eight-byte target state removes per-run challenge variation from the initializer AV and `.data` result
 - Protected `.data` byte transform recovered as `state = Advance(state); byte -= low8(state)`, with minimal target state `0900000000000000` repeatedly restoring the normal initializer and eliminating the initializer AV
 - One-shot `original_initializer_window` diagnostic captured at the original entry's first `GetVersion` call
+- USER32 startup tracing through window creation and display-mode setup; both host and VFS runs attribute the pre-asset exit to the failed 640×480×16 `ChangeDisplaySettingsExA` branch
+- Strict-match `--hle-display-mode` import-thunk policy that accepts the observed 640×480×16 guest mode without changing the host desktop; repeated runs advance to the next Direct3D initialization blocker
+- Target-specific `--d3d-init-trace` one-shot return diagnostics; repeated runs identify hardware-only `IDirect3D3::FindDevice` returning `DDERR_NOTFOUND` after successful DirectDraw and Direct3D3 interface creation
+- `--hle-d3d3` Windows x86 COM facade with shared root identity, separately lived surfaces/device/viewport, virtual HAL discovery, 16-bit format enumeration, and a logical 640×480×16 flip chain; all five graphics initialization stages pass repeatedly and the former null-device AV is eliminated
+- Platform-neutral legacy byte-I/O bus and target-limited `--hle-io-ports` Windows x86 trap; confirmed active-low idle ports and counter bytes advance repeatedly without privileged-instruction or access-violation failure
+- DirectDraw4 `RestoreDisplayMode` cleanup contract, removing the null vtable execute AV exposed after port-I/O progress
+- Controlled-exit EBP-frame attribution for the shared original helper; repeated runs identify caller `0x00424813`, KSND load failure, and detail `coin0.wav` without an access violation
+- Bounded KSND search-path-state observation; repeated API traces confirm one `System/Common` entry and expose the VFS mount-root mismatch in the resulting `coin0.wav` host candidate
+- Target-profile working-directory VFS source mount; original asset APIs now open `coin0.wav`, `coin1.wav`, and `WarningMsg.bmp` from the supplied read-only HDD before the next stable boundary
+- RGB565 DirectDraw texture/primary/back CPU backing, GDI GetDC/ReleaseDC bitmap upload, source color key, IDirect3DTexture2 identity, and observed DDBLT_COLORFILL rectangle path; former surface null AVs are removed
 - Protected `.gidata` static import surface mapped slot-by-slot; dynamic resolution observed for WSAGetLastError only
 - Illegal-instruction caller identified: WOW64 win32k syscall transition inside the DLL-unload tail, not a guest branch
 - Termination path attributed: stub-planted stack block → register restore at `0x01ed2730` → `.gdata` pointer jump → `ret` onto the undecrypted continuation page

@@ -87,6 +87,7 @@ endif()
 add_library(re2dj_core STATIC
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
+    src/input/legacy_io_port_bus.cpp
     src/exe/pe_image.cpp
     src/hdd/hdd_root.cpp
     src/hdd/hdd_scan.cpp
@@ -137,6 +138,7 @@ endif()
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     add_library(re2dj_windows_injected_runtime SHARED
         src/device/lptdi_challenge_response.cpp
+        src/platform/windows/direct3d3_com_facade.cpp
         src/platform/windows/injected_runtime.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
@@ -146,7 +148,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
             src/tools/windows_vfs_runtime_probe/main.cpp
         )
         target_link_libraries(re2dj_windows_vfs_runtime_probe
-            PRIVATE re2dj_windows_injected_runtime re2dj_warnings
+            PRIVATE re2dj_windows_injected_runtime re2dj_warnings dxguid
         )
         add_test(NAME re2dj_windows_vfs_runtime_probe COMMAND re2dj_windows_vfs_runtime_probe)
     endif()
@@ -227,6 +229,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/main.cpp
         tests/unit/lptdi_challenge_response_test.cpp
         tests/unit/lptdi_response_profile_test.cpp
+        tests/unit/legacy_io_port_bus_test.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp

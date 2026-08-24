@@ -66,5 +66,6 @@ void RunTargetProfileTests(re2dj::test::Context& context);
 void RunVfsFileTableTests(re2dj::test::Context& context);
 void RunLptdiChallengeResponseTests(re2dj::test::Context& context);
 void RunLptdiResponseProfileTests(re2dj::test::Context& context);
+void RunLegacyIoPortBusTests(re2dj::test::Context& context);
 
 #endif  // RE2DJ_TESTS_UNIT_TEST_SUPPORT_H_

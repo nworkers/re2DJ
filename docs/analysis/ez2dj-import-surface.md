@@ -41,15 +41,11 @@ USER32.dll  EnumDisplaySettingsA, ChangeDisplaySettingsExA, DrawTextA, FillRect,
             SetRect, ReleaseDC, LoadImageA
 ```
 
-**Direct3D가 없다.** `DirectDrawCreate`만 있고 `DirectDrawCreateEx`도 없으므로 DirectDraw 1~6 인터페이스다. 3D 파이프라인, 텍스처 스테이지, 셰이더를 HLE로 제공할 필요가 없다.
+**확인됨 — 정정됨, 2026-08-25.** import table에는 Direct3D 이름이 없지만, 이것은 Direct3D 미사용을 뜻하지 않는다. 보호 해제 후 실행 추적에서 `DirectDrawCreate`로 만든 객체가 `IDirectDraw4`와 `IDirect3D3`를 제공했고, 원본은 `IDirect3D3::FindDevice`를 hardware-only 조건으로 호출했다. Direct3D는 별도 DLL import가 아니라 DirectDraw COM의 `QueryInterface` 경로로 도달한다.
 
-렌더링은 2D 표면 블릿과 GDI DIB 섹션 조합이다. `ChangeDisplaySettingsExA`와 `EnumDisplaySettingsA`가 있으므로 전체 화면 모드를 직접 설정한다.
+**확인됨.** GDI DIB와 DirectDraw surface 호출도 존재하고 `ChangeDisplaySettingsExA`는 640×480×16 전체 화면 mode를 요청한다. 그러나 현재 증거만으로 최종 화면이 2D blit만으로 구성된다고 확정할 수 없다. 실제 Direct3D 3 method, surface format과 primitive 범위는 후속 COM trace로 누적한다.
 
-*No Direct3D. Only `DirectDrawCreate` appears — not even `DirectDrawCreateEx` — so this is the DirectDraw 1 through 6 interface family. No 3D pipeline, texture stages, or shaders need HLE. Rendering is 2D surface blitting combined with GDI DIB sections, and the display-settings calls mean the program sets its own full-screen mode.*
-
-이것이 HLE 범위에 주는 영향은 크다. `ARCHITECTURE.md`가 우선순위 2로 잡았던 `d3d`는 **1st에 관한 한 필요 없다.**
-
-*This materially shrinks the scope: the `d3d` entry `ARCHITECTURE.md` listed at priority 2 is **not needed at all for 1st**.*
+*Confirmed — corrected on 2026-08-25. The import table has no function named Direct3D, but that does not mean Direct3D is unused. Post-unprotection runtime traces show the object created by `DirectDrawCreate` providing `IDirectDraw4` and `IDirect3D3`, followed by a hardware-only `IDirect3D3::FindDevice` call. Direct3D is reached through DirectDraw COM `QueryInterface`, not a separate DLL import. GDI DIB, DirectDraw surfaces, and a 640×480×16 display request also exist, but current evidence does not prove that final rendering is exclusively 2D blitting. The actual Direct3D 3 methods, surface formats, and primitive set remain subject to COM tracing.*
 
 ---
 

@@ -207,6 +207,10 @@
 
 *Confirmed — 2026-08-24. The first target-state DWORD seeds `.data` restoration at `0x01ed7296`. Address 0x01ed2742 advances it once per byte, and 0x01ed26c1–0x01ed26ce subtracts its low byte from protected raw data. All first 64 protected/unprotected byte differences match the stream generated from initial low byte 0x09. Two runs with minimal state `0900000000000000` restored initializer `{0, 0, 0, 0x0043c600, 0x0044e710, 0, 0, 0x0043c730}` and reached the ExitProcess breakpoint without the old access violation. This is a restoration state for the current binary, not an identified dongle secret or vendor protocol.*
 
+**확인됨 — 2026-08-24.** 정상 복원 뒤 원본은 창 등록·생성·표시를 통과하고 `SetCurrentDirectoryA("c:\\ez2dj")`를 요청한다. 이어 640×480×16 `ChangeDisplaySettingsExA`가 성공 0/restart 1 이외의 분기로 돌아가 `PostQuitMessage(0)`가 호출되며, host baseline과 VFS 실행 모두 첫 파일 API 전에 종료됐다. HDD 입력은 저장소 밖 사용자 디렉터리이고 guest `C:` mapping은 별도 HLE 대상이므로 host에 해당 경로를 만들지 않는다.
+
+*Confirmed — 2026-08-24. After normal restoration, original code passes class registration, window creation, and display, then requests SetCurrentDirectoryA("c:\\ez2dj"). Its 640×480×16 ChangeDisplaySettingsExA returns through the branch that is neither success zero nor restart one, causing PostQuitMessage(0). Both host-baseline and VFS runs end before the first file API. The HDD input remains an external user directory and guest C: mapping belongs in HLE; no host path is created.*
+
 **추정 — 2026-08-24.** 공개 HASP4 `HaspCode`의 seed input과 네 개 16-bit return code는 첫 LPTDI IOCTL의 4→8바이트 형태와 맞는다. 그러나 Aladdin driver 자료와 독립 호환성 조사에서 classic HASP device는 `\\.\HASP`, packet은 28바이트 계열로 기술되어 LPTDI의 4/24→8/104 interface와 직접 일치하지 않는다. EZ2DJ가 HASP 계열 병렬포트 동글을 사용했다는 외부 정보는 유력한 방향이지만 현재 바이너리 증거만으로 vendor protocol을 확정할 수 없다.
 
 *Inferred — 2026-08-24. Public HASP4 HaspCode takes a seed and returns four 16-bit codes, matching the first LPTDI IOCTL's four-to-eight-byte shape. However, Aladdin driver material and an independent compatibility study describe classic HASP as `\\.\HASP` with a 28-byte packet family, not LPTDI's 4/24→8/104 interface. External identification of EZ2DJ's parallel dongle as HASP is a strong direction, but current binary evidence does not confirm the vendor protocol.*
@@ -281,6 +285,20 @@ Windows 9x는 `[boot]`의 `shell=` 항목이 가리키는 프로그램을 Explor
 *Unresolved: `Tdsd.vxd111` is a Windows 9x kernel driver and could be the arcade I/O path, but `ez2dj1.exe` imports no `DeviceIoControl` and the `111` suffix suggests the driver is disabled in this dump. Confirm by tracing the paths `CreateFileA` asks for during a run; a name starting with `\\.\` is a driver path.*
 
 ---
+
+### 확인됨: 논리 display mode 이후 Direct3D 정리 AV
+
+**확인됨 — 2026-08-25.** 관찰된 640×480×16 `ChangeDisplaySettingsExA` 요청만 성공시키는 import-thunk HLE를 적용한 두 실행은 기존 `PostQuitMessage` 종료를 지나 표시 초기화로 진행했다. 두 실행 모두 원본 `.text` `0x00422f39`에서 address 0 read AV를 냈다. 정적 동형 코드는 정리 함수 `0x00422f20`이 null 전역 `[0x01eb7cc0]`을 역참조하는 지점이며, 같은 전역의 `BeginScene`(+0x24), `EndScene`(+0x28), `SetRenderState`(+0x58), `SetTexture`(+0x98) 호출 형태는 `IDirect3DDevice3` vtable과 일치한다. 충돌 명령은 `SetTexture(0, nullptr)` 준비 뒤의 역참조다.
+
+**확인됨 — 2026-08-25.** 다섯 초기화 return site를 관찰한 두 최종 실행에서 `0x0041f650` DirectDraw 단계는 0으로 성공하고 DirectDraw4 전역이 채워졌다. `0x0041f8e0` Direct3D 단계는 모두 `0x887600ff`(`DDERR_NOTFOUND`)를 반환했다. Direct3D3 전역은 유효하고, `FindDevice` 성공 뒤에만 쓰는 `[0x01eb7d48]`과 Z-buffer 열거 준비 시 쓰는 `[0x01eb7d24]`는 모두 0이었다. 정적 코드는 `QueryInterface(IID_IDirect3D3)` 다음 검색 구조에 `D3DFDS_HARDWARE`, `bHardware=TRUE`를 설정해 `IDirect3D3::FindDevice`를 호출한다. 따라서 hardware device 검색 실패가 최초 실패이고, `0x00422f39`는 그 뒤 null device 정리에서 발생한 2차 AV다.
+
+**확인됨 — 2026-08-25, 작업 61.** `DirectDrawCreate`를 Windows x86 COM facade로 교체한 최종 두 실행에서 DirectDraw, Direct3D, surface, device, graphics-state 다섯 stage가 모두 0으로 성공했다. `[0x01eb7d48]=0x4000`, `[0x01eb7d24]=0x400`이 기록됐고 DirectDraw4, Direct3D3, primary/back surface, Direct3DDevice3와 viewport 전역이 모두 채워졌다. `0x00422f39` AV는 발생하지 않았다. 이어지는 최초 예외는 두 실행 모두 원본 `.text` `0x00438987: in al,dx`에서 port `0x103`을 읽을 때의 `0xc0000096` privileged instruction이었다. 같은 helper는 port `0x104`, `0x105`도 순서대로 읽도록 호출되지만 첫 read에서 중단된다. 포트의 장치 의미와 반환 bit 계약은 아직 미확정이다.
+
+*Confirmed — 2026-08-25. Two runs with import-thunk HLE for only the observed 640×480×16 request pass the former `PostQuitMessage` exit and enter display initialization, then both raise a null-read AV at original `.text` address `0x00422f39`. Static sibling code places it in cleanup function `0x00422f20`; calls through global `[0x01eb7cc0]` match the `IDirect3DDevice3` vtable for BeginScene (+0x24), EndScene (+0x28), SetRenderState (+0x58), and SetTexture (+0x98). The faulting dereference follows setup for `SetTexture(0, nullptr)`.*
+
+*Confirmed — 2026-08-25. Two final runs with one-shot breakpoints at all five initialization returns show the DirectDraw stage succeeding with a populated DirectDraw4 global, followed by `0x887600ff` (`DDERR_NOTFOUND`) from the Direct3D stage. The Direct3D3 global is valid while the post-FindDevice and Z-buffer-preparation markers remain zero. Static code sets `D3DFDS_HARDWARE` and `bHardware=TRUE` before `IDirect3D3::FindDevice`, so hardware-device lookup is the first failure and `0x00422f39` is its secondary null-device cleanup AV.*
+
+*Confirmed — 2026-08-25, Task 61. In two final runs with `DirectDrawCreate` replaced by the Windows x86 COM facade, all five DirectDraw, Direct3D, surface, device, and graphics-state stages return zero. Markers become 0x4000 and 0x400, and every DirectDraw4, Direct3D3, primary/back-surface, Direct3DDevice3, and viewport global is populated. The AV at 0x00422f39 no longer occurs. Both runs first fail afterward with privileged-instruction exception 0xc0000096 at original `0x00438987: in al,dx`, reading port 0x103. The caller would then read ports 0x104 and 0x105, but execution stops on the first read. Device meaning and returned-bit semantics remain unresolved.*
 
 ## 4. import 목록 / Import list
 
