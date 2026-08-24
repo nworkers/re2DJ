@@ -11,7 +11,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <new>
+#include <span>
+#include <string>
+
+#include "direct3d3_opengl_backend.h"
+#include "re2dj/graphics/legacy_draw_command.h"
 
 namespace
 {
@@ -21,6 +27,8 @@ constexpr char kFindDeviceMessage[] = "re2dj:hle:IDirect3D3::FindDevice";
 constexpr char kCreateDeviceMessage[] = "re2dj:hle:IDirect3D3::CreateDevice";
 constexpr char kCreateTextureSurfaceMessage[] =
     "re2dj:hle:IDirectDraw4::CreateTextureSurface";
+constexpr char kDrawPrimitiveMessage[] = "re2dj:hle:IDirect3DDevice3::DrawPrimitive";
+constexpr char kOpenGlFailureMessage[] = "re2dj:hle:OpenGLFailure";
 constexpr DWORD kRootMagic = 0x52324444;
 constexpr DWORD kSurfaceMagic = 0x52325346;
 constexpr DWORD kDeviceMagic = 0x52324456;
@@ -145,6 +153,20 @@ HRESULT WINAPI DeviceGetTexture(IDirect3DDevice3* self,
 HRESULT WINAPI DeviceSetTexture(IDirect3DDevice3* self,
                                 DWORD stage,
                                 IDirect3DTexture2* texture);
+HRESULT WINAPI DeviceGetTextureStageState(IDirect3DDevice3* self,
+                                          DWORD stage,
+                                          D3DTEXTURESTAGESTATETYPE state,
+                                          DWORD* value);
+HRESULT WINAPI DeviceSetTextureStageState(IDirect3DDevice3* self,
+                                          DWORD stage,
+                                          D3DTEXTURESTAGESTATETYPE state,
+                                          DWORD value);
+HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
+                                   D3DPRIMITIVETYPE primitive,
+                                   DWORD vertex_type,
+                                   void* vertices,
+                                   DWORD vertex_count,
+                                   DWORD flags);
 
 HRESULT WINAPI ViewportQueryInterface(IDirect3DViewport3* self, REFIID iid, void** object);
 ULONG WINAPI ViewportAddRef(IDirect3DViewport3* self);
@@ -258,6 +280,9 @@ IDirect3DDevice3Vtbl* DeviceVtable()
         table.GetTransform = DeviceGetTransform;
         table.GetTexture = DeviceGetTexture;
         table.SetTexture = DeviceSetTexture;
+        table.GetTextureStageState = DeviceGetTextureStageState;
+        table.SetTextureStageState = DeviceSetTextureStageState;
+        table.DrawPrimitive = DeviceDrawPrimitive;
         initialized = true;
     }
     return &table;
@@ -288,6 +313,8 @@ struct RootFacade
     DWORD width = 640;
     DWORD height = 480;
     DWORD bits_per_pixel = 16;
+    HWND window = nullptr;
+    re2dj::platform::windows::Direct3d3OpenGlBackend* render_backend = nullptr;
 };
 
 struct SurfaceFacade
@@ -321,9 +348,11 @@ struct DeviceFacade
     SurfaceFacade* render_target = nullptr;
     IDirect3DViewport3* attached_viewport = nullptr;
     IDirect3DViewport3* current_viewport = nullptr;
+    IDirect3DTexture2* texture_stage_zero = nullptr;
     bool scene_active = false;
     std::array<DWORD, 256> render_states = {};
     std::array<DWORD, 256> light_states = {};
+    std::array<std::array<DWORD, 64>, 8> texture_stage_states = {};
     std::array<D3DMATRIX, 32> transforms = {};
 };
 
@@ -382,6 +411,7 @@ ULONG ReleaseRootReference(RootFacade* root)
     const LONG references = InterlockedDecrement(&root->references);
     if (references == 0)
     {
+        delete root->render_backend;
         root->magic = 0;
         delete root;
     }
@@ -620,9 +650,14 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
     return DD_OK;
 }
 
-HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4*, HWND window, DWORD)
+HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD)
 {
-    return window == nullptr ? DDERR_INVALIDPARAMS : DD_OK;
+    if (window == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    RootFromDirectDraw(self)->window = window;
+    return DD_OK;
 }
 
 HRESULT WINAPI RootSetDisplayMode(IDirectDraw4* self,
@@ -873,6 +908,15 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
     {
         return DDERR_NOTFLIPPABLE;
     }
+    if (surface->root->render_backend != nullptr)
+    {
+        std::string error;
+        if (!surface->root->render_backend->Present(&error))
+        {
+            OutputDebugStringA(kOpenGlFailureMessage);
+            return DDERR_GENERIC;
+        }
+    }
     return DD_OK;
 }
 
@@ -1063,6 +1107,10 @@ ULONG WINAPI DeviceRelease(IDirect3DDevice3* self)
         if (device->attached_viewport != nullptr)
         {
             ViewportRelease(device->attached_viewport);
+        }
+        if (device->texture_stage_zero != nullptr)
+        {
+            TextureRelease(device->texture_stage_zero);
         }
         SurfaceRelease(&device->render_target->interface_value);
         RootFacade* const root = device->root;
@@ -1289,19 +1337,154 @@ HRESULT WINAPI DeviceGetTransform(IDirect3DDevice3* self,
     return DD_OK;
 }
 
-HRESULT WINAPI DeviceGetTexture(IDirect3DDevice3*, DWORD, IDirect3DTexture2** texture)
+HRESULT WINAPI DeviceGetTexture(IDirect3DDevice3* self,
+                                DWORD stage,
+                                IDirect3DTexture2** texture)
 {
-    if (texture == nullptr)
+    if (texture == nullptr || stage != 0)
     {
         return DDERR_INVALIDPARAMS;
     }
-    *texture = nullptr;
+    DeviceFacade* const device = DeviceFromInterface(self);
+    *texture = device->texture_stage_zero;
+    if (*texture != nullptr)
+    {
+        TextureAddRef(*texture);
+    }
     return DD_OK;
 }
 
-HRESULT WINAPI DeviceSetTexture(IDirect3DDevice3*, DWORD stage, IDirect3DTexture2* texture)
+HRESULT WINAPI DeviceSetTexture(IDirect3DDevice3* self,
+                                DWORD stage,
+                                IDirect3DTexture2* texture)
 {
-    return stage == 0 && texture == nullptr ? DD_OK : DDERR_UNSUPPORTED;
+    if (stage != 0)
+    {
+        return DDERR_UNSUPPORTED;
+    }
+    if (texture != nullptr)
+    {
+        SurfaceFacade* const surface = SurfaceFromTexture(texture);
+        if (IsBadReadPtr(surface, sizeof(*surface)) != FALSE ||
+            surface->magic != kSurfaceMagic ||
+            (surface->capabilities & DDSCAPS_TEXTURE) == 0)
+        {
+            return DDERR_INVALIDOBJECT;
+        }
+        TextureAddRef(texture);
+    }
+    DeviceFacade* const device = DeviceFromInterface(self);
+    if (device->texture_stage_zero != nullptr)
+    {
+        TextureRelease(device->texture_stage_zero);
+    }
+    device->texture_stage_zero = texture;
+    return DD_OK;
+}
+
+HRESULT WINAPI DeviceGetTextureStageState(IDirect3DDevice3* self,
+                                          DWORD stage,
+                                          D3DTEXTURESTAGESTATETYPE state,
+                                          DWORD* value)
+{
+    const unsigned state_index = static_cast<unsigned>(state);
+    if (value == nullptr || stage >= 8 || state_index >= 64)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *value = DeviceFromInterface(self)->texture_stage_states[stage][state_index];
+    return DD_OK;
+}
+
+HRESULT WINAPI DeviceSetTextureStageState(IDirect3DDevice3* self,
+                                          DWORD stage,
+                                          D3DTEXTURESTAGESTATETYPE state,
+                                          DWORD value)
+{
+    const unsigned state_index = static_cast<unsigned>(state);
+    if (stage >= 8 || state_index >= 64)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    DeviceFromInterface(self)->texture_stage_states[stage][state_index] = value;
+    return DD_OK;
+}
+
+HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
+                                   D3DPRIMITIVETYPE primitive,
+                                   DWORD vertex_type,
+                                   void* vertices,
+                                   DWORD vertex_count,
+                                   DWORD flags)
+{
+    if (primitive != D3DPT_TRIANGLESTRIP || vertex_type != D3DFVF_TLVERTEX ||
+        vertices == nullptr || vertex_count < 3 || flags != 0 ||
+        vertex_count > (std::numeric_limits<DWORD>::max)() /
+                           re2dj::graphics::kTransformedLitVertexStride)
+    {
+        return DDERR_UNSUPPORTED;
+    }
+    const std::size_t bytes = static_cast<std::size_t>(vertex_count) *
+                              re2dj::graphics::kTransformedLitVertexStride;
+    if (IsBadReadPtr(vertices, bytes) != FALSE)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    re2dj::graphics::LegacyDrawCommand command;
+    std::string error;
+    if (!re2dj::graphics::DecodeTransformedLitVertices(
+            std::span<const std::byte>(static_cast<const std::byte*>(vertices), bytes),
+            vertex_count,
+            &command,
+            &error))
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+
+    DeviceFacade* const device = DeviceFromInterface(self);
+    RootFacade* const root = device->root;
+    if (root->window == nullptr)
+    {
+        return DDERR_NOCOOPERATIVELEVELSET;
+    }
+    if (root->render_backend == nullptr)
+    {
+        auto* const backend = new (std::nothrow)
+            re2dj::platform::windows::Direct3d3OpenGlBackend;
+        if (backend == nullptr || !backend->Initialize(root->window, &error))
+        {
+            delete backend;
+            OutputDebugStringA(kOpenGlFailureMessage);
+            return DDERR_GENERIC;
+        }
+        root->render_backend = backend;
+    }
+
+    re2dj::platform::windows::Rgb565TextureView texture_view;
+    const re2dj::platform::windows::Rgb565TextureView* texture = nullptr;
+    if (device->texture_stage_zero != nullptr)
+    {
+        const SurfaceFacade* const surface = SurfaceFromTexture(device->texture_stage_zero);
+        texture_view.pixels = surface->pixels;
+        texture_view.width = surface->width;
+        texture_view.height = surface->height;
+        texture_view.pitch = surface->pitch;
+        texture_view.has_source_color_key = surface->has_source_blt_color_key;
+        texture_view.source_color_key =
+            static_cast<std::uint16_t>(surface->source_blt_color_key.dwColorSpaceLowValue);
+        texture = &texture_view;
+    }
+    if (!root->render_backend->Draw(command,
+                                    root->width,
+                                    root->height,
+                                    texture,
+                                    &error))
+    {
+        OutputDebugStringA(kOpenGlFailureMessage);
+        return DDERR_GENERIC;
+    }
+    OutputDebugStringA(kDrawPrimitiveMessage);
+    return DD_OK;
 }
 
 HRESULT WINAPI ViewportQueryInterface(IDirect3DViewport3* self, REFIID iid, void** object)

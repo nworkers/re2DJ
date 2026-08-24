@@ -182,6 +182,33 @@ bool WriteRemoteAnsi(HANDLE process,
 
 void TraceDebugEvent(const DEBUG_EVENT& event);
 
+bool RecordAnsiOutputDebugString(HANDLE process,
+                                 const DEBUG_EVENT& event,
+                                 std::string* message)
+{
+    if (event.dwDebugEventCode != OUTPUT_DEBUG_STRING_EVENT ||
+        event.u.DebugString.fUnicode != FALSE ||
+        event.u.DebugString.nDebugStringLength == 0)
+    {
+        return false;
+    }
+    std::vector<char> buffer(event.u.DebugString.nDebugStringLength + 1, '\0');
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(process,
+                          event.u.DebugString.lpDebugStringData,
+                          buffer.data(),
+                          event.u.DebugString.nDebugStringLength,
+                          &copied) == FALSE ||
+        copied != event.u.DebugString.nDebugStringLength)
+    {
+        return false;
+    }
+    *message = buffer.data();
+    RecordDiagnostic("{\"debug_event\":\"output_debug\",\"message\":\"%s\"}",
+                     message->c_str());
+    return true;
+}
+
 bool WaitForHandoff(HANDLE process, const char* expected_message, bool trace, std::string* error)
 {
     (void)trace;
@@ -197,24 +224,12 @@ bool WaitForHandoff(HANDLE process, const char* expected_message, bool trace, st
             *error = "cannot wait for runtime handoff event";
             return false;
         }
-        if (event.dwDebugEventCode == OUTPUT_DEBUG_STRING_EVENT &&
-            event.u.DebugString.fUnicode == FALSE && event.u.DebugString.nDebugStringLength > 0)
+        std::string debug_message;
+        if (RecordAnsiOutputDebugString(process, event, &debug_message))
         {
-            std::vector<char> message(event.u.DebugString.nDebugStringLength + 1, '\0');
-            SIZE_T copied = 0;
-            if (ReadProcessMemory(process,
-                                  event.u.DebugString.lpDebugStringData,
-                                  message.data(),
-                                  event.u.DebugString.nDebugStringLength,
-                                  &copied) != FALSE &&
-                copied == event.u.DebugString.nDebugStringLength)
+            if (debug_message == expected_message)
             {
-                RecordDiagnostic("{\"debug_event\":\"output_debug\",\"message\":\"%s\"}",
-                                 message.data());
-                if (std::string(message.data()) == expected_message)
-                {
-                    return true;
-                }
+                return true;
             }
         }
         if (event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT && event.u.LoadDll.hFile != nullptr)
@@ -532,6 +547,8 @@ void TraceDebugEvent(const DEBUG_EVENT& event)
     case EXIT_PROCESS_DEBUG_EVENT:
         RecordDiagnostic("{\"debug_event\":\"exit_process\",\"code\":\"0x%08x\"}",
                          static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+        break;
+    case OUTPUT_DEBUG_STRING_EVENT:
         break;
     case EXCEPTION_DEBUG_EVENT:
         RecordDiagnostic("{\"debug_event\":\"exception\",\"code\":\"0x%08x\",\"address\":\"0x%08x\"}",
@@ -2084,6 +2101,8 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             return false;
         }
         TraceDebugEvent(event);
+        std::string debug_message;
+        RecordAnsiOutputDebugString(process, event, &debug_message);
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT)
         {
             const IoPortTrapResult io_result = HandleLegacyIoPortTrap(

@@ -69,6 +69,7 @@
 - Bounded KSND search-path-state observation; repeated API traces confirm one `System/Common` entry and expose the VFS mount-root mismatch in the resulting `coin0.wav` host candidate
 - Target-profile working-directory VFS source mount; original asset APIs now open `coin0.wav`, `coin1.wav`, and `WarningMsg.bmp` from the supplied read-only HDD before the next stable boundary
 - RGB565 DirectDraw texture/primary/back CPU backing, GDI GetDC/ReleaseDC bitmap upload, source color key, IDirect3DTexture2 identity, and observed DDBLT_COLORFILL rectangle path; former surface null AVs are removed
+- Platform-neutral transformed/lit vertex command plus a Windows WGL/OpenGL shader backend for the observed RGB565 textured triangle strip; `DrawPrimitive`, stage-zero texture state, and Flip/present slots remove the former graphics AVs, with two runs reaching the later controlled `title.wav` sound-load exit
 - Protected `.gidata` static import surface mapped slot-by-slot; dynamic resolution observed for WSAGetLastError only
 - Illegal-instruction caller identified: WOW64 win32k syscall transition inside the DLL-unload tail, not a guest branch
 - Termination path attributed: stub-planted stack block → register restore at `0x01ed2730` → `.gdata` pointer jump → `ret` onto the undecrypted continuation page

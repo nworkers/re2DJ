@@ -85,6 +85,7 @@ endif()
 # Platform-neutral core. Nothing here may include a host OS header; see the
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
+    src/graphics/legacy_draw_command.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/legacy_io_port_bus.cpp
@@ -138,11 +139,15 @@ endif()
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     add_library(re2dj_windows_injected_runtime SHARED
         src/device/lptdi_challenge_response.cpp
+        src/graphics/legacy_draw_command.cpp
         src/platform/windows/direct3d3_com_facade.cpp
+        src/platform/windows/direct3d3_opengl_backend.cpp
         src/platform/windows/injected_runtime.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
-    target_link_libraries(re2dj_windows_injected_runtime PRIVATE re2dj_warnings)
+    target_link_libraries(re2dj_windows_injected_runtime
+        PRIVATE re2dj_warnings opengl32
+    )
     if(RE2DJ_BUILD_TESTS)
         add_executable(re2dj_windows_vfs_runtime_probe
             src/tools/windows_vfs_runtime_probe/main.cpp
@@ -230,6 +235,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/lptdi_challenge_response_test.cpp
         tests/unit/lptdi_response_profile_test.cpp
         tests/unit/legacy_io_port_bus_test.cpp
+        tests/unit/legacy_draw_command_test.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp

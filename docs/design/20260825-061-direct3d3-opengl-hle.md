@@ -4,7 +4,7 @@
 
 ## 상태와 근거
 
-**[부분 구현 — 초기화 HLE 완료, OpenGL draw 전]** 작업 60에서 1st SE 원본 실행 파일은 `DirectDrawCreate`로 얻은 객체에서 `IDirectDraw4`와 `IDirect3D3`를 획득하는 데 성공했다. 최초 그래픽 실패는 `D3DFDS_HARDWARE`, `bHardware=TRUE` 조건의 `IDirect3D3::FindDevice`가 현대 Windows에서 `DDERR_NOTFOUND`를 반환하는 지점이었다. 이후 `0x00422f39` access violation은 null `IDirect3DDevice3`를 정리하는 2차 실패였다.
+**[부분 구현 — Windows 최소 OpenGL draw 완료, 시각 검증 전]** 작업 60에서 1st SE 원본 실행 파일은 `DirectDrawCreate`로 얻은 객체에서 `IDirectDraw4`와 `IDirect3D3`를 획득하는 데 성공했다. 최초 그래픽 실패는 `D3DFDS_HARDWARE`, `bHardware=TRUE` 조건의 `IDirect3D3::FindDevice`가 현대 Windows에서 `DDERR_NOTFOUND`를 반환하는 지점이었다. 이후 `0x00422f39` access violation은 null `IDirect3DDevice3`를 정리하는 2차 실패였다.
 
 따라서 system Direct3D 3 HAL 열거 결과에 의존하지 않고, 원본이 보는 DirectDraw/Direct3D 3 COM 계약을 HLE로 제공하며 실제 렌더링을 OpenGL 계열 backend로 변환한다. 원본 코드와 호출 순서는 수정하지 않는다.
 
@@ -81,7 +81,7 @@ DirectDraw surface는 guest가 기대하는 pitch와 16비트 메모리 표현�
 
 ### 첫 구현 결과
 
-작업 61의 첫 구현 단위는 `--hle-d3d3`로 `DirectDrawCreate` IAT를 Windows x86 facade로 교체했다. 작업 66은 확인된 RGB565 texture surface, GDI bitmap upload, `IDirect3DTexture2`, color key와 color-fill Blt까지 surface 계약을 확장했다. 자산 load 뒤 기존 `0x0042292b` null surface와 `0x0042333b` null Blt slot AV는 제거됐으며, 다음 최초 경계는 `0x0042325c`의 `IDirect3DDevice3::DrawPrimitive` null slot execute AV다. OpenGL draw와 present는 아직 구현하지 않았다.
+작업 61의 첫 구현 단위는 `--hle-d3d3`로 `DirectDrawCreate` IAT를 Windows x86 facade로 교체했다. 작업 66은 RGB565 texture surface, GDI bitmap upload, `IDirect3DTexture2`, color key와 color-fill Blt까지 surface 계약을 확장했다. 작업 67은 FVF `0x1c4`의 triangle strip을 공용 draw command로 변환하고 Windows WGL/GLSL backend, Flip present와 texture-stage state 보존을 연결했다. 기존 DrawPrimitive·stage-state null slot AV는 제거됐고 두 실행은 `title.wav` KSND load 제어 종료까지 진행했다. 실제 화면의 시각 정확성은 아직 확인하지 않았다.
 
 ## 장치와 surface 정책
 
@@ -145,7 +145,7 @@ Related work order: [Direct3D 3 OpenGL HLE Work Order](../work-orders/20260825-0
 
 ## Status and evidence
 
-**[Partially implemented — initialization HLE complete, before OpenGL drawing]** Task 60 confirmed that the original 1st SE executable obtains `IDirectDraw4` and `IDirect3D3`, then first fails when hardware-only `IDirect3D3::FindDevice` returns `DDERR_NOTFOUND`. The AV at `0x00422f39` was a secondary null-device cleanup failure.
+**[Partially implemented — minimum Windows OpenGL draw complete, before visual verification]** Task 60 confirmed that the original 1st SE executable obtains `IDirectDraw4` and `IDirect3D3`, then first fails when hardware-only `IDirect3D3::FindDevice` returns `DDERR_NOTFOUND`. The AV at `0x00422f39` was a secondary null-device cleanup failure.
 
 The HLE will therefore preserve the original DirectDraw/Direct3D 3 COM contract while translating rendering into an OpenGL-family backend instead of depending on system Direct3D 3 HAL enumeration. Original code and call order remain unchanged.
 
@@ -157,7 +157,7 @@ The COM facade owns guest vtables, identity, `QueryInterface`, and shared refere
 
 The first native ABI adapter lives in `src/platform/windows/direct3d3_com_facade.*`. Shared helper/Web ABI contracts will later live under `hle/directx`; the neutral surface/state model and backend contract under `graphics`; reusable OpenGL translation under `graphics/opengl`; and native context and present adapters under platform directories. The injected Windows runtime retains only policy wiring and import replacement.
 
-The first Task 61 increment replaces the `DirectDrawCreate` IAT through `--hle-d3d3`. Task 66 extends the surface contract with the confirmed RGB565 texture surface, GDI bitmap upload, `IDirect3DTexture2`, color key, and color-fill Blt. After asset loading, the former null surface at 0x0042292b and null Blt slot at 0x0042333b are removed. The next boundary is a null `IDirect3DDevice3::DrawPrimitive` slot at 0x0042325c. OpenGL drawing and presentation remain pending.
+The first Task 61 increment replaces the `DirectDrawCreate` IAT through `--hle-d3d3`. Task 66 extends the surface contract with RGB565 texture surfaces, GDI bitmap upload, `IDirect3DTexture2`, color key, and color-fill Blt. Task 67 translates the observed FVF 0x1c4 triangle strip into a neutral draw command and connects a Windows WGL/GLSL backend, Flip presentation, and texture-stage-state retention. The former DrawPrimitive and state null slots are removed, and two runs reach the later controlled KSND `title.wav` load exit. Visual output accuracy remains unverified.
 
 ## Rendering policy
 

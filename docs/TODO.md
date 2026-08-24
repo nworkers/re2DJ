@@ -9,8 +9,8 @@
 - [ ] Windows x86 VFS runtime 연결
   - [ ] canonical 실행에서 read/write/close와 overlay 결과를 검증
 - [ ] 보호 해제 후 원본 `.text` 초기화 안정화
-  - [ ] 640×480×16 surface와 최소 fixed-function draw/present를 OpenGL backend로 연결
-  - [ ] `0x0042325c`에서 확인된 `IDirect3DDevice3::DrawPrimitive` HLE와 OpenGL backend 연결
+  - [ ] `title.wav` KSND load 실패의 실제 검색 경로와 VFS 후보를 확인
+  - [ ] OpenGL 첫 프레임을 시각 검증하고 관찰된 texture-stage state를 shader 의미에 반영
 
 ## 다음 작업 / Next work
 
