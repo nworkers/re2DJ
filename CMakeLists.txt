@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(re2DJ LANGUAGES CXX)
+project(re2DJ LANGUAGES C CXX)
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
@@ -26,6 +26,7 @@ option(RE2DJ_BUILD_NATIVE_HELPER_PROBE
        "Build the Windows x86 native helper feasibility probe" OFF)
 option(RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE
        "Build the Linux i386 native helper feasibility probe" OFF)
+option(RE2DJ_ENABLE_SDL3_AUDIO "Build the SDL3/SDL3_mixer audio backend" ON)
 
 # Win32 x86 is the primary Windows-native host during the current bring-up.
 # A non-Windows 32-bit build remains reserved for explicit helper probes.
@@ -85,7 +86,10 @@ endif()
 # Platform-neutral core. Nothing here may include a host OS header; see the
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
+    src/audio/legacy_audio_buffer.cpp
     src/graphics/legacy_draw_command.cpp
+    src/graphics/legacy_texture.cpp
+    src/graphics/legacy_vertex_buffer.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/legacy_io_port_bus.cpp
@@ -137,17 +141,80 @@ if(RE2DJ_BUILD_NATIVE_HELPER_PROBE)
 endif()
 
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    if(RE2DJ_ENABLE_SDL3_AUDIO)
+        include(FetchContent)
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+        set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+        set(SDL_VIDEO OFF CACHE BOOL "" FORCE)
+        set(SDL_RENDER OFF CACHE BOOL "" FORCE)
+        set(SDL_GPU OFF CACHE BOOL "" FORCE)
+        set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
+        set(SDL_JOYSTICK OFF CACHE BOOL "" FORCE)
+        set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+        set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
+        set(SDL_POWER OFF CACHE BOOL "" FORCE)
+        set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
+        set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
+        set(SDL_TRAY OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(SDL3
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+            GIT_TAG 147a8ee32dbf9ac02f3794964490687b6bbda1bc
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(SDL3)
+
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_INSTALL OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_TESTS OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_AIFF OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_WAVE OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_VOC OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_AU OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_FLAC OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_GME OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_MOD OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_MP3 OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_MIDI OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_OPUS OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_VORBIS_STB OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_VORBIS_VORBISFILE OFF CACHE BOOL "" FORCE)
+        set(SDLMIXER_WAVPACK OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(SDL3_mixer
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
+            GIT_TAG 72a81869b45e249e8e67102db4e98dd2441f05a1
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(SDL3_mixer)
+    endif()
+
     add_library(re2dj_windows_injected_runtime SHARED
         src/device/lptdi_challenge_response.cpp
         src/graphics/legacy_draw_command.cpp
+        src/graphics/legacy_texture.cpp
+        src/graphics/legacy_vertex_buffer.cpp
+        src/input/legacy_io_port_bus.cpp
         src/platform/windows/direct3d3_com_facade.cpp
         src/platform/windows/direct3d3_opengl_backend.cpp
         src/platform/windows/injected_runtime.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
     target_link_libraries(re2dj_windows_injected_runtime
-        PRIVATE re2dj_warnings opengl32
+        PRIVATE re2dj_warnings opengl32 dxguid
     )
+    if(RE2DJ_ENABLE_SDL3_AUDIO)
+        target_sources(re2dj_windows_injected_runtime PRIVATE
+            src/audio/legacy_audio_buffer.cpp
+            src/audio/sdl3_mixer_audio_backend.cpp
+            src/platform/windows/directsound_com_facade.cpp
+        )
+        target_link_libraries(re2dj_windows_injected_runtime
+            PRIVATE SDL3_mixer::SDL3_mixer-static SDL3::SDL3-static
+        )
+    endif()
     if(RE2DJ_BUILD_TESTS)
         add_executable(re2dj_windows_vfs_runtime_probe
             src/tools/windows_vfs_runtime_probe/main.cpp
@@ -156,6 +223,9 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
             PRIVATE re2dj_windows_injected_runtime re2dj_warnings dxguid
         )
         add_test(NAME re2dj_windows_vfs_runtime_probe COMMAND re2dj_windows_vfs_runtime_probe)
+        set_tests_properties(re2dj_windows_vfs_runtime_probe PROPERTIES
+            ENVIRONMENT "SDL_AUDIODRIVER=dummy"
+        )
     endif()
     add_executable(re2dj_windows_x86_launcher_probe
         src/tools/windows_original_process_probe/iat_verifier.cpp
@@ -236,6 +306,9 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/lptdi_response_profile_test.cpp
         tests/unit/legacy_io_port_bus_test.cpp
         tests/unit/legacy_draw_command_test.cpp
+        tests/unit/legacy_texture_test.cpp
+        tests/unit/legacy_vertex_buffer_test.cpp
+        tests/unit/legacy_audio_buffer_test.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp

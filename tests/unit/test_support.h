@@ -68,5 +68,8 @@ void RunLptdiChallengeResponseTests(re2dj::test::Context& context);
 void RunLptdiResponseProfileTests(re2dj::test::Context& context);
 void RunLegacyIoPortBusTests(re2dj::test::Context& context);
 void RunLegacyDrawCommandTests(re2dj::test::Context& context);
+void RunLegacyTextureTests(re2dj::test::Context& context);
+void RunLegacyVertexBufferTests(re2dj::test::Context& context);
+void RunLegacyAudioBufferTests(re2dj::test::Context& context);
 
 #endif  // RE2DJ_TESTS_UNIT_TEST_SUPPORT_H_

@@ -9,15 +9,21 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
 #include <span>
 #include <string>
 
 #include "direct3d3_opengl_backend.h"
 #include "re2dj/graphics/legacy_draw_command.h"
+#include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/legacy_vertex_buffer.h"
+
+extern "C" __declspec(dllexport) char g_re2dj_graphics_trace_path[MAX_PATH] = {};
 
 namespace
 {
@@ -33,11 +39,14 @@ constexpr DWORD kRootMagic = 0x52324444;
 constexpr DWORD kSurfaceMagic = 0x52325346;
 constexpr DWORD kDeviceMagic = 0x52324456;
 constexpr DWORD kViewportMagic = 0x52325650;
+constexpr DWORD kVertexBufferMagic = 0x52325642;
+HANDLE g_composition_trace_file = INVALID_HANDLE_VALUE;
 
 struct RootFacade;
 struct SurfaceFacade;
 struct DeviceFacade;
 struct ViewportFacade;
+struct VertexBufferFacade;
 
 HRESULT WINAPI RootQueryInterface(IDirectDraw4* self, REFIID iid, void** object);
 ULONG WINAPI RootAddRef(IDirectDraw4* self);
@@ -75,6 +84,30 @@ HRESULT WINAPI D3dEnumZBufferFormats(IDirect3D3* self,
                                      REFCLSID device_class,
                                      LPD3DENUMPIXELFORMATSCALLBACK callback,
                                      void* context);
+HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
+                                     D3DVERTEXBUFFERDESC* descriptor,
+                                     IDirect3DVertexBuffer** vertex_buffer,
+                                     DWORD flags,
+                                     IUnknown* outer);
+
+HRESULT WINAPI VbQueryInterface(IDirect3DVertexBuffer* self, REFIID iid, void** object);
+ULONG WINAPI VbAddRef(IDirect3DVertexBuffer* self);
+ULONG WINAPI VbRelease(IDirect3DVertexBuffer* self);
+HRESULT WINAPI VbLock(IDirect3DVertexBuffer* self, DWORD flags, void** data, DWORD* size);
+HRESULT WINAPI VbUnlock(IDirect3DVertexBuffer* self);
+HRESULT WINAPI VbProcessVertices(IDirect3DVertexBuffer* self,
+                                 DWORD operation,
+                                 DWORD destination_start,
+                                 DWORD vertex_count,
+                                 IDirect3DVertexBuffer* source,
+                                 DWORD source_start,
+                                 IDirect3DDevice3* device,
+                                 DWORD flags);
+HRESULT WINAPI VbGetVertexBufferDesc(IDirect3DVertexBuffer* self,
+                                     D3DVERTEXBUFFERDESC* descriptor);
+HRESULT WINAPI VbOptimize(IDirect3DVertexBuffer* self,
+                          IDirect3DDevice3* device,
+                          DWORD flags);
 
 HRESULT WINAPI SurfaceQueryInterface(IDirectDrawSurface4* self, REFIID iid, void** object);
 ULONG WINAPI SurfaceAddRef(IDirectDrawSurface4* self);
@@ -85,6 +118,12 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
                           RECT* source_rectangle,
                           DWORD flags,
                           DDBLTFX* effects);
+HRESULT WINAPI SurfaceBltFast(IDirectDrawSurface4* self,
+                              DWORD destination_x,
+                              DWORD destination_y,
+                              IDirectDrawSurface4* source,
+                              RECT* source_rectangle,
+                              DWORD flags);
 HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
                            IDirectDrawSurface4* override_surface,
                            DWORD flags);
@@ -206,6 +245,7 @@ IDirect3D3Vtbl* Direct3dVtable()
         table.CreateViewport = D3dCreateViewport;
         table.FindDevice = D3dFindDevice;
         table.CreateDevice = D3dCreateDevice;
+        table.CreateVertexBuffer = D3dCreateVertexBuffer;
         table.EnumZBufferFormats = D3dEnumZBufferFormats;
         initialized = true;
     }
@@ -222,6 +262,7 @@ IDirectDrawSurface4Vtbl* SurfaceVtable()
         table.AddRef = SurfaceAddRef;
         table.Release = SurfaceRelease;
         table.Blt = SurfaceBlt;
+        table.BltFast = SurfaceBltFast;
         table.Flip = SurfaceFlip;
         table.GetAttachedSurface = SurfaceGetAttachedSurface;
         table.GetCaps = SurfaceGetCaps;
@@ -304,6 +345,25 @@ IDirect3DViewport3Vtbl* ViewportVtable()
     return &table;
 }
 
+IDirect3DVertexBufferVtbl* VertexBufferVtable()
+{
+    static IDirect3DVertexBufferVtbl table = {};
+    static bool initialized = false;
+    if (!initialized)
+    {
+        table.QueryInterface = VbQueryInterface;
+        table.AddRef = VbAddRef;
+        table.Release = VbRelease;
+        table.Lock = VbLock;
+        table.Unlock = VbUnlock;
+        table.ProcessVertices = VbProcessVertices;
+        table.GetVertexBufferDesc = VbGetVertexBufferDesc;
+        table.Optimize = VbOptimize;
+        initialized = true;
+    }
+    return &table;
+}
+
 struct RootFacade
 {
     IDirectDraw4 direct_draw = {DirectDrawVtable()};
@@ -314,6 +374,18 @@ struct RootFacade
     DWORD height = 480;
     DWORD bits_per_pixel = 16;
     HWND window = nullptr;
+    std::uint64_t next_texture_identity = 1;
+    std::uint32_t next_surface_diagnostic_id = 1;
+    std::uint64_t next_composition_diagnostic_sequence = 1;
+    std::uint32_t create_surface_diagnostic_count = 0;
+    std::uint32_t surface_dc_diagnostic_count = 0;
+    std::uint32_t source_blt_diagnostic_count = 0;
+    std::uint32_t color_fill_diagnostic_count = 0;
+    std::uint32_t flip_diagnostic_count = 0;
+    std::uint32_t draw_failure_diagnostic_count = 0;
+    std::uint32_t untextured_draw_diagnostic_count = 0;
+    std::uint32_t late_draw_diagnostic_count = 0;
+    std::uint64_t frame_number = 0;
     re2dj::platform::windows::Direct3d3OpenGlBackend* render_backend = nullptr;
 };
 
@@ -334,8 +406,15 @@ struct SurfaceFacade
     HBITMAP bitmap = nullptr;
     HGDIOBJ previous_bitmap = nullptr;
     void* pixels = nullptr;
+    std::uint32_t diagnostic_id = 0;
+    std::uint64_t texture_identity = 0;
+    std::uint64_t texture_revision = 1;
     bool dc_acquired = false;
     bool has_source_blt_color_key = false;
+    bool draw_diagnostic_reported = false;
+    bool content_diagnostic_computed = false;
+    std::uint64_t diagnostic_non_key_pixels = 0;
+    std::uint64_t diagnostic_nonzero_pixels = 0;
     DDCOLORKEY source_blt_color_key = {};
 };
 
@@ -350,11 +429,605 @@ struct DeviceFacade
     IDirect3DViewport3* current_viewport = nullptr;
     IDirect3DTexture2* texture_stage_zero = nullptr;
     bool scene_active = false;
+    bool draw_success_reported = false;
+    bool draw_failure_reported = false;
     std::array<DWORD, 256> render_states = {};
+    std::array<std::uint8_t, 256> render_state_reports = {};
     std::array<DWORD, 256> light_states = {};
     std::array<std::array<DWORD, 64>, 8> texture_stage_states = {};
+    std::array<std::array<std::uint8_t, 64>, 8> texture_stage_state_reports = {};
     std::array<D3DMATRIX, 32> transforms = {};
 };
+
+SurfaceFacade* SurfaceFromTexture(IDirect3DTexture2* self);
+
+void MarkSurfaceDirty(SurfaceFacade* surface)
+{
+    ++surface->texture_revision;
+    if (surface->texture_revision == 0)
+    {
+        surface->texture_revision = 1;
+    }
+    surface->content_diagnostic_computed = false;
+    surface->diagnostic_non_key_pixels = 0;
+    surface->diagnostic_nonzero_pixels = 0;
+}
+
+std::uint64_t AllocateSurfaceIdentity(RootFacade* root)
+{
+    const std::uint64_t identity = root->next_texture_identity++;
+    if (root->next_texture_identity == 0)
+    {
+        root->next_texture_identity = 1;
+    }
+    return identity;
+}
+
+std::uint32_t AllocateSurfaceDiagnosticId(RootFacade* root)
+{
+    const std::uint32_t id = root->next_surface_diagnostic_id++;
+    if (root->next_surface_diagnostic_id == 0)
+    {
+        root->next_surface_diagnostic_id = 1;
+    }
+    return id;
+}
+
+void ReportCompositionDiagnostic(RootFacade* root, const char* detail)
+{
+    if (root == nullptr || detail == nullptr)
+    {
+        return;
+    }
+    const std::uint64_t sequence = root->next_composition_diagnostic_sequence++;
+    char message[800] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:hle:ddraw-trace:seq=%llu:%s",
+                  static_cast<unsigned long long>(sequence),
+                  detail);
+    OutputDebugStringA(message);
+    if (g_re2dj_graphics_trace_path[0] == '\0')
+    {
+        return;
+    }
+    if (g_composition_trace_file == INVALID_HANDLE_VALUE)
+    {
+        g_composition_trace_file = CreateFileA(g_re2dj_graphics_trace_path,
+                                               FILE_APPEND_DATA,
+                                               FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                               nullptr,
+                                               OPEN_ALWAYS,
+                                               FILE_ATTRIBUTE_NORMAL,
+                                               nullptr);
+        if (g_composition_trace_file == INVALID_HANDLE_VALUE)
+        {
+            return;
+        }
+    }
+    DWORD written = 0;
+    WriteFile(g_composition_trace_file,
+              message,
+              static_cast<DWORD>(std::strlen(message)),
+              &written,
+              nullptr);
+    constexpr char kNewline[] = "\r\n";
+    WriteFile(g_composition_trace_file,
+              kNewline,
+              static_cast<DWORD>(sizeof(kNewline) - 1),
+              &written,
+              nullptr);
+}
+
+void ReportCreateSurfaceDiagnostic(RootFacade* root,
+                                   const DDSURFACEDESC2& descriptor,
+                                   const SurfaceFacade* surface,
+                                   HRESULT result)
+{
+    constexpr std::uint32_t kMaximumCreateSurfaceDiagnostics = 256;
+    if (root == nullptr ||
+        ++root->create_surface_diagnostic_count > kMaximumCreateSurfaceDiagnostics)
+    {
+        return;
+    }
+    char detail[320] = {};
+    std::snprintf(detail,
+                  sizeof(detail),
+                  "CreateSurface:id=%lu:flags=0x%08lx:caps=0x%08lx:size=%lux%lu:result=0x%08lx",
+                  surface == nullptr ? 0UL : static_cast<unsigned long>(surface->diagnostic_id),
+                  static_cast<unsigned long>(descriptor.dwFlags),
+                  static_cast<unsigned long>(descriptor.ddsCaps.dwCaps),
+                  static_cast<unsigned long>(descriptor.dwWidth),
+                  static_cast<unsigned long>(descriptor.dwHeight),
+                  static_cast<unsigned long>(result));
+    ReportCompositionDiagnostic(root, detail);
+}
+
+void ReportBltDiagnostic(const char* operation,
+                         const SurfaceFacade* destination,
+                         const RECT* destination_rectangle,
+                         const SurfaceFacade* source,
+                         const RECT* source_rectangle,
+                         DWORD flags,
+                         HRESULT result)
+{
+    if (destination == nullptr)
+    {
+        return;
+    }
+    constexpr std::uint32_t kMaximumSourceBltDiagnostics = 256;
+    constexpr std::uint32_t kMaximumColorFillDiagnostics = 8;
+    std::uint32_t& diagnostic_count = source == nullptr
+                                          ? destination->root->color_fill_diagnostic_count
+                                          : destination->root->source_blt_diagnostic_count;
+    const std::uint32_t maximum_diagnostics = source == nullptr
+                                                  ? kMaximumColorFillDiagnostics
+                                                  : kMaximumSourceBltDiagnostics;
+    if (++diagnostic_count > maximum_diagnostics)
+    {
+        return;
+    }
+    const RECT destination_full = {
+        0, 0, static_cast<LONG>(destination->width), static_cast<LONG>(destination->height)};
+    const RECT source_full = source == nullptr
+                                 ? RECT{0, 0, 0, 0}
+                                 : RECT{0,
+                                        0,
+                                        static_cast<LONG>(source->width),
+                                        static_cast<LONG>(source->height)};
+    const RECT& destination_region =
+        destination_rectangle == nullptr ? destination_full : *destination_rectangle;
+    const RECT& source_region = source_rectangle == nullptr ? source_full : *source_rectangle;
+    char detail[320] = {};
+    std::snprintf(detail,
+                  sizeof(detail),
+                  "%s:dst=%lu:dstrect=%ld,%ld,%ld,%ld:src=%lu:srcrect=%ld,%ld,%ld,%ld:flags=0x%08lx:result=0x%08lx",
+                  operation,
+                  static_cast<unsigned long>(destination->diagnostic_id),
+                  destination_region.left,
+                  destination_region.top,
+                  destination_region.right,
+                  destination_region.bottom,
+                  source == nullptr ? 0UL : static_cast<unsigned long>(source->diagnostic_id),
+                  source_region.left,
+                  source_region.top,
+                  source_region.right,
+                  source_region.bottom,
+                  static_cast<unsigned long>(flags),
+                  static_cast<unsigned long>(result));
+    ReportCompositionDiagnostic(destination->root, detail);
+}
+
+void ReportSurfaceDiagnostic(const char* operation,
+                             const SurfaceFacade* surface,
+                             HRESULT result)
+{
+    if (surface == nullptr)
+    {
+        return;
+    }
+    const bool is_flip = std::strcmp(operation, "Flip") == 0;
+    constexpr std::uint32_t kMaximumSurfaceDcDiagnostics = 256;
+    constexpr std::uint32_t kMaximumFlipDiagnostics = 8;
+    std::uint32_t& diagnostic_count = is_flip ? surface->root->flip_diagnostic_count
+                                              : surface->root->surface_dc_diagnostic_count;
+    const std::uint32_t maximum_diagnostics =
+        is_flip ? kMaximumFlipDiagnostics : kMaximumSurfaceDcDiagnostics;
+    if (++diagnostic_count > maximum_diagnostics)
+    {
+        return;
+    }
+    char detail[160] = {};
+    std::snprintf(detail,
+                  sizeof(detail),
+                  "%s:id=%lu:caps=0x%08lx:revision=%llu:result=0x%08lx",
+                  operation,
+                  static_cast<unsigned long>(surface->diagnostic_id),
+                  static_cast<unsigned long>(surface->capabilities),
+                  static_cast<unsigned long long>(surface->texture_revision),
+                  static_cast<unsigned long>(result));
+    ReportCompositionDiagnostic(surface->root, detail);
+}
+
+void ReportDrawDiagnostic(DeviceFacade* device,
+                          D3DPRIMITIVETYPE primitive,
+                          DWORD vertex_type,
+                          DWORD vertex_count,
+                          DWORD flags,
+                          HRESULT result,
+                          const char* reason)
+{
+    if (device == nullptr || device->root == nullptr)
+    {
+        return;
+    }
+    SurfaceFacade* texture_surface = device->texture_stage_zero == nullptr
+                                         ? nullptr
+                                         : SurfaceFromTexture(device->texture_stage_zero);
+    if (result == DD_OK && texture_surface != nullptr &&
+        texture_surface->draw_diagnostic_reported)
+    {
+        return;
+    }
+    constexpr std::uint32_t kMaximumDrawFailureDiagnostics = 64;
+    constexpr std::uint32_t kMaximumUntexturedDrawDiagnostics = 16;
+    if (result != DD_OK &&
+        ++device->root->draw_failure_diagnostic_count > kMaximumDrawFailureDiagnostics)
+    {
+        return;
+    }
+    if (result == DD_OK && texture_surface == nullptr &&
+        ++device->root->untextured_draw_diagnostic_count > kMaximumUntexturedDrawDiagnostics)
+    {
+        return;
+    }
+    if (result == DD_OK && texture_surface != nullptr)
+    {
+        texture_surface->draw_diagnostic_reported = true;
+    }
+    const auto& stage = device->texture_stage_states[0];
+    char detail[512] = {};
+    std::snprintf(detail,
+                  sizeof(detail),
+                  "DrawPrimitive:texture=%lu:primitive=%lu:fvf=0x%08lx:vertices=%lu:flags=0x%08lx:result=0x%08lx:reason=%s:colorop=%lu:colorarg1=0x%08lx:colorarg2=0x%08lx:alphatest=%lu:alphafunc=%lu:blend=%lu:srcblend=%lu:dstblend=%lu:minfilter=%lu:magfilter=%lu",
+                  texture_surface == nullptr
+                      ? 0UL
+                      : static_cast<unsigned long>(texture_surface->diagnostic_id),
+                  static_cast<unsigned long>(primitive),
+                  static_cast<unsigned long>(vertex_type),
+                  static_cast<unsigned long>(vertex_count),
+                  static_cast<unsigned long>(flags),
+                  static_cast<unsigned long>(result),
+                  reason == nullptr ? "none" : reason,
+                  static_cast<unsigned long>(stage[D3DTSS_COLOROP]),
+                  static_cast<unsigned long>(stage[D3DTSS_COLORARG1]),
+                  static_cast<unsigned long>(stage[D3DTSS_COLORARG2]),
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_ALPHATESTENABLE]),
+                  static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_ALPHAFUNC]),
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_ALPHABLENDENABLE]),
+                  static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_SRCBLEND]),
+                  static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_DESTBLEND]),
+                  static_cast<unsigned long>(stage[D3DTSS_MINFILTER]),
+                  static_cast<unsigned long>(stage[D3DTSS_MAGFILTER]));
+    ReportCompositionDiagnostic(device->root, detail);
+}
+
+void ReportLateDrawDiagnostic(DeviceFacade* device,
+                              const re2dj::graphics::LegacyDrawCommand& command,
+                              DWORD flags)
+{
+    if (device == nullptr || device->root == nullptr || command.vertices.empty())
+    {
+        return;
+    }
+    constexpr std::uint32_t kMaximumLateDrawDiagnostics = 512;
+    if (++device->root->late_draw_diagnostic_count > kMaximumLateDrawDiagnostics)
+    {
+        return;
+    }
+    float minimum_x = command.vertices.front().x;
+    float minimum_y = command.vertices.front().y;
+    float minimum_z = command.vertices.front().z;
+    float maximum_x = minimum_x;
+    float maximum_y = minimum_y;
+    float maximum_z = minimum_z;
+    float minimum_u = command.vertices.front().texture_u;
+    float minimum_v = command.vertices.front().texture_v;
+    float maximum_u = minimum_u;
+    float maximum_v = minimum_v;
+    for (const re2dj::graphics::TransformedLitVertex& vertex : command.vertices)
+    {
+        minimum_x = (std::min)(minimum_x, vertex.x);
+        minimum_y = (std::min)(minimum_y, vertex.y);
+        minimum_z = (std::min)(minimum_z, vertex.z);
+        maximum_x = (std::max)(maximum_x, vertex.x);
+        maximum_y = (std::max)(maximum_y, vertex.y);
+        maximum_z = (std::max)(maximum_z, vertex.z);
+        minimum_u = (std::min)(minimum_u, vertex.texture_u);
+        minimum_v = (std::min)(minimum_v, vertex.texture_v);
+        maximum_u = (std::max)(maximum_u, vertex.texture_u);
+        maximum_v = (std::max)(maximum_v, vertex.texture_v);
+    }
+    const SurfaceFacade* texture_surface = device->texture_stage_zero == nullptr
+                                               ? nullptr
+                                               : SurfaceFromTexture(device->texture_stage_zero);
+    if (texture_surface != nullptr && !texture_surface->content_diagnostic_computed &&
+        texture_surface->pixels != nullptr)
+    {
+        SurfaceFacade* mutable_surface = const_cast<SurfaceFacade*>(texture_surface);
+        const auto* const pixels = static_cast<const unsigned char*>(texture_surface->pixels);
+        for (std::uint32_t y = 0; y < texture_surface->height; ++y)
+        {
+            const auto* const row = reinterpret_cast<const std::uint16_t*>(
+                pixels + static_cast<std::size_t>(y) * texture_surface->pitch);
+            for (std::uint32_t x = 0; x < texture_surface->width; ++x)
+            {
+                const std::uint16_t pixel = row[x];
+                if (pixel != 0)
+                {
+                    ++mutable_surface->diagnostic_nonzero_pixels;
+                }
+                const bool matches_key = texture_surface->has_source_blt_color_key &&
+                                         pixel >= texture_surface->source_blt_color_key
+                                                      .dwColorSpaceLowValue &&
+                                         pixel <= texture_surface->source_blt_color_key
+                                                      .dwColorSpaceHighValue;
+                if (!matches_key)
+                {
+                    ++mutable_surface->diagnostic_non_key_pixels;
+                }
+            }
+        }
+        mutable_surface->content_diagnostic_computed = true;
+    }
+    char detail[760] = {};
+    std::snprintf(detail,
+                  sizeof(detail),
+                  "LateDraw:frame=%llu:texture=%lu:topology=%u:vertices=%lu:bounds=%.3f,%.3f,%.3f,%.3f:z=%.6f,%.6f:uv=%.6f,%.6f,%.6f,%.6f:diffuse=0x%08lx:flags=0x%08lx:blend=%lu:srcblend=%lu:dstblend=%lu:zenable=%lu:zwrite=%lu:zfunc=%lu:texsize=%lux%lu:key=%u:colorkey=%lu:alphatest=%lu:keylow=0x%04lx:keyhigh=0x%04lx:nonkey=%llu:nonzero=%llu",
+                  static_cast<unsigned long long>(device->root->frame_number),
+                  texture_surface == nullptr
+                      ? 0UL
+                      : static_cast<unsigned long>(texture_surface->diagnostic_id),
+                  command.topology == re2dj::graphics::PrimitiveTopology::kLineList ? 2U : 5U,
+                  static_cast<unsigned long>(command.vertices.size()),
+                  minimum_x,
+                  minimum_y,
+                  maximum_x,
+                  maximum_y,
+                  minimum_z,
+                  maximum_z,
+                  minimum_u,
+                  minimum_v,
+                  maximum_u,
+                  maximum_v,
+                  static_cast<unsigned long>(command.vertices.front().diffuse_argb),
+                  static_cast<unsigned long>(flags),
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_ALPHABLENDENABLE]),
+                  static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_SRCBLEND]),
+                  static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_DESTBLEND]),
+                  static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_ZENABLE]),
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_ZWRITEENABLE]),
+                  static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_ZFUNC]),
+                  texture_surface == nullptr
+                      ? 0UL
+                      : static_cast<unsigned long>(texture_surface->width),
+                  texture_surface == nullptr
+                      ? 0UL
+                      : static_cast<unsigned long>(texture_surface->height),
+                  texture_surface != nullptr && texture_surface->has_source_blt_color_key ? 1U
+                                                                                          : 0U,
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_COLORKEYENABLE]),
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_ALPHATESTENABLE]),
+                  texture_surface == nullptr
+                      ? 0UL
+                      : static_cast<unsigned long>(
+                            texture_surface->source_blt_color_key.dwColorSpaceLowValue),
+                  texture_surface == nullptr
+                      ? 0UL
+                      : static_cast<unsigned long>(
+                            texture_surface->source_blt_color_key.dwColorSpaceHighValue),
+                  texture_surface == nullptr
+                      ? 0ULL
+                      : static_cast<unsigned long long>(
+                            texture_surface->diagnostic_non_key_pixels),
+                  texture_surface == nullptr
+                      ? 0ULL
+                      : static_cast<unsigned long long>(
+                            texture_surface->diagnostic_nonzero_pixels));
+    ReportCompositionDiagnostic(device->root, detail);
+}
+
+bool BuildSurfaceRectangle(const SurfaceFacade& surface,
+                           const RECT* input,
+                           re2dj::graphics::Rgb565Rectangle* output)
+{
+    if (output == nullptr)
+    {
+        return false;
+    }
+    const RECT rectangle = input != nullptr
+                               ? *input
+                               : RECT{0,
+                                      0,
+                                      static_cast<LONG>(surface.width),
+                                      static_cast<LONG>(surface.height)};
+    if (rectangle.left < 0 || rectangle.top < 0 || rectangle.right <= rectangle.left ||
+        rectangle.bottom <= rectangle.top ||
+        rectangle.right > static_cast<LONG>(surface.width) ||
+        rectangle.bottom > static_cast<LONG>(surface.height))
+    {
+        return false;
+    }
+    output->x = static_cast<std::uint32_t>(rectangle.left);
+    output->y = static_cast<std::uint32_t>(rectangle.top);
+    output->width = static_cast<std::uint32_t>(rectangle.right - rectangle.left);
+    output->height = static_cast<std::uint32_t>(rectangle.bottom - rectangle.top);
+    return true;
+}
+
+HRESULT CopySurfaceRectangle(SurfaceFacade* destination,
+                             const re2dj::graphics::Rgb565Rectangle& destination_rectangle,
+                             SurfaceFacade* source,
+                             const re2dj::graphics::Rgb565Rectangle& source_rectangle,
+                             bool use_source_color_key)
+{
+    if (destination == nullptr || source == nullptr || destination->magic != kSurfaceMagic ||
+        source->magic != kSurfaceMagic || destination->pixels == nullptr ||
+        source->pixels == nullptr || destination->dc_acquired || source->dc_acquired)
+    {
+        return DDERR_SURFACEBUSY;
+    }
+    if (destination_rectangle.width != source_rectangle.width ||
+        destination_rectangle.height != source_rectangle.height)
+    {
+        return DDERR_UNSUPPORTED;
+    }
+    if (use_source_color_key && !source->has_source_blt_color_key)
+    {
+        return DDERR_NOCOLORKEY;
+    }
+
+    re2dj::graphics::Rgb565ColorKey key;
+    if (use_source_color_key)
+    {
+        key.enabled = true;
+        key.low = static_cast<std::uint16_t>(source->source_blt_color_key.dwColorSpaceLowValue);
+        key.high = static_cast<std::uint16_t>(source->source_blt_color_key.dwColorSpaceHighValue);
+    }
+    const re2dj::graphics::Rgb565SurfaceView destination_view = {
+        destination->pixels, destination->width, destination->height, destination->pitch};
+    const re2dj::graphics::LegacyTextureView source_view = {
+        source->pixels,
+        source->width,
+        source->height,
+        source->pitch,
+        source->texture_identity,
+        source->texture_revision,
+        key};
+    if (!re2dj::graphics::CopyRgb565Rectangle(destination_view,
+                                              destination_rectangle.x,
+                                              destination_rectangle.y,
+                                              source_view,
+                                              source_rectangle,
+                                              key))
+    {
+        return DDERR_INVALIDRECT;
+    }
+    MarkSurfaceDirty(destination);
+
+    const bool is_display_surface =
+        (destination->capabilities & (DDSCAPS_PRIMARYSURFACE | DDSCAPS_BACKBUFFER)) != 0;
+    if (!is_display_surface || destination->root->render_backend == nullptr)
+    {
+        return DD_OK;
+    }
+
+    const float left = static_cast<float>(destination_rectangle.x);
+    const float top = static_cast<float>(destination_rectangle.y);
+    const float right = static_cast<float>(destination_rectangle.x + destination_rectangle.width);
+    const float bottom = static_cast<float>(destination_rectangle.y + destination_rectangle.height);
+    const float source_width = static_cast<float>(source->width);
+    const float source_height = static_cast<float>(source->height);
+    const float u0 = static_cast<float>(source_rectangle.x) / source_width;
+    const float v0 = static_cast<float>(source_rectangle.y) / source_height;
+    const float u1 = static_cast<float>(source_rectangle.x + source_rectangle.width) / source_width;
+    const float v1 = static_cast<float>(source_rectangle.y + source_rectangle.height) / source_height;
+    re2dj::graphics::LegacyDrawCommand command;
+    command.vertices = {
+        {left, top, 0.0f, 1.0f, 0xffffffff, 0, u0, v0},
+        {right, top, 0.0f, 1.0f, 0xffffffff, 0, u1, v0},
+        {left, bottom, 0.0f, 1.0f, 0xffffffff, 0, u0, v1},
+        {right, bottom, 0.0f, 1.0f, 0xffffffff, 0, u1, v1},
+    };
+    re2dj::graphics::LegacyFixedFunctionState state;
+    // Color keying now discards on its own, so the blit path no longer has to
+    // borrow the alpha test to express it.
+    state.color_key_enabled = use_source_color_key;
+    std::string error;
+    if (!destination->root->render_backend->Draw(command,
+                                                  state,
+                                                  destination->root->width,
+                                                  destination->root->height,
+                                                  &source_view,
+                                                  &error))
+    {
+        OutputDebugStringA(kOpenGlFailureMessage);
+        return DDERR_GENERIC;
+    }
+    return DD_OK;
+}
+
+bool BuildFixedFunctionState(const DeviceFacade& device,
+                             re2dj::graphics::LegacyFixedFunctionState* state,
+                             std::string* error)
+{
+    if (state == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    const auto& stage = device.texture_stage_states[0];
+    if (stage[D3DTSS_COLOROP] != D3DTOP_MODULATE ||
+        stage[D3DTSS_COLORARG1] != D3DTA_TEXTURE ||
+        stage[D3DTSS_COLORARG2] != D3DTA_DIFFUSE)
+    {
+        *error = "unsupported Direct3D3 texture color operation";
+        return false;
+    }
+    state->color_key_enabled =
+        device.render_states[D3DRENDERSTATE_COLORKEYENABLE] != 0;
+    state->alpha_test_enabled =
+        device.render_states[D3DRENDERSTATE_ALPHATESTENABLE] != 0;
+    state->alpha_reference = static_cast<std::uint8_t>(
+        device.render_states[D3DRENDERSTATE_ALPHAREF] & 0xff);
+    if (state->alpha_test_enabled &&
+        device.render_states[D3DRENDERSTATE_ALPHAFUNC] != D3DCMP_NOTEQUAL)
+    {
+        *error = "unsupported Direct3D3 alpha comparison function";
+        return false;
+    }
+    state->alpha_function = re2dj::graphics::CompareFunction::kNotEqual;
+    state->alpha_blend_enabled =
+        device.render_states[D3DRENDERSTATE_ALPHABLENDENABLE] != 0;
+
+    const auto convert_blend = [](DWORD value,
+                                  re2dj::graphics::BlendFactor* output) {
+        switch (value)
+        {
+            case D3DBLEND_ZERO:
+                *output = re2dj::graphics::BlendFactor::kZero;
+                return true;
+            case D3DBLEND_ONE:
+                *output = re2dj::graphics::BlendFactor::kOne;
+                return true;
+            case D3DBLEND_SRCCOLOR:
+                *output = re2dj::graphics::BlendFactor::kSourceColor;
+                return true;
+            case D3DBLEND_SRCALPHA:
+                *output = re2dj::graphics::BlendFactor::kSourceAlpha;
+                return true;
+            default:
+                return false;
+        }
+    };
+    if (state->alpha_blend_enabled &&
+        (!convert_blend(device.render_states[D3DRENDERSTATE_SRCBLEND],
+                        &state->source_blend) ||
+         !convert_blend(device.render_states[D3DRENDERSTATE_DESTBLEND],
+                        &state->destination_blend)))
+    {
+        *error = "unsupported Direct3D3 alpha blend factor";
+        return false;
+    }
+
+    const auto convert_filter = [](DWORD value,
+                                   re2dj::graphics::TextureFilter* output) {
+        if (value == D3DTFN_POINT)
+        {
+            *output = re2dj::graphics::TextureFilter::kNearest;
+            return true;
+        }
+        if (value == D3DTFN_LINEAR)
+        {
+            *output = re2dj::graphics::TextureFilter::kLinear;
+            return true;
+        }
+        return false;
+    };
+    if (!convert_filter(stage[D3DTSS_MINFILTER], &state->minification_filter) ||
+        !convert_filter(stage[D3DTSS_MAGFILTER], &state->magnification_filter))
+    {
+        *error = "unsupported Direct3D3 texture filter";
+        return false;
+    }
+    error->clear();
+    return true;
+}
 
 struct ViewportFacade
 {
@@ -363,6 +1036,16 @@ struct ViewportFacade
     DWORD magic = kViewportMagic;
     RootFacade* root = nullptr;
     D3DVIEWPORT2 viewport = {};
+};
+
+struct VertexBufferFacade
+{
+    IDirect3DVertexBuffer interface_value = {VertexBufferVtable()};
+    volatile LONG references = 1;
+    DWORD magic = kVertexBufferMagic;
+    RootFacade* root = nullptr;
+    re2dj::graphics::LegacyVertexBufferDesc descriptor;
+    std::unique_ptr<re2dj::graphics::LegacyVertexBuffer> buffer;
 };
 
 RootFacade* RootFromDirectDraw(IDirectDraw4* self)
@@ -399,6 +1082,12 @@ ViewportFacade* ViewportFromInterface(IDirect3DViewport3* self)
 {
     return reinterpret_cast<ViewportFacade*>(reinterpret_cast<unsigned char*>(self) -
                                              offsetof(ViewportFacade, interface_value));
+}
+
+VertexBufferFacade* VertexBufferFromInterface(IDirect3DVertexBuffer* self)
+{
+    return reinterpret_cast<VertexBufferFacade*>(reinterpret_cast<unsigned char*>(self) -
+                                                 offsetof(VertexBufferFacade, interface_value));
 }
 
 ULONG AddRootReference(RootFacade* root)
@@ -580,6 +1269,11 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
         return DDERR_INVALIDPARAMS;
     }
     *surface = nullptr;
+    RootFacade* const root = RootFromDirectDraw(self);
+    const auto finish = [&](HRESULT result, const SurfaceFacade* created = nullptr) {
+        ReportCreateSurfaceDiagnostic(root, *descriptor, created, result);
+        return result;
+    };
     if ((descriptor->ddsCaps.dwCaps & DDSCAPS_TEXTURE) != 0)
     {
         constexpr DWORD kRequiredFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT |
@@ -588,66 +1282,101 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
             descriptor->dwWidth == 0 || descriptor->dwHeight == 0 ||
             !IsRgb565Format(descriptor->ddpfPixelFormat))
         {
-            return DDERR_INVALIDPIXELFORMAT;
+            return finish(DDERR_INVALIDPIXELFORMAT);
         }
         auto* const texture = new (std::nothrow) SurfaceFacade;
         if (texture == nullptr)
         {
-            return DDERR_OUTOFMEMORY;
+            return finish(DDERR_OUTOFMEMORY);
         }
-        RootFacade* const root = RootFromDirectDraw(self);
         texture->root = root;
         texture->width = descriptor->dwWidth;
         texture->height = descriptor->dwHeight;
         texture->bits_per_pixel = 16;
         texture->capabilities = descriptor->ddsCaps.dwCaps;
+        texture->diagnostic_id = AllocateSurfaceDiagnosticId(root);
+        texture->texture_identity = AllocateSurfaceIdentity(root);
         if (!CreateRgb565GdiBacking(texture))
         {
             delete texture;
-            return DDERR_OUTOFMEMORY;
+            return finish(DDERR_OUTOFMEMORY);
         }
         AddRootReference(root);
         *surface = &texture->interface_value;
         OutputDebugStringA(kCreateTextureSurfaceMessage);
-        return DD_OK;
+        return finish(DD_OK, texture);
+    }
+    if ((descriptor->ddsCaps.dwCaps & DDSCAPS_OFFSCREENPLAIN) != 0)
+    {
+        constexpr DWORD kRequiredFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+        if ((descriptor->dwFlags & kRequiredFlags) != kRequiredFlags ||
+            descriptor->dwWidth == 0 || descriptor->dwHeight == 0 ||
+            ((descriptor->dwFlags & DDSD_PIXELFORMAT) != 0 &&
+             !IsRgb565Format(descriptor->ddpfPixelFormat)))
+        {
+            return finish(DDERR_INVALIDPIXELFORMAT);
+        }
+        auto* const offscreen = new (std::nothrow) SurfaceFacade;
+        if (offscreen == nullptr)
+        {
+            return finish(DDERR_OUTOFMEMORY);
+        }
+        offscreen->root = root;
+        offscreen->width = descriptor->dwWidth;
+        offscreen->height = descriptor->dwHeight;
+        offscreen->bits_per_pixel = 16;
+        offscreen->capabilities = descriptor->ddsCaps.dwCaps;
+        offscreen->diagnostic_id = AllocateSurfaceDiagnosticId(root);
+        offscreen->texture_identity = AllocateSurfaceIdentity(root);
+        if (!CreateRgb565GdiBacking(offscreen))
+        {
+            delete offscreen;
+            return finish(DDERR_OUTOFMEMORY);
+        }
+        AddRootReference(root);
+        *surface = &offscreen->interface_value;
+        return finish(DD_OK, offscreen);
     }
     if ((descriptor->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) == 0 ||
         descriptor->dwBackBufferCount != 1)
     {
-        return DDERR_UNSUPPORTED;
+        return finish(DDERR_UNSUPPORTED);
     }
-    RootFacade* const root = RootFromDirectDraw(self);
     auto* const primary = new (std::nothrow) SurfaceFacade;
     auto* const back = new (std::nothrow) SurfaceFacade;
     if (primary == nullptr || back == nullptr)
     {
         delete primary;
         delete back;
-        return DDERR_OUTOFMEMORY;
+        return finish(DDERR_OUTOFMEMORY);
     }
     primary->root = root;
     primary->width = root->width;
     primary->height = root->height;
     primary->bits_per_pixel = root->bits_per_pixel;
     primary->capabilities = DDSCAPS_PRIMARYSURFACE | DDSCAPS_COMPLEX | DDSCAPS_FLIP;
+    primary->diagnostic_id = AllocateSurfaceDiagnosticId(root);
+    primary->texture_identity = AllocateSurfaceIdentity(root);
     primary->attached_back_buffer = back;
     back->root = root;
     back->width = root->width;
     back->height = root->height;
     back->bits_per_pixel = root->bits_per_pixel;
     back->capabilities = DDSCAPS_BACKBUFFER | DDSCAPS_3DDEVICE;
+    back->diagnostic_id = AllocateSurfaceDiagnosticId(root);
+    back->texture_identity = AllocateSurfaceIdentity(root);
     if (!CreateRgb565GdiBacking(primary) || !CreateRgb565GdiBacking(back))
     {
         DestroyGdiBacking(primary);
         DestroyGdiBacking(back);
         delete primary;
         delete back;
-        return DDERR_OUTOFMEMORY;
+        return finish(DDERR_OUTOFMEMORY);
     }
     AddRootReference(root);
     AddRootReference(root);
     *surface = &primary->interface_value;
-    return DD_OK;
+    return finish(DD_OK, primary);
 }
 
 HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD)
@@ -779,6 +1508,13 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
     }
     facade->root = RootFromDirect3d(self);
     facade->render_target = target;
+    facade->render_states[D3DRENDERSTATE_SRCBLEND] = D3DBLEND_ONE;
+    facade->render_states[D3DRENDERSTATE_DESTBLEND] = D3DBLEND_ZERO;
+    facade->texture_stage_states[0][D3DTSS_COLOROP] = D3DTOP_MODULATE;
+    facade->texture_stage_states[0][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
+    facade->texture_stage_states[0][D3DTSS_COLORARG2] = D3DTA_DIFFUSE;
+    facade->texture_stage_states[0][D3DTSS_MINFILTER] = D3DTFN_POINT;
+    facade->texture_stage_states[0][D3DTSS_MAGFILTER] = D3DTFG_POINT;
     AddRootReference(facade->root);
     SurfaceAddRef(render_target);
     *device = &facade->interface_value;
@@ -799,6 +1535,55 @@ HRESULT WINAPI D3dEnumZBufferFormats(IDirect3D3*,
     format.dwFlags = DDPF_ZBUFFER;
     format.dwZBufferBitDepth = 16;
     callback(&format, context);
+    return DD_OK;
+}
+
+HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
+                                     D3DVERTEXBUFFERDESC* descriptor,
+                                     IDirect3DVertexBuffer** vertex_buffer,
+                                     DWORD flags,
+                                     IUnknown* outer)
+{
+    if (vertex_buffer == nullptr || descriptor == nullptr || outer != nullptr ||
+        descriptor->dwSize < sizeof(D3DVERTEXBUFFERDESC))
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *vertex_buffer = nullptr;
+    char message[160] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:hle:IDirect3D3::CreateVertexBuffer:caps=0x%08lx:fvf=0x%08lx:vertices=%lu:flags=0x%08lx",
+                  descriptor->dwCaps,
+                  descriptor->dwFVF,
+                  static_cast<unsigned long>(descriptor->dwNumVertices),
+                  flags);
+    OutputDebugStringA(message);
+    auto* const facade = new (std::nothrow) VertexBufferFacade;
+    if (facade == nullptr)
+    {
+        return DDERR_OUTOFMEMORY;
+    }
+    facade->root = RootFromDirect3d(self);
+    facade->descriptor.size = sizeof(D3DVERTEXBUFFERDESC);
+    facade->descriptor.caps = descriptor->dwCaps;
+    facade->descriptor.fvf = descriptor->dwFVF;
+    facade->descriptor.vertex_count = descriptor->dwNumVertices;
+    facade->buffer = re2dj::graphics::LegacyVertexBuffer::Create(facade->descriptor);
+    if (facade->buffer == nullptr)
+    {
+        delete facade;
+        return DDERR_INVALIDPARAMS;
+    }
+    AddRootReference(facade->root);
+    *vertex_buffer = &facade->interface_value;
+    char result_message[160] = {};
+    std::snprintf(result_message,
+                  sizeof(result_message),
+                  "re2dj:hle:IDirect3D3::CreateVertexBuffer:result=%p:vtable=%p",
+                  static_cast<void*>(*vertex_buffer),
+                  static_cast<void*>((*vertex_buffer)->lpVtbl));
+    OutputDebugStringA(result_message);
     return DD_OK;
 }
 
@@ -843,6 +1628,10 @@ ULONG WINAPI SurfaceRelease(IDirectDrawSurface4* self)
     {
         SurfaceFacade* const attached = surface->attached_back_buffer;
         RootFacade* const root = surface->root;
+        if (root->render_backend != nullptr && surface->texture_identity != 0)
+        {
+            root->render_backend->DiscardTexture(surface->texture_identity);
+        }
         DestroyGdiBacking(surface);
         surface->magic = 0;
         delete surface;
@@ -862,18 +1651,46 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
                           DWORD flags,
                           DDBLTFX* effects)
 {
-    if (source != nullptr || source_rectangle != nullptr || flags != DDBLT_COLORFILL)
+    SurfaceFacade* const surface = SurfaceFromInterface(self);
+    const SurfaceFacade* traced_source =
+        source == nullptr ? nullptr : SurfaceFromInterface(source);
+    const auto finish = [&](HRESULT result) {
+        ReportBltDiagnostic(
+            "Blt", surface, destination, traced_source, source_rectangle, flags, result);
+        return result;
+    };
+    if (source != nullptr)
     {
-        return DDERR_UNSUPPORTED;
+        constexpr DWORD kSupportedFlags = DDBLT_KEYSRC | DDBLT_WAIT;
+        if ((flags & ~kSupportedFlags) != 0 || effects != nullptr)
+        {
+            return finish(DDERR_UNSUPPORTED);
+        }
+        SurfaceFacade* const source_surface = SurfaceFromInterface(source);
+        re2dj::graphics::Rgb565Rectangle source_region;
+        re2dj::graphics::Rgb565Rectangle destination_region;
+        if (!BuildSurfaceRectangle(*source_surface, source_rectangle, &source_region) ||
+            !BuildSurfaceRectangle(*surface, destination, &destination_region))
+        {
+            return finish(DDERR_INVALIDRECT);
+        }
+        return finish(CopySurfaceRectangle(surface,
+                                           destination_region,
+                                           source_surface,
+                                           source_region,
+                                           (flags & DDBLT_KEYSRC) != 0));
+    }
+    if (source_rectangle != nullptr || flags != DDBLT_COLORFILL)
+    {
+        return finish(DDERR_UNSUPPORTED);
     }
     if (effects == nullptr || effects->dwSize != sizeof(DDBLTFX))
     {
-        return DDERR_INVALIDPARAMS;
+        return finish(DDERR_INVALIDPARAMS);
     }
-    SurfaceFacade* const surface = SurfaceFromInterface(self);
     if (surface->pixels == nullptr || surface->dc_acquired)
     {
-        return DDERR_SURFACEBUSY;
+        return finish(DDERR_SURFACEBUSY);
     }
     const RECT full = {0,
                        0,
@@ -885,7 +1702,7 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         rectangle.right > static_cast<LONG>(surface->width) ||
         rectangle.bottom > static_cast<LONG>(surface->height))
     {
-        return DDERR_INVALIDRECT;
+        return finish(DDERR_INVALIDRECT);
     }
     const std::uint16_t color = static_cast<std::uint16_t>(effects->dwFillColor);
     auto* const pixels = static_cast<unsigned char*>(surface->pixels);
@@ -894,7 +1711,55 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         auto* const row = reinterpret_cast<std::uint16_t*>(pixels + y * surface->pitch);
         std::fill(row + rectangle.left, row + rectangle.right, color);
     }
-    return DD_OK;
+    MarkSurfaceDirty(surface);
+    return finish(DD_OK);
+}
+
+HRESULT WINAPI SurfaceBltFast(IDirectDrawSurface4* self,
+                              DWORD destination_x,
+                              DWORD destination_y,
+                              IDirectDrawSurface4* source,
+                              RECT* source_rectangle,
+                              DWORD flags)
+{
+    constexpr DWORD kSupportedFlags = DDBLTFAST_SRCCOLORKEY | DDBLTFAST_WAIT;
+    SurfaceFacade* const destination_surface = SurfaceFromInterface(self);
+    SurfaceFacade* const source_surface =
+        source == nullptr ? nullptr : SurfaceFromInterface(source);
+    RECT destination_rectangle = {static_cast<LONG>(destination_x),
+                                  static_cast<LONG>(destination_y),
+                                  static_cast<LONG>(destination_x),
+                                  static_cast<LONG>(destination_y)};
+    const auto finish = [&](HRESULT result) {
+        ReportBltDiagnostic("BltFast",
+                            destination_surface,
+                            &destination_rectangle,
+                            source_surface,
+                            source_rectangle,
+                            flags,
+                            result);
+        return result;
+    };
+    if (source == nullptr || (flags & ~kSupportedFlags) != 0)
+    {
+        return finish(DDERR_UNSUPPORTED);
+    }
+    re2dj::graphics::Rgb565Rectangle source_region;
+    if (!BuildSurfaceRectangle(*source_surface, source_rectangle, &source_region))
+    {
+        return finish(DDERR_INVALIDRECT);
+    }
+    const re2dj::graphics::Rgb565Rectangle destination_region = {
+        destination_x, destination_y, source_region.width, source_region.height};
+    destination_rectangle.right =
+        static_cast<LONG>(destination_x + source_region.width);
+    destination_rectangle.bottom =
+        static_cast<LONG>(destination_y + source_region.height);
+    return finish(CopySurfaceRectangle(destination_surface,
+                                       destination_region,
+                                       source_surface,
+                                       source_region,
+                                       (flags & DDBLTFAST_SRCCOLORKEY) != 0));
 }
 
 HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
@@ -902,11 +1767,16 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
                            DWORD)
 {
     SurfaceFacade* const surface = SurfaceFromInterface(self);
+    ++surface->root->frame_number;
+    const auto finish = [&](HRESULT result) {
+        ReportSurfaceDiagnostic("Flip", surface, result);
+        return result;
+    };
     if (surface->attached_back_buffer == nullptr ||
         (override_surface != nullptr &&
          override_surface != &surface->attached_back_buffer->interface_value))
     {
-        return DDERR_NOTFLIPPABLE;
+        return finish(DDERR_NOTFLIPPABLE);
     }
     if (surface->root->render_backend != nullptr)
     {
@@ -914,10 +1784,10 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
         if (!surface->root->render_backend->Present(&error))
         {
             OutputDebugStringA(kOpenGlFailureMessage);
-            return DDERR_GENERIC;
+            return finish(DDERR_GENERIC);
         }
     }
-    return DD_OK;
+    return finish(DD_OK);
 }
 
 HRESULT WINAPI SurfaceGetAttachedSurface(IDirectDrawSurface4* self,
@@ -982,23 +1852,27 @@ HRESULT WINAPI SurfaceGetSurfaceDesc(IDirectDrawSurface4* self, DDSURFACEDESC2* 
 
 HRESULT WINAPI SurfaceGetDC(IDirectDrawSurface4* self, HDC* dc)
 {
+    SurfaceFacade* const surface = SurfaceFromInterface(self);
+    const auto finish = [&](HRESULT result) {
+        ReportSurfaceDiagnostic("GetDC", surface, result);
+        return result;
+    };
     if (dc == nullptr)
     {
-        return DDERR_INVALIDPARAMS;
+        return finish(DDERR_INVALIDPARAMS);
     }
     *dc = nullptr;
-    SurfaceFacade* const surface = SurfaceFromInterface(self);
     if (surface->bitmap_dc == nullptr)
     {
-        return DDERR_UNSUPPORTED;
+        return finish(DDERR_UNSUPPORTED);
     }
     if (surface->dc_acquired)
     {
-        return DDERR_DCALREADYCREATED;
+        return finish(DDERR_DCALREADYCREATED);
     }
     surface->dc_acquired = true;
     *dc = surface->bitmap_dc;
-    return DD_OK;
+    return finish(DD_OK);
 }
 
 HRESULT WINAPI SurfaceIsLost(IDirectDrawSurface4*)
@@ -1009,12 +1883,17 @@ HRESULT WINAPI SurfaceIsLost(IDirectDrawSurface4*)
 HRESULT WINAPI SurfaceReleaseDC(IDirectDrawSurface4* self, HDC dc)
 {
     SurfaceFacade* const surface = SurfaceFromInterface(self);
+    const auto finish = [&](HRESULT result) {
+        ReportSurfaceDiagnostic("ReleaseDC", surface, result);
+        return result;
+    };
     if (!surface->dc_acquired || dc == nullptr || dc != surface->bitmap_dc)
     {
-        return DDERR_INVALIDPARAMS;
+        return finish(DDERR_INVALIDPARAMS);
     }
     surface->dc_acquired = false;
-    return DD_OK;
+    MarkSurfaceDirty(surface);
+    return finish(DD_OK);
 }
 
 HRESULT WINAPI SurfaceRestore(IDirectDrawSurface4*)
@@ -1281,11 +2160,34 @@ HRESULT WINAPI DeviceSetRenderState(IDirect3DDevice3* self,
                                     D3DRENDERSTATETYPE state,
                                     DWORD value)
 {
-    if (static_cast<unsigned>(state) >= 256)
+    const unsigned state_index = static_cast<unsigned>(state);
+    if (state_index >= 256)
     {
         return DDERR_INVALIDPARAMS;
     }
-    DeviceFromInterface(self)->render_states[static_cast<unsigned>(state)] = value;
+    DeviceFacade* const device = DeviceFromInterface(self);
+    const DWORD previous = device->render_states[state_index];
+    device->render_states[state_index] = value;
+    std::uint8_t& reports = device->render_state_reports[state_index];
+    if (reports < 8 && (reports == 0 || previous != value))
+    {
+        char message[128] = {};
+        std::snprintf(message,
+                      sizeof(message),
+                      "re2dj:hle:render-state:state=%u:value=0x%08x",
+                      state_index,
+                      static_cast<unsigned>(value));
+        OutputDebugStringA(message);
+        char detail[160] = {};
+        std::snprintf(detail,
+                      sizeof(detail),
+                      "RenderState:frame=%llu:state=%u:value=0x%08x",
+                      static_cast<unsigned long long>(device->root->frame_number),
+                      state_index,
+                      static_cast<unsigned>(value));
+        ReportCompositionDiagnostic(device->root, detail);
+        ++reports;
+    }
     return DD_OK;
 }
 
@@ -1406,7 +2308,22 @@ HRESULT WINAPI DeviceSetTextureStageState(IDirect3DDevice3* self,
     {
         return DDERR_INVALIDPARAMS;
     }
-    DeviceFromInterface(self)->texture_stage_states[stage][state_index] = value;
+    DeviceFacade* const device = DeviceFromInterface(self);
+    const DWORD previous = device->texture_stage_states[stage][state_index];
+    device->texture_stage_states[stage][state_index] = value;
+    std::uint8_t& reports = device->texture_stage_state_reports[stage][state_index];
+    if (reports < 8 && (reports == 0 || previous != value))
+    {
+        char message[144] = {};
+        std::snprintf(message,
+                      sizeof(message),
+                      "re2dj:hle:texture-stage-state:stage=%u:state=%u:value=0x%08x",
+                      static_cast<unsigned>(stage),
+                      state_index,
+                      static_cast<unsigned>(value));
+        OutputDebugStringA(message);
+        ++reports;
+    }
     return DD_OK;
 }
 
@@ -1417,34 +2334,70 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
                                    DWORD vertex_count,
                                    DWORD flags)
 {
-    if (primitive != D3DPT_TRIANGLESTRIP || vertex_type != D3DFVF_TLVERTEX ||
-        vertices == nullptr || vertex_count < 3 || flags != 0 ||
+    DeviceFacade* const device = DeviceFromInterface(self);
+    const bool is_triangle_strip = primitive == D3DPT_TRIANGLESTRIP && vertex_count >= 3;
+    const bool is_line_list =
+        primitive == D3DPT_LINELIST && vertex_count >= 2 && vertex_count % 2 == 0;
+    if ((!is_triangle_strip && !is_line_list) || vertex_type != D3DFVF_TLVERTEX ||
+        vertices == nullptr ||
+        !re2dj::graphics::AreLegacyDrawFlagsSupported(flags) ||
         vertex_count > (std::numeric_limits<DWORD>::max)() /
                            re2dj::graphics::kTransformedLitVertexStride)
     {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             vertex_type,
+                             vertex_count,
+                             flags,
+                             DDERR_UNSUPPORTED,
+                             "unsupported-arguments");
         return DDERR_UNSUPPORTED;
     }
     const std::size_t bytes = static_cast<std::size_t>(vertex_count) *
                               re2dj::graphics::kTransformedLitVertexStride;
     if (IsBadReadPtr(vertices, bytes) != FALSE)
     {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             vertex_type,
+                             vertex_count,
+                             flags,
+                             DDERR_INVALIDPARAMS,
+                             "invalid-vertices");
         return DDERR_INVALIDPARAMS;
     }
     re2dj::graphics::LegacyDrawCommand command;
     std::string error;
+    const re2dj::graphics::PrimitiveTopology topology =
+        is_line_list ? re2dj::graphics::PrimitiveTopology::kLineList
+                     : re2dj::graphics::PrimitiveTopology::kTriangleStrip;
     if (!re2dj::graphics::DecodeTransformedLitVertices(
             std::span<const std::byte>(static_cast<const std::byte*>(vertices), bytes),
             vertex_count,
+            topology,
             &command,
             &error))
     {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             vertex_type,
+                             vertex_count,
+                             flags,
+                             DDERR_INVALIDPARAMS,
+                             error.c_str());
         return DDERR_INVALIDPARAMS;
     }
 
-    DeviceFacade* const device = DeviceFromInterface(self);
     RootFacade* const root = device->root;
     if (root->window == nullptr)
     {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             vertex_type,
+                             vertex_count,
+                             flags,
+                             DDERR_NOCOOPERATIVELEVELSET,
+                             "no-window");
         return DDERR_NOCOOPERATIVELEVELSET;
     }
     if (root->render_backend == nullptr)
@@ -1455,13 +2408,20 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         {
             delete backend;
             OutputDebugStringA(kOpenGlFailureMessage);
+            ReportDrawDiagnostic(device,
+                                 primitive,
+                                 vertex_type,
+                                 vertex_count,
+                                 flags,
+                                 DDERR_GENERIC,
+                                 "backend-initialize");
             return DDERR_GENERIC;
         }
         root->render_backend = backend;
     }
 
-    re2dj::platform::windows::Rgb565TextureView texture_view;
-    const re2dj::platform::windows::Rgb565TextureView* texture = nullptr;
+    re2dj::graphics::LegacyTextureView texture_view;
+    const re2dj::graphics::LegacyTextureView* texture = nullptr;
     if (device->texture_stage_zero != nullptr)
     {
         const SurfaceFacade* const surface = SurfaceFromTexture(device->texture_stage_zero);
@@ -1469,21 +2429,53 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         texture_view.width = surface->width;
         texture_view.height = surface->height;
         texture_view.pitch = surface->pitch;
-        texture_view.has_source_color_key = surface->has_source_blt_color_key;
-        texture_view.source_color_key =
+        texture_view.identity = surface->texture_identity;
+        texture_view.revision = surface->texture_revision;
+        texture_view.source_color_key.enabled = surface->has_source_blt_color_key;
+        texture_view.source_color_key.low =
             static_cast<std::uint16_t>(surface->source_blt_color_key.dwColorSpaceLowValue);
+        texture_view.source_color_key.high =
+            static_cast<std::uint16_t>(surface->source_blt_color_key.dwColorSpaceHighValue);
         texture = &texture_view;
     }
-    if (!root->render_backend->Draw(command,
-                                    root->width,
-                                    root->height,
-                                    texture,
-                                    &error))
+    re2dj::graphics::LegacyFixedFunctionState fixed_function_state;
+    const bool state_built = BuildFixedFunctionState(*device, &fixed_function_state, &error);
+    const bool drawn = state_built && root->render_backend->Draw(command,
+                                                                 fixed_function_state,
+                                                                 root->width,
+                                                                 root->height,
+                                                                 texture,
+                                                                 &error);
+    if (!drawn)
     {
-        OutputDebugStringA(kOpenGlFailureMessage);
+        if (!device->draw_failure_reported)
+        {
+            OutputDebugStringA(kOpenGlFailureMessage);
+            char message[256] = {};
+            std::snprintf(message,
+                          sizeof(message),
+                          "re2dj:hle:draw-failure:%s",
+                          error.c_str());
+            OutputDebugStringA(message);
+            device->draw_failure_reported = true;
+        }
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             vertex_type,
+                             vertex_count,
+                             flags,
+                             DDERR_GENERIC,
+                             error.c_str());
         return DDERR_GENERIC;
     }
-    OutputDebugStringA(kDrawPrimitiveMessage);
+    if (!device->draw_success_reported)
+    {
+        OutputDebugStringA(kDrawPrimitiveMessage);
+        device->draw_success_reported = true;
+    }
+    ReportDrawDiagnostic(
+        device, primitive, vertex_type, vertex_count, flags, DD_OK, "success");
+    ReportLateDrawDiagnostic(device, command, flags);
     return DD_OK;
 }
 
@@ -1545,6 +2537,157 @@ HRESULT WINAPI ViewportSetViewport2(IDirect3DViewport3* self, D3DVIEWPORT2* view
     }
     ViewportFromInterface(self)->viewport = *viewport;
     return DD_OK;
+}
+
+HRESULT WINAPI VbQueryInterface(IDirect3DVertexBuffer* self, REFIID iid, void** object)
+{
+    if (object == nullptr)
+    {
+        return E_POINTER;
+    }
+    *object = nullptr;
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic)
+    {
+        return E_FAIL;
+    }
+    if (!IsEqualGUID(iid, IID_IUnknown) && !IsEqualGUID(iid, IID_IDirect3DVertexBuffer))
+    {
+        return E_NOINTERFACE;
+    }
+    *object = self;
+    VbAddRef(self);
+    return S_OK;
+}
+
+ULONG WINAPI VbAddRef(IDirect3DVertexBuffer* self)
+{
+    return static_cast<ULONG>(InterlockedIncrement(&VertexBufferFromInterface(self)->references));
+}
+
+ULONG WINAPI VbRelease(IDirect3DVertexBuffer* self)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    const LONG references = InterlockedDecrement(&facade->references);
+    if (references == 0)
+    {
+        RootFacade* const root = facade->root;
+        facade->magic = 0;
+        delete facade;
+        ReleaseRootReference(root);
+    }
+    return static_cast<ULONG>(references);
+}
+
+HRESULT WINAPI VbLock(IDirect3DVertexBuffer* self, DWORD flags, void** data, DWORD* size)
+{
+    char entry_message[192] = {};
+    std::snprintf(entry_message,
+                  sizeof(entry_message),
+                  "re2dj:hle:IDirect3DVertexBuffer::Lock:entry:self=%p:vtable=%p:data=%p:size=%p:flags=0x%08lx",
+                  static_cast<void*>(self),
+                  self == nullptr ? nullptr : static_cast<void*>(self->lpVtbl),
+                  static_cast<void*>(data),
+                  static_cast<void*>(size),
+                  flags);
+    OutputDebugStringA(entry_message);
+    if (data == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *data = nullptr;
+    if (size != nullptr)
+    {
+        *size = 0;
+    }
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic || facade->buffer == nullptr)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    std::span<std::byte> vertices = facade->buffer->Lock();
+    if (vertices.empty())
+    {
+        return D3DERR_VERTEXBUFFERLOCKED;
+    }
+    char message[128] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:hle:IDirect3DVertexBuffer::Lock:success:bytes=%lu:output=%p:flags=0x%08lx",
+                  static_cast<unsigned long>(vertices.size()),
+                  static_cast<void*>(vertices.data()),
+                  flags);
+    OutputDebugStringA(message);
+    *data = vertices.data();
+    if (size != nullptr)
+    {
+        *size = static_cast<DWORD>(vertices.size());
+    }
+    return DD_OK;
+}
+
+HRESULT WINAPI VbUnlock(IDirect3DVertexBuffer* self)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic || facade->buffer == nullptr)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    if (!facade->buffer->Unlock())
+    {
+        OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Unlock:not-locked");
+        return DDERR_NOTLOCKED;
+    }
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Unlock");
+    return DD_OK;
+}
+
+HRESULT WINAPI VbProcessVertices(IDirect3DVertexBuffer* self,
+                                 DWORD,
+                                 DWORD,
+                                 DWORD,
+                                 IDirect3DVertexBuffer*,
+                                 DWORD,
+                                 IDirect3DDevice3*,
+                                 DWORD)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::ProcessVertices");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI VbGetVertexBufferDesc(IDirect3DVertexBuffer* self, D3DVERTEXBUFFERDESC* descriptor)
+{
+    if (descriptor == nullptr || descriptor->dwSize < sizeof(D3DVERTEXBUFFERDESC))
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic || facade->buffer == nullptr)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    descriptor->dwSize = facade->descriptor.size;
+    descriptor->dwCaps = facade->descriptor.caps;
+    descriptor->dwFVF = facade->descriptor.fvf;
+    descriptor->dwNumVertices = facade->descriptor.vertex_count;
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::GetVertexBufferDesc");
+    return DD_OK;
+}
+
+HRESULT WINAPI VbOptimize(IDirect3DVertexBuffer* self, IDirect3DDevice3*, DWORD)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Optimize");
+    return E_NOTIMPL;
 }
 
 }  // namespace

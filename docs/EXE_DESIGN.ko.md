@@ -47,8 +47,8 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 
 | 항목 | 값 |
 | --- | --- |
-| 그래픽 | **DirectDraw/Direct3D Immediate Mode 계열**. 정적 import는 `DirectDrawCreate`뿐이지만 runtime은 `d3dim.dll`을 적재하고 `QueryInterface(IID_IDirect3D3)`로 Direct3D를 얻는다. 이어 `D3DFDS_HARDWARE`, `bHardware=TRUE`로 `IDirect3D3::FindDevice`를 호출하며 현대 host에서는 `DDERR_NOTFOUND`가 반복됨. 전역 `[0x01eb7cc0]`의 호출 형태는 `IDirect3DDevice3` vtable과 일치함 |
-| 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨 |
+| 그래픽 | **DirectDraw/Direct3D Immediate Mode 계열**. runtime은 `QueryInterface(IID_IDirect3D3)`로 Direct3D를 얻고 XYZ/NORMAL/TEX1 정점 121개를 `CreateVertexBuffer`로 만든 뒤 null-size `Lock`과 stride 32의 11×11 grid fill을 수행한다. 확인된 draw state는 stage-zero texture/diffuse modulate, linear filtering, RGB565 source color key, alpha test와 `ZERO/SRCALPHA`·`ONE/ZERO` blending이다. `%s.bmp` 지연 로딩은 `DDSCAPS_OFFSCREENPLAIN` RGB565 surface를 만들고 GDI 복사 뒤 source-key `BltFast`/`Blt`로 합성한다. 전역 `[0x01eb7cc0]`의 호출 형태는 `IDirect3DDevice3` vtable과 일치한다. |
+| 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨. buffer 생성·Lock/Unlock·Play 뒤 `DuplicateSoundBuffer`를 사용한다. |
 | 입력 | **`GetAsyncKeyState` 하나가 전부. DirectInput 없음** |
 | 설정 | `GetPrivateProfile*` / `WritePrivateProfileStringA` — INI |
 | 레지스트리 | `RegFlushKey` 하나 |

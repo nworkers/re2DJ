@@ -32,8 +32,14 @@ bool IsFinite(const PackedTransformedLitVertex& vertex)
 
 }  // namespace
 
+bool AreLegacyDrawFlagsSupported(std::uint32_t flags)
+{
+    return (flags & ~kLegacyDrawWaitFlag) == 0;
+}
+
 bool DecodeTransformedLitVertices(std::span<const std::byte> source,
                                   std::size_t vertex_count,
+                                  PrimitiveTopology topology,
                                   LegacyDrawCommand* command,
                                   std::string* error)
 {
@@ -42,7 +48,10 @@ bool DecodeTransformedLitVertices(std::span<const std::byte> source,
         return false;
     }
     command->vertices.clear();
-    if (vertex_count < 3 ||
+    const std::size_t minimum_vertex_count =
+        topology == PrimitiveTopology::kLineList ? 2 : 3;
+    if (vertex_count < minimum_vertex_count ||
+        (topology == PrimitiveTopology::kLineList && vertex_count % 2 != 0) ||
         vertex_count > (std::numeric_limits<std::size_t>::max)() /
                            kTransformedLitVertexStride)
     {
@@ -56,7 +65,7 @@ bool DecodeTransformedLitVertices(std::span<const std::byte> source,
         return false;
     }
 
-    command->topology = PrimitiveTopology::kTriangleStrip;
+    command->topology = topology;
     command->vertices.reserve(vertex_count);
     for (std::size_t index = 0; index < vertex_count; ++index)
     {
@@ -64,10 +73,16 @@ bool DecodeTransformedLitVertices(std::span<const std::byte> source,
         std::memcpy(&packed,
                     source.data() + index * kTransformedLitVertexStride,
                     sizeof(packed));
-        if (!IsFinite(packed) || packed.reciprocal_w == 0.0f)
+        if (!IsFinite(packed))
         {
             command->vertices.clear();
             *error = "transformed/lit vertex contains an invalid float";
+            return false;
+        }
+        if (packed.reciprocal_w == 0.0f && topology != PrimitiveTopology::kLineList)
+        {
+            command->vertices.clear();
+            *error = "transformed/lit vertex has zero reciprocal w";
             return false;
         }
         command->vertices.push_back({packed.x,

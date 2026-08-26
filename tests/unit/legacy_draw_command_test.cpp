@@ -31,6 +31,12 @@ static_assert(sizeof(PackedVertex) == re2dj::graphics::kTransformedLitVertexStri
 
 void RunLegacyDrawCommandTests(re2dj::test::Context& context)
 {
+    RE2DJ_CHECK(context, re2dj::graphics::AreLegacyDrawFlagsSupported(0));
+    RE2DJ_CHECK(context,
+                re2dj::graphics::AreLegacyDrawFlagsSupported(
+                    re2dj::graphics::kLegacyDrawWaitFlag));
+    RE2DJ_CHECK(context, !re2dj::graphics::AreLegacyDrawFlagsSupported(0x00000002));
+
     const std::array<PackedVertex, 4> input = {{
         {0.0f, 480.0f, 0.99f, 0.5f, 0xffffffff, 0, 0.0f, 1.0f},
         {0.0f, 0.0f, 0.99f, 0.5f, 0xffffffff, 0, 0.0f, 0.0f},
@@ -43,7 +49,11 @@ void RunLegacyDrawCommandTests(re2dj::test::Context& context)
     std::string error;
     RE2DJ_CHECK(context,
                 re2dj::graphics::DecodeTransformedLitVertices(
-                    bytes, input.size(), &command, &error));
+                    bytes,
+                    input.size(),
+                    re2dj::graphics::PrimitiveTopology::kTriangleStrip,
+                    &command,
+                    &error));
     RE2DJ_CHECK_EQ(context, command.vertices.size(), std::size_t{4});
     RE2DJ_CHECK_EQ(context, command.vertices[2].x, 640.0f);
     RE2DJ_CHECK_EQ(context, command.vertices[0].diffuse_argb, std::uint32_t{0xffffffff});
@@ -55,16 +65,60 @@ void RunLegacyDrawCommandTests(re2dj::test::Context& context)
                 !re2dj::graphics::DecodeTransformedLitVertices(
                     std::span<const std::byte>(bytes.data(), bytes.size() - 1),
                     input.size(),
+                    re2dj::graphics::PrimitiveTopology::kTriangleStrip,
                     &command,
                     &error));
     RE2DJ_CHECK(context,
                 !re2dj::graphics::DecodeTransformedLitVertices(
-                    bytes, 2, &command, &error));
+                    bytes,
+                    2,
+                    re2dj::graphics::PrimitiveTopology::kTriangleStrip,
+                    &command,
+                    &error));
+    RE2DJ_CHECK(context,
+                re2dj::graphics::DecodeTransformedLitVertices(
+                    bytes,
+                    2,
+                    re2dj::graphics::PrimitiveTopology::kLineList,
+                    &command,
+                    &error));
+    RE2DJ_CHECK_EQ(context,
+                   command.topology,
+                   re2dj::graphics::PrimitiveTopology::kLineList);
+    RE2DJ_CHECK(context,
+                !re2dj::graphics::DecodeTransformedLitVertices(
+                    bytes,
+                    3,
+                    re2dj::graphics::PrimitiveTopology::kLineList,
+                    &command,
+                    &error));
+
+    auto zero_reciprocal_w = input;
+    zero_reciprocal_w[0].reciprocal_w = 0.0f;
+    std::memcpy(bytes.data(), zero_reciprocal_w.data(), bytes.size());
+    RE2DJ_CHECK(context,
+                re2dj::graphics::DecodeTransformedLitVertices(
+                    bytes,
+                    2,
+                    re2dj::graphics::PrimitiveTopology::kLineList,
+                    &command,
+                    &error));
+    RE2DJ_CHECK(context,
+                !re2dj::graphics::DecodeTransformedLitVertices(
+                    bytes,
+                    input.size(),
+                    re2dj::graphics::PrimitiveTopology::kTriangleStrip,
+                    &command,
+                    &error));
 
     auto invalid = input;
     invalid[1].u = (std::numeric_limits<float>::quiet_NaN)();
     std::memcpy(bytes.data(), invalid.data(), bytes.size());
     RE2DJ_CHECK(context,
                 !re2dj::graphics::DecodeTransformedLitVertices(
-                    bytes, invalid.size(), &command, &error));
+                    bytes,
+                    invalid.size(),
+                    re2dj::graphics::PrimitiveTopology::kTriangleStrip,
+                    &command,
+                    &error));
 }

@@ -76,3 +76,6 @@ run.txt
 *.user
 *.suo
 compile_commands.json
+
+# Local capture and scratch work, never committed.
+/WIP/

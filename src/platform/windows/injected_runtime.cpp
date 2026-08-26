@@ -7,12 +7,14 @@
 #include <intrin.h>
 
 #include "re2dj/device/lptdi_challenge_response.h"
+#include "re2dj/input/legacy_io_port_bus.h"
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_hle_windows_directory[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_hdd_root[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_overlay_root[MAX_PATH] = {};
+extern "C" __declspec(dllexport) char g_re2dj_vfs_trace_path[MAX_PATH] = {};
 // Device-emulation policy: 0 keeps the natural open failure, 1 lets the
 // emulated \\.\ devices open successfully.
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_mock = 0;
@@ -25,6 +27,8 @@ extern "C" __declspec(dllexport) unsigned char g_re2dj_device_response_410[8] = 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_response_414_size = 0;
 extern "C" __declspec(dllexport) unsigned char g_re2dj_device_response_414[104] = {};
 extern "C" __declspec(dllexport) unsigned char g_re2dj_device_target_state[8] = {};
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_io_ports = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_image_base = 0;
 
 namespace
 {
@@ -37,6 +41,146 @@ constexpr char kFileApiMessage[] = "re2dj:vfs:file-api";
 constexpr char kDeviceIoControlMessage[] = "re2dj:device:DeviceIoControl";
 constexpr char kDisplayModeMessage[] = "re2dj:hle:ChangeDisplaySettingsExA";
 constexpr char kExitProcessMessage[] = "re2dj:probe:ExitProcess";
+
+re2dj::input::LegacyIoPortBus g_legacy_io_port_bus;
+volatile LONG g_vfs_image_trace_count = 0;
+volatile LONG g_vfs_script_trace_count = 0;
+
+// Asset classes the bounded open diagnostic reports on. Images answer which
+// bitmaps a scene resolved, scripts answer whether the scene description that
+// names those bitmaps was reached at all.
+enum class VfsAssetKind
+{
+    kNone,
+    kImage,
+    kScript,
+};
+
+bool HasExtensionIgnoreCase(const char* path, const char* extension)
+{
+    if (path == nullptr)
+    {
+        return false;
+    }
+    const std::size_t length = std::strlen(path);
+    const std::size_t extension_length = std::strlen(extension);
+    return length >= extension_length &&
+           _stricmp(path + length - extension_length, extension) == 0;
+}
+
+VfsAssetKind ClassifyVfsAsset(const char* path)
+{
+    if (HasExtensionIgnoreCase(path, ".bmp"))
+    {
+        return VfsAssetKind::kImage;
+    }
+    if (HasExtensionIgnoreCase(path, ".str"))
+    {
+        return VfsAssetKind::kScript;
+    }
+    return VfsAssetKind::kNone;
+}
+
+// Separate budgets so the attract loop's bitmap sweep cannot exhaust the log
+// before the rarer script requests appear in it.
+bool ClaimVfsTraceBudget(VfsAssetKind kind)
+{
+    constexpr LONG kMaximumImageDiagnostics = 1024;
+    constexpr LONG kMaximumScriptDiagnostics = 256;
+    switch (kind)
+    {
+    case VfsAssetKind::kImage:
+        return InterlockedIncrement(&g_vfs_image_trace_count) <= kMaximumImageDiagnostics;
+    case VfsAssetKind::kScript:
+        return InterlockedIncrement(&g_vfs_script_trace_count) <= kMaximumScriptDiagnostics;
+    case VfsAssetKind::kNone:
+        break;
+    }
+    return false;
+}
+
+void ReportVfsAssetOpen(const char* api,
+                        const char* requested,
+                        const char* mapped,
+                        HANDLE result,
+                        DWORD error)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' ||
+        !ClaimVfsTraceBudget(ClassifyVfsAsset(requested)))
+    {
+        return;
+    }
+    char message[900] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:asset-open:api=%s:request=%s:mapped=%s:success=%u:error=%lu\r\n",
+                  api,
+                  requested,
+                  mapped == nullptr ? "" : mapped,
+                  result != INVALID_HANDLE_VALUE ? 1U : 0U,
+                  static_cast<unsigned long>(error));
+    HANDLE trace = CreateFileA(g_re2dj_vfs_trace_path,
+                               FILE_APPEND_DATA,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               nullptr,
+                               OPEN_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL,
+                               nullptr);
+    if (trace == INVALID_HANDLE_VALUE)
+    {
+        return;
+    }
+    DWORD written = 0;
+    WriteFile(trace,
+              message,
+              static_cast<DWORD>(std::strlen(message)),
+              &written,
+              nullptr);
+    CloseHandle(trace);
+}
+
+LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
+{
+    if (g_re2dj_hle_io_ports == 0 || g_re2dj_io_image_base == 0 ||
+        exception == nullptr || exception->ExceptionRecord == nullptr ||
+        exception->ContextRecord == nullptr ||
+        exception->ExceptionRecord->ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    constexpr DWORD kInByteRva = 0x00038987;
+    constexpr DWORD kOutByteRva = 0x000389ab;
+    const DWORD address = static_cast<DWORD>(
+        reinterpret_cast<std::uintptr_t>(exception->ExceptionRecord->ExceptionAddress));
+    const bool is_read = address == g_re2dj_io_image_base + kInByteRva;
+    const bool is_write = address == g_re2dj_io_image_base + kOutByteRva;
+    if (!is_read && !is_write)
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    const unsigned char opcode = *reinterpret_cast<const unsigned char*>(address);
+    if (opcode != (is_read ? 0xec : 0xee))
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    const std::uint16_t port = static_cast<std::uint16_t>(exception->ContextRecord->Edx);
+    std::uint8_t value = static_cast<std::uint8_t>(exception->ContextRecord->Eax);
+    const bool handled = is_read ? g_legacy_io_port_bus.ReadByte(port, &value)
+                                 : g_legacy_io_port_bus.WriteByte(port, value);
+    if (!handled)
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (is_read)
+    {
+        exception->ContextRecord->Eax =
+            (exception->ContextRecord->Eax & 0xffffff00u) | value;
+    }
+    exception->ContextRecord->Eip += 1;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
 
 bool HasPrefixIgnoreCase(const char* text, const char* prefix)
 {
@@ -228,6 +372,38 @@ extern "C" __declspec(dllexport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
     return ChangeDisplaySettingsExA(device_name, dev_mode, window, flags, reserved);
 }
 
+extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsLoadImageA(
+    HINSTANCE instance,
+    LPCSTR name,
+    UINT type,
+    int desired_width,
+    int desired_height,
+    UINT flags)
+{
+    const bool is_file_bitmap = !IS_INTRESOURCE(name) && name != nullptr &&
+                                type == IMAGE_BITMAP && (flags & LR_LOADFROMFILE) != 0;
+    if (!is_file_bitmap)
+    {
+        return LoadImageA(instance, name, type, desired_width, desired_height, flags);
+    }
+    char path[MAX_PATH] = {};
+    const char* load_name = name;
+    if (MapVfsPath(name, false, path, nullptr))
+    {
+        load_name = path;
+    }
+    const HANDLE result =
+        LoadImageA(instance, load_name, type, desired_width, desired_height, flags);
+    const DWORD error = result == nullptr ? GetLastError() : ERROR_SUCCESS;
+    ReportVfsAssetOpen("LoadImageA",
+                       name,
+                       load_name,
+                       result == nullptr ? INVALID_HANDLE_VALUE : result,
+                       error);
+    SetLastError(error);
+    return result;
+}
+
 extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     LPCSTR name,
     DWORD access,
@@ -253,6 +429,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     const bool write = (access & (GENERIC_WRITE | FILE_APPEND_DATA | DELETE)) != 0;
     if (!MapVfsPath(name, write, path, source))
     {
+        ReportVfsAssetOpen("CreateFileA", name, "", INVALID_HANDLE_VALUE, ERROR_INVALID_NAME);
         SetLastError(ERROR_INVALID_NAME);
         return INVALID_HANDLE_VALUE;
     }
@@ -288,7 +465,22 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
             return INVALID_HANDLE_VALUE;
         }
     }
-    return CreateFileA(path, access, share, security, disposition, flags, template_handle);
+    // Windows 9x did not enforce the FILE_FLAG_NO_BUFFERING alignment rules, so
+    // the original opens scene scripts with that flag and then reads a whole
+    // non-sector-multiple file into an unaligned buffer. The NT kernel enforces
+    // them and fails that read, so the flag is dropped here. Only the caching
+    // policy changes; the bytes the guest receives are the same.
+    const HANDLE result = CreateFileA(path,
+                                      access,
+                                      share,
+                                      security,
+                                      disposition,
+                                      flags & ~static_cast<DWORD>(FILE_FLAG_NO_BUFFERING),
+                                      template_handle);
+    const DWORD error = result == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    ReportVfsAssetOpen("CreateFileA", name, path, result, error);
+    SetLastError(error);
+    return result;
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
@@ -569,7 +761,15 @@ extern "C" __declspec(dllexport) void __declspec(naked) Re2djHleGetWindowsDirect
     }
 }
 
-BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID)
+BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
 {
+    if (reason == DLL_PROCESS_ATTACH)
+    {
+        DisableThreadLibraryCalls(module);
+        if (AddVectoredExceptionHandler(1, HandleLegacyIoPortException) == nullptr)
+        {
+            return FALSE;
+        }
+    }
     return TRUE;
 }

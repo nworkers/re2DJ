@@ -8,19 +8,10 @@
 #include <string>
 
 #include "re2dj/graphics/legacy_draw_command.h"
+#include "re2dj/graphics/legacy_texture.h"
 
 namespace re2dj::platform::windows
 {
-
-struct Rgb565TextureView
-{
-    const void* pixels = nullptr;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    std::uint32_t pitch = 0;
-    bool has_source_color_key = false;
-    std::uint16_t source_color_key = 0;
-};
 
 class Direct3d3OpenGlBackend
 {
@@ -33,10 +24,12 @@ public:
 
     bool Initialize(HWND window, std::string* error);
     bool Draw(const graphics::LegacyDrawCommand& command,
+              const graphics::LegacyFixedFunctionState& state,
               std::uint32_t logical_width,
               std::uint32_t logical_height,
-              const Rgb565TextureView* texture,
+              const graphics::LegacyTextureView* texture,
               std::string* error);
+    void DiscardTexture(std::uint64_t identity);
     bool Present(std::string* error);
 
 private:

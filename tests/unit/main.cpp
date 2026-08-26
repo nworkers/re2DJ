@@ -18,6 +18,9 @@ int main()
     RunLptdiResponseProfileTests(context);
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);
+    RunLegacyTextureTests(context);
+    RunLegacyVertexBufferTests(context);
+    RunLegacyAudioBufferTests(context);
 
     std::printf("checks: %d, failures: %d\n", context.checks, context.failures);
     return context.failures == 0 ? 0 : 1;

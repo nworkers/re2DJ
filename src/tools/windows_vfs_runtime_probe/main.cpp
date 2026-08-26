@@ -1,9 +1,11 @@
 #define NOMINMAX
 #define CINTERFACE
 #define DIRECT3D_VERSION 0x0600
+#define DIRECTSOUND_VERSION 0x0300
 #include <windows.h>
 #include <ddraw.h>
 #include <d3d.h>
+#include <dsound.h>
 
 #include <cstdio>
 #include <cstring>
@@ -24,6 +26,10 @@ extern "C" __declspec(dllimport) unsigned char g_re2dj_device_target_state[8];
 extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsCreateFileA(
     LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
     DWORD disposition, DWORD flags, HANDLE template_handle);
+extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsLoadImageA(
+    HINSTANCE instance, LPCSTR name, UINT type, int desired_width,
+    int desired_height, UINT flags);
+extern "C" __declspec(dllimport) char g_re2dj_vfs_trace_path[MAX_PATH];
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsReadFile(
     HANDLE handle, LPVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped);
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsWriteFile(
@@ -40,6 +46,8 @@ extern "C" __declspec(dllimport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
     LPCSTR device_name, DEVMODEA* dev_mode, HWND window, DWORD flags, LPVOID reserved);
 extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectDrawCreate(
     GUID* device_guid, LPDIRECTDRAW* direct_draw, IUnknown* outer);
+extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
+    GUID* device_guid, LPDIRECTSOUND* direct_sound, IUnknown* outer);
 
 namespace
 {
@@ -97,9 +105,37 @@ int main()
         std::ofstream original(hdd / "DATA" / "ORIGINAL.TXT", std::ios::binary);
         original << "original";
     }
+    {
+        BITMAPFILEHEADER file_header = {};
+        file_header.bfType = 0x4d42;
+        file_header.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+        file_header.bfSize = file_header.bfOffBits + 4;
+        BITMAPINFOHEADER info_header = {};
+        info_header.biSize = sizeof(BITMAPINFOHEADER);
+        info_header.biWidth = 1;
+        info_header.biHeight = 1;
+        info_header.biPlanes = 1;
+        info_header.biBitCount = 24;
+        info_header.biCompression = BI_RGB;
+        info_header.biSizeImage = 4;
+        const unsigned char pixel[4] = {0x33, 0x22, 0x11, 0x00};
+        std::filesystem::create_directories(hdd / "System" / "CompanyLogo");
+        std::ofstream bitmap(hdd / "System" / "CompanyLogo" / "LOGO.BMP",
+                             std::ios::binary);
+        bitmap.write(reinterpret_cast<const char*>(&file_header), sizeof(file_header));
+        bitmap.write(reinterpret_cast<const char*>(&info_header), sizeof(info_header));
+        bitmap.write(reinterpret_cast<const char*>(pixel), sizeof(pixel));
+    }
+    {
+        std::ofstream script(hdd / "System" / "CompanyLogo" / "logo.str", std::ios::binary);
+        script << "logostr";
+    }
+    const std::filesystem::path trace = root / "vfs.log";
     if (!Check(strcpy_s(g_re2dj_vfs_hdd_root, hdd.string().c_str()) == 0, "cannot configure HDD root") ||
         !Check(strcpy_s(g_re2dj_vfs_overlay_root, overlay.string().c_str()) == 0,
-               "cannot configure overlay root"))
+               "cannot configure overlay root") ||
+        !Check(strcpy_s(g_re2dj_vfs_trace_path, trace.string().c_str()) == 0,
+               "cannot configure VFS trace path"))
     {
         std::filesystem::remove_all(root);
         return 1;
@@ -119,6 +155,96 @@ int main()
                         "cannot read original through VFS") &&
                   Check(std::string(contents, read) == "original", "VFS read returned wrong original data") &&
                   Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close original VFS handle");
+
+    HBITMAP bitmap = static_cast<HBITMAP>(Re2djVfsLoadImageA(
+        nullptr,
+        "System\\CompanyLogo\\LOGO.BMP",
+        IMAGE_BITMAP,
+        0,
+        0,
+        LR_LOADFROMFILE));
+    BITMAP bitmap_info = {};
+    passed = passed &&
+             Check(bitmap != nullptr, "cannot load relative bitmap through VFS") &&
+             Check(GetObjectA(bitmap, sizeof(bitmap_info), &bitmap_info) == sizeof(bitmap_info),
+                   "cannot inspect VFS-loaded bitmap") &&
+             Check(bitmap_info.bmWidth == 1 && bitmap_info.bmHeight == 1,
+                   "VFS-loaded bitmap has wrong dimensions");
+    if (bitmap != nullptr)
+    {
+        DeleteObject(bitmap);
+    }
+
+    HANDLE script = Re2djVfsCreateFileA("System\\CompanyLogo\\logo.str",
+                                        GENERIC_READ,
+                                        FILE_SHARE_READ,
+                                        nullptr,
+                                        OPEN_EXISTING,
+                                        FILE_ATTRIBUTE_NORMAL,
+                                        nullptr);
+    char script_contents[16] = {};
+    DWORD script_read = 0;
+    passed = passed &&
+             Check(script != INVALID_HANDLE_VALUE, "cannot open relative script through VFS") &&
+             Check(Re2djVfsReadFile(script, script_contents, sizeof(script_contents), &script_read,
+                                    nullptr) != FALSE,
+                   "cannot read script through VFS") &&
+             Check(std::string(script_contents, script_read) == "logostr",
+                   "VFS read returned wrong script data") &&
+             Check(Re2djVfsCloseHandle(script) != FALSE, "cannot close script VFS handle");
+
+    // The original opens scene scripts with FILE_FLAG_NO_BUFFERING and then
+    // reads the whole file, whose size is not a sector multiple. The VFS has to
+    // drop that flag or the NT kernel rejects the read.
+    HANDLE unbuffered = Re2djVfsCreateFileA("System\\CompanyLogo\\logo.str",
+                                            GENERIC_READ,
+                                            0,
+                                            nullptr,
+                                            OPEN_EXISTING,
+                                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING,
+                                            nullptr);
+    char unbuffered_contents[16] = {};
+    DWORD unbuffered_read = 0;
+    passed = passed &&
+             Check(unbuffered != INVALID_HANDLE_VALUE,
+                   "cannot open script with FILE_FLAG_NO_BUFFERING through VFS") &&
+             Check(Re2djVfsReadFile(unbuffered, unbuffered_contents, sizeof(unbuffered_contents),
+                                    &unbuffered_read, nullptr) != FALSE,
+                   "unbuffered script read failed through VFS") &&
+             Check(std::string(unbuffered_contents, unbuffered_read) == "logostr",
+                   "unbuffered script read returned wrong data") &&
+             Check(Re2djVfsCloseHandle(unbuffered) != FALSE,
+                   "cannot close unbuffered script VFS handle");
+
+    // A rooted guest path has no mapping, and the bounded trace this request
+    // also produces must not overwrite the error the guest reads back.
+    SetLastError(ERROR_SUCCESS);
+    const HANDLE rejected = Re2djVfsCreateFileA("\\System\\CompanyLogo\\logo.str",
+                                                GENERIC_READ,
+                                                FILE_SHARE_READ,
+                                                nullptr,
+                                                OPEN_EXISTING,
+                                                FILE_ATTRIBUTE_NORMAL,
+                                                nullptr);
+    const DWORD rejected_error = GetLastError();
+    passed = passed &&
+             Check(rejected == INVALID_HANDLE_VALUE, "unmapped script path was not rejected") &&
+             Check(rejected_error == ERROR_INVALID_NAME,
+                   "rejected script path reported the wrong Win32 error");
+
+    std::string trace_contents;
+    {
+        std::ifstream trace_file(trace, std::ios::binary);
+        trace_contents.assign(std::istreambuf_iterator<char>(trace_file),
+                              std::istreambuf_iterator<char>());
+    }
+    passed = passed &&
+             Check(trace_contents.find("api=CreateFileA") != std::string::npos,
+                   "VFS trace is missing a CreateFileA marker") &&
+             Check(trace_contents.find("api=LoadImageA") != std::string::npos,
+                   "VFS trace is missing a LoadImageA marker") &&
+             Check(trace_contents.find("logo.str") != std::string::npos,
+                   "VFS trace is missing a script marker");
 
     DEVMODEA guest_mode = {};
     guest_mode.dmSize = sizeof(guest_mode);
@@ -295,6 +421,48 @@ int main()
                            "current viewport setup failed") &&
                      Check(IDirect3DDevice3_SetTexture(device, 0, nullptr) == DD_OK,
                            "null texture reset failed");
+        }
+
+        IDirect3DVertexBuffer* vertex_buffer = nullptr;
+        D3DVERTEXBUFFERDESC vertex_descriptor = {};
+        vertex_descriptor.dwSize = sizeof(vertex_descriptor);
+        vertex_descriptor.dwCaps = D3DVBCAPS_SYSTEMMEMORY;
+        vertex_descriptor.dwFVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1;
+        vertex_descriptor.dwNumVertices = 4;
+        passed = passed &&
+                 Check(IDirect3D3_CreateVertexBuffer(direct3d,
+                                                     &vertex_descriptor,
+                                                     &vertex_buffer,
+                                                     0,
+                                                     nullptr) == DD_OK &&
+                           vertex_buffer != nullptr,
+                       "logical Direct3D3 vertex buffer creation failed");
+        if (vertex_buffer != nullptr)
+        {
+            void* vertices = nullptr;
+            passed = passed &&
+                     Check(IDirect3DVertexBuffer_Lock(vertex_buffer,
+                                                      0,
+                                                      &vertices,
+                                                      nullptr) == DD_OK &&
+                               vertices != nullptr,
+                           "vertex buffer nullable-size lock failed");
+            if (vertices != nullptr)
+            {
+                std::memset(vertices, 0, 4 * 32);
+            }
+            passed = passed &&
+                     Check(IDirect3DVertexBuffer_Unlock(vertex_buffer) == DD_OK,
+                           "vertex buffer unlock failed");
+            D3DVERTEXBUFFERDESC stored_descriptor = {};
+            stored_descriptor.dwSize = sizeof(stored_descriptor);
+            passed = passed &&
+                     Check(IDirect3DVertexBuffer_GetVertexBufferDesc(vertex_buffer,
+                                                                     &stored_descriptor) == DD_OK &&
+                               stored_descriptor.dwFVF == vertex_descriptor.dwFVF &&
+                               stored_descriptor.dwNumVertices == vertex_descriptor.dwNumVertices,
+                           "vertex buffer descriptor query failed");
+            IDirect3DVertexBuffer_Release(vertex_buffer);
         }
     }
 
@@ -545,6 +713,68 @@ int main()
     }
     passed = passed &&
              Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close device mock handle");
+
+    LPDIRECTSOUND direct_sound = nullptr;
+    passed = passed && Check(Re2djHleDirectSoundCreate(nullptr, &direct_sound, nullptr) == DS_OK,
+                             "DirectSound facade creation failed") &&
+             Check(IDirectSound_SetCooperativeLevel(direct_sound, GetDesktopWindow(), DSSCL_NORMAL) == DS_OK,
+                   "DirectSound cooperative level failed");
+    WAVEFORMATEX wave = {WAVE_FORMAT_PCM, 2, 44100, 176400, 4, 16, 0};
+    DSBUFFERDESC sound_desc = {};
+    sound_desc.dwSize = sizeof(DSBUFFERDESC);
+    sound_desc.dwFlags = DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN;
+    sound_desc.dwBufferBytes = 16;
+    sound_desc.lpwfxFormat = &wave;
+    LPDIRECTSOUNDBUFFER sound_buffer = nullptr;
+    passed = passed && Check(IDirectSound_CreateSoundBuffer(direct_sound, &sound_desc, &sound_buffer, nullptr) == DS_OK,
+                             "DirectSound secondary buffer creation failed");
+    void* first = nullptr;
+    DWORD first_bytes = 0;
+    void* second = nullptr;
+    DWORD second_bytes = 0;
+    passed = passed && Check(IDirectSoundBuffer_Lock(sound_buffer, 0, 0, &first, &first_bytes,
+                                                     &second, &second_bytes, DSBLOCK_ENTIREBUFFER) == DS_OK,
+                             "DirectSound buffer lock failed");
+    if (first != nullptr) std::memset(first, 0, first_bytes);
+    if (second != nullptr) std::memset(second, 0, second_bytes);
+    passed = passed && Check(IDirectSoundBuffer_Unlock(sound_buffer, first, first_bytes, second, second_bytes) == DS_OK,
+                             "DirectSound buffer unlock failed") &&
+             Check(IDirectSoundBuffer_SetCurrentPosition(sound_buffer, 0) == DS_OK,
+                   "DirectSound buffer position failed") &&
+             Check(IDirectSoundBuffer_Play(sound_buffer, 0, 0, 0) == DS_OK,
+                   "DirectSound buffer play failed") &&
+             Check(IDirectSoundBuffer_Stop(sound_buffer) == DS_OK,
+                   "DirectSound buffer stop failed");
+    LPDIRECTSOUNDBUFFER duplicate_buffer = nullptr;
+    passed = passed &&
+             Check(IDirectSoundBuffer_SetVolume(sound_buffer, -1200) == DS_OK,
+                   "DirectSound source volume setup failed") &&
+             Check(IDirectSound_DuplicateSoundBuffer(direct_sound,
+                                                      sound_buffer,
+                                                      &duplicate_buffer) == DS_OK &&
+                       duplicate_buffer != nullptr,
+                   "DirectSound buffer duplication failed");
+    if (duplicate_buffer != nullptr)
+    {
+        LONG source_volume = 0;
+        LONG duplicate_volume = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_GetVolume(duplicate_buffer, &duplicate_volume) == DS_OK &&
+                           duplicate_volume == -1200,
+                       "DirectSound duplicate did not inherit controls") &&
+                 Check(IDirectSoundBuffer_SetVolume(duplicate_buffer, -2400) == DS_OK,
+                       "DirectSound duplicate volume update failed") &&
+                 Check(IDirectSoundBuffer_GetVolume(sound_buffer, &source_volume) == DS_OK &&
+                           source_volume == -1200,
+                       "DirectSound duplicate changed source controls") &&
+                 Check(IDirectSoundBuffer_Play(duplicate_buffer, 0, 0, 0) == DS_OK,
+                       "DirectSound duplicate play failed") &&
+                 Check(IDirectSoundBuffer_Stop(duplicate_buffer) == DS_OK,
+                       "DirectSound duplicate stop failed");
+        IDirectSoundBuffer_Release(duplicate_buffer);
+    }
+    if (sound_buffer != nullptr) IDirectSoundBuffer_Release(sound_buffer);
+    if (direct_sound != nullptr) IDirectSound_Release(direct_sound);
 
     std::filesystem::remove_all(root);
     return passed ? 0 : 1;

@@ -116,7 +116,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-io-ports|--d3d-init-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-directsound|--hle-io-ports|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -1016,7 +1016,15 @@ using ApiWatchMap = std::map<std::uintptr_t, ApiWatchPoint>;
 
 struct GuestReturnWatchPoint
 {
+    enum class Kind
+    {
+        kD3dInit,
+        kKsndLoad,
+    };
+
     const char* name = nullptr;
+    Kind kind = Kind::kD3dInit;
+    bool nonzero_is_success = false;
     std::uint8_t original_byte = 0;
 };
 
@@ -1048,6 +1056,40 @@ bool InstallD3dInitReturnBreakpoints(HANDLE process,
         }
         watches->emplace(address, watch);
         RecordDiagnostic("{\"event\":\"d3d_init_watch\",\"stage\":\"%s\",\"address\":\"0x%08x\",\"status\":\"armed\"}",
+                         stage.name,
+                         static_cast<unsigned>(address));
+    }
+    return true;
+}
+
+bool InstallKsndLoadReturnBreakpoints(HANDLE process,
+                                      std::uintptr_t image_base,
+                                      GuestReturnWatchMap* watches,
+                                      std::string* error)
+{
+    struct Stage
+    {
+        std::uint32_t return_rva;
+        const char* name;
+        bool nonzero_is_success;
+    };
+    constexpr Stage kStages[] = {{0x0002483d, "wave_parse", true},
+                                 {0x000248fe, "create_sound_buffer", false},
+                                 {0x00024963, "buffer_lock", false},
+                                 {0x000249a0, "buffer_unlock", false}};
+    for (const Stage& stage : kStages)
+    {
+        GuestReturnWatchPoint watch;
+        watch.name = stage.name;
+        watch.kind = GuestReturnWatchPoint::Kind::kKsndLoad;
+        watch.nonzero_is_success = stage.nonzero_is_success;
+        const std::uintptr_t address = image_base + stage.return_rva;
+        if (!SetSoftwareEntryBreakpoint(process, address, &watch.original_byte, error))
+        {
+            return false;
+        }
+        watches->emplace(address, watch);
+        RecordDiagnostic("{\"event\":\"ksnd_load_watch\",\"stage\":\"%s\",\"address\":\"0x%08x\",\"status\":\"armed\"}",
                          stage.name,
                          static_cast<unsigned>(address));
     }
@@ -1917,6 +1959,7 @@ IoPortTrapResult HandleLegacyIoPortTrap(
     const EXCEPTION_RECORD& exception,
     std::uintptr_t image_base,
     re2dj::input::LegacyIoPortBus* bus,
+    bool trace,
     std::string* error)
 {
     if (bus == nullptr || exception.ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
@@ -1987,12 +2030,15 @@ IoPortTrapResult HandleLegacyIoPortTrap(
     }
     CloseHandle(thread);
 
-    RecordDiagnostic("{\"event\":\"io_port_%s\",\"thread\":%u,\"address\":\"0x%08x\",\"port\":\"0x%03x\",\"width\":1,\"value\":\"0x%02x\"}",
-                     is_read ? "read" : "write",
-                     static_cast<unsigned>(thread_id),
-                     static_cast<unsigned>(address),
-                     static_cast<unsigned>(port),
-                     static_cast<unsigned>(value));
+    if (trace)
+    {
+        RecordDiagnostic("{\"event\":\"io_port_%s\",\"thread\":%u,\"address\":\"0x%08x\",\"port\":\"0x%03x\",\"width\":1,\"value\":\"0x%02x\"}",
+                         is_read ? "read" : "write",
+                         static_cast<unsigned>(thread_id),
+                         static_cast<unsigned>(address),
+                         static_cast<unsigned>(port),
+                         static_cast<unsigned>(value));
+    }
     return IoPortTrapResult::kHandled;
 }
 
@@ -2008,8 +2054,8 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                   re2dj::input::LegacyIoPortBus* io_port_bus,
                                   std::string* error)
 {
-    (void)trace;
     std::map<DWORD, std::uintptr_t> pending_api_steps;
+    std::map<DWORD, std::uintptr_t> pending_guest_return_steps;
     std::map<DWORD, PendingDeviceIoControl> pending_device_io_controls;
     std::map<DWORD, PostDeviceIoControlTrace> post_device_io_control_traces;
     std::set<std::uintptr_t> dynamic_module_bases;
@@ -2100,7 +2146,14 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             *error = "cannot wait for ExitProcess breakpoint";
             return false;
         }
-        TraceDebugEvent(event);
+        const bool suppress_io_event =
+            !trace && io_port_bus != nullptr &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_PRIV_INSTRUCTION;
+        if (!suppress_io_event)
+        {
+            TraceDebugEvent(event);
+        }
         std::string debug_message;
         RecordAnsiOutputDebugString(process, event, &debug_message);
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT)
@@ -2111,6 +2164,7 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 event.u.Exception.ExceptionRecord,
                 image_base,
                 io_port_bus,
+                trace,
                 error);
             if (io_result == IoPortTrapResult::kError)
             {
@@ -2137,6 +2191,38 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                     event.u.Exception.ExceptionRecord.ExceptionAddress);
             if (exception_code == EXCEPTION_SINGLE_STEP)
             {
+                const auto pending_guest = pending_guest_return_steps.find(event.dwThreadId);
+                if (pending_guest != pending_guest_return_steps.end())
+                {
+                    bool rearmed = false;
+                    const auto watch = guest_return_watches->find(pending_guest->second);
+                    if (watch != guest_return_watches->end())
+                    {
+                        const std::uint8_t breakpoint = 0xcc;
+                        SIZE_T written = 0;
+                        rearmed = WriteProcessMemory(
+                                      process,
+                                      reinterpret_cast<void*>(pending_guest->second),
+                                      &breakpoint,
+                                      sizeof(breakpoint),
+                                      &written) != FALSE &&
+                                  written == sizeof(breakpoint) &&
+                                  FlushInstructionCache(
+                                      process,
+                                      reinterpret_cast<const void*>(pending_guest->second),
+                                      sizeof(breakpoint)) != FALSE;
+                    }
+                    pending_guest_return_steps.erase(pending_guest);
+                    if (!rearmed ||
+                        ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        *error = "cannot rearm guest return breakpoint";
+                        return false;
+                    }
+                    continue;
+                }
                 const auto pending = pending_api_steps.find(event.dwThreadId);
                 if (pending != pending_api_steps.end())
                 {
@@ -2456,44 +2542,100 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                                event.dwThreadId);
                     CONTEXT context = {};
                     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
-                    constexpr std::uint32_t kObjectRvas[] = {0x01ab7cc0,
-                                                              0x01ab7cc4,
-                                                              0x01ab7ce0,
-                                                              0x01ab7d00,
-                                                              0x01ab7d04,
-                                                              0x01ab7d08,
-                                                              0x01ab7d24,
-                                                              0x01ab7d48};
-                    std::uint32_t objects[std::size(kObjectRvas)] = {};
                     bool captured = thread != nullptr &&
                                     GetThreadContext(thread, &context) != FALSE;
-                    for (std::size_t index = 0;
-                         captured && index < std::size(kObjectRvas);
-                         ++index)
+                    if (captured && guest_return->second.kind ==
+                                        GuestReturnWatchPoint::Kind::kD3dInit)
                     {
-                        captured = ReadRemoteU32(
-                            process, image_base + kObjectRvas[index], &objects[index]);
+                        constexpr std::uint32_t kObjectRvas[] = {0x01ab7cc0,
+                                                                  0x01ab7cc4,
+                                                                  0x01ab7ce0,
+                                                                  0x01ab7d00,
+                                                                  0x01ab7d04,
+                                                                  0x01ab7d08,
+                                                                  0x01ab7d24,
+                                                                  0x01ab7d48};
+                        std::uint32_t objects[std::size(kObjectRvas)] = {};
+                        for (std::size_t index = 0;
+                             captured && index < std::size(kObjectRvas);
+                             ++index)
+                        {
+                            captured = ReadRemoteU32(
+                                process, image_base + kObjectRvas[index], &objects[index]);
+                        }
+                        if (captured)
+                        {
+                            RecordDiagnostic("{\"event\":\"d3d_init_return\",\"thread\":%u,\"stage\":\"%s\",\"address\":\"0x%08x\",\"result\":\"0x%08x\",\"success\":%s,\"objects\":{\"d3d_device3\":\"0x%08x\",\"device_aux\":\"0x%08x\",\"d3d3\":\"0x%08x\",\"direct_draw4\":\"0x%08x\",\"primary_surface\":\"0x%08x\",\"surface_aux\":\"0x%08x\"},\"markers\":{\"zbuffer_caps\":\"0x%08x\",\"find_device_passed\":\"0x%08x\"}}",
+                                             static_cast<unsigned>(event.dwThreadId),
+                                             guest_return->second.name,
+                                             static_cast<unsigned>(exception_address),
+                                             static_cast<unsigned>(context.Eax),
+                                             context.Eax == 0 ? "true" : "false",
+                                             objects[0],
+                                             objects[1],
+                                             objects[2],
+                                             objects[3],
+                                             objects[4],
+                                             objects[5],
+                                             objects[6],
+                                             objects[7]);
+                        }
                     }
-                    if (!captured)
+                    else if (captured)
                     {
-                        *error = "cannot capture Direct3D initialization return context";
-                    }
-                    else
-                    {
-                        RecordDiagnostic("{\"event\":\"d3d_init_return\",\"thread\":%u,\"stage\":\"%s\",\"address\":\"0x%08x\",\"result\":\"0x%08x\",\"success\":%s,\"objects\":{\"d3d_device3\":\"0x%08x\",\"device_aux\":\"0x%08x\",\"d3d3\":\"0x%08x\",\"direct_draw4\":\"0x%08x\",\"primary_surface\":\"0x%08x\",\"surface_aux\":\"0x%08x\"},\"markers\":{\"zbuffer_caps\":\"0x%08x\",\"find_device_passed\":\"0x%08x\"}}",
+                        std::uint32_t sound_slot = 0;
+                        std::uint32_t sound_buffer = 0;
+                        std::uint32_t parsed_bytes = 0;
+                        std::uint32_t retry_index = 0;
+                        std::uint32_t filename_pointer = 0;
+                        char filename[128] = {};
+                        const bool have_slot = context.Ebp >= 4 &&
+                                               ReadRemoteU32(process,
+                                                             context.Ebp - 4,
+                                                             &sound_slot);
+                        const bool have_buffer = have_slot && sound_slot != 0 &&
+                                                 ReadRemoteU32(process,
+                                                               sound_slot + 0x3c,
+                                                               &sound_buffer);
+                        const bool have_parsed_bytes = have_slot && sound_slot != 0 &&
+                                                       ReadRemoteU32(process,
+                                                                     sound_slot + 0x20,
+                                                                     &parsed_bytes);
+                        const bool have_retry = context.Ebp >= 0x230 &&
+                                                ReadRemoteU32(process,
+                                                              context.Ebp - 0x230,
+                                                              &retry_index);
+                        const bool have_filename =
+                            ReadRemoteU32(process,
+                                          context.Ebp + 8,
+                                          &filename_pointer) &&
+                            ReadRemoteAnsiString(process, filename_pointer, filename);
+                        const bool success = guest_return->second.nonzero_is_success
+                                                 ? context.Eax != 0
+                                                 : context.Eax == 0;
+                        RecordDiagnostic("{\"event\":\"ksnd_load_return\",\"thread\":%u,\"file\":\"%s\",\"file_readable\":%s,\"stage\":\"%s\",\"address\":\"0x%08x\",\"result\":\"0x%08x\",\"success\":%s,\"sound_slot\":\"0x%08x\",\"sound_slot_readable\":%s,\"sound_buffer\":\"0x%08x\",\"sound_buffer_readable\":%s,\"parsed_bytes\":%u,\"parsed_bytes_readable\":%s,\"retry_index\":%u,\"retry_index_readable\":%s}",
                                          static_cast<unsigned>(event.dwThreadId),
+                                         have_filename ? filename : "",
+                                         have_filename ? "true" : "false",
                                          guest_return->second.name,
                                          static_cast<unsigned>(exception_address),
                                          static_cast<unsigned>(context.Eax),
-                                         context.Eax == 0 ? "true" : "false",
-                                         objects[0],
-                                         objects[1],
-                                         objects[2],
-                                         objects[3],
-                                         objects[4],
-                                         objects[5],
-                                         objects[6],
-                                         objects[7]);
+                                         success ? "true" : "false",
+                                         sound_slot,
+                                         have_slot ? "true" : "false",
+                                         sound_buffer,
+                                         have_buffer ? "true" : "false",
+                                         parsed_bytes,
+                                         have_parsed_bytes ? "true" : "false",
+                                         retry_index,
+                                         have_retry ? "true" : "false");
+                    }
+                    if (!captured)
+                    {
+                        *error = "cannot capture guest return context";
+                    }
+                    else
+                    {
                         SIZE_T written = 0;
                         context.Eip = static_cast<DWORD>(exception_address);
                         swallowed = WriteProcessMemory(
@@ -2508,13 +2650,24 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                         reinterpret_cast<const void*>(exception_address),
                                         sizeof(guest_return->second.original_byte)) != FALSE &&
                                     SetThreadContext(thread, &context) != FALSE;
-                        if (swallowed)
+                        if (swallowed && guest_return->second.kind ==
+                                             GuestReturnWatchPoint::Kind::kKsndLoad)
+                        {
+                            context.EFlags |= 0x100;
+                            swallowed = SetThreadContext(thread, &context) != FALSE;
+                            if (swallowed)
+                            {
+                                pending_guest_return_steps[event.dwThreadId] =
+                                    exception_address;
+                            }
+                        }
+                        else if (swallowed)
                         {
                             guest_return_watches->erase(guest_return);
                         }
                         else
                         {
-                            *error = "cannot swallow Direct3D initialization return breakpoint";
+                            *error = "cannot swallow guest return breakpoint";
                         }
                     }
                     if (thread != nullptr)
@@ -3262,8 +3415,11 @@ int main(int argc, char** argv)
     bool hle_vfs = false;
     bool hle_display_mode = false;
     bool hle_d3d3 = false;
+    bool hle_directsound = false;
     bool hle_io_ports = false;
+    bool run_detached = false;
     bool d3d_init_trace = false;
+    bool ksnd_load_trace = false;
     bool device_mock_lptdi = false;
     bool device_mock_lptdi_ioctl_success = false;
     bool device_mock_lptdi_ioctl_full_success = false;
@@ -3359,15 +3515,32 @@ int main(int argc, char** argv)
             inject_runtime = true;
             software_breakpoint = true;
         }
+        else if (option == "--hle-directsound")
+        {
+            hle_directsound = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+            break_exit_process = true;
+        }
         else if (option == "--hle-io-ports")
         {
             hle_io_ports = true;
             break_exit_process = true;
             software_breakpoint = true;
         }
+        else if (option == "--run-detached")
+        {
+            run_detached = true;
+        }
         else if (option == "--d3d-init-trace")
         {
             d3d_init_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--ksnd-load-trace")
+        {
+            ksnd_load_trace = true;
             break_exit_process = true;
             software_breakpoint = true;
         }
@@ -3483,11 +3656,23 @@ int main(int argc, char** argv)
         return 1;
     }
     if (instruction_trace && (probe_handoff || hle_command_line || hle_windows_directory ||
-                              hle_vfs || hle_display_mode || hle_d3d3 || hle_io_ports || d3d_init_trace || probe_exit_process ||
+                              hle_vfs || hle_display_mode || hle_d3d3 || hle_directsound || hle_io_ports || d3d_init_trace || ksnd_load_trace || probe_exit_process ||
                               break_exit_process))
     {
         PrintUsage();
         return 1;
+    }
+    if (run_detached &&
+        (!hle_io_ports || trace || instruction_trace || d3d_init_trace || ksnd_load_trace ||
+         api_trace || probe_exit_process || scan_fault_references ||
+         lptdi_post_ioctl_trace_steps != 0))
+    {
+        PrintUsage();
+        return 1;
+    }
+    if (run_detached)
+    {
+        break_exit_process = false;
     }
 
     g_trace = trace;
@@ -3549,9 +3734,19 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "{\"error\":\"Direct3D initialization trace requires ez2dj1stse target\"}\\n");
         return 2;
     }
+    if (ksnd_load_trace && target->id != "ez2dj1stse")
+    {
+        std::fprintf(stderr, "{\"error\":\"KSND load trace requires ez2dj1stse target\"}\\n");
+        return 2;
+    }
     if (hle_d3d3 && target->id != "ez2dj1stse")
     {
         std::fprintf(stderr, "{\"error\":\"Direct3D3 HLE requires ez2dj1stse target\"}\\n");
+        return 2;
+    }
+    if (hle_directsound && target->id != "ez2dj1stse")
+    {
+        std::fprintf(stderr, "{\"error\":\"DirectSound HLE requires ez2dj1stse target\"}\\n");
         return 2;
     }
     if (hle_io_ports && target->id != "ez2dj1stse")
@@ -3580,7 +3775,7 @@ int main(int argc, char** argv)
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"hle_io_ports\":%s,\"d3d_init_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      trace ? "true" : "false",
@@ -3589,8 +3784,11 @@ int main(int argc, char** argv)
                      api_trace ? "true" : "false",
                      hle_display_mode ? "true" : "false",
                      hle_d3d3 ? "true" : "false",
+                     hle_directsound ? "true" : "false",
                      hle_io_ports ? "true" : "false",
+                     run_detached ? "true" : "false",
                      d3d_init_trace ? "true" : "false",
+                     ksnd_load_trace ? "true" : "false",
                      device_mock_lptdi ? "true" : "false",
                      device_mock_lptdi_ioctl_success ? "true" : "false",
                      device_mock_lptdi_ioctl_full_success ? "true" : "false",
@@ -3770,10 +3968,18 @@ int main(int argc, char** argv)
     {
         std::uint32_t d3d3_thunk_rva = 0;
         std::uint32_t d3d3_slot_rva = 0;
+        std::uint32_t graphics_trace_path_rva = 0;
+        std::filesystem::path graphics_trace_path = diagnostic_log.path();
+        graphics_trace_path.replace_extension(".ddraw.log");
         d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
                             runtime_path,
                             "_Re2djHleDirectDrawCreate@12",
                             &d3d3_thunk_rva,
+                            &error) &&
+                        re2dj::platform::windows::FindPe32ExportRva(
+                            runtime_path,
+                            "g_re2dj_graphics_trace_path",
+                            &graphics_trace_path_rva,
                             &error) &&
                         re2dj::tools::windows_original_process_probe::FindIatSlotByName(
                             info,
@@ -3786,7 +3992,39 @@ int main(int argc, char** argv)
                         WriteRemoteU32(child.hProcess,
                                        main_image_base + d3d3_slot_rva,
                                        runtime_base + d3d3_thunk_rva,
+                                       &error) &&
+                        WriteRemoteAnsi(child.hProcess,
+                                        runtime_base + graphics_trace_path_rva,
+                                        graphics_trace_path.string(),
                                        &error);
+        if (d3d3_prepared)
+        {
+            RecordDiagnostic("{\"event\":\"graphics_trace\",\"path\":\"%s\"}",
+                             graphics_trace_path.generic_string().c_str());
+        }
+    }
+    bool directsound_prepared = !hle_directsound;
+    if (hle_directsound && runtime_loaded)
+    {
+        std::uint32_t directsound_thunk_rva = 0;
+        std::uint32_t directsound_slot_rva = 0;
+        directsound_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                   runtime_path,
+                                   "_Re2djHleDirectSoundCreate@12",
+                                   &directsound_thunk_rva,
+                                   &error) &&
+                               re2dj::tools::windows_original_process_probe::FindIatSlotByOrdinal(
+                                   info,
+                                   file.data(),
+                                   file.size(),
+                                   "DSOUND.dll",
+                                   1,
+                                   &directsound_slot_rva,
+                                   &error) &&
+                               WriteRemoteU32(child.hProcess,
+                                              main_image_base + directsound_slot_rva,
+                                              runtime_base + directsound_thunk_rva,
+                                              &error);
     }
     const char* const vfs_exports[] = {"_Re2djVfsCreateFileA@28",
                                        "_Re2djVfsReadFile@20",
@@ -3803,18 +4041,26 @@ int main(int argc, char** argv)
                                        "CloseHandle",
                                        "GetFileType"};
     bool vfs_prepared = !hle_vfs;
+    // Tracked apart from vfs_prepared so a failed image-loader patch reports
+    // itself instead of silently skipping the device patches that follow it.
+    bool image_loader_prepared = !hle_vfs;
     std::uint32_t device_ioctl_wrapper_address = 0;
     if (hle_vfs && runtime_loaded)
     {
         std::uint32_t hdd_root_rva = 0;
         std::uint32_t overlay_root_rva = 0;
+        std::uint32_t vfs_trace_path_rva = 0;
         std::uint32_t device_mock_rva = 0;
         std::uint32_t device_ioctl_mode_rva = 0;
         const std::filesystem::path overlay = std::filesystem::current_path() / "overlays" / target->id;
+        std::filesystem::path vfs_trace_path = diagnostic_log.path();
+        vfs_trace_path.replace_extension(".vfs.log");
         vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
                            runtime_path, "g_re2dj_vfs_hdd_root", &hdd_root_rva, &error) &&
                        re2dj::platform::windows::FindPe32ExportRva(
                            runtime_path, "g_re2dj_vfs_overlay_root", &overlay_root_rva, &error) &&
+                       re2dj::platform::windows::FindPe32ExportRva(
+                           runtime_path, "g_re2dj_vfs_trace_path", &vfs_trace_path_rva, &error) &&
                        WriteRemoteAnsi(child.hProcess,
                                        runtime_base + hdd_root_rva,
                                        vfs_source_root.string(),
@@ -3822,6 +4068,10 @@ int main(int argc, char** argv)
                        WriteRemoteAnsi(child.hProcess,
                                        runtime_base + overlay_root_rva,
                                        overlay.string(),
+                                       &error) &&
+                       WriteRemoteAnsi(child.hProcess,
+                                       runtime_base + vfs_trace_path_rva,
+                                       vfs_trace_path.string(),
                                        &error);
         if (vfs_prepared)
         {
@@ -3830,6 +4080,8 @@ int main(int argc, char** argv)
                              target->working_directory_relative_path.c_str(),
                              vfs_source_root.generic_string().c_str(),
                              overlay.generic_string().c_str());
+            RecordDiagnostic("{\"event\":\"vfs_trace\",\"path\":\"%s\"}",
+                             vfs_trace_path.generic_string().c_str());
         }
         if (vfs_prepared && device_mock_lptdi)
         {
@@ -3937,6 +4189,30 @@ int main(int argc, char** argv)
                                           runtime_base + export_rva,
                                           &error);
         }
+        if (vfs_prepared)
+        {
+            std::uint32_t export_rva = 0;
+            std::uint32_t slot_rva = 0;
+            image_loader_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                        runtime_path,
+                                        "_Re2djVfsLoadImageA@24",
+                                        &export_rva,
+                                        &error) &&
+                                    re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                                        info,
+                                        file.data(),
+                                        file.size(),
+                                        "USER32.dll",
+                                        "LoadImageA",
+                                        &slot_rva,
+                                        &error) &&
+                                    WriteRemoteU32(child.hProcess,
+                                                   main_image_base + slot_rva,
+                                                   runtime_base + export_rva,
+                                                   &error);
+            RecordDiagnostic("{\"event\":\"vfs_image_loader\",\"import\":\"USER32.dll!LoadImageA\",\"prepared\":%s}",
+                             image_loader_prepared ? "true" : "false");
+        }
         if (vfs_prepared &&
             device_ioctl_policy_count != 0)
         {
@@ -3963,6 +4239,35 @@ int main(int argc, char** argv)
             {
                 device_ioctl_wrapper_address = runtime_base + export_rva;
             }
+        }
+    }
+    bool io_runtime_prepared = !run_detached;
+    if (run_detached && runtime_loaded)
+    {
+        std::uint32_t enable_rva = 0;
+        std::uint32_t image_base_rva = 0;
+        io_runtime_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                  runtime_path,
+                                  "g_re2dj_hle_io_ports",
+                                  &enable_rva,
+                                  &error) &&
+                              re2dj::platform::windows::FindPe32ExportRva(
+                                  runtime_path,
+                                  "g_re2dj_io_image_base",
+                                  &image_base_rva,
+                                  &error) &&
+                              WriteRemoteU32(child.hProcess,
+                                             runtime_base + image_base_rva,
+                                             static_cast<std::uint32_t>(main_image_base),
+                                             &error) &&
+                              WriteRemoteU32(child.hProcess,
+                                             runtime_base + enable_rva,
+                                             1,
+                                             &error);
+        if (io_runtime_prepared)
+        {
+            RecordDiagnostic("{\"event\":\"io_port_runtime\",\"image_base\":\"0x%08x\",\"status\":\"prepared\"}",
+                             static_cast<unsigned>(main_image_base));
         }
     }
     std::uint32_t exit_thunk_rva = 0;
@@ -4015,18 +4320,31 @@ int main(int argc, char** argv)
             error = "cannot set ExitProcess software breakpoint";
         }
     }
-    GuestReturnWatchMap d3d_init_watches;
+    GuestReturnWatchMap guest_return_watches;
     bool d3d_init_trace_prepared = !d3d_init_trace;
     if (d3d_init_trace)
     {
         d3d_init_trace_prepared = reached && entry_restored && exit_break_prepared &&
                                   InstallD3dInitReturnBreakpoints(child.hProcess,
                                                                   main_image_base,
-                                                                  &d3d_init_watches,
+                                                                  &guest_return_watches,
                                                                   &error);
         if (!d3d_init_trace_prepared && error.empty())
         {
             error = "cannot install Direct3D initialization return breakpoints";
+        }
+    }
+    bool ksnd_load_trace_prepared = !ksnd_load_trace;
+    if (ksnd_load_trace)
+    {
+        ksnd_load_trace_prepared = reached && entry_restored && exit_break_prepared &&
+                                   InstallKsndLoadReturnBreakpoints(child.hProcess,
+                                                                    main_image_base,
+                                                                    &guest_return_watches,
+                                                                    &error);
+        if (!ksnd_load_trace_prepared && error.empty())
+        {
+            error = "cannot install KSND load return breakpoints";
         }
     }
     ApiWatchMap api_watches;
@@ -4068,8 +4386,11 @@ int main(int argc, char** argv)
     }
     re2dj::tools::windows_original_process_probe::IatVerificationResult iat;
     const bool iat_verified = reached && entry_restored && runtime_loaded && handoff_prepared &&
-                              display_prepared && d3d3_prepared && vfs_prepared && exit_probe_prepared &&
+                              display_prepared && d3d3_prepared && directsound_prepared && vfs_prepared &&
+                              image_loader_prepared &&
+                              io_runtime_prepared && exit_probe_prepared &&
                               exit_break_prepared && d3d_init_trace_prepared &&
+                              ksnd_load_trace_prepared &&
                               api_trace_prepared &&
                               re2dj::tools::windows_original_process_probe::VerifySuspendedIat(
                                   child.hProcess,
@@ -4103,7 +4424,44 @@ int main(int argc, char** argv)
         error = "cannot continue entry breakpoint debug event";
         return false;
     };
-    const bool handoff_observed = instruction_trace
+    const auto run_detached_runtime = [&]() {
+        if (DebugSetProcessKillOnExit(FALSE) == FALSE ||
+            DebugActiveProcessStop(child.dwProcessId) == FALSE)
+        {
+            error = "cannot detach debugger from prepared original process";
+            return false;
+        }
+        if (ResumeThread(child.hThread) == (std::numeric_limits<DWORD>::max)())
+        {
+            error = "cannot resume detached original process";
+            return false;
+        }
+        RecordDiagnostic("{\"event\":\"runtime_detached\",\"process_id\":%u}",
+                         static_cast<unsigned>(child.dwProcessId));
+        if (WaitForSingleObject(child.hProcess, INFINITE) != WAIT_OBJECT_0)
+        {
+            error = "cannot wait for detached original process";
+            return false;
+        }
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(child.hProcess, &exit_code) == FALSE)
+        {
+            error = "cannot read detached original process exit code";
+            return false;
+        }
+        RecordDiagnostic("{\"event\":\"runtime_detached_exit\",\"code\":\"0x%08x\"}",
+                         static_cast<unsigned>(exit_code));
+        return true;
+    };
+    const bool handoff_observed = run_detached
+                                      ? (handoff_prepared && display_prepared && d3d3_prepared &&
+                                         directsound_prepared && vfs_prepared &&
+                                         image_loader_prepared &&
+                                         io_runtime_prepared && exit_probe_prepared &&
+                                         exit_break_prepared && d3d_init_trace_prepared &&
+                                         ksnd_load_trace_prepared && api_trace_prepared &&
+                                         run_detached_runtime())
+                                      : instruction_trace
                                       ? (entry_restored &&
                                          EnableSingleStep(child.hThread, entry, &error) &&
                                          resume_debuggee() &&
@@ -4112,9 +4470,12 @@ int main(int argc, char** argv)
                                                                  instruction_trace_max_steps,
                                                                  &error))
                                       : (!resume_for_handoff ||
-                                         (handoff_prepared && display_prepared && d3d3_prepared && vfs_prepared &&
+                                         (handoff_prepared && display_prepared && d3d3_prepared && directsound_prepared && vfs_prepared &&
+                                          image_loader_prepared &&
+                                          io_runtime_prepared &&
                                           exit_probe_prepared &&
                                           exit_break_prepared && d3d_init_trace_prepared &&
+                                          ksnd_load_trace_prepared &&
                                           api_trace_prepared &&
                                           (break_exit_process
                                                ? (resume_debuggee() &&
@@ -4125,7 +4486,7 @@ int main(int argc, char** argv)
                                                                                lptdi_post_ioctl_trace_steps,
                                                                                main_image_base,
                                                                                &info,
-                                                                               &d3d_init_watches,
+                                                                               &guest_return_watches,
                                                                                &api_watches,
                                                                                hle_io_ports ? &io_port_bus : nullptr,
                                                                                &error))
@@ -4150,7 +4511,10 @@ int main(int argc, char** argv)
                              runtime_base + exit_thunk_rva);
         }
     }
-    TerminateProcess(child.hProcess, 0);
+    if (!run_detached || !handoff_observed)
+    {
+        TerminateProcess(child.hProcess, 0);
+    }
     if (reached && !inject_runtime && !break_exit_process && !instruction_trace)
     {
         ContinueDebugEvent(breakpoint_process_id, breakpoint_thread_id, DBG_CONTINUE);
@@ -4158,8 +4522,11 @@ int main(int argc, char** argv)
     CloseHandle(child.hThread);
     CloseHandle(child.hProcess);
     if (!reached || !entry_restored || !runtime_loaded || !handoff_prepared ||
-        !display_prepared || !d3d3_prepared || !vfs_prepared || !exit_probe_prepared ||
-        !exit_break_prepared || !d3d_init_trace_prepared || !handoff_observed ||
+        !display_prepared || !d3d3_prepared || !directsound_prepared || !vfs_prepared ||
+        !image_loader_prepared ||
+        !io_runtime_prepared || !exit_probe_prepared ||
+        !exit_break_prepared || !d3d_init_trace_prepared || !ksnd_load_trace_prepared ||
+        !handoff_observed ||
         !iat_verified)
     {
         PrintDiagnosticError(error);

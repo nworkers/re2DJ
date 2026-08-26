@@ -6,8 +6,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <new>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "direct3d3_opengl_backend.h"
@@ -34,18 +36,18 @@ using DeleteProgramFunction = void(APIENTRY*)(GLuint);
 using UseProgramFunction = void(APIENTRY*)(GLuint);
 using GetUniformLocationFunction = GLint(APIENTRY*)(GLuint, const GlChar*);
 using Uniform1iFunction = void(APIENTRY*)(GLint, GLint);
+using Uniform1fFunction = void(APIENTRY*)(GLint, GLfloat);
 using Uniform2fFunction = void(APIENTRY*)(GLint, GLfloat, GLfloat);
-using Uniform3fFunction = void(APIENTRY*)(GLint, GLfloat, GLfloat, GLfloat);
 using EnableVertexAttribArrayFunction = void(APIENTRY*)(GLuint);
 using DisableVertexAttribArrayFunction = void(APIENTRY*)(GLuint);
 using VertexAttribPointerFunction =
     void(APIENTRY*)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*);
 
-constexpr GLenum kUnsignedShort565 = 0x8363;
 constexpr GLenum kVertexShader = 0x8b31;
 constexpr GLenum kFragmentShader = 0x8b30;
 constexpr GLenum kCompileStatus = 0x8b81;
 constexpr GLenum kLinkStatus = 0x8b82;
+constexpr GLenum kClampToEdge = 0x812f;
 
 template <typename Function>
 bool LoadGlFunction(const char* name, Function* function)
@@ -73,22 +75,24 @@ std::array<float, 4> ArgbToFloats(std::uint32_t argb)
             static_cast<float>((argb >> 24) & 0xff) * scale};
 }
 
-std::array<float, 3> Rgb565ToFloats(std::uint16_t color)
-{
-    return {static_cast<float>((color >> 11) & 0x1f) / 31.0f,
-            static_cast<float>((color >> 5) & 0x3f) / 63.0f,
-            static_cast<float>(color & 0x1f) / 31.0f};
-}
-
 }  // namespace
 
 struct Direct3d3OpenGlBackend::Impl
 {
+    struct CachedTexture
+    {
+        GLuint name = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        std::uint64_t revision = 0;
+        graphics::Rgb565ColorKey color_key;
+    };
+
     HWND window = nullptr;
     HDC dc = nullptr;
     HGLRC context = nullptr;
     GLuint program = 0;
-    GLuint texture = 0;
+    std::unordered_map<std::uint64_t, CachedTexture> textures;
     bool frame_started = false;
 
     CreateShaderFunction create_shader = nullptr;
@@ -107,8 +111,8 @@ struct Direct3d3OpenGlBackend::Impl
     UseProgramFunction use_program = nullptr;
     GetUniformLocationFunction get_uniform_location = nullptr;
     Uniform1iFunction uniform_1i = nullptr;
+    Uniform1fFunction uniform_1f = nullptr;
     Uniform2fFunction uniform_2f = nullptr;
-    Uniform3fFunction uniform_3f = nullptr;
     EnableVertexAttribArrayFunction enable_vertex_attrib_array = nullptr;
     DisableVertexAttribArrayFunction disable_vertex_attrib_array = nullptr;
     VertexAttribPointerFunction vertex_attrib_pointer = nullptr;
@@ -173,14 +177,22 @@ struct Direct3d3OpenGlBackend::Impl
             "uniform sampler2D u_texture;\n"
             "uniform int u_texture_enabled;\n"
             "uniform int u_color_key_enabled;\n"
-            "uniform vec3 u_color_key;\n"
+            "uniform int u_alpha_test_enabled;\n"
+            "uniform float u_alpha_reference;\n"
             "varying vec4 v_color;\n"
             "varying vec2 v_texture;\n"
             "void main() {\n"
             "  vec4 texel = u_texture_enabled != 0 ? texture2D(u_texture, v_texture) : vec4(1.0);\n"
-            "  if (u_color_key_enabled != 0 &&\n"
-            "      all(lessThanEqual(abs(texel.rgb - u_color_key), vec3(0.017)))) discard;\n"
-            "  gl_FragColor = texel * v_color;\n"
+            // Direct3D color keying drops matching texels regardless of the
+            // blend factors, so it cannot ride on the alpha channel alone: a
+            // copy blend of ONE and ZERO would write them out as solid key
+            // color. Upload marks matching texels with zero alpha, and this
+            // branch is what actually removes them.
+            "  if (u_color_key_enabled != 0 && texel.a < 0.5) discard;\n"
+            "  vec4 output_color = texel * v_color;\n"
+            "  if (u_alpha_test_enabled != 0 &&\n"
+            "      abs(output_color.a - u_alpha_reference) < 0.001) discard;\n"
+            "  gl_FragColor = output_color;\n"
             "}\n";
 
         const GLuint vertex_shader = Compile(kVertexShader, vertex_source, error);
@@ -233,9 +245,10 @@ Direct3d3OpenGlBackend::~Direct3d3OpenGlBackend()
     if (impl_->context != nullptr && impl_->dc != nullptr &&
         wglMakeCurrent(impl_->dc, impl_->context) != FALSE)
     {
-        if (impl_->texture != 0)
+        for (const auto& [identity, texture] : impl_->textures)
         {
-            glDeleteTextures(1, &impl_->texture);
+            (void)identity;
+            glDeleteTextures(1, &texture.name);
         }
         if (impl_->program != 0 && impl_->delete_program != nullptr)
         {
@@ -314,8 +327,8 @@ bool Direct3d3OpenGlBackend::Initialize(HWND window, std::string* error)
         LoadGlFunction("glUseProgram", &impl->use_program) &&
         LoadGlFunction("glGetUniformLocation", &impl->get_uniform_location) &&
         LoadGlFunction("glUniform1i", &impl->uniform_1i) &&
+        LoadGlFunction("glUniform1f", &impl->uniform_1f) &&
         LoadGlFunction("glUniform2f", &impl->uniform_2f) &&
-        LoadGlFunction("glUniform3f", &impl->uniform_3f) &&
         LoadGlFunction("glEnableVertexAttribArray", &impl->enable_vertex_attrib_array) &&
         LoadGlFunction("glDisableVertexAttribArray", &impl->disable_vertex_attrib_array) &&
         LoadGlFunction("glVertexAttribPointer", &impl->vertex_attrib_pointer);
@@ -328,25 +341,23 @@ bool Direct3d3OpenGlBackend::Initialize(HWND window, std::string* error)
     {
         return false;
     }
-    glGenTextures(1, &impl->texture);
-    if (impl->texture == 0)
-    {
-        *error = "cannot create the Direct3D3 OpenGL texture";
-        return false;
-    }
     error->clear();
     return true;
 }
 
 bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
+                                  const graphics::LegacyFixedFunctionState& state,
                                   std::uint32_t logical_width,
                                   std::uint32_t logical_height,
-                                  const Rgb565TextureView* texture_view,
+                                  const graphics::LegacyTextureView* texture_view,
                                   std::string* error)
 {
     if (impl_ == nullptr || error == nullptr || logical_width == 0 || logical_height == 0 ||
-        command.topology != graphics::PrimitiveTopology::kTriangleStrip ||
-        command.vertices.size() < 3 || !impl_->MakeCurrent(error))
+        (command.topology == graphics::PrimitiveTopology::kTriangleStrip &&
+         command.vertices.size() < 3) ||
+        (command.topology == graphics::PrimitiveTopology::kLineList &&
+         (command.vertices.size() < 2 || command.vertices.size() % 2 != 0)) ||
+        !impl_->MakeCurrent(error))
     {
         return false;
     }
@@ -373,7 +384,10 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
         output.position[0] = input.x;
         output.position[1] = input.y;
         output.position[2] = input.z;
-        output.position[3] = input.reciprocal_w;
+        output.position[3] = command.topology == graphics::PrimitiveTopology::kLineList &&
+                                     input.reciprocal_w == 0.0f
+                                 ? 1.0f
+                                 : input.reciprocal_w;
         const std::array<float, 4> color = ArgbToFloats(input.diffuse_argb);
         for (std::size_t index = 0; index < color.size(); ++index)
         {
@@ -398,37 +412,146 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
         *error = "invalid RGB565 texture row pitch";
         return false;
     }
+    const bool color_key_active = has_texture && state.color_key_enabled &&
+                                  texture_view->source_color_key.enabled;
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture"), 0);
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture_enabled"),
                      has_texture ? 1 : 0);
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_color_key_enabled"),
-                     has_texture && texture_view->has_source_color_key ? 1 : 0);
-    if (has_texture && texture_view->has_source_color_key)
+                     color_key_active ? 1 : 0);
+    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_alpha_test_enabled"),
+                     state.alpha_test_enabled ? 1 : 0);
+    const GLint alpha_reference =
+        impl_->get_uniform_location(impl_->program, "u_alpha_reference");
+    if (alpha_reference >= 0)
     {
-        const std::array<float, 3> key = Rgb565ToFloats(texture_view->source_color_key);
-        impl_->uniform_3f(impl_->get_uniform_location(impl_->program, "u_color_key"),
-                         key[0], key[1], key[2]);
+        impl_->uniform_1f(alpha_reference,
+                         static_cast<float>(state.alpha_reference) / 255.0f);
     }
     if (has_texture)
     {
-        glBindTexture(GL_TEXTURE_2D, impl_->texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH,
-                      static_cast<GLint>(texture_view->pitch / sizeof(std::uint16_t)));
-        glTexImage2D(GL_TEXTURE_2D,
-                     0,
-                     GL_RGB,
-                     static_cast<GLsizei>(texture_view->width),
-                     static_cast<GLsizei>(texture_view->height),
-                     0,
-                     GL_RGB,
-                     kUnsignedShort565,
-                     texture_view->pixels);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        if (texture_view->identity == 0 || texture_view->revision == 0)
+        {
+            *error = "RGB565 texture identity and revision must be nonzero";
+            return false;
+        }
+        Impl::CachedTexture& cached = impl_->textures[texture_view->identity];
+        if (cached.name == 0)
+        {
+            glGenTextures(1, &cached.name);
+            if (cached.name == 0)
+            {
+                impl_->textures.erase(texture_view->identity);
+                *error = "cannot create a cached Direct3D3 OpenGL texture";
+                return false;
+            }
+            glBindTexture(GL_TEXTURE_2D, cached.name);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
+        }
+        else
+        {
+            glBindTexture(GL_TEXTURE_2D, cached.name);
+        }
+        graphics::Rgb565ColorKey effective_key = texture_view->source_color_key;
+        effective_key.enabled = color_key_active;
+        const bool key_changed = cached.color_key.enabled != effective_key.enabled ||
+                                 cached.color_key.low != effective_key.low ||
+                                 cached.color_key.high != effective_key.high;
+        if (cached.revision != texture_view->revision || key_changed ||
+            cached.width != texture_view->width || cached.height != texture_view->height)
+        {
+            const std::uint64_t pixel_count =
+                static_cast<std::uint64_t>(texture_view->width) * texture_view->height;
+            if (pixel_count > (std::numeric_limits<std::size_t>::max)() / 4)
+            {
+                *error = "RGB565 texture conversion size overflows host memory";
+                return false;
+            }
+            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(pixel_count) * 4);
+            const auto* const source = static_cast<const std::uint8_t*>(texture_view->pixels);
+            for (std::uint32_t y = 0; y < texture_view->height; ++y)
+            {
+                const auto* const row = reinterpret_cast<const std::uint16_t*>(
+                    source + static_cast<std::size_t>(y) * texture_view->pitch);
+                for (std::uint32_t x = 0; x < texture_view->width; ++x)
+                {
+                    const std::uint16_t pixel = row[x];
+                    const std::size_t offset =
+                        (static_cast<std::size_t>(y) * texture_view->width + x) * 4;
+                    rgba[offset] = static_cast<std::uint8_t>(((pixel >> 11) & 0x1f) * 255 / 31);
+                    rgba[offset + 1] =
+                        static_cast<std::uint8_t>(((pixel >> 5) & 0x3f) * 255 / 63);
+                    rgba[offset + 2] = static_cast<std::uint8_t>((pixel & 0x1f) * 255 / 31);
+                    rgba[offset + 3] = graphics::IsRgb565ColorKeyMatch(pixel, effective_key)
+                                           ? 0
+                                           : 255;
+                }
+            }
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            if (cached.width == texture_view->width && cached.height == texture_view->height)
+            {
+                glTexSubImage2D(GL_TEXTURE_2D,
+                                0,
+                                0,
+                                0,
+                                static_cast<GLsizei>(texture_view->width),
+                                static_cast<GLsizei>(texture_view->height),
+                                GL_RGBA,
+                                GL_UNSIGNED_BYTE,
+                                rgba.data());
+            }
+            else
+            {
+                glTexImage2D(GL_TEXTURE_2D,
+                             0,
+                             GL_RGBA,
+                             static_cast<GLsizei>(texture_view->width),
+                             static_cast<GLsizei>(texture_view->height),
+                             0,
+                             GL_RGBA,
+                             GL_UNSIGNED_BYTE,
+                             rgba.data());
+            }
+            cached.width = texture_view->width;
+            cached.height = texture_view->height;
+            cached.revision = texture_view->revision;
+            cached.color_key = effective_key;
+        }
+        glTexParameteri(GL_TEXTURE_2D,
+                        GL_TEXTURE_MIN_FILTER,
+                        state.minification_filter == graphics::TextureFilter::kLinear ? GL_LINEAR
+                                                                                      : GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,
+                        GL_TEXTURE_MAG_FILTER,
+                        state.magnification_filter == graphics::TextureFilter::kLinear ? GL_LINEAR
+                                                                                       : GL_NEAREST);
+    }
+
+    if (state.alpha_blend_enabled)
+    {
+        const auto to_gl_blend = [](graphics::BlendFactor factor) {
+            switch (factor)
+            {
+                case graphics::BlendFactor::kZero:
+                    return GL_ZERO;
+                case graphics::BlendFactor::kOne:
+                    return GL_ONE;
+                case graphics::BlendFactor::kSourceColor:
+                    return GL_SRC_COLOR;
+                case graphics::BlendFactor::kSourceAlpha:
+                    return GL_SRC_ALPHA;
+            }
+            return GL_ONE;
+        };
+        glEnable(GL_BLEND);
+        glBlendFunc(to_gl_blend(state.source_blend), to_gl_blend(state.destination_blend));
+    }
+    else
+    {
+        glDisable(GL_BLEND);
     }
 
     const GLsizei stride = sizeof(GlVertex);
@@ -438,7 +561,10 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
     impl_->vertex_attrib_pointer(0, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].position);
     impl_->vertex_attrib_pointer(1, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].color);
     impl_->vertex_attrib_pointer(2, 2, GL_FLOAT, GL_FALSE, stride, &vertices[0].texture);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, static_cast<GLsizei>(vertices.size()));
+    const GLenum primitive_mode = command.topology == graphics::PrimitiveTopology::kLineList
+                                      ? GL_LINES
+                                      : GL_TRIANGLE_STRIP;
+    glDrawArrays(primitive_mode, 0, static_cast<GLsizei>(vertices.size()));
     impl_->disable_vertex_attrib_array(2);
     impl_->disable_vertex_attrib_array(1);
     impl_->disable_vertex_attrib_array(0);
@@ -450,6 +576,25 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
     }
     error->clear();
     return true;
+}
+
+void Direct3d3OpenGlBackend::DiscardTexture(std::uint64_t identity)
+{
+    if (impl_ == nullptr || identity == 0)
+    {
+        return;
+    }
+    const auto found = impl_->textures.find(identity);
+    if (found == impl_->textures.end())
+    {
+        return;
+    }
+    std::string error;
+    if (impl_->MakeCurrent(&error))
+    {
+        glDeleteTextures(1, &found->second.name);
+        impl_->textures.erase(found);
+    }
 }
 
 bool Direct3d3OpenGlBackend::Present(std::string* error)

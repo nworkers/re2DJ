@@ -13,6 +13,39 @@ namespace re2dj::graphics
 enum class PrimitiveTopology
 {
     kTriangleStrip,
+    kLineList,
+};
+
+enum class BlendFactor
+{
+    kZero,
+    kOne,
+    kSourceColor,
+    kSourceAlpha,
+};
+
+enum class CompareFunction
+{
+    kNotEqual,
+};
+
+enum class TextureFilter
+{
+    kNearest,
+    kLinear,
+};
+
+struct LegacyFixedFunctionState
+{
+    bool color_key_enabled = false;
+    bool alpha_test_enabled = false;
+    CompareFunction alpha_function = CompareFunction::kNotEqual;
+    std::uint8_t alpha_reference = 0;
+    bool alpha_blend_enabled = false;
+    BlendFactor source_blend = BlendFactor::kOne;
+    BlendFactor destination_blend = BlendFactor::kZero;
+    TextureFilter minification_filter = TextureFilter::kNearest;
+    TextureFilter magnification_filter = TextureFilter::kNearest;
 };
 
 struct TransformedLitVertex
@@ -34,9 +67,13 @@ struct LegacyDrawCommand
 };
 
 inline constexpr std::size_t kTransformedLitVertexStride = 32;
+inline constexpr std::uint32_t kLegacyDrawWaitFlag = 0x00000001;
+
+bool AreLegacyDrawFlagsSupported(std::uint32_t flags);
 
 bool DecodeTransformedLitVertices(std::span<const std::byte> source,
                                   std::size_t vertex_count,
+                                  PrimitiveTopology topology,
                                   LegacyDrawCommand* command,
                                   std::string* error);
 

@@ -36,3 +36,19 @@ proxy는 COM identity와 `QueryInterface`/`AddRef`/`Release` 수명을 일관되
 EZ2DJ 1st SE의 초기화 경로는 `FindDevice` 성공 뒤 16비트 Z-buffer format 열거, 640×480×16 primary/back flip chain, HAL device, viewport 생성과 설정을 순서대로 요구한다. device 생성 뒤에는 RGB565 texture format 열거와 device capability 조회도 실행한다. 작업 61의 guest 소유 facade가 이 집합을 제공했을 때 다섯 graphics stage가 모두 통과했으므로, 이 집합은 현재 target의 확인된 최소 초기화 계약이다. 실제 texture resource, primitive draw와 present 계약은 아직 포함하지 않는다.
 
 *The confirmed minimum initialization set for EZ2DJ 1st SE is hardware-device discovery, 16-bit Z-format enumeration, a 640×480×16 primary/back flip chain, HAL device and viewport creation, RGB565 texture-format enumeration, and device-capability lookup. A guest-owned facade providing this set passes all five original graphics stages. Texture resources, primitive drawing, and presentation are not part of this confirmed minimum yet.*
+
+## 컬러키와 fixed-function state
+
+RGB565 source color key는 packed low/high의 inclusive 범위다. linear filtering을 쓰는 경로에서 sampling 뒤 RGB float를 key와 비교하면 경계 texel이 이미 이웃 색과 섞여 투명 판정과 blending이 어긋난다. HLE backend는 upload 시 packed RGB565 key 범위를 alpha로 바꾸고, 그 RGBA texture에 filtering을 적용해야 한다.
+
+구형 immediate mode의 최종 색은 texture 자체만으로 결정되지 않는다. `D3DTSS_COLOROP/COLORARG*`, `D3DRENDERSTATE_ALPHATESTENABLE/ALPHAFUNC/ALPHAREF`, `ALPHABLENDENABLE`, `SRCBLEND`와 `DESTBLEND`를 draw 시점의 한 상태로 보존해야 한다. texture identity별 cache는 CPU backing revision과 color-key 계약이 바뀔 때만 다시 upload한다.
+
+*An RGB565 source color key is an inclusive packed low/high range. With linear filtering, comparing sampled RGB floats after filtering is too late because boundary texels already contain neighboring colors. Convert keyed packed texels into alpha during upload, then filter the RGBA texture. Preserve texture-stage color operations, alpha test, and source/destination blending as one draw-time fixed-function snapshot. A per-texture cache should reupload only when the CPU backing revision or color-key contract changes.*
+
+## DirectDraw offscreen surface와 2D blit
+
+`DDSCAPS_OFFSCREENPLAIN`은 화면에 직접 표시되는 primary surface가 아니라 메모리 기반 합성 source/destination이다. 구형 프로그램은 `DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT`만 지정해 이를 만들고, `GetDC`로 얻은 DC에 GDI bitmap을 복사한 뒤 `Blt` 또는 `BltFast`로 primary/back surface에 합성할 수 있다. 따라서 HLE가 texture와 flip chain만 만들면 파일 open이 성공해도 이미지 객체 생성은 실패할 수 있다.
+
+`BltFast`는 destination 위치와 source rectangle을 받고 stretch하지 않는다. `DDBLTFAST_SRCCOLORKEY`는 source surface의 `DDCKEY_SRCBLT` 범위와 일치하는 pixel을 쓰지 않는다. 일반 `Blt`의 `DDBLT_KEYSRC`도 같은 source-key 의미를 가지며, rectangle 크기가 다르면 stretch 계약이 추가로 필요하다. CPU backing과 GPU 합성을 함께 유지하는 backend는 blit 뒤 destination revision을 증가시키고, 화면 대상이면 동일한 source rectangle을 현재 frame에 그려야 한다.
+
+*A `DDSCAPS_OFFSCREENPLAIN` surface is a memory-based composition source or destination rather than the visible primary surface. Legacy applications may create it with only caps, width, and height, copy a GDI bitmap through `GetDC`, and then compose it with `Blt` or `BltFast`. `BltFast` does not stretch; `DDBLTFAST_SRCCOLORKEY` skips pixels in the source surface's `DDCKEY_SRCBLT` range. General `Blt` uses `DDBLT_KEYSRC` for the same source-key behavior and needs an additional stretch contract when rectangle sizes differ. A backend retaining both CPU backing and GPU output advances the destination revision and draws the same source rectangle into the current frame when the destination is visible.*
