@@ -6,11 +6,17 @@
 
 ## 현재 진행 / In progress
 
-- [ ] Windows x86 VFS runtime 연결
-  - [ ] canonical 실행에서 read/write/close와 overlay 결과를 검증
-- [ ] 보호 해제 후 원본 `.text` 초기화 안정화
-  - [ ] `title.wav` KSND load 실패의 실제 검색 경로와 VFS 후보를 확인
-  - [ ] OpenGL 첫 프레임을 시각 검증하고 관찰된 texture-stage state를 shader 의미에 반영
+- [ ] 작업 072 — 메인 루프 사용자 검증
+  - [ ] OpenGL 첫 프레임과 texture-stage state의 시각 정확성을 확인
+  - [ ] `title.wav`, 효과음, volume/pan/frequency와 duplicate 동시 재생을 청취 확인
+  - [ ] 키보드와 legacy I/O port 입력으로 메뉴·게임 상태 전이가 가능한지 확인
+
+  *Task 072 — Validate the main loop from the user's perspective: first-frame and texture-stage visuals, title/effect audio and duplicate playback, and keyboard/legacy-I/O navigation.*
+
+- [ ] Windows x86 VFS guest write/overlay 검증
+  - [ ] canonical 실행에서 guest write가 원본 HDD가 아닌 overlay에 기록되는지 확인
+
+  *Verify that canonical guest writes go to the overlay rather than modifying the original HDD directory. The read/seek/size/close path already runs through the original main-loop startup.*
 
 ## 다음 작업 / Next work
 

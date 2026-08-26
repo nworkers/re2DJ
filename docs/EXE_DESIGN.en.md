@@ -47,8 +47,8 @@ The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layo
 
 | Item | Value |
 | --- | --- |
-| Graphics | **DirectDraw plus Direct3D Immediate Mode**. The static import surface contains only `DirectDrawCreate`, but runtime loads `d3dim.dll` and obtains Direct3D through `QueryInterface(IID_IDirect3D3)`. It then calls `IDirect3D3::FindDevice` with `D3DFDS_HARDWARE` and `bHardware=TRUE`, repeatedly receiving `DDERR_NOTFOUND` on the modern host. Calls through global `[0x01eb7cc0]` match the `IDirect3DDevice3` vtable |
-| Audio | **DirectSound** (ordinal `#1`) plus `winmm` mixer volume |
+| Graphics | **DirectDraw plus Direct3D Immediate Mode**. The runtime obtains Direct3D through `QueryInterface(IID_IDirect3D3)`, creates 121 XYZ/NORMAL/TEX1 vertices, null-size-locks the buffer, and fills an 11×11 grid at stride 32. Calls through global `[0x01eb7cc0]` match the `IDirect3DDevice3` vtable. |
+| Audio | **DirectSound** (ordinal `#1`) plus `winmm` mixer volume. It uses buffer creation, Lock/Unlock, Play, and DuplicateSoundBuffer. |
 | Input | **A single `GetAsyncKeyState`. No DirectInput** |
 | Configuration | `GetPrivateProfile*` and `WritePrivateProfileStringA` — INI files |
 | Registry | `RegFlushKey` only |

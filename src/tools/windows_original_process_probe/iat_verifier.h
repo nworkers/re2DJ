@@ -44,6 +44,14 @@ bool FindIatSlotByName(const exe::PeImageInfo& info,
                        std::uint32_t* slot_rva,
                        std::string* error);
 
+bool FindIatSlotByOrdinal(const exe::PeImageInfo& info,
+                          const std::uint8_t* file,
+                          std::size_t file_size,
+                          const std::string& module,
+                          std::uint16_t ordinal,
+                          std::uint32_t* slot_rva,
+                          std::string* error);
+
 }  // namespace re2dj::tools::windows_original_process_probe
 
 #endif  // RE2DJ_TOOLS_WINDOWS_ORIGINAL_PROCESS_PROBE_IAT_VERIFIER_H_

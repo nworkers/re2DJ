@@ -4,6 +4,20 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+## 최신 실행 이정표 / Latest runtime milestones
+
+- **작업 070 — Direct3D 3 정점 버퍼 HLE 완료.** `IDirect3DVertexBuffer::Lock`의 nullable `lpdwSize` 계약을 바로잡고, XYZ/NORMAL/TEX1 정점 121개에 필요한 3,872바이트 storage와 원본 11×11 grid fill을 AV 없이 통과했다. 근거: [설계](design/20260826-070-direct3d3-vertex-buffer-hle.md), [작업 로그](work-logs/20260826-070-direct3d3-vertex-buffer-hle.md).
+
+  *Task 070 — Direct3D 3 vertex-buffer HLE complete. The nullable `lpdwSize` Lock contract, 3,872-byte storage for 121 XYZ/NORMAL/TEX1 vertices, and the original 11×11 grid fill now pass without an access violation. Evidence: [design](design/20260826-070-direct3d3-vertex-buffer-hle.md), [work log](work-logs/20260826-070-direct3d3-vertex-buffer-hle.md).*
+
+- **작업 071 — DirectSound duplicate buffer HLE 완료.** duplicate 사이 PCM storage를 공유하면서 cursor/control/Play 상태와 SDL voice를 분리했다. 원본 실행 두 번은 기존 `KSnd(ksndDuplicate)` 종료를 통과하고 AV, OpenGL 실패, SDL 오류 없이 메인 루프를 유지했다. 근거: [설계](design/20260826-071-directsound-duplicate-buffer-hle.md), [작업 로그](work-logs/20260826-071-directsound-duplicate-buffer-hle.md).
+
+  *Task 071 — DirectSound duplicate-buffer HLE complete. Duplicates share PCM storage while retaining independent cursor/control/Play state and SDL voices. Two original runs pass the former `KSnd(ksndDuplicate)` exit and remain in the main loop without access violations, OpenGL failures, or SDL errors. Evidence: [design](design/20260826-071-directsound-duplicate-buffer-hle.md), [work log](work-logs/20260826-071-directsound-duplicate-buffer-hle.md).*
+
+- **현재 도달점 — 보호된 원본 실행 파일의 메인 루프.** 최소 target state `0900000000000000`으로 원본 `.text` initializer를 안정적으로 복원하고, VFS read 경로, 표시 초기화, I/O port trap, 그래픽·오디오 초기화와 sound duplication을 통과했다. 실제 화면·소리·입력 정확성은 사용자 검증 대상으로 남아 있다.
+
+  *Current milestone — protected original executable main loop. Minimal target state `0900000000000000` restores the original `.text` initializer deterministically, and the runtime passes VFS reads, display initialization, I/O-port traps, graphics/audio initialization, and sound duplication. User-visible visual, audible, and input accuracy remains to be verified.*
+
 ## 기반 / Foundation
 
 - Repository workflow, bilingual documentation structure, coding rules, BSD baseline, and original-asset handling policy
@@ -70,6 +84,8 @@
 - Target-profile working-directory VFS source mount; original asset APIs now open `coin0.wav`, `coin1.wav`, and `WarningMsg.bmp` from the supplied read-only HDD before the next stable boundary
 - RGB565 DirectDraw texture/primary/back CPU backing, GDI GetDC/ReleaseDC bitmap upload, source color key, IDirect3DTexture2 identity, and observed DDBLT_COLORFILL rectangle path; former surface null AVs are removed
 - Platform-neutral transformed/lit vertex command plus a Windows WGL/OpenGL shader backend for the observed RGB565 textured triangle strip; `DrawPrimitive`, stage-zero texture state, and Flip/present slots remove the former graphics AVs, with two runs reaching the later controlled `title.wav` sound-load exit
+- Target-limited KSND load-stage tracing with repeatable breakpoint rearming and filename attribution; `title.wav` path/open/read and 9,438,264-byte PCM parsing succeed, while system `IDirectSound::CreateSoundBuffer` returns `E_NOTIMPL` on all ten retries without an access violation
+- Platform-neutral legacy PCM/circular-lock state plus a Windows x86 DirectSound COM facade backed by pinned zlib-licensed SDL 3.4.14 and SDL_mixer 3.2.4; ordinal `DSOUND.dll` replacement advances 121 secondary buffers and 299 Lock/Unlock pairs through looping `title.wav` playback to the next Direct3D vertex-buffer boundary
 - Protected `.gidata` static import surface mapped slot-by-slot; dynamic resolution observed for WSAGetLastError only
 - Illegal-instruction caller identified: WOW64 win32k syscall transition inside the DLL-unload tail, not a guest branch
 - Termination path attributed: stub-planted stack block → register restore at `0x01ed2730` → `.gdata` pointer jump → `ret` onto the undecrypted continuation page

@@ -1,9 +1,11 @@
 #define NOMINMAX
 #define CINTERFACE
 #define DIRECT3D_VERSION 0x0600
+#define DIRECTSOUND_VERSION 0x0300
 #include <windows.h>
 #include <ddraw.h>
 #include <d3d.h>
+#include <dsound.h>
 
 #include <cstdio>
 #include <cstring>
@@ -40,6 +42,8 @@ extern "C" __declspec(dllimport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
     LPCSTR device_name, DEVMODEA* dev_mode, HWND window, DWORD flags, LPVOID reserved);
 extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectDrawCreate(
     GUID* device_guid, LPDIRECTDRAW* direct_draw, IUnknown* outer);
+extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
+    GUID* device_guid, LPDIRECTSOUND* direct_sound, IUnknown* outer);
 
 namespace
 {
@@ -296,6 +300,48 @@ int main()
                      Check(IDirect3DDevice3_SetTexture(device, 0, nullptr) == DD_OK,
                            "null texture reset failed");
         }
+
+        IDirect3DVertexBuffer* vertex_buffer = nullptr;
+        D3DVERTEXBUFFERDESC vertex_descriptor = {};
+        vertex_descriptor.dwSize = sizeof(vertex_descriptor);
+        vertex_descriptor.dwCaps = D3DVBCAPS_SYSTEMMEMORY;
+        vertex_descriptor.dwFVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1;
+        vertex_descriptor.dwNumVertices = 4;
+        passed = passed &&
+                 Check(IDirect3D3_CreateVertexBuffer(direct3d,
+                                                     &vertex_descriptor,
+                                                     &vertex_buffer,
+                                                     0,
+                                                     nullptr) == DD_OK &&
+                           vertex_buffer != nullptr,
+                       "logical Direct3D3 vertex buffer creation failed");
+        if (vertex_buffer != nullptr)
+        {
+            void* vertices = nullptr;
+            passed = passed &&
+                     Check(IDirect3DVertexBuffer_Lock(vertex_buffer,
+                                                      0,
+                                                      &vertices,
+                                                      nullptr) == DD_OK &&
+                               vertices != nullptr,
+                           "vertex buffer nullable-size lock failed");
+            if (vertices != nullptr)
+            {
+                std::memset(vertices, 0, 4 * 32);
+            }
+            passed = passed &&
+                     Check(IDirect3DVertexBuffer_Unlock(vertex_buffer) == DD_OK,
+                           "vertex buffer unlock failed");
+            D3DVERTEXBUFFERDESC stored_descriptor = {};
+            stored_descriptor.dwSize = sizeof(stored_descriptor);
+            passed = passed &&
+                     Check(IDirect3DVertexBuffer_GetVertexBufferDesc(vertex_buffer,
+                                                                     &stored_descriptor) == DD_OK &&
+                               stored_descriptor.dwFVF == vertex_descriptor.dwFVF &&
+                               stored_descriptor.dwNumVertices == vertex_descriptor.dwNumVertices,
+                           "vertex buffer descriptor query failed");
+            IDirect3DVertexBuffer_Release(vertex_buffer);
+        }
     }
 
     if (device != nullptr)
@@ -545,6 +591,68 @@ int main()
     }
     passed = passed &&
              Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close device mock handle");
+
+    LPDIRECTSOUND direct_sound = nullptr;
+    passed = passed && Check(Re2djHleDirectSoundCreate(nullptr, &direct_sound, nullptr) == DS_OK,
+                             "DirectSound facade creation failed") &&
+             Check(IDirectSound_SetCooperativeLevel(direct_sound, GetDesktopWindow(), DSSCL_NORMAL) == DS_OK,
+                   "DirectSound cooperative level failed");
+    WAVEFORMATEX wave = {WAVE_FORMAT_PCM, 2, 44100, 176400, 4, 16, 0};
+    DSBUFFERDESC sound_desc = {};
+    sound_desc.dwSize = sizeof(DSBUFFERDESC);
+    sound_desc.dwFlags = DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN;
+    sound_desc.dwBufferBytes = 16;
+    sound_desc.lpwfxFormat = &wave;
+    LPDIRECTSOUNDBUFFER sound_buffer = nullptr;
+    passed = passed && Check(IDirectSound_CreateSoundBuffer(direct_sound, &sound_desc, &sound_buffer, nullptr) == DS_OK,
+                             "DirectSound secondary buffer creation failed");
+    void* first = nullptr;
+    DWORD first_bytes = 0;
+    void* second = nullptr;
+    DWORD second_bytes = 0;
+    passed = passed && Check(IDirectSoundBuffer_Lock(sound_buffer, 0, 0, &first, &first_bytes,
+                                                     &second, &second_bytes, DSBLOCK_ENTIREBUFFER) == DS_OK,
+                             "DirectSound buffer lock failed");
+    if (first != nullptr) std::memset(first, 0, first_bytes);
+    if (second != nullptr) std::memset(second, 0, second_bytes);
+    passed = passed && Check(IDirectSoundBuffer_Unlock(sound_buffer, first, first_bytes, second, second_bytes) == DS_OK,
+                             "DirectSound buffer unlock failed") &&
+             Check(IDirectSoundBuffer_SetCurrentPosition(sound_buffer, 0) == DS_OK,
+                   "DirectSound buffer position failed") &&
+             Check(IDirectSoundBuffer_Play(sound_buffer, 0, 0, 0) == DS_OK,
+                   "DirectSound buffer play failed") &&
+             Check(IDirectSoundBuffer_Stop(sound_buffer) == DS_OK,
+                   "DirectSound buffer stop failed");
+    LPDIRECTSOUNDBUFFER duplicate_buffer = nullptr;
+    passed = passed &&
+             Check(IDirectSoundBuffer_SetVolume(sound_buffer, -1200) == DS_OK,
+                   "DirectSound source volume setup failed") &&
+             Check(IDirectSound_DuplicateSoundBuffer(direct_sound,
+                                                      sound_buffer,
+                                                      &duplicate_buffer) == DS_OK &&
+                       duplicate_buffer != nullptr,
+                   "DirectSound buffer duplication failed");
+    if (duplicate_buffer != nullptr)
+    {
+        LONG source_volume = 0;
+        LONG duplicate_volume = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_GetVolume(duplicate_buffer, &duplicate_volume) == DS_OK &&
+                           duplicate_volume == -1200,
+                       "DirectSound duplicate did not inherit controls") &&
+                 Check(IDirectSoundBuffer_SetVolume(duplicate_buffer, -2400) == DS_OK,
+                       "DirectSound duplicate volume update failed") &&
+                 Check(IDirectSoundBuffer_GetVolume(sound_buffer, &source_volume) == DS_OK &&
+                           source_volume == -1200,
+                       "DirectSound duplicate changed source controls") &&
+                 Check(IDirectSoundBuffer_Play(duplicate_buffer, 0, 0, 0) == DS_OK,
+                       "DirectSound duplicate play failed") &&
+                 Check(IDirectSoundBuffer_Stop(duplicate_buffer) == DS_OK,
+                       "DirectSound duplicate stop failed");
+        IDirectSoundBuffer_Release(duplicate_buffer);
+    }
+    if (sound_buffer != nullptr) IDirectSoundBuffer_Release(sound_buffer);
+    if (direct_sound != nullptr) IDirectSound_Release(direct_sound);
 
     std::filesystem::remove_all(root);
     return passed ? 0 : 1;

@@ -12,12 +12,14 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
 #include <span>
 #include <string>
 
 #include "direct3d3_opengl_backend.h"
 #include "re2dj/graphics/legacy_draw_command.h"
+#include "re2dj/graphics/legacy_vertex_buffer.h"
 
 namespace
 {
@@ -33,11 +35,13 @@ constexpr DWORD kRootMagic = 0x52324444;
 constexpr DWORD kSurfaceMagic = 0x52325346;
 constexpr DWORD kDeviceMagic = 0x52324456;
 constexpr DWORD kViewportMagic = 0x52325650;
+constexpr DWORD kVertexBufferMagic = 0x52325642;
 
 struct RootFacade;
 struct SurfaceFacade;
 struct DeviceFacade;
 struct ViewportFacade;
+struct VertexBufferFacade;
 
 HRESULT WINAPI RootQueryInterface(IDirectDraw4* self, REFIID iid, void** object);
 ULONG WINAPI RootAddRef(IDirectDraw4* self);
@@ -75,6 +79,30 @@ HRESULT WINAPI D3dEnumZBufferFormats(IDirect3D3* self,
                                      REFCLSID device_class,
                                      LPD3DENUMPIXELFORMATSCALLBACK callback,
                                      void* context);
+HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
+                                     D3DVERTEXBUFFERDESC* descriptor,
+                                     IDirect3DVertexBuffer** vertex_buffer,
+                                     DWORD flags,
+                                     IUnknown* outer);
+
+HRESULT WINAPI VbQueryInterface(IDirect3DVertexBuffer* self, REFIID iid, void** object);
+ULONG WINAPI VbAddRef(IDirect3DVertexBuffer* self);
+ULONG WINAPI VbRelease(IDirect3DVertexBuffer* self);
+HRESULT WINAPI VbLock(IDirect3DVertexBuffer* self, DWORD flags, void** data, DWORD* size);
+HRESULT WINAPI VbUnlock(IDirect3DVertexBuffer* self);
+HRESULT WINAPI VbProcessVertices(IDirect3DVertexBuffer* self,
+                                 DWORD operation,
+                                 DWORD destination_start,
+                                 DWORD vertex_count,
+                                 IDirect3DVertexBuffer* source,
+                                 DWORD source_start,
+                                 IDirect3DDevice3* device,
+                                 DWORD flags);
+HRESULT WINAPI VbGetVertexBufferDesc(IDirect3DVertexBuffer* self,
+                                     D3DVERTEXBUFFERDESC* descriptor);
+HRESULT WINAPI VbOptimize(IDirect3DVertexBuffer* self,
+                          IDirect3DDevice3* device,
+                          DWORD flags);
 
 HRESULT WINAPI SurfaceQueryInterface(IDirectDrawSurface4* self, REFIID iid, void** object);
 ULONG WINAPI SurfaceAddRef(IDirectDrawSurface4* self);
@@ -206,6 +234,7 @@ IDirect3D3Vtbl* Direct3dVtable()
         table.CreateViewport = D3dCreateViewport;
         table.FindDevice = D3dFindDevice;
         table.CreateDevice = D3dCreateDevice;
+        table.CreateVertexBuffer = D3dCreateVertexBuffer;
         table.EnumZBufferFormats = D3dEnumZBufferFormats;
         initialized = true;
     }
@@ -304,6 +333,25 @@ IDirect3DViewport3Vtbl* ViewportVtable()
     return &table;
 }
 
+IDirect3DVertexBufferVtbl* VertexBufferVtable()
+{
+    static IDirect3DVertexBufferVtbl table = {};
+    static bool initialized = false;
+    if (!initialized)
+    {
+        table.QueryInterface = VbQueryInterface;
+        table.AddRef = VbAddRef;
+        table.Release = VbRelease;
+        table.Lock = VbLock;
+        table.Unlock = VbUnlock;
+        table.ProcessVertices = VbProcessVertices;
+        table.GetVertexBufferDesc = VbGetVertexBufferDesc;
+        table.Optimize = VbOptimize;
+        initialized = true;
+    }
+    return &table;
+}
+
 struct RootFacade
 {
     IDirectDraw4 direct_draw = {DirectDrawVtable()};
@@ -365,6 +413,16 @@ struct ViewportFacade
     D3DVIEWPORT2 viewport = {};
 };
 
+struct VertexBufferFacade
+{
+    IDirect3DVertexBuffer interface_value = {VertexBufferVtable()};
+    volatile LONG references = 1;
+    DWORD magic = kVertexBufferMagic;
+    RootFacade* root = nullptr;
+    re2dj::graphics::LegacyVertexBufferDesc descriptor;
+    std::unique_ptr<re2dj::graphics::LegacyVertexBuffer> buffer;
+};
+
 RootFacade* RootFromDirectDraw(IDirectDraw4* self)
 {
     return reinterpret_cast<RootFacade*>(reinterpret_cast<unsigned char*>(self) -
@@ -399,6 +457,12 @@ ViewportFacade* ViewportFromInterface(IDirect3DViewport3* self)
 {
     return reinterpret_cast<ViewportFacade*>(reinterpret_cast<unsigned char*>(self) -
                                              offsetof(ViewportFacade, interface_value));
+}
+
+VertexBufferFacade* VertexBufferFromInterface(IDirect3DVertexBuffer* self)
+{
+    return reinterpret_cast<VertexBufferFacade*>(reinterpret_cast<unsigned char*>(self) -
+                                                 offsetof(VertexBufferFacade, interface_value));
 }
 
 ULONG AddRootReference(RootFacade* root)
@@ -799,6 +863,55 @@ HRESULT WINAPI D3dEnumZBufferFormats(IDirect3D3*,
     format.dwFlags = DDPF_ZBUFFER;
     format.dwZBufferBitDepth = 16;
     callback(&format, context);
+    return DD_OK;
+}
+
+HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
+                                     D3DVERTEXBUFFERDESC* descriptor,
+                                     IDirect3DVertexBuffer** vertex_buffer,
+                                     DWORD flags,
+                                     IUnknown* outer)
+{
+    if (vertex_buffer == nullptr || descriptor == nullptr || outer != nullptr ||
+        descriptor->dwSize < sizeof(D3DVERTEXBUFFERDESC))
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *vertex_buffer = nullptr;
+    char message[160] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:hle:IDirect3D3::CreateVertexBuffer:caps=0x%08lx:fvf=0x%08lx:vertices=%lu:flags=0x%08lx",
+                  descriptor->dwCaps,
+                  descriptor->dwFVF,
+                  static_cast<unsigned long>(descriptor->dwNumVertices),
+                  flags);
+    OutputDebugStringA(message);
+    auto* const facade = new (std::nothrow) VertexBufferFacade;
+    if (facade == nullptr)
+    {
+        return DDERR_OUTOFMEMORY;
+    }
+    facade->root = RootFromDirect3d(self);
+    facade->descriptor.size = sizeof(D3DVERTEXBUFFERDESC);
+    facade->descriptor.caps = descriptor->dwCaps;
+    facade->descriptor.fvf = descriptor->dwFVF;
+    facade->descriptor.vertex_count = descriptor->dwNumVertices;
+    facade->buffer = re2dj::graphics::LegacyVertexBuffer::Create(facade->descriptor);
+    if (facade->buffer == nullptr)
+    {
+        delete facade;
+        return DDERR_INVALIDPARAMS;
+    }
+    AddRootReference(facade->root);
+    *vertex_buffer = &facade->interface_value;
+    char result_message[160] = {};
+    std::snprintf(result_message,
+                  sizeof(result_message),
+                  "re2dj:hle:IDirect3D3::CreateVertexBuffer:result=%p:vtable=%p",
+                  static_cast<void*>(*vertex_buffer),
+                  static_cast<void*>((*vertex_buffer)->lpVtbl));
+    OutputDebugStringA(result_message);
     return DD_OK;
 }
 
@@ -1545,6 +1658,157 @@ HRESULT WINAPI ViewportSetViewport2(IDirect3DViewport3* self, D3DVIEWPORT2* view
     }
     ViewportFromInterface(self)->viewport = *viewport;
     return DD_OK;
+}
+
+HRESULT WINAPI VbQueryInterface(IDirect3DVertexBuffer* self, REFIID iid, void** object)
+{
+    if (object == nullptr)
+    {
+        return E_POINTER;
+    }
+    *object = nullptr;
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic)
+    {
+        return E_FAIL;
+    }
+    if (!IsEqualGUID(iid, IID_IUnknown) && !IsEqualGUID(iid, IID_IDirect3DVertexBuffer))
+    {
+        return E_NOINTERFACE;
+    }
+    *object = self;
+    VbAddRef(self);
+    return S_OK;
+}
+
+ULONG WINAPI VbAddRef(IDirect3DVertexBuffer* self)
+{
+    return static_cast<ULONG>(InterlockedIncrement(&VertexBufferFromInterface(self)->references));
+}
+
+ULONG WINAPI VbRelease(IDirect3DVertexBuffer* self)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    const LONG references = InterlockedDecrement(&facade->references);
+    if (references == 0)
+    {
+        RootFacade* const root = facade->root;
+        facade->magic = 0;
+        delete facade;
+        ReleaseRootReference(root);
+    }
+    return static_cast<ULONG>(references);
+}
+
+HRESULT WINAPI VbLock(IDirect3DVertexBuffer* self, DWORD flags, void** data, DWORD* size)
+{
+    char entry_message[192] = {};
+    std::snprintf(entry_message,
+                  sizeof(entry_message),
+                  "re2dj:hle:IDirect3DVertexBuffer::Lock:entry:self=%p:vtable=%p:data=%p:size=%p:flags=0x%08lx",
+                  static_cast<void*>(self),
+                  self == nullptr ? nullptr : static_cast<void*>(self->lpVtbl),
+                  static_cast<void*>(data),
+                  static_cast<void*>(size),
+                  flags);
+    OutputDebugStringA(entry_message);
+    if (data == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *data = nullptr;
+    if (size != nullptr)
+    {
+        *size = 0;
+    }
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic || facade->buffer == nullptr)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    std::span<std::byte> vertices = facade->buffer->Lock();
+    if (vertices.empty())
+    {
+        return D3DERR_VERTEXBUFFERLOCKED;
+    }
+    char message[128] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:hle:IDirect3DVertexBuffer::Lock:success:bytes=%lu:output=%p:flags=0x%08lx",
+                  static_cast<unsigned long>(vertices.size()),
+                  static_cast<void*>(vertices.data()),
+                  flags);
+    OutputDebugStringA(message);
+    *data = vertices.data();
+    if (size != nullptr)
+    {
+        *size = static_cast<DWORD>(vertices.size());
+    }
+    return DD_OK;
+}
+
+HRESULT WINAPI VbUnlock(IDirect3DVertexBuffer* self)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic || facade->buffer == nullptr)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    if (!facade->buffer->Unlock())
+    {
+        OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Unlock:not-locked");
+        return DDERR_NOTLOCKED;
+    }
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Unlock");
+    return DD_OK;
+}
+
+HRESULT WINAPI VbProcessVertices(IDirect3DVertexBuffer* self,
+                                 DWORD,
+                                 DWORD,
+                                 DWORD,
+                                 IDirect3DVertexBuffer*,
+                                 DWORD,
+                                 IDirect3DDevice3*,
+                                 DWORD)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::ProcessVertices");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI VbGetVertexBufferDesc(IDirect3DVertexBuffer* self, D3DVERTEXBUFFERDESC* descriptor)
+{
+    if (descriptor == nullptr || descriptor->dwSize < sizeof(D3DVERTEXBUFFERDESC))
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic || facade->buffer == nullptr)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    descriptor->dwSize = facade->descriptor.size;
+    descriptor->dwCaps = facade->descriptor.caps;
+    descriptor->dwFVF = facade->descriptor.fvf;
+    descriptor->dwNumVertices = facade->descriptor.vertex_count;
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::GetVertexBufferDesc");
+    return DD_OK;
+}
+
+HRESULT WINAPI VbOptimize(IDirect3DVertexBuffer* self, IDirect3DDevice3*, DWORD)
+{
+    VertexBufferFacade* const facade = VertexBufferFromInterface(self);
+    if (facade->magic != kVertexBufferMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Optimize");
+    return E_NOTIMPL;
 }
 
 }  // namespace
