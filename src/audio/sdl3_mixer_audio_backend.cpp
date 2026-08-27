@@ -45,6 +45,14 @@ Sdl3MixerAudioBackend::~Sdl3MixerAudioBackend()
 }
 bool Sdl3MixerAudioBackend::ready() const { return mixer_ != nullptr; }
 bool Sdl3MixerAudioBackend::has_playback_device() const { return has_playback_device_; }
+bool Sdl3MixerAudioBackend::SetMasterGain(float gain)
+{
+    return mixer_ != nullptr && MIX_SetMixerGain(mixer_, (std::max)(0.0f, gain));
+}
+float Sdl3MixerAudioBackend::master_gain() const
+{
+    return mixer_ == nullptr ? 0.0f : MIX_GetMixerGain(mixer_);
+}
 const std::string& Sdl3MixerAudioBackend::error() const { return error_; }
 Sdl3MixerAudioBackend::Voice* Sdl3MixerAudioBackend::CreateVoice()
 {

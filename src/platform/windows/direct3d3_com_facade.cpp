@@ -18,10 +18,10 @@
 #include <span>
 #include <string>
 
-#include "direct3d3_opengl_backend.h"
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
+#include "re2dj/graphics/sdl3_opengl_backend.h"
 
 extern "C" __declspec(dllexport) char g_re2dj_graphics_trace_path[MAX_PATH] = {};
 
@@ -386,7 +386,7 @@ struct RootFacade
     std::uint32_t untextured_draw_diagnostic_count = 0;
     std::uint32_t late_draw_diagnostic_count = 0;
     std::uint64_t frame_number = 0;
-    re2dj::platform::windows::Direct3d3OpenGlBackend* render_backend = nullptr;
+    re2dj::graphics::Sdl3OpenGlBackend* render_backend = nullptr;
 };
 
 struct SurfaceFacade
@@ -2402,9 +2402,10 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     if (root->render_backend == nullptr)
     {
-        auto* const backend = new (std::nothrow)
-            re2dj::platform::windows::Direct3d3OpenGlBackend;
-        if (backend == nullptr || !backend->Initialize(root->window, &error))
+        auto* const backend = new (std::nothrow) re2dj::graphics::Sdl3OpenGlBackend;
+        const re2dj::graphics::Sdl3OpenGlWindowConfig window_config = {
+            root->window, root->width, root->height, "re2DJ"};
+        if (backend == nullptr || !backend->Initialize(window_config, &error))
         {
             delete backend;
             OutputDebugStringA(kOpenGlFailureMessage);

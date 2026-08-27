@@ -48,9 +48,9 @@ flowchart LR
     HLE --> PLAT["Platform backend<br/>windows / linux / web"]
 ```
 
-x86-64 Windows에서는 32비트 helper backend가 구현되어 있고, Linux에서는 x86-64 host/i386 helper의 native gate IPC prototype이 검증되었습니다. WebAssembly에는 별도 x86 실행 엔진이 필요합니다. 이 경로들은 교체 가능한 `ExecutionBackend` 경계 뒤에 두며, 직접 인터프리터 구현은 후순위 fallback입니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+x86-64 Windows에서는 Win32 `re2dj --run`이 원본 `ez2dj.exe`를 Windows main image로 시작하고 injected runtime의 선택적 HLE 경계를 연결합니다. Linux에서는 x86-64 제품 CLI가 별도 i386 helper를 통해 원본 PE32 entry의 첫 import·exit·fault 경계까지 실행합니다. Linux는 아직 Win32 import를 처리하지 않으므로 게임 창까지 진행되지는 않습니다. WebAssembly에는 별도 x86 실행 엔진이 필요합니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*Windows x86-64 has an implemented 32-bit helper backend, and Linux has a validated x86-64 host/i386 helper native-gate IPC prototype. WebAssembly needs a separate x86 execution engine. These paths sit behind a replaceable `ExecutionBackend` boundary, and a custom interpreter is a deferred fallback. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On x86-64 Windows, Win32 `re2dj --run` starts the original `ez2dj.exe` as the Windows main image and connects selected HLE boundaries through the injected runtime. On Linux, the x86-64 product CLI uses a separate i386 helper to execute the original PE32 entry up to its first import, exit, or fault boundary; it does not reach a game window yet because Win32 imports are not handled. WebAssembly needs a separate x86 execution engine. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -59,12 +59,13 @@ x86-64 Windows에서는 32비트 helper backend가 구현되어 있고, Linux에
 | 호스트 | 필요한 것 |
 | --- | --- |
 | 64-bit Windows | Visual Studio 2019 이상 또는 Build Tools의 **Desktop development with C++**, CMake 3.20 이상 |
-| Linux x86-64 | GCC 11 이상 또는 Clang 14 이상, CMake 3.20 이상, Ninja |
+| Linux x86-64 | GCC 11 이상 또는 Clang 14 이상, CMake 3.20 이상, Ninja, SDL3용 X11/Wayland/OpenGL 개발 패키지 |
 | Web | Emscripten SDK (`EMSDK` 환경 변수 설정), CMake 3.20 이상, Ninja |
 
-외부 의존성은 아직 없습니다. 원본 자산 없이도 빌드되고 단위 테스트가 통과합니다.
+SDL3와 SDL_mixer는 CMake가 고정된 zlib 라이선스 버전에서 가져옵니다. 원본 자산 없이도 빌드되고 단위 테스트가 통과합니다.
+Ubuntu/WSL의 정확한 패키지 설치 명령은 [Linux SDL3/OpenGL 빌드 가이드](docs/guides/linux-sdl3-build.md)를 참고하세요.
 
-*There are no external dependencies yet, and the repository builds and passes its unit tests without any original assets.*
+*CMake fetches SDL3 and SDL_mixer from pinned zlib-licensed revisions. The repository builds and passes its unit tests without any original assets. See the [Linux SDL3/OpenGL build guide](docs/guides/linux-sdl3-build.md) for the exact Ubuntu/WSL package command.*
 
 ---
 
@@ -80,10 +81,10 @@ cd re2DJ
 ### 2. 빌드 / Build
 
 ```bash
-# 64-bit Windows
-cmake --preset windows-x64-debug
-cmake --build --preset windows-x64-debug
-ctest --preset windows-x64-debug
+# 64-bit Windows host (Win32 runtime under WOW64)
+cmake --preset windows-x86-debug
+cmake --build --preset windows-x86-debug
+ctest --preset windows-x86-debug
 
 # Linux x86-64
 cmake --preset linux-x64-debug
@@ -95,8 +96,6 @@ cmake --preset windows-x86-native-probe -DRE2DJ_WARNINGS_AS_ERRORS=ON
 cmake --build --preset windows-x86-native-probe
 ctest --preset windows-x86-native-probe
 
-# Windows x64 host / x86 helper synthetic PE32 IPC integration
-powershell -ExecutionPolicy Bypass -File scripts/test_windows_native_ipc_probe.ps1
 ```
 
 빌드 산출물은 `build/<preset>/bin/`에 생성됩니다.
@@ -206,14 +205,26 @@ re2dj --hdd <directory> [options]
   --target <id>       사용할 타깃 프로파일. 기본값은 첫 번째 후보.
   --list-targets      후보 타깃 프로파일을 나열하고 종료.
   --resolve <path>    게스트 경로 하나를 해석하고 종료.
-  --run               게스트 실행. 아직 구현되지 않음.
+  --run               게스트 실행. Windows 제품 경로는 ez2dj1stse 지원.
+  --linux-helper      Linux --run에서 사용하는 i386 helper 경로.
+  --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 +6).
   --version           버전 출력.
   --help              도움말 출력.
 ```
 
-종료 코드: `0` 성공, `1` 잘못된 사용, `2` HDD 디렉터리 오류, `3` 미구현 기능.
+Windows 제품 실행 예:
 
-*Exit codes: `0` success, `1` usage error, `2` HDD directory error, `3` not implemented yet.*
+```powershell
+.\build\windows-x86\bin\Debug\re2dj.exe --hdd D:\EZ2DJ\1stSE --target ez2dj1stse --run
+```
+
+기본 `+6 dB`보다 더 큰 출력이 필요하면 `--audio-gain-db 12`를 추가한다. 왜곡이나 clipping이 들리면 `6`, `3`, `0` 순서로 낮춘다. 이 값은 DirectSound buffer별 상대 음량을 바꾸지 않고 최종 SDL mix에만 적용된다.
+
+*Add `--audio-gain-db 12` when more output than the default `+6 dB` is required. Reduce it to `6`, `3`, or `0` if distortion or clipping is audible. The value affects only the final SDL mix and preserves relative DirectSound buffer levels.*
+
+종료 코드: `0` 성공, `1` 잘못된 사용, `2` HDD 디렉터리 오류, `3` 지원되지 않는 실행 경로.
+
+*Exit codes: `0` success, `1` usage error, `2` HDD directory error, and `3` unsupported execution path.*
 
 ---
 

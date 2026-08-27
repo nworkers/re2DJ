@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  windows-x64:
+  windows-x86:
     runs-on: windows-latest
     # No preset here. The Visual Studio presets pin a generator version that
     # tracks the developer's local install, while the Ninja preset needs a
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build/ci -A x64 -DRE2DJ_WARNINGS_AS_ERRORS=ON
+        run: cmake -S . -B build/ci -A Win32 -DRE2DJ_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build/ci --config Debug
       - name: Test
@@ -28,8 +28,15 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Ninja
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Install build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          ninja-build
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev
+          libxi-dev libxss-dev libxtst-dev
+          libwayland-dev libwayland-egl-backend-dev libxkbcommon-dev
+          libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev
+          libdrm-dev libgbm-dev
       - name: Configure
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
@@ -47,9 +54,8 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - uses: mymindstorm/setup-emsdk@v14
-      # The Web host cannot run CTest, so this job only proves the shared core
-      # still compiles for WebAssembly. A platform assumption that slips into
-      # the core usually breaks here first.
+      # The Web host cannot run CTest, so this job proves the shared core and
+      # SDL3/OpenGL backend still compile for WebAssembly.
       - name: Configure
         run: cmake --preset web
       - name: Build

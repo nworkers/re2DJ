@@ -86,7 +86,7 @@ std::vector<std::uint8_t> MakeSyntheticPe32()
     PutU32(&bytes, kOptionalHeader + 96 + 8, 0x2000);
     PutU32(&bytes, kOptionalHeader + 96 + 12, 40);
     PutU32(&bytes, kOptionalHeader + 96 + 5 * 8, 0x4000);
-    PutU32(&bytes, kOptionalHeader + 96 + 5 * 8 + 4, 28);
+    PutU32(&bytes, kOptionalHeader + 96 + 5 * 8 + 4, 32);
     PutU32(&bytes, kOptionalHeader + 96 + 9 * 8, 0x3000);
     PutU32(&bytes, kOptionalHeader + 96 + 9 * 8 + 4, 24);
     PutU32(&bytes, kOptionalHeader + 96 + 12 * 8, kIatRva);
@@ -137,14 +137,27 @@ std::vector<std::uint8_t> MakeSyntheticPe32()
     PutU32(&bytes, 0x413, kImageBase + kTlsStateRva);
     bytes[0x417] = 0xC3;
 
-    // TLS callback: state = 7; return and pop three callback arguments.
-    bytes[0x420] = 0xC7;
-    bytes[0x421] = 0x05;
-    PutU32(&bytes, 0x422, kImageBase + kTlsStateRva);
-    PutU32(&bytes, 0x426, 7);
-    bytes[0x42A] = 0xC2;
-    bytes[0x42B] = 0x0C;
-    bytes[0x42C] = 0x00;
+    // TLS callback: validate FS self and TEB stack bounds, then set state = 7.
+    const std::array<std::uint8_t, 49> tls_code = {
+        0x64, 0xA1, 0x18, 0x00, 0x00, 0x00,
+        0x3B, 0x40, 0x18,
+        0x75, 0x19,
+        0x89, 0xE1,
+        0x3B, 0x48, 0x04,
+        0x73, 0x12,
+        0x3B, 0x48, 0x08,
+        0x76, 0x0D,
+        0xC7, 0x05, 0, 0, 0, 0, 7, 0, 0, 0,
+        0xC2, 0x0C, 0x00,
+        0xC7, 0x05, 0, 0, 0, 0, 0, 0, 0, 0,
+        0xC2, 0x0C, 0x00,
+    };
+    for (std::size_t index = 0; index < tls_code.size(); ++index)
+    {
+        bytes[0x420 + index] = tls_code[index];
+    }
+    PutU32(&bytes, 0x439, kImageBase + kTlsStateRva);
+    PutU32(&bytes, 0x446, kImageBase + kTlsStateRva);
 
     PutU32(&bytes, 0x600, 0x2060);
     PutU32(&bytes, 0x60C, 0x2080);
@@ -161,15 +174,17 @@ std::vector<std::uint8_t> MakeSyntheticPe32()
     PutU32(&bytes, 0x820, kImageBase + kTlsCallbackRva);
 
     PutU32(&bytes, 0xA00, 0x1000);
-    PutU32(&bytes, 0xA04, 16);
+    PutU32(&bytes, 0xA04, 20);
     PutU16(&bytes, 0xA08, 0x3004);
     PutU16(&bytes, 0xA0A, 0x300B);
     PutU16(&bytes, 0xA0C, 0x3013);
-    PutU16(&bytes, 0xA0E, 0x3022);
-    PutU32(&bytes, 0xA10, 0x3000);
-    PutU32(&bytes, 0xA14, 12);
-    PutU16(&bytes, 0xA18, 0x300C);
-    PutU16(&bytes, 0xA1A, 0x3020);
+    PutU16(&bytes, 0xA0E, 0x3039);
+    PutU16(&bytes, 0xA10, 0x3046);
+    PutU16(&bytes, 0xA12, 0x0000);
+    PutU32(&bytes, 0xA14, 0x3000);
+    PutU32(&bytes, 0xA18, 12);
+    PutU16(&bytes, 0xA1C, 0x300C);
+    PutU16(&bytes, 0xA1E, 0x3020);
     return bytes;
 }
 

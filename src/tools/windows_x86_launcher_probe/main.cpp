@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdarg>
 #include <cstring>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -23,6 +25,7 @@
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
 #include "re2dj/input/legacy_io_port_bus.h"
+#include "re2dj/platform/windows/original_process_backend.h"
 #include "re2dj/target/target_profile.h"
 
 #include "../../platform/windows/injected_runtime_loader.h"
@@ -116,7 +119,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-directsound|--hle-io-ports|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-directsound [--audio-gain-db <-24..18>]|--hle-io-ports|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -3400,7 +3403,7 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
 
 }  // namespace
 
-int main(int argc, char** argv)
+int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char** argv)
 {
     std::filesystem::path hdd_path;
     std::string target_id = "ez2dj1stse";
@@ -3416,6 +3419,8 @@ int main(int argc, char** argv)
     bool hle_display_mode = false;
     bool hle_d3d3 = false;
     bool hle_directsound = false;
+    float audio_gain_db = 0.0f;
+    bool audio_gain_set = false;
     bool hle_io_ports = false;
     bool run_detached = false;
     bool d3d_init_trace = false;
@@ -3521,6 +3526,26 @@ int main(int argc, char** argv)
             inject_runtime = true;
             software_breakpoint = true;
             break_exit_process = true;
+        }
+        else if (option == "--audio-gain-db" && index + 1 < argc)
+        {
+            try
+            {
+                std::size_t parsed = 0;
+                const std::string value = argv[++index];
+                audio_gain_db = std::stof(value, &parsed);
+                if (parsed != value.size() || !std::isfinite(audio_gain_db) ||
+                    audio_gain_db < -24.0f || audio_gain_db > 18.0f)
+                {
+                    throw std::out_of_range("audio gain");
+                }
+            }
+            catch (const std::exception&)
+            {
+                PrintUsage();
+                return 1;
+            }
+            audio_gain_set = true;
         }
         else if (option == "--hle-io-ports")
         {
@@ -3651,6 +3676,11 @@ int main(int argc, char** argv)
     }
     if (lptdi_post_ioctl_trace_steps != 0 &&
         device_ioctl_policy_count == 0)
+    {
+        PrintUsage();
+        return 1;
+    }
+    if (audio_gain_set && !hle_directsound)
     {
         PrintUsage();
         return 1;
@@ -4008,11 +4038,27 @@ int main(int argc, char** argv)
     {
         std::uint32_t directsound_thunk_rva = 0;
         std::uint32_t directsound_slot_rva = 0;
+        std::uint32_t audio_master_gain_rva = 0;
+        const float audio_master_gain = std::pow(10.0f, audio_gain_db / 20.0f);
+        const bool audio_gain_prepared =
+            !audio_gain_set ||
+            (re2dj::platform::windows::FindPe32ExportRva(
+                 runtime_path,
+                 "g_re2dj_audio_master_gain",
+                 &audio_master_gain_rva,
+                 &error) &&
+             WriteRemoteBytes(
+                 child.hProcess,
+                 runtime_base + audio_master_gain_rva,
+                 reinterpret_cast<const std::uint8_t*>(&audio_master_gain),
+                 sizeof(audio_master_gain),
+                 &error));
         directsound_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                    runtime_path,
                                    "_Re2djHleDirectSoundCreate@12",
                                    &directsound_thunk_rva,
                                    &error) &&
+                               audio_gain_prepared &&
                                re2dj::tools::windows_original_process_probe::FindIatSlotByOrdinal(
                                    info,
                                    file.data(),
@@ -4025,6 +4071,12 @@ int main(int argc, char** argv)
                                               main_image_base + directsound_slot_rva,
                                               runtime_base + directsound_thunk_rva,
                                               &error);
+        if (directsound_prepared && audio_gain_set)
+        {
+            RecordDiagnostic("{\"event\":\"audio_master_gain\",\"db\":%.3f,\"linear\":%.6f}",
+                             static_cast<double>(audio_gain_db),
+                             static_cast<double>(audio_master_gain));
+        }
     }
     const char* const vfs_exports[] = {"_Re2djVfsCreateFileA@28",
                                        "_Re2djVfsReadFile@20",

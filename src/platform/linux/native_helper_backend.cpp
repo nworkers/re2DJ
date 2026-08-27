@@ -40,13 +40,33 @@ public:
   const auto* tls=info.Directory(exe::PeDirectoryIndex::kTls); loaded->tls_directory_rva=tls==nullptr?0:tls->virtual_address; loaded->tls_directory_size=tls==nullptr?0:tls->size; state_=State::Prepared; return true;
  }
  bool Start(std::string* error){ if(state_!=State::Prepared||!Send(protocol::MessageType::kStart,nullptr,0,error)){Error(error,"Linux helper cannot start image");Stop();return false;}state_=State::Running;return true; }
- bool Wait(runtime::ExecutionEvent* event,std::string* error){ if(state_!=State::Running||event==nullptr){Error(error,"Linux helper is not running");return false;} protocol::ExecutionEvent packet; if(!Receive(protocol::MessageType::kExecutionEvent,&packet,error)){Stop();return false;} event->event_id=EventId(packet.event_id_low,packet.event_id_high);event->thread_id=packet.thread_id;event->instruction_pointer=runtime::GuestAddress(packet.instruction_pointer);event->stack_pointer=runtime::GuestAddress(packet.stack_pointer);event->gate_address=runtime::GuestAddress(packet.gate_address);event->status_code=packet.status_code; if(packet.kind==static_cast<std::uint32_t>(protocol::EventKind::kImportGate)){event->kind=runtime::ExecutionEventKind::kImportGate;pending_=event->event_id;state_=State::Pending;return true;} if(packet.kind==static_cast<std::uint32_t>(protocol::EventKind::kProcessExit)){event->kind=runtime::ExecutionEventKind::kProcessExit; state_=State::Exited; Close(); return true;} event->kind=runtime::ExecutionEventKind::kFault;state_=State::Failed;return true; }
+ bool Wait(runtime::ExecutionEvent* event,std::string* error){ if(state_!=State::Running||event==nullptr){Error(error,"Linux helper is not running");return false;} protocol::ExecutionEvent packet; if(!Receive(protocol::MessageType::kExecutionEvent,&packet,error)){return ReportChildFailure(event,error);} event->event_id=EventId(packet.event_id_low,packet.event_id_high);event->thread_id=packet.thread_id;event->instruction_pointer=runtime::GuestAddress(packet.instruction_pointer);event->stack_pointer=runtime::GuestAddress(packet.stack_pointer);event->gate_address=runtime::GuestAddress(packet.gate_address);event->status_code=packet.status_code; if(packet.kind==static_cast<std::uint32_t>(protocol::EventKind::kImportGate)){event->kind=runtime::ExecutionEventKind::kImportGate;pending_=event->event_id;state_=State::Pending;return true;} if(packet.kind==static_cast<std::uint32_t>(protocol::EventKind::kProcessExit)){event->kind=runtime::ExecutionEventKind::kProcessExit; state_=State::Exited; Close(); return true;} event->kind=runtime::ExecutionEventKind::kFault;state_=State::Failed;return true; }
  bool Memory(runtime::GuestAddress address,std::span<std::uint8_t> bytes,std::string* error){ if(state_!=State::Pending||bytes.size()>kTransferLimit){Error(error,"guest memory is unavailable");return false;}protocol::ReadMemoryRequest req{address.value(),static_cast<std::uint32_t>(bytes.size())};if(!Send(protocol::MessageType::kReadMemory,&req,sizeof(req),error))return false;protocol::MessageHeader h;if(!Header(&h,error)||h.type!=static_cast<std::uint32_t>(protocol::MessageType::kMemoryData)||h.payload_size!=bytes.size()||(!bytes.empty()&&!ReadExact(out_,bytes.data(),static_cast<std::uint32_t>(bytes.size())))){Error(error,"cannot read Linux helper memory");return false;}return true; }
  bool Write(runtime::GuestAddress address,std::span<const std::uint8_t> bytes,std::string* error){if(state_!=State::Pending||bytes.size()>kTransferLimit){Error(error,"guest memory is unavailable");return false;}protocol::ReadMemoryRequest req{address.value(),static_cast<std::uint32_t>(bytes.size())};std::vector<std::uint8_t> p(sizeof(req)+bytes.size());std::memcpy(p.data(),&req,sizeof(req));if(!bytes.empty())std::memcpy(p.data()+sizeof(req),bytes.data(),bytes.size());protocol::WriteMemoryResult result;if(!Send(protocol::MessageType::kWriteMemory,p.data(),static_cast<std::uint32_t>(p.size()),error)||!Receive(protocol::MessageType::kWriteResult,&result,error)||result.success!=1||result.size!=bytes.size()){Error(error,"cannot write Linux helper memory");return false;}return true;}
  bool Complete(const runtime::ImportCompletion& completion,std::string* error){if(state_!=State::Pending||completion.event_id!=pending_){Error(error,"invalid Linux helper import completion");return false;}protocol::CompleteImport p; p.event_id_low=static_cast<std::uint32_t>(completion.event_id);p.event_id_high=static_cast<std::uint32_t>(completion.event_id>>32);p.eax=completion.eax;p.edx=completion.edx;p.stack_bytes_to_pop=completion.stack_bytes_to_pop;p.action=completion.action==runtime::ImportCompletionAction::kContinue?0:1;if(!Send(protocol::MessageType::kCompleteImport,&p,sizeof(p),error)){Stop();return false;}state_=State::Running;return true;}
  void Stop(){Close();if(pid_>0){kill(pid_,SIGKILL);while(waitpid(pid_,nullptr,0)<0&&errno==EINTR){}pid_=-1;}if(state_!=State::Exited)state_=State::Failed;}
 private:
  enum class State{Idle,Prepared,Running,Pending,Exited,Failed};
+ bool ReportChildFailure(runtime::ExecutionEvent* event,std::string* error){
+  int status=0;
+  const pid_t result=waitpid(pid_,&status,WNOHANG);
+  if(result==pid_){
+   pid_=-1;
+   Close();
+   state_=State::Failed;
+   if(WIFSIGNALED(status)){
+    *event={};
+    event->kind=runtime::ExecutionEventKind::kFault;
+    event->status_code=static_cast<std::uint32_t>(WTERMSIG(status));
+    if(error!=nullptr)error->clear();
+    return true;
+   }
+   if(error!=nullptr&&error->empty())*error="Linux helper exited before reporting an execution event";
+   return false;
+  }
+  Stop();
+  return false;
+ }
  bool Launch(std::string* error){int a[2]={-1,-1},b[2]={-1,-1};if(pipe(a)!=0||pipe(b)!=0){Error(error,"cannot create Linux helper pipes");return false;}pid_=fork();if(pid_==0){dup2(a[0],0);dup2(b[1],1);close(a[0]);close(a[1]);close(b[0]);close(b[1]);execl(path_.c_str(),path_.c_str(),static_cast<char*>(nullptr));_exit(127);}if(pid_<0){Error(error,"cannot fork Linux helper");return false;}close(a[0]);close(b[1]);in_=a[1];out_=b[0];return true;}
  void Close(){if(in_>=0){close(in_);in_=-1;}if(out_>=0){close(out_);out_=-1;}}
  bool Send(protocol::MessageType type,const void* p,std::uint32_t n,std::string* e){protocol::MessageHeader h;h.type=static_cast<std::uint32_t>(type);h.payload_size=n;if(!WriteExact(in_,&h,sizeof(h))||(n&&!WriteExact(in_,p,n))){Error(e,"cannot write Linux helper packet");return false;}return true;}

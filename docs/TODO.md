@@ -4,7 +4,25 @@
 
 *This file contains only active work and unresolved items. Completed items are moved to [Implemented](IMPLEMENTED.md).*
 
+다음 세션은 [v0.0.11 작업 인계](work-logs/20260828-081-v0.0.11-session-handoff.md)에서 시작한다. Win32 검증을 우선하며 Linux 작업 077은 사용자 결정에 따라 잠시 보류한다.
+
+*Start the next session from the [v0.0.11 session handoff](work-logs/20260828-081-v0.0.11-session-handoff.md). Prioritize Win32 validation; Linux Task 077 is temporarily paused by user decision.*
+
 ## 현재 진행 / In progress
+
+- [ ] 작업 077 — Linux 원본 실행 경로
+  - [x] Linux x86-64 host/i386 helper synthetic PE32 mapping·relocation·TLS·import gate IPC 검증
+  - [x] X11·Wayland SDL3/OpenGL 공용 backend build 검증
+  - [x] production i386 helper와 Linux `re2dj --run`을 연결해 원본 첫 import/fault/exit 보고
+  - [x] guest stack·TEB/PEB·FS와 signal fault 경계 구현
+  - [ ] 공용 Win32 import dispatcher, ABI marshalling, guest memory·handle·module service 구현
+  - [ ] kernel32·USER32·VFS·INI·GDI HLE로 창과 첫 자산 접근 도달
+  - [ ] guest callback, nested import, thread·TLS·동기화 구현
+  - [ ] 공용 DirectDraw/Direct3D/DirectSound COM facade를 SDL graphics/audio/input에 연결
+  - [ ] 보호된 `ez2dj.exe` self-modifying code·LPTDI 환경·raw I/O 지원
+  - [ ] helper 자동 탐색, overlay CLI, synthetic CI와 Linux 원본 실행 가이드 완성
+
+  *Task 077 — Execute the original x86 PE32 in a Linux i386 helper behind the shared Win32 HLE and x86-64 SDL services. Bring up the unprotected build first, then add the protected cabinet executable's environment boundaries.*
 
 - [ ] 작업 072 — 렌더링 정확성·성능 회복
   - [x] surface별 OpenGL texture cache와 dirty revision으로 매 draw 전체 upload를 제거
@@ -15,6 +33,13 @@
   - [ ] 키보드와 legacy I/O port 입력으로 메뉴·게임 상태 전이가 가능한지 확인
 
   *Task 072 — Rendering and detached-runtime implementation is complete. User revalidation of visuals, audio, and input remains active.*
+
+- [ ] 작업 080 — Win32 오디오 master gain 사용자 재검증
+  - [x] DirectSound track gain과 분리된 SDL mixer master gain 추가
+  - [x] 제품 기본값 `+6 dB`와 `--audio-gain-db -24..+18` 전달·runtime 검증
+  - [ ] 실제 HDD에서 `+6 dB`와 `+12 dB`의 체감 음량·clipping 비교
+
+  *Task 080 — The Win32 product now has independent SDL master gain with a `+6 dB` default and a bounded CLI override. User listening comparison at `+6 dB` and `+12 dB` remains.*
 
 - [ ] 작업 074 — 누락 이미지 합성 추적
   - [x] `USER32!LoadImageA` VFS wrapper 구현과 IAT 패치 동작 확인

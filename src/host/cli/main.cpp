@@ -3,12 +3,13 @@
 // The original HDD contents arrive as a directory path, never as a disk image
 // and never from a fixed location inside the repository. Everything this entry
 // point does is orchestration: it validates the directory, scans it, resolves a
-// target profile, and reports the result. Loading and execution belong to the
-// runtime layer, which does not exist yet.
+// target profile, and enters an available platform execution backend.
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +20,12 @@
 #include "re2dj/storage/guest_path.h"
 #include "re2dj/target/target_profile.h"
 #include "re2dj/version.h"
+
+#if defined(__linux__)
+#include "re2dj/platform/linux/original_runner.h"
+#elif defined(_WIN32)
+#include "re2dj/platform/windows/original_process_backend.h"
+#endif
 
 namespace
 {
@@ -33,8 +40,11 @@ constexpr int kExitNotImplemented = 3;
 struct Options
 {
     std::filesystem::path hdd_directory;
+    std::filesystem::path linux_helper;
     std::string target_id;
     std::string resolve_path;
+    float audio_gain_db = 6.0f;
+    bool audio_gain_explicit = false;
     bool list_targets = false;
     bool run = false;
     bool show_help = false;
@@ -56,12 +66,17 @@ void PrintUsage()
         "  --list-targets      List target profiles found in the directory.\n"
         "  --resolve <path>    Resolve one guest path (for example\n"
         "                      \"C:\\\\EZ2DJ\\\\DATA\\\\SONG.EZ\") and exit.\n"
-        "  --run               Start the guest. Not implemented yet.\n"
+        "  --run               Start the selected guest executable. Windows\n"
+        "                      currently supports target ez2dj1stse.\n"
+        "  --linux-helper <path>\n"
+        "                      32-bit native helper used by --run on Linux.\n"
+        "  --audio-gain-db <dB>\n"
+        "                      Windows output gain (-24..+18, default +6).\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
         "\n"
-        "The HDD directory is read only. Guest writes will go to a separate\n"
-        "overlay directory once the runtime layer exists.\n",
+        "The HDD directory is read only. Supported execution paths route\n"
+        "guest writes to a separate overlay directory.\n",
         std::string(re2dj::VersionString()).c_str());
 }
 
@@ -106,6 +121,40 @@ bool ParseOptions(int argc, char** argv, Options* options)
                 return false;
             }
             options->hdd_directory = std::filesystem::path(value);
+        }
+        else if (argument == "--linux-helper")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            options->linux_helper = std::filesystem::path(value);
+        }
+        else if (argument == "--audio-gain-db")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            try
+            {
+                std::size_t parsed = 0;
+                options->audio_gain_db = std::stof(value, &parsed);
+                if (parsed != value.size() || !std::isfinite(options->audio_gain_db) ||
+                    options->audio_gain_db < -24.0f || options->audio_gain_db > 18.0f)
+                {
+                    throw std::out_of_range("audio gain");
+                }
+            }
+            catch (const std::exception&)
+            {
+                std::fprintf(stderr,
+                             "error: --audio-gain-db must be between -24 and +18 dB\n");
+                return false;
+            }
+            options->audio_gain_explicit = true;
         }
         else if (argument == "--target")
         {
@@ -191,6 +240,13 @@ int main(int argc, char** argv)
         PrintUsage();
         return options.show_help ? kExitOk : kExitUsage;
     }
+#if !defined(_WIN32)
+    if (options.audio_gain_explicit)
+    {
+        std::fprintf(stderr, "error: --audio-gain-db is currently supported only on Windows\n");
+        return kExitNotImplemented;
+    }
+#endif
     if (options.hdd_directory.empty())
     {
         std::fprintf(stderr, "error: --hdd <directory> is required\n");
@@ -282,12 +338,14 @@ int main(int argc, char** argv)
                 std::string(re2dj::target::ExecutableFormatHintName(selected->format_hint))
                     .c_str());
 
+    const re2dj::hdd::ExecutableEntry* selected_entry = nullptr;
     for (const re2dj::hdd::ExecutableEntry& entry : scan.executables)
     {
         if (entry.relative_path != selected->executable_relative_path)
         {
             continue;
         }
+        selected_entry = &entry;
         const re2dj::exe::PeImageInfo& info = entry.pe_info;
         std::printf("machine         : %s\n", std::string(re2dj::exe::MachineName(info.machine)).c_str());
         std::printf("magic           : %s\n", std::string(re2dj::exe::MagicName(info.magic)).c_str());
@@ -314,14 +372,96 @@ int main(int argc, char** argv)
     if (!options.run)
     {
         std::printf(
-            "\nNothing was executed. Pass --run once the runtime layer lands, or\n"
-            "use re2dj_pe_analyzer for a full header dump.\n");
+            "\nNothing was executed. Pass --run to enter the available execution\n"
+            "backend, or use re2dj_pe_analyzer for a full header dump.\n");
         return kExitOk;
     }
 
+#if defined(__linux__)
+    if (options.linux_helper.empty())
+    {
+        std::fprintf(stderr,
+                     "\nerror: --linux-helper <path> is required with --run on Linux.\n");
+        return kExitUsage;
+    }
+    if (selected_entry == nullptr)
+    {
+        std::fprintf(stderr, "\nerror: selected executable metadata is unavailable.\n");
+        return kExitHddError;
+    }
+
+    std::filesystem::path executable_path;
+    if (!root.ResolveFile(selected->executable_relative_path, &executable_path))
+    {
+        std::fprintf(stderr, "\nerror: selected executable is no longer available.\n");
+        return kExitHddError;
+    }
+
+    re2dj::platform::linux::OriginalRunResult run_result;
+    if (!re2dj::platform::linux::RunOriginalUntilBoundary(executable_path,
+                                                           selected_entry->pe_info,
+                                                           options.linux_helper,
+                                                           &run_result,
+                                                           &error))
+    {
+        std::fprintf(stderr, "\nerror: Linux execution failed: %s\n", error.c_str());
+        return kExitNotImplemented;
+    }
+
+    std::printf("\nload base       : 0x%08x\n", run_result.load_base.value());
+    std::printf("entry point     : 0x%08x\n", run_result.entry_point.value());
+    switch (run_result.boundary)
+    {
+    case re2dj::platform::linux::OriginalRunBoundary::kImportGate:
+        if (run_result.by_ordinal)
+        {
+            std::printf("first boundary  : import %s!#%u\n",
+                        run_result.module.c_str(),
+                        static_cast<unsigned>(run_result.ordinal));
+        }
+        else
+        {
+            std::printf("first boundary  : import %s!%s\n",
+                        run_result.module.c_str(),
+                        run_result.name.c_str());
+        }
+        std::printf("gate / eip / esp: 0x%08x / 0x%08x / 0x%08x\n",
+                    run_result.gate_address.value(),
+                    run_result.instruction_pointer.value(),
+                    run_result.stack_pointer.value());
+        std::fprintf(stderr,
+                     "execution stopped cleanly at the first unimplemented Win32 import.\n");
+        return kExitNotImplemented;
+    case re2dj::platform::linux::OriginalRunBoundary::kProcessExit:
+        std::printf("first boundary  : process exit (guest status 0x%08x)\n",
+                    run_result.status_code);
+        return kExitOk;
+    case re2dj::platform::linux::OriginalRunBoundary::kFault:
+        std::fprintf(stderr,
+                     "first boundary  : guest fault (host signal/status %u, eip 0x%08x)\n",
+                     run_result.status_code,
+                     run_result.instruction_pointer.value());
+        return kExitNotImplemented;
+    case re2dj::platform::linux::OriginalRunBoundary::kStopped:
+        std::fprintf(stderr, "first boundary  : guest stopped\n");
+        return kExitNotImplemented;
+    }
+#elif defined(_WIN32)
+    re2dj::platform::windows::OriginalProcessOptions run_options;
+    run_options.hdd_directory = root.root();
+    run_options.target_id = selected->id;
+    run_options.audio_gain_db = options.audio_gain_db;
+    const int run_result =
+        re2dj::platform::windows::RunOriginalProcess(run_options, &error);
+    if (run_result < 0)
+    {
+        std::fprintf(stderr, "\nerror: Windows execution failed: %s\n", error.c_str());
+        return kExitNotImplemented;
+    }
+    return run_result;
+#else
     std::fprintf(stderr,
-                 "\nerror: the execution backend is not implemented yet.\n"
-                 "       The loader, guest address space, and Win32 HLE layer are\n"
-                 "       still design-only. See ARCHITECTURE.md sections 7 and 8.\n");
+                 "\nerror: --run is not connected to an execution backend on this host.\n");
     return kExitNotImplemented;
+#endif
 }

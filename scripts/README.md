@@ -6,12 +6,10 @@
 
 | 스크립트 | 호스트 | 내용 |
 | --- | --- | --- |
-| `build.ps1` | 64-bit Windows | configure + build |
-| `test_all.ps1` | 64-bit Windows | 경고를 오류로 하여 build + ctest |
+| `build.ps1` | 64-bit Windows + WOW64 | Win32 runtime configure + build |
+| `test_all.ps1` | 64-bit Windows + WOW64 | Win32 runtime build + ctest, 경고를 오류로 처리 |
 | `test_windows_native_helper_probe.ps1` | 64-bit Windows + WOW64 | Win32 x86 native helper probe build + ctest |
-| `test_windows_native_ipc_probe.ps1` | 64-bit Windows + WOW64 | x64 host / x86 helper synthetic PE32 IPC integration probe |
-| `stage_windows_native_helper.ps1` | 64-bit Windows + WOW64 | x64 observer와 Win32 helper를 빌드하고 helper를 `helpers/win32/`로 staging |
-| `test_linux_native_helper_probe.sh` | Linux x86-64 + i386 multilib | x64 host / i386 helper native gate IPC integration probe |
+| `test_linux_native_helper_probe.sh` | Linux x86-64 + i386 multilib | production i386 helper의 synthetic PE32 IPC integration 검증 |
 | `build.sh` | Linux x86-64 | configure + build |
 | `test_all.sh` | Linux x86-64 | 경고를 오류로 하여 build + ctest |
 

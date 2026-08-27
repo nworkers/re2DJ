@@ -4,6 +4,10 @@ Windows 전용 backend와 probe를 둡니다. `native_helper_backend.cpp`는 x86
 
 *Windows-specific backends and probes. `native_helper_backend.cpp` encapsulates the x86 helper process and protocol-v3 IPC as an `ExecutionBackend` and receives import metadata. `native_pe_image.cpp` owns requested-base mapping, relocations, protection, and TLS callbacks; `native_import_thunks.cpp` parses named/ordinal imports and emits native thunks. `native_ipc_helper.cpp` orchestrates protocol and execution. The two probes validate a minimal gate call and a non-preferred synthetic-PE32 round trip.*
 
+`original_process_backend.cpp`는 Windows loader가 원본 PE를 주 image로 적재하는 검증된 실행 engine을 제품 CLI와 진단 launcher가 함께 사용하게 합니다. 제품 facade는 현재 검증된 `ez2dj1stse` 정책만 허용하며, runtime 주입과 import-thunk HLE를 활성화한 detached 실행을 조율합니다.
+
+*`original_process_backend.cpp` shares the verified engine, in which the Windows loader maps the original PE as the main image, between the product CLI and diagnostic launcher. The product facade currently permits only the verified `ez2dj1stse` policy and orchestrates detached execution with runtime injection and import-thunk HLE.*
+
 rePIU와 달리 주 host는 64비트이므로 디렉터리 이름에 비트 폭을 넣지 않습니다. 32비트 helper도 Windows platform 구현이므로 이 아래에 둡니다. 여기서만 `<windows.h>`를 포함할 수 있습니다.
 
 *Unlike rePIU the primary host is 64-bit, so the directory name carries no bit width. The 32-bit helper also lives here as a Windows platform implementation. This is the only place that may include `<windows.h>`.*

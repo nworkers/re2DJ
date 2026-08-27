@@ -22,36 +22,6 @@
       }
     },
     {
-      "name": "windows-x64-debug",
-      "displayName": "Windows x64 Debug (MSVC)",
-      "generator": "Visual Studio 18 2026",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-x64",
-      "cacheVariables": {
-        "RE2DJ_BUILD_TESTS": "ON"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      }
-    },
-    {
-      "name": "windows-x64-ninja",
-      "displayName": "Windows x64 (Ninja, single config)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/windows-x64-ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "RE2DJ_BUILD_TESTS": "ON"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      }
-    },
-    {
       "name": "windows-x86-native-probe",
       "displayName": "Windows x86 Native Helper Probe (MSVC)",
       "generator": "Visual Studio 18 2026",
@@ -92,16 +62,17 @@
       }
     },
     {
-      "name": "linux-x86-native-probe",
-      "displayName": "Linux i386 Native Helper Probe",
+      "name": "linux-x86-helper",
+      "displayName": "Linux i386 Native Helper",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/linux-x86-native-probe",
+      "binaryDir": "${sourceDir}/build/linux-x86-helper",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-m32",
         "CMAKE_CXX_FLAGS": "-m32",
         "CMAKE_EXE_LINKER_FLAGS": "-m32",
         "RE2DJ_BUILD_TESTS": "OFF",
-        "RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE": "ON"
+        "RE2DJ_BUILD_LINUX_NATIVE_HELPER": "ON"
       },
       "condition": {
         "type": "equals",
@@ -128,15 +99,6 @@
       "configuration": "Debug"
     },
     {
-      "name": "windows-x64-debug",
-      "configurePreset": "windows-x64-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "windows-x64-ninja",
-      "configurePreset": "windows-x64-ninja"
-    },
-    {
       "name": "windows-x86-native-probe",
       "configurePreset": "windows-x86-native-probe",
       "configuration": "Debug",
@@ -151,9 +113,9 @@
       "configurePreset": "linux-x64-release"
     },
     {
-      "name": "linux-x86-native-probe",
-      "configurePreset": "linux-x86-native-probe",
-      "targets": ["re2dj_linux_native_ipc_helper_probe"]
+      "name": "linux-x86-helper",
+      "configurePreset": "linux-x86-helper",
+      "targets": ["re2dj_linux_native_ipc_helper"]
     },
     {
       "name": "web",
@@ -164,14 +126,6 @@
     {
       "name": "windows-x86-debug",
       "configurePreset": "windows-x86-debug",
-      "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "windows-x64-debug",
-      "configurePreset": "windows-x64-debug",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true

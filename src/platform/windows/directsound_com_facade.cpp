@@ -8,6 +8,8 @@
 #include "../../audio/sdl3_mixer_audio_backend.h"
 #include "re2dj/audio/legacy_audio_buffer.h"
 
+extern "C" __declspec(dllexport) volatile float g_re2dj_audio_master_gain = 1.0f;
+
 namespace
 {
 using re2dj::audio::LegacyAudioBuffer;
@@ -139,9 +141,16 @@ extern "C" HRESULT WINAPI Re2djHleDirectSoundCreate(GUID*, LPDIRECTSOUND* direct
         std::snprintf(message, sizeof(message), "re2dj:audio:sdl3-headless:%s", backend.error().c_str());
         OutputDebugStringA(message);
     }
-    if (!backend.ready()) return DSERR_NODRIVER;
+    if (!backend.ready() ||
+        !backend.SetMasterGain(static_cast<float>(g_re2dj_audio_master_gain)))
+        return DSERR_NODRIVER;
     auto* facade = new (std::nothrow) DirectSoundFacade;
     if (!facade) return DSERR_OUTOFMEMORY;
     *direct_sound = facade;
     return DS_OK;
+}
+
+extern "C" __declspec(dllexport) float WINAPI Re2djHleGetAudioMasterGain()
+{
+    return Sdl3MixerAudioBackend::Instance().master_gain();
 }

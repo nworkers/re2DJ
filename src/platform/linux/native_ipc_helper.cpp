@@ -10,6 +10,7 @@
 
 #include "../native_helper_protocol.h"
 #include "native_import_thunks.h"
+#include "native_process_bootstrap.h"
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/runtime/pe_loader.h"
 
@@ -240,7 +241,11 @@ bool MapPe32Image(const std::vector<std::uint8_t>& file,
     return true;
 }
 
-bool RunTlsCallbacks(const re2dj::exe::PeImageInfo& info, const MappedImage& image)
+bool RunTlsCallbacks(const re2dj::exe::PeImageInfo& info,
+                     const MappedImage& image,
+                     re2dj::platform::linux::NativeProcessBootstrap* bootstrap,
+                     re2dj::platform::linux::NativeGuestFault* fault,
+                     std::string* error)
 {
     const auto* directory = info.Directory(re2dj::exe::PeDirectoryIndex::kTls);
     if (directory == nullptr || directory->virtual_address == 0 || directory->size == 0)
@@ -279,10 +284,10 @@ bool RunTlsCallbacks(const re2dj::exe::PeImageInfo& info, const MappedImage& ima
         {
             return false;
         }
-        using TlsCallback = void(__attribute__((stdcall)) *)(void*, std::uint32_t, void*);
-        const auto callback = reinterpret_cast<TlsCallback>(
-            static_cast<std::uintptr_t>(callback_address));
-        callback(image.memory, 1, nullptr);
+        if (!bootstrap->RunTlsCallback(callback_address, base, fault, error))
+        {
+            return false;
+        }
     }
     return false;
 }
@@ -369,6 +374,20 @@ bool SendImportMetadata(const re2dj::runtime::ImportGate& gate)
     }
     return SendPacket(protocol::MessageType::kImportMetadata,
                       payload.data(), static_cast<std::uint32_t>(payload.size()));
+}
+
+bool SendFaultEvent(const re2dj::platform::linux::NativeGuestFault& fault)
+{
+    protocol::ExecutionEvent event;
+    event.kind = static_cast<std::uint32_t>(protocol::EventKind::kFault);
+    const std::uint64_t event_id = next_event_id++;
+    event.event_id_low = static_cast<std::uint32_t>(event_id);
+    event.event_id_high = static_cast<std::uint32_t>(event_id >> 32);
+    event.thread_id = static_cast<std::uint32_t>(syscall(SYS_gettid));
+    event.instruction_pointer = fault.instruction_pointer;
+    event.stack_pointer = fault.stack_pointer;
+    event.status_code = fault.status_code;
+    return SendPacket(protocol::MessageType::kExecutionEvent, &event, sizeof(event));
 }
 
 bool MemoryRangeAllowed(std::uint32_t address, std::uint32_t size)
@@ -536,6 +555,7 @@ int main()
         MappedImage image;
         re2dj::runtime::ImportGateTable gates;
         re2dj::platform::linux::NativeImportThunkRegion thunks;
+        re2dj::platform::linux::NativeProcessBootstrap bootstrap;
         if (!re2dj::exe::ReadPeImageInfo(file.data(), file.size(), &info, &error) ||
             !MapPe32Image(file, info, load.requested_base, &image) ||
             !re2dj::platform::linux::BindNativeImportThunks(
@@ -546,7 +566,8 @@ int main()
                 reinterpret_cast<std::uintptr_t>(&completion_stack_bytes),
                 &gates,
                 &thunks,
-                &error))
+                &error) ||
+            !bootstrap.Initialize(load.requested_base, &error))
         {
             SendError(error.empty() ? "cannot map native PE image" : error);
             return 4;
@@ -579,15 +600,22 @@ int main()
             re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
             return 6;
         }
-        if (!RunTlsCallbacks(info, image))
+        re2dj::platform::linux::NativeGuestFault fault;
+        if (!RunTlsCallbacks(info, image, &bootstrap, &fault, &error))
         {
+            const bool sent = fault.status_code != 0 ? SendFaultEvent(fault) : SendError(error);
             ReleaseMappedImage(&image);
             re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
-            return 6;
+            return sent ? 0 : 6;
         }
-        using GuestEntry = std::uint32_t (*)();
-        const auto entry = reinterpret_cast<GuestEntry>(static_cast<std::uintptr_t>(image.entry_point));
-        const std::uint32_t result_code = entry();
+        std::uint32_t result_code = 0;
+        if (!bootstrap.RunEntry(image.entry_point, &result_code, &fault, &error))
+        {
+            const bool sent = fault.status_code != 0 ? SendFaultEvent(fault) : SendError(error);
+            ReleaseMappedImage(&image);
+            re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
+            return sent ? 0 : 7;
+        }
         protocol::ExecutionEvent event;
         event.kind = static_cast<std::uint32_t>(protocol::EventKind::kProcessExit);
         const std::uint64_t exit_event_id = next_event_id++;
@@ -602,21 +630,6 @@ int main()
         return sent && !gate_failed ? 0 : 7;
     }
 
-    if (static_cast<protocol::MessageType>(request.type) != protocol::MessageType::kStart ||
-        request.payload_size != 0)
-    {
-        return 1;
-    }
-
-    const std::uint32_t result = NativeImportGate(41);
-    protocol::ExecutionEvent event;
-    event.kind = static_cast<std::uint32_t>(protocol::EventKind::kProcessExit);
-    event.event_id_low = 2;
-    event.thread_id = static_cast<std::uint32_t>(syscall(SYS_gettid));
-    event.status_code = result;
-    if (!SendPacket(protocol::MessageType::kExecutionEvent, &event, sizeof(event)))
-    {
-        return 2;
-    }
-    return result == 42 ? 0 : 3;
+    SendError("expected LoadImage request");
+    return 1;
 }

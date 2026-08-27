@@ -24,36 +24,69 @@ option(RE2DJ_BUILD_TESTS "Build the unit test suite" ON)
 option(RE2DJ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(RE2DJ_BUILD_NATIVE_HELPER_PROBE
        "Build the Windows x86 native helper feasibility probe" OFF)
-option(RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE
-       "Build the Linux i386 native helper feasibility probe" OFF)
+option(RE2DJ_BUILD_LINUX_NATIVE_HELPER
+       "Build the Linux i386 native helper" OFF)
 option(RE2DJ_ENABLE_SDL3_AUDIO "Build the SDL3/SDL3_mixer audio backend" ON)
+
+if(NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
+    include(FetchContent)
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+    set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+    set(SDL_VIDEO ON CACHE BOOL "" FORCE)
+    set(SDL_RENDER OFF CACHE BOOL "" FORCE)
+    set(SDL_GPU OFF CACHE BOOL "" FORCE)
+    set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
+    set(SDL_JOYSTICK OFF CACHE BOOL "" FORCE)
+    set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+    set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
+    set(SDL_POWER OFF CACHE BOOL "" FORCE)
+    set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
+    set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
+    set(SDL_TRAY OFF CACHE BOOL "" FORCE)
+    if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4 AND RE2DJ_ENABLE_SDL3_AUDIO)
+        set(SDL_AUDIO ON CACHE BOOL "" FORCE)
+    else()
+        set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
+    endif()
+    FetchContent_Declare(SDL3
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+        GIT_TAG 147a8ee32dbf9ac02f3794964490687b6bbda1bc
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(SDL3)
+endif()
 
 # Win32 x86 is the primary Windows-native host during the current bring-up.
 # A non-Windows 32-bit build remains reserved for explicit helper probes.
 if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT WIN32 AND NOT RE2DJ_BUILD_NATIVE_HELPER_PROBE AND
-   NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE)
+   NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     message(WARNING
         "Configuring an unsupported 32-bit non-Windows host build.")
 endif()
 
-if(RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE)
+if(RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
         message(FATAL_ERROR
-            "RE2DJ_BUILD_LINUX_NATIVE_HELPER_PROBE requires a Linux i386 build")
+            "RE2DJ_BUILD_LINUX_NATIVE_HELPER requires a Linux i386 build")
     endif()
-    add_executable(re2dj_linux_native_ipc_helper_probe
+    add_executable(re2dj_linux_native_ipc_helper
         src/platform/linux/native_import_thunks.cpp
-        src/platform/linux/native_ipc_helper_probe.cpp
+        src/platform/linux/native_ipc_helper.cpp
+        src/platform/linux/native_process_bootstrap.cpp
     )
-    target_compile_options(re2dj_linux_native_ipc_helper_probe
+    target_compile_options(re2dj_linux_native_ipc_helper
         PRIVATE -fno-omit-frame-pointer
     )
-    target_link_libraries(re2dj_linux_native_ipc_helper_probe PRIVATE re2dj_core re2dj_warnings)
+    target_link_libraries(re2dj_linux_native_ipc_helper PRIVATE re2dj_core re2dj_warnings)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     add_library(re2dj_linux_native_backend STATIC
         src/platform/linux/native_helper_backend.cpp
+        src/platform/linux/original_runner.cpp
     )
     target_link_libraries(re2dj_linux_native_backend
         PUBLIC re2dj_core
@@ -69,7 +102,7 @@ endif()
 
 add_library(re2dj_warnings INTERFACE)
 if(MSVC)
-    target_compile_options(re2dj_warnings INTERFACE /W4 /permissive-)
+    target_compile_options(re2dj_warnings INTERFACE /W4 /permissive- /utf-8)
     if(RE2DJ_WARNINGS_AS_ERRORS)
         target_compile_options(re2dj_warnings INTERFACE /WX)
     endif()
@@ -83,13 +116,29 @@ else()
     endif()
 endif()
 
+add_library(re2dj_legacy_graphics STATIC
+    src/graphics/legacy_draw_command.cpp
+    src/graphics/legacy_texture.cpp
+    src/graphics/legacy_vertex_buffer.cpp
+)
+target_include_directories(re2dj_legacy_graphics PUBLIC include)
+target_link_libraries(re2dj_legacy_graphics PRIVATE re2dj_warnings)
+
+if(NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
+    add_library(re2dj_sdl3_opengl_backend STATIC
+        src/graphics/sdl3_opengl_backend.cpp
+    )
+    target_include_directories(re2dj_sdl3_opengl_backend PUBLIC include)
+    target_link_libraries(re2dj_sdl3_opengl_backend
+        PUBLIC re2dj_legacy_graphics
+        PRIVATE SDL3::SDL3-static re2dj_warnings
+    )
+endif()
+
 # Platform-neutral core. Nothing here may include a host OS header; see the
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
     src/audio/legacy_audio_buffer.cpp
-    src/graphics/legacy_draw_command.cpp
-    src/graphics/legacy_texture.cpp
-    src/graphics/legacy_vertex_buffer.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/legacy_io_port_bus.cpp
@@ -115,7 +164,10 @@ target_compile_definitions(re2dj_core
         RE2DJ_VERSION="${RE2DJ_VERSION}"
 )
 
-target_link_libraries(re2dj_core PRIVATE re2dj_warnings)
+target_link_libraries(re2dj_core
+    PUBLIC re2dj_legacy_graphics
+    PRIVATE re2dj_warnings
+)
 
 if(RE2DJ_BUILD_NATIVE_HELPER_PROBE)
     if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -142,30 +194,6 @@ endif()
 
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     if(RE2DJ_ENABLE_SDL3_AUDIO)
-        include(FetchContent)
-        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-        set(SDL_STATIC ON CACHE BOOL "" FORCE)
-        set(SDL_TESTS OFF CACHE BOOL "" FORCE)
-        set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
-        set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-        set(SDL_VIDEO OFF CACHE BOOL "" FORCE)
-        set(SDL_RENDER OFF CACHE BOOL "" FORCE)
-        set(SDL_GPU OFF CACHE BOOL "" FORCE)
-        set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
-        set(SDL_JOYSTICK OFF CACHE BOOL "" FORCE)
-        set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
-        set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
-        set(SDL_POWER OFF CACHE BOOL "" FORCE)
-        set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
-        set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
-        set(SDL_TRAY OFF CACHE BOOL "" FORCE)
-        FetchContent_Declare(SDL3
-            GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-            GIT_TAG 147a8ee32dbf9ac02f3794964490687b6bbda1bc
-            GIT_SHALLOW TRUE
-        )
-        FetchContent_MakeAvailable(SDL3)
-
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
         set(SDLMIXER_INSTALL OFF CACHE BOOL "" FORCE)
         set(SDLMIXER_TESTS OFF CACHE BOOL "" FORCE)
@@ -193,17 +221,13 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
 
     add_library(re2dj_windows_injected_runtime SHARED
         src/device/lptdi_challenge_response.cpp
-        src/graphics/legacy_draw_command.cpp
-        src/graphics/legacy_texture.cpp
-        src/graphics/legacy_vertex_buffer.cpp
         src/input/legacy_io_port_bus.cpp
         src/platform/windows/direct3d3_com_facade.cpp
-        src/platform/windows/direct3d3_opengl_backend.cpp
         src/platform/windows/injected_runtime.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
     target_link_libraries(re2dj_windows_injected_runtime
-        PRIVATE re2dj_warnings opengl32 dxguid
+        PRIVATE re2dj_sdl3_opengl_backend re2dj_warnings dxguid
     )
     if(RE2DJ_ENABLE_SDL3_AUDIO)
         target_sources(re2dj_windows_injected_runtime PRIVATE
@@ -227,46 +251,34 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
             ENVIRONMENT "SDL_AUDIODRIVER=dummy"
         )
     endif()
-    add_executable(re2dj_windows_x86_launcher_probe
+    add_library(re2dj_windows_original_process_backend STATIC
         src/tools/windows_original_process_probe/iat_verifier.cpp
         src/platform/windows/injected_runtime_loader.cpp
+        src/platform/windows/original_process_backend.cpp
         src/platform/windows/runtime_export_locator.cpp
         src/tools/windows_x86_launcher_probe/remote_module_exports.cpp
         src/tools/windows_x86_launcher_probe/main.cpp
     )
+    target_include_directories(re2dj_windows_original_process_backend PUBLIC include)
+    target_link_libraries(re2dj_windows_original_process_backend
+        PRIVATE re2dj_core re2dj_warnings
+    )
+    add_executable(re2dj_windows_x86_launcher_probe
+        src/tools/windows_x86_launcher_probe/entry.cpp
+    )
     target_link_libraries(re2dj_windows_x86_launcher_probe
-        PRIVATE re2dj_core re2dj_warnings
+        PRIVATE re2dj_windows_original_process_backend re2dj_warnings
     )
-endif()
-
-if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-    add_library(re2dj_windows_native_backend STATIC
-        src/platform/windows/native_helper_backend.cpp
-    )
-    target_link_libraries(re2dj_windows_native_backend
-        PUBLIC re2dj_core
-        PRIVATE re2dj_warnings
-    )
-    add_executable(re2dj_native_ipc_host_probe
-        src/platform/windows/native_ipc_host_probe.cpp
-    )
-    target_link_libraries(re2dj_native_ipc_host_probe
-        PRIVATE re2dj_windows_native_backend re2dj_warnings
-    )
-    add_executable(re2dj_windows_import_observer
-        src/tools/windows_import_observer/main.cpp
-    )
-    target_link_libraries(re2dj_windows_import_observer
-        PRIVATE re2dj_windows_native_backend re2dj_warnings
-    )
-    add_executable(re2dj_windows_original_process_probe
-        src/tools/windows_original_process_probe/iat_verifier.cpp
-        src/tools/windows_original_process_probe/main.cpp
-        src/tools/windows_original_process_probe/runtime_loader.cpp
-    )
-    target_link_libraries(re2dj_windows_original_process_probe
-        PRIVATE re2dj_core re2dj_warnings
-    )
+    if(RE2DJ_BUILD_TESTS)
+        add_executable(re2dj_windows_product_loader_probe
+            src/tools/windows_product_loader_probe/main.cpp
+        )
+        target_link_libraries(re2dj_windows_product_loader_probe
+            PRIVATE re2dj_windows_original_process_backend re2dj_warnings
+        )
+        add_test(NAME re2dj_windows_product_loader_probe
+                 COMMAND re2dj_windows_product_loader_probe)
+    endif()
 endif()
 
 # std::filesystem needs no separate link library on GCC 9+, Clang with
@@ -277,6 +289,12 @@ add_executable(re2dj
     src/host/cli/main.cpp
 )
 target_link_libraries(re2dj PRIVATE re2dj_core re2dj_warnings)
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    target_link_libraries(re2dj PRIVATE re2dj_windows_original_process_backend)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_link_libraries(re2dj PRIVATE re2dj_linux_native_backend)
+endif()
 
 # Non-executing analysis tools.
 add_executable(re2dj_hdd_probe

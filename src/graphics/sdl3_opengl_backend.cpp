@@ -1,7 +1,10 @@
-#define NOMINMAX
-#include <windows.h>
+#include <SDL3/SDL.h>
 
-#include <GL/gl.h>
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+#include <SDL3/SDL_opengles2.h>
+#else
+#include <SDL3/SDL_opengl.h>
+#endif
 
 #include <array>
 #include <cstddef>
@@ -12,9 +15,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "direct3d3_opengl_backend.h"
+#include "re2dj/graphics/sdl3_opengl_backend.h"
 
-namespace re2dj::platform::windows
+namespace re2dj::graphics
 {
 namespace
 {
@@ -40,8 +43,25 @@ using Uniform1fFunction = void(APIENTRY*)(GLint, GLfloat);
 using Uniform2fFunction = void(APIENTRY*)(GLint, GLfloat, GLfloat);
 using EnableVertexAttribArrayFunction = void(APIENTRY*)(GLuint);
 using DisableVertexAttribArrayFunction = void(APIENTRY*)(GLuint);
-using VertexAttribPointerFunction =
-    void(APIENTRY*)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*);
+using VertexAttribPointerFunction = void(APIENTRY*)(GLuint, GLint, GLenum, GLboolean, GLsizei,
+                                                    const void*);
+using DeleteTexturesFunction = void(APIENTRY*)(GLsizei, const GLuint*);
+using ViewportFunction = void(APIENTRY*)(GLint, GLint, GLsizei, GLsizei);
+using DisableFunction = void(APIENTRY*)(GLenum);
+using ClearColorFunction = void(APIENTRY*)(GLfloat, GLfloat, GLfloat, GLfloat);
+using ClearFunction = void(APIENTRY*)(GLbitfield);
+using GenTexturesFunction = void(APIENTRY*)(GLsizei, GLuint*);
+using BindTextureFunction = void(APIENTRY*)(GLenum, GLuint);
+using TexParameteriFunction = void(APIENTRY*)(GLenum, GLenum, GLint);
+using PixelStoreiFunction = void(APIENTRY*)(GLenum, GLint);
+using TexSubImage2dFunction = void(APIENTRY*)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum,
+                                              GLenum, const void*);
+using TexImage2dFunction = void(APIENTRY*)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum,
+                                           GLenum, const void*);
+using EnableFunction = void(APIENTRY*)(GLenum);
+using BlendFuncFunction = void(APIENTRY*)(GLenum, GLenum);
+using DrawArraysFunction = void(APIENTRY*)(GLenum, GLint, GLsizei);
+using GetErrorFunction = GLenum(APIENTRY*)();
 
 constexpr GLenum kVertexShader = 0x8b31;
 constexpr GLenum kFragmentShader = 0x8b30;
@@ -52,11 +72,8 @@ constexpr GLenum kClampToEdge = 0x812f;
 template <typename Function>
 bool LoadGlFunction(const char* name, Function* function)
 {
-    *function = reinterpret_cast<Function>(wglGetProcAddress(name));
-    return *function != nullptr && *function != reinterpret_cast<Function>(1) &&
-           *function != reinterpret_cast<Function>(2) &&
-           *function != reinterpret_cast<Function>(3) &&
-           *function != reinterpret_cast<Function>(-1);
+    *function = reinterpret_cast<Function>(SDL_GL_GetProcAddress(name));
+    return *function != nullptr;
 }
 
 struct GlVertex
@@ -70,14 +87,13 @@ std::array<float, 4> ArgbToFloats(std::uint32_t argb)
 {
     constexpr float scale = 1.0f / 255.0f;
     return {static_cast<float>((argb >> 16) & 0xff) * scale,
-            static_cast<float>((argb >> 8) & 0xff) * scale,
-            static_cast<float>(argb & 0xff) * scale,
+            static_cast<float>((argb >> 8) & 0xff) * scale, static_cast<float>(argb & 0xff) * scale,
             static_cast<float>((argb >> 24) & 0xff) * scale};
 }
 
 }  // namespace
 
-struct Direct3d3OpenGlBackend::Impl
+struct Sdl3OpenGlBackend::Impl
 {
     struct CachedTexture
     {
@@ -85,12 +101,12 @@ struct Direct3d3OpenGlBackend::Impl
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         std::uint64_t revision = 0;
-        graphics::Rgb565ColorKey color_key;
+        Rgb565ColorKey color_key;
     };
 
-    HWND window = nullptr;
-    HDC dc = nullptr;
-    HGLRC context = nullptr;
+    SDL_Window* window = nullptr;
+    SDL_GLContext context = nullptr;
+    bool owns_video_subsystem = false;
     GLuint program = 0;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
     bool frame_started = false;
@@ -116,12 +132,27 @@ struct Direct3d3OpenGlBackend::Impl
     EnableVertexAttribArrayFunction enable_vertex_attrib_array = nullptr;
     DisableVertexAttribArrayFunction disable_vertex_attrib_array = nullptr;
     VertexAttribPointerFunction vertex_attrib_pointer = nullptr;
+    DeleteTexturesFunction delete_textures = nullptr;
+    ViewportFunction viewport = nullptr;
+    DisableFunction disable = nullptr;
+    ClearColorFunction clear_color = nullptr;
+    ClearFunction clear = nullptr;
+    GenTexturesFunction gen_textures = nullptr;
+    BindTextureFunction bind_texture = nullptr;
+    TexParameteriFunction tex_parameter_i = nullptr;
+    PixelStoreiFunction pixel_store_i = nullptr;
+    TexSubImage2dFunction tex_sub_image_2d = nullptr;
+    TexImage2dFunction tex_image_2d = nullptr;
+    EnableFunction enable = nullptr;
+    BlendFuncFunction blend_func = nullptr;
+    DrawArraysFunction draw_arrays = nullptr;
+    GetErrorFunction get_error = nullptr;
 
     bool MakeCurrent(std::string* error)
     {
-        if (wglMakeCurrent(dc, context) == FALSE)
+        if (!SDL_GL_MakeCurrent(window, context))
         {
-            *error = "cannot make the Direct3D3 OpenGL context current";
+            *error = std::string("cannot make the SDL3 OpenGL context current: ") + SDL_GetError();
             return false;
         }
         return true;
@@ -145,9 +176,7 @@ struct Direct3d3OpenGlBackend::Impl
         }
         std::array<char, 512> message = {};
         GLsizei length = 0;
-        get_shader_info_log(shader,
-                            static_cast<GLsizei>(message.size() - 1),
-                            &length,
+        get_shader_info_log(shader, static_cast<GLsizei>(message.size() - 1), &length,
                             message.data());
         delete_shader(shader);
         *error = std::string("OpenGL shader compilation failed: ") + message.data();
@@ -156,8 +185,14 @@ struct Direct3d3OpenGlBackend::Impl
 
     bool CreateProgram(std::string* error)
     {
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+        constexpr char shader_version[] = "#version 100\n";
+        constexpr char fragment_precision[] = "precision mediump float;\n";
+#else
+        constexpr char shader_version[] = "#version 120\n";
+        constexpr char fragment_precision[] = "";
+#endif
         constexpr char vertex_source[] =
-            "#version 120\n"
             "attribute vec4 a_position;\n"
             "attribute vec4 a_color;\n"
             "attribute vec2 a_texture;\n"
@@ -168,12 +203,12 @@ struct Direct3d3OpenGlBackend::Impl
             "  float clip_w = 1.0 / a_position.w;\n"
             "  vec2 ndc = vec2(a_position.x * 2.0 / u_viewport.x - 1.0,\n"
             "                  1.0 - a_position.y * 2.0 / u_viewport.y);\n"
-            "  gl_Position = vec4(ndc * clip_w, (a_position.z * 2.0 - 1.0) * clip_w, clip_w);\n"
+            "  gl_Position = vec4(ndc * clip_w, (a_position.z * 2.0 - 1.0) * "
+            "clip_w, clip_w);\n"
             "  v_color = a_color;\n"
             "  v_texture = a_texture;\n"
             "}\n";
         constexpr char fragment_source[] =
-            "#version 120\n"
             "uniform sampler2D u_texture;\n"
             "uniform int u_texture_enabled;\n"
             "uniform int u_color_key_enabled;\n"
@@ -182,7 +217,8 @@ struct Direct3d3OpenGlBackend::Impl
             "varying vec4 v_color;\n"
             "varying vec2 v_texture;\n"
             "void main() {\n"
-            "  vec4 texel = u_texture_enabled != 0 ? texture2D(u_texture, v_texture) : vec4(1.0);\n"
+            "  vec4 texel = u_texture_enabled != 0 ? texture2D(u_texture, "
+            "v_texture) : vec4(1.0);\n"
             // Direct3D color keying drops matching texels regardless of the
             // blend factors, so it cannot ride on the alpha channel alone: a
             // copy blend of ONE and ZERO would write them out as solid key
@@ -195,12 +231,16 @@ struct Direct3d3OpenGlBackend::Impl
             "  gl_FragColor = output_color;\n"
             "}\n";
 
-        const GLuint vertex_shader = Compile(kVertexShader, vertex_source, error);
+        const std::string complete_vertex_source = std::string(shader_version) + vertex_source;
+        const std::string complete_fragment_source =
+            std::string(shader_version) + fragment_precision + fragment_source;
+        const GLuint vertex_shader = Compile(kVertexShader, complete_vertex_source.c_str(), error);
         if (vertex_shader == 0)
         {
             return false;
         }
-        const GLuint fragment_shader = Compile(kFragmentShader, fragment_source, error);
+        const GLuint fragment_shader =
+            Compile(kFragmentShader, complete_fragment_source.c_str(), error);
         if (fragment_shader == 0)
         {
             delete_shader(vertex_shader);
@@ -223,9 +263,7 @@ struct Direct3d3OpenGlBackend::Impl
         }
         std::array<char, 512> message = {};
         GLsizei length = 0;
-        get_program_info_log(program,
-                             static_cast<GLsizei>(message.size() - 1),
-                             &length,
+        get_program_info_log(program, static_cast<GLsizei>(message.size() - 1), &length,
                              message.data());
         delete_program(program);
         program = 0;
@@ -234,77 +272,124 @@ struct Direct3d3OpenGlBackend::Impl
     }
 };
 
-Direct3d3OpenGlBackend::Direct3d3OpenGlBackend() = default;
+Sdl3OpenGlBackend::Sdl3OpenGlBackend() = default;
 
-Direct3d3OpenGlBackend::~Direct3d3OpenGlBackend()
+Sdl3OpenGlBackend::~Sdl3OpenGlBackend()
 {
     if (impl_ == nullptr)
     {
         return;
     }
-    if (impl_->context != nullptr && impl_->dc != nullptr &&
-        wglMakeCurrent(impl_->dc, impl_->context) != FALSE)
+    if (impl_->context != nullptr && impl_->window != nullptr &&
+        SDL_GL_MakeCurrent(impl_->window, impl_->context))
     {
         for (const auto& [identity, texture] : impl_->textures)
         {
             (void)identity;
-            glDeleteTextures(1, &texture.name);
+            if (impl_->delete_textures != nullptr)
+            {
+                impl_->delete_textures(1, &texture.name);
+            }
         }
         if (impl_->program != 0 && impl_->delete_program != nullptr)
         {
             impl_->delete_program(impl_->program);
         }
-        wglMakeCurrent(nullptr, nullptr);
+        SDL_GL_MakeCurrent(impl_->window, nullptr);
     }
     if (impl_->context != nullptr)
     {
-        wglDeleteContext(impl_->context);
+        SDL_GL_DestroyContext(impl_->context);
     }
-    if (impl_->dc != nullptr && impl_->window != nullptr)
+    if (impl_->window != nullptr)
     {
-        ReleaseDC(impl_->window, impl_->dc);
+        SDL_DestroyWindow(impl_->window);
+    }
+    if (impl_->owns_video_subsystem)
+    {
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
     }
     delete impl_;
 }
 
-bool Direct3d3OpenGlBackend::Initialize(HWND window, std::string* error)
+bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::string* error)
 {
-    if (impl_ != nullptr || window == nullptr || error == nullptr)
+    if (impl_ != nullptr || error == nullptr || config.width == 0 || config.height == 0 ||
+        config.title == nullptr)
     {
         return false;
     }
     auto* const impl = new (std::nothrow) Impl;
     if (impl == nullptr)
     {
-        *error = "cannot allocate the Direct3D3 OpenGL backend";
+        *error = "cannot allocate the SDL3 OpenGL backend";
         return false;
     }
     impl_ = impl;
-    impl->window = window;
-    impl->dc = GetDC(window);
-    PIXELFORMATDESCRIPTOR descriptor = {};
-    descriptor.nSize = sizeof(descriptor);
-    descriptor.nVersion = 1;
-    descriptor.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-    descriptor.iPixelType = PFD_TYPE_RGBA;
-    descriptor.cColorBits = 32;
-    descriptor.cDepthBits = 24;
-    descriptor.iLayerType = PFD_MAIN_PLANE;
-    if (impl->dc == nullptr)
+    impl->owns_video_subsystem = (SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0;
+    if (impl->owns_video_subsystem && !SDL_InitSubSystem(SDL_INIT_VIDEO))
     {
-        *error = "cannot acquire the Direct3D3 window DC";
+        *error = std::string("cannot initialize SDL3 video: ") + SDL_GetError();
         return false;
     }
-    if (GetPixelFormat(impl->dc) == 0)
+
+    SDL_GL_ResetAttributes();
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+    const bool attributes_set =
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0) &&
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+#else
+    const bool attributes_set =
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1) &&
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+#endif
+    if (!attributes_set)
     {
-        const int format = ChoosePixelFormat(impl->dc, &descriptor);
-        if (format == 0 || SetPixelFormat(impl->dc, format, &descriptor) == FALSE)
-        {
-            *error = "cannot set the Direct3D3 OpenGL pixel format";
-            return false;
-        }
+        *error = std::string("cannot configure the SDL3 OpenGL context: ") + SDL_GetError();
+        return false;
     }
-    impl->context = wglCreateContext(impl->dc);
+
+    const SDL_PropertiesID properties = SDL_CreateProperties();
+    if (properties == 0)
+    {
+        *error = std::string("cannot allocate SDL3 window properties: ") + SDL_GetError();
+        return false;
+    }
+    bool properties_set =
+        SDL_SetStringProperty(properties, SDL_PROP_WINDOW_CREATE_TITLE_STRING, config.title) &&
+        SDL_SetNumberProperty(properties, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER,
+                              static_cast<Sint64>(config.width)) &&
+        SDL_SetNumberProperty(properties, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER,
+                              static_cast<Sint64>(config.height)) &&
+        SDL_SetBooleanProperty(properties, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
+    if (config.native_window != nullptr)
+    {
+#if defined(SDL_PLATFORM_WINDOWS)
+        properties_set =
+            properties_set &&
+            SDL_SetPointerProperty(properties, SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER,
+                                   config.native_window);
+#else
+        properties_set = false;
+        SDL_SetError("native window wrapping is only implemented for Win32");
+#endif
+    }
+    if (properties_set)
+    {
+        impl->window = SDL_CreateWindowWithProperties(properties);
+    }
+    SDL_DestroyProperties(properties);
+    if (!properties_set || impl->window == nullptr)
+    {
+        *error = std::string("cannot create the SDL3 OpenGL window: ") + SDL_GetError();
+        return false;
+    }
+
+    impl->context = SDL_GL_CreateContext(impl->window);
     if (impl->context == nullptr || !impl->MakeCurrent(error))
     {
         return false;
@@ -331,7 +416,22 @@ bool Direct3d3OpenGlBackend::Initialize(HWND window, std::string* error)
         LoadGlFunction("glUniform2f", &impl->uniform_2f) &&
         LoadGlFunction("glEnableVertexAttribArray", &impl->enable_vertex_attrib_array) &&
         LoadGlFunction("glDisableVertexAttribArray", &impl->disable_vertex_attrib_array) &&
-        LoadGlFunction("glVertexAttribPointer", &impl->vertex_attrib_pointer);
+        LoadGlFunction("glVertexAttribPointer", &impl->vertex_attrib_pointer) &&
+        LoadGlFunction("glDeleteTextures", &impl->delete_textures) &&
+        LoadGlFunction("glViewport", &impl->viewport) &&
+        LoadGlFunction("glDisable", &impl->disable) &&
+        LoadGlFunction("glClearColor", &impl->clear_color) &&
+        LoadGlFunction("glClear", &impl->clear) &&
+        LoadGlFunction("glGenTextures", &impl->gen_textures) &&
+        LoadGlFunction("glBindTexture", &impl->bind_texture) &&
+        LoadGlFunction("glTexParameteri", &impl->tex_parameter_i) &&
+        LoadGlFunction("glPixelStorei", &impl->pixel_store_i) &&
+        LoadGlFunction("glTexSubImage2D", &impl->tex_sub_image_2d) &&
+        LoadGlFunction("glTexImage2D", &impl->tex_image_2d) &&
+        LoadGlFunction("glEnable", &impl->enable) &&
+        LoadGlFunction("glBlendFunc", &impl->blend_func) &&
+        LoadGlFunction("glDrawArrays", &impl->draw_arrays) &&
+        LoadGlFunction("glGetError", &impl->get_error);
     if (!loaded)
     {
         *error = "required OpenGL shader entry points are unavailable";
@@ -345,49 +445,48 @@ bool Direct3d3OpenGlBackend::Initialize(HWND window, std::string* error)
     return true;
 }
 
-bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
-                                  const graphics::LegacyFixedFunctionState& state,
-                                  std::uint32_t logical_width,
-                                  std::uint32_t logical_height,
-                                  const graphics::LegacyTextureView* texture_view,
-                                  std::string* error)
+bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
+                             const LegacyFixedFunctionState& state, std::uint32_t logical_width,
+                             std::uint32_t logical_height, const LegacyTextureView* texture_view,
+                             std::string* error)
 {
     if (impl_ == nullptr || error == nullptr || logical_width == 0 || logical_height == 0 ||
-        (command.topology == graphics::PrimitiveTopology::kTriangleStrip &&
-         command.vertices.size() < 3) ||
-        (command.topology == graphics::PrimitiveTopology::kLineList &&
+        (command.topology == PrimitiveTopology::kTriangleStrip && command.vertices.size() < 3) ||
+        (command.topology == PrimitiveTopology::kLineList &&
          (command.vertices.size() < 2 || command.vertices.size() % 2 != 0)) ||
         !impl_->MakeCurrent(error))
     {
         return false;
     }
-    RECT client = {};
-    if (GetClientRect(impl_->window, &client) == FALSE || client.right <= 0 || client.bottom <= 0)
+    int pixel_width = 0;
+    int pixel_height = 0;
+    if (!SDL_GetWindowSizeInPixels(impl_->window, &pixel_width, &pixel_height) ||
+        pixel_width <= 0 || pixel_height <= 0)
     {
-        *error = "cannot query the Direct3D3 OpenGL client rectangle";
+        *error = std::string("cannot query the SDL3 OpenGL window size: ") + SDL_GetError();
         return false;
     }
     if (!impl_->frame_started)
     {
-        glViewport(0, 0, client.right, client.bottom);
-        glDisable(GL_DEPTH_TEST);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        impl_->viewport(0, 0, pixel_width, pixel_height);
+        impl_->disable(GL_DEPTH_TEST);
+        impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+        impl_->clear(GL_COLOR_BUFFER_BIT);
         impl_->frame_started = true;
     }
 
     std::vector<GlVertex> vertices;
     vertices.reserve(command.vertices.size());
-    for (const graphics::TransformedLitVertex& input : command.vertices)
+    for (const TransformedLitVertex& input : command.vertices)
     {
         GlVertex output = {};
         output.position[0] = input.x;
         output.position[1] = input.y;
         output.position[2] = input.z;
-        output.position[3] = command.topology == graphics::PrimitiveTopology::kLineList &&
-                                     input.reciprocal_w == 0.0f
-                                 ? 1.0f
-                                 : input.reciprocal_w;
+        output.position[3] =
+            command.topology == PrimitiveTopology::kLineList && input.reciprocal_w == 0.0f
+                ? 1.0f
+                : input.reciprocal_w;
         const std::array<float, 4> color = ArgbToFloats(input.diffuse_argb);
         for (std::size_t index = 0; index < color.size(); ++index)
         {
@@ -400,33 +499,29 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
 
     impl_->use_program(impl_->program);
     impl_->uniform_2f(impl_->get_uniform_location(impl_->program, "u_viewport"),
-                     static_cast<float>(logical_width),
-                     static_cast<float>(logical_height));
+                      static_cast<float>(logical_width), static_cast<float>(logical_height));
     const bool has_texture = texture_view != nullptr && texture_view->pixels != nullptr &&
                              texture_view->width != 0 && texture_view->height != 0;
-    if (has_texture &&
-        (texture_view->pitch < static_cast<std::uint64_t>(texture_view->width) *
-                                   sizeof(std::uint16_t) ||
-         texture_view->pitch % sizeof(std::uint16_t) != 0))
+    if (has_texture && (texture_view->pitch < static_cast<std::uint64_t>(texture_view->width) *
+                                                  sizeof(std::uint16_t) ||
+                        texture_view->pitch % sizeof(std::uint16_t) != 0))
     {
         *error = "invalid RGB565 texture row pitch";
         return false;
     }
-    const bool color_key_active = has_texture && state.color_key_enabled &&
-                                  texture_view->source_color_key.enabled;
+    const bool color_key_active =
+        has_texture && state.color_key_enabled && texture_view->source_color_key.enabled;
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture"), 0);
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture_enabled"),
-                     has_texture ? 1 : 0);
+                      has_texture ? 1 : 0);
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_color_key_enabled"),
-                     color_key_active ? 1 : 0);
+                      color_key_active ? 1 : 0);
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_alpha_test_enabled"),
-                     state.alpha_test_enabled ? 1 : 0);
-    const GLint alpha_reference =
-        impl_->get_uniform_location(impl_->program, "u_alpha_reference");
+                      state.alpha_test_enabled ? 1 : 0);
+    const GLint alpha_reference = impl_->get_uniform_location(impl_->program, "u_alpha_reference");
     if (alpha_reference >= 0)
     {
-        impl_->uniform_1f(alpha_reference,
-                         static_cast<float>(state.alpha_reference) / 255.0f);
+        impl_->uniform_1f(alpha_reference, static_cast<float>(state.alpha_reference) / 255.0f);
     }
     if (has_texture)
     {
@@ -438,24 +533,24 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
         Impl::CachedTexture& cached = impl_->textures[texture_view->identity];
         if (cached.name == 0)
         {
-            glGenTextures(1, &cached.name);
+            impl_->gen_textures(1, &cached.name);
             if (cached.name == 0)
             {
                 impl_->textures.erase(texture_view->identity);
                 *error = "cannot create a cached Direct3D3 OpenGL texture";
                 return false;
             }
-            glBindTexture(GL_TEXTURE_2D, cached.name);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
+            impl_->bind_texture(GL_TEXTURE_2D, cached.name);
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
         }
         else
         {
-            glBindTexture(GL_TEXTURE_2D, cached.name);
+            impl_->bind_texture(GL_TEXTURE_2D, cached.name);
         }
-        graphics::Rgb565ColorKey effective_key = texture_view->source_color_key;
+        Rgb565ColorKey effective_key = texture_view->source_color_key;
         effective_key.enabled = color_key_active;
         const bool key_changed = cached.color_key.enabled != effective_key.enabled ||
                                  cached.color_key.low != effective_key.low ||
@@ -482,76 +577,61 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
                     const std::size_t offset =
                         (static_cast<std::size_t>(y) * texture_view->width + x) * 4;
                     rgba[offset] = static_cast<std::uint8_t>(((pixel >> 11) & 0x1f) * 255 / 31);
-                    rgba[offset + 1] =
-                        static_cast<std::uint8_t>(((pixel >> 5) & 0x3f) * 255 / 63);
+                    rgba[offset + 1] = static_cast<std::uint8_t>(((pixel >> 5) & 0x3f) * 255 / 63);
                     rgba[offset + 2] = static_cast<std::uint8_t>((pixel & 0x1f) * 255 / 31);
-                    rgba[offset + 3] = graphics::IsRgb565ColorKeyMatch(pixel, effective_key)
-                                           ? 0
-                                           : 255;
+                    rgba[offset + 3] = IsRgb565ColorKeyMatch(pixel, effective_key) ? 0 : 255;
                 }
             }
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            impl_->pixel_store_i(GL_UNPACK_ALIGNMENT, 4);
             if (cached.width == texture_view->width && cached.height == texture_view->height)
             {
-                glTexSubImage2D(GL_TEXTURE_2D,
-                                0,
-                                0,
-                                0,
-                                static_cast<GLsizei>(texture_view->width),
-                                static_cast<GLsizei>(texture_view->height),
-                                GL_RGBA,
-                                GL_UNSIGNED_BYTE,
-                                rgba.data());
+                impl_->tex_sub_image_2d(GL_TEXTURE_2D, 0, 0, 0,
+                                        static_cast<GLsizei>(texture_view->width),
+                                        static_cast<GLsizei>(texture_view->height), GL_RGBA,
+                                        GL_UNSIGNED_BYTE, rgba.data());
             }
             else
             {
-                glTexImage2D(GL_TEXTURE_2D,
-                             0,
-                             GL_RGBA,
-                             static_cast<GLsizei>(texture_view->width),
-                             static_cast<GLsizei>(texture_view->height),
-                             0,
-                             GL_RGBA,
-                             GL_UNSIGNED_BYTE,
-                             rgba.data());
+                impl_->tex_image_2d(GL_TEXTURE_2D, 0, GL_RGBA,
+                                    static_cast<GLsizei>(texture_view->width),
+                                    static_cast<GLsizei>(texture_view->height), 0, GL_RGBA,
+                                    GL_UNSIGNED_BYTE, rgba.data());
             }
             cached.width = texture_view->width;
             cached.height = texture_view->height;
             cached.revision = texture_view->revision;
             cached.color_key = effective_key;
         }
-        glTexParameteri(GL_TEXTURE_2D,
-                        GL_TEXTURE_MIN_FILTER,
-                        state.minification_filter == graphics::TextureFilter::kLinear ? GL_LINEAR
-                                                                                      : GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D,
-                        GL_TEXTURE_MAG_FILTER,
-                        state.magnification_filter == graphics::TextureFilter::kLinear ? GL_LINEAR
-                                                                                       : GL_NEAREST);
+        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                               state.minification_filter == TextureFilter::kLinear ? GL_LINEAR
+                                                                                   : GL_NEAREST);
+        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                               state.magnification_filter == TextureFilter::kLinear ? GL_LINEAR
+                                                                                    : GL_NEAREST);
     }
 
     if (state.alpha_blend_enabled)
     {
-        const auto to_gl_blend = [](graphics::BlendFactor factor) {
+        const auto to_gl_blend = [](BlendFactor factor) {
             switch (factor)
             {
-                case graphics::BlendFactor::kZero:
-                    return GL_ZERO;
-                case graphics::BlendFactor::kOne:
-                    return GL_ONE;
-                case graphics::BlendFactor::kSourceColor:
-                    return GL_SRC_COLOR;
-                case graphics::BlendFactor::kSourceAlpha:
-                    return GL_SRC_ALPHA;
+            case BlendFactor::kZero:
+                return GL_ZERO;
+            case BlendFactor::kOne:
+                return GL_ONE;
+            case BlendFactor::kSourceColor:
+                return GL_SRC_COLOR;
+            case BlendFactor::kSourceAlpha:
+                return GL_SRC_ALPHA;
             }
             return GL_ONE;
         };
-        glEnable(GL_BLEND);
-        glBlendFunc(to_gl_blend(state.source_blend), to_gl_blend(state.destination_blend));
+        impl_->enable(GL_BLEND);
+        impl_->blend_func(to_gl_blend(state.source_blend), to_gl_blend(state.destination_blend));
     }
     else
     {
-        glDisable(GL_BLEND);
+        impl_->disable(GL_BLEND);
     }
 
     const GLsizei stride = sizeof(GlVertex);
@@ -561,15 +641,14 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
     impl_->vertex_attrib_pointer(0, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].position);
     impl_->vertex_attrib_pointer(1, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].color);
     impl_->vertex_attrib_pointer(2, 2, GL_FLOAT, GL_FALSE, stride, &vertices[0].texture);
-    const GLenum primitive_mode = command.topology == graphics::PrimitiveTopology::kLineList
-                                      ? GL_LINES
-                                      : GL_TRIANGLE_STRIP;
-    glDrawArrays(primitive_mode, 0, static_cast<GLsizei>(vertices.size()));
+    const GLenum primitive_mode =
+        command.topology == PrimitiveTopology::kLineList ? GL_LINES : GL_TRIANGLE_STRIP;
+    impl_->draw_arrays(primitive_mode, 0, static_cast<GLsizei>(vertices.size()));
     impl_->disable_vertex_attrib_array(2);
     impl_->disable_vertex_attrib_array(1);
     impl_->disable_vertex_attrib_array(0);
     impl_->use_program(0);
-    if (glGetError() != GL_NO_ERROR)
+    if (impl_->get_error() != GL_NO_ERROR)
     {
         *error = "OpenGL rejected the Direct3D3 draw command";
         return false;
@@ -578,7 +657,7 @@ bool Direct3d3OpenGlBackend::Draw(const graphics::LegacyDrawCommand& command,
     return true;
 }
 
-void Direct3d3OpenGlBackend::DiscardTexture(std::uint64_t identity)
+void Sdl3OpenGlBackend::DiscardTexture(std::uint64_t identity)
 {
     if (impl_ == nullptr || identity == 0)
     {
@@ -592,20 +671,20 @@ void Direct3d3OpenGlBackend::DiscardTexture(std::uint64_t identity)
     std::string error;
     if (impl_->MakeCurrent(&error))
     {
-        glDeleteTextures(1, &found->second.name);
+        impl_->delete_textures(1, &found->second.name);
         impl_->textures.erase(found);
     }
 }
 
-bool Direct3d3OpenGlBackend::Present(std::string* error)
+bool Sdl3OpenGlBackend::Present(std::string* error)
 {
     if (impl_ == nullptr || error == nullptr || !impl_->MakeCurrent(error))
     {
         return false;
     }
-    if (SwapBuffers(impl_->dc) == FALSE)
+    if (!SDL_GL_SwapWindow(impl_->window))
     {
-        *error = "cannot swap the Direct3D3 OpenGL buffers";
+        *error = std::string("cannot swap the SDL3 OpenGL buffers: ") + SDL_GetError();
         return false;
     }
     impl_->frame_started = false;
@@ -613,4 +692,4 @@ bool Direct3d3OpenGlBackend::Present(std::string* error)
     return true;
 }
 
-}  // namespace re2dj::platform::windows
+}  // namespace re2dj::graphics

@@ -48,6 +48,8 @@ extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectDrawCreate(
     GUID* device_guid, LPDIRECTDRAW* direct_draw, IUnknown* outer);
 extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
     GUID* device_guid, LPDIRECTSOUND* direct_sound, IUnknown* outer);
+extern "C" __declspec(dllimport) volatile float g_re2dj_audio_master_gain;
+extern "C" __declspec(dllimport) float WINAPI Re2djHleGetAudioMasterGain();
 
 namespace
 {
@@ -714,9 +716,12 @@ int main()
     passed = passed &&
              Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close device mock handle");
 
+    g_re2dj_audio_master_gain = 2.0f;
     LPDIRECTSOUND direct_sound = nullptr;
     passed = passed && Check(Re2djHleDirectSoundCreate(nullptr, &direct_sound, nullptr) == DS_OK,
                              "DirectSound facade creation failed") &&
+             Check(Re2djHleGetAudioMasterGain() == 2.0f,
+                   "DirectSound master gain was not applied") &&
              Check(IDirectSound_SetCooperativeLevel(direct_sound, GetDesktopWindow(), DSSCL_NORMAL) == DS_OK,
                    "DirectSound cooperative level failed");
     WAVEFORMATEX wave = {WAVE_FORMAT_PCM, 2, 44100, 176400, 4, 16, 0};

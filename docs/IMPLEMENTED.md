@@ -6,6 +6,10 @@
 
 ## 최신 실행 이정표 / Latest runtime milestones
 
+- **작업 076 — SDL3/OpenGL 공용 backend 구현 완료.** Windows x86 facade에서 WGL과 `opengl32` 직접 경계를 제거하고, SDL3가 기존 HWND wrapping, OpenGL context, 함수 해석, drawable 크기와 present를 담당하는 공용 backend로 이전했다. 같은 source는 Win32, Linux와 Web build에 포함되며 desktop GLSL 1.20과 Web GLSL ES 1.00을 분리한다. Windows x64 preset·CI·helper script는 제거하고 Windows CI는 실제 Win32 runtime을 검증한다. 근거: [설계](design/20260827-076-sdl3-opengl-shared-backend.md), [작업 로그](work-logs/20260827-076-sdl3-opengl-shared-backend.md).
+
+  *Task 076 — shared SDL3/OpenGL backend complete. The Windows x86 facade no longer owns direct WGL or `opengl32` boundaries. SDL3 wraps the existing HWND and provides the OpenGL context, symbol resolution, drawable sizing, and presentation in shared code compiled by Win32, Linux, and Web builds, with separate desktop GLSL 1.20 and Web GLSL ES 1.00 paths. Windows x64 presets, CI, and helper scripts are removed, and Windows CI now validates the actual Win32 runtime. Evidence: [design](design/20260827-076-sdl3-opengl-shared-backend.md), [work log](work-logs/20260827-076-sdl3-opengl-shared-backend.md).*
+
 - **작업 070 — Direct3D 3 정점 버퍼 HLE 완료.** `IDirect3DVertexBuffer::Lock`의 nullable `lpdwSize` 계약을 바로잡고, XYZ/NORMAL/TEX1 정점 121개에 필요한 3,872바이트 storage와 원본 11×11 grid fill을 AV 없이 통과했다. 근거: [설계](design/20260826-070-direct3d3-vertex-buffer-hle.md), [작업 로그](work-logs/20260826-070-direct3d3-vertex-buffer-hle.md).
 
   *Task 070 — Direct3D 3 vertex-buffer HLE complete. The nullable `lpdwSize` Lock contract, 3,872-byte storage for 121 XYZ/NORMAL/TEX1 vertices, and the original 11×11 grid fill now pass without an access violation. Evidence: [design](design/20260826-070-direct3d3-vertex-buffer-hle.md), [work log](work-logs/20260826-070-direct3d3-vertex-buffer-hle.md).*
@@ -103,7 +107,7 @@
 - Bounded KSND search-path-state observation; repeated API traces confirm one `System/Common` entry and expose the VFS mount-root mismatch in the resulting `coin0.wav` host candidate
 - Target-profile working-directory VFS source mount; original asset APIs now open `coin0.wav`, `coin1.wav`, and `WarningMsg.bmp` from the supplied read-only HDD before the next stable boundary
 - RGB565 DirectDraw texture/primary/back CPU backing, GDI GetDC/ReleaseDC bitmap upload, source color key, IDirect3DTexture2 identity, and observed DDBLT_COLORFILL rectangle path; former surface null AVs are removed
-- Platform-neutral transformed/lit vertex command plus a Windows WGL/OpenGL shader backend for the observed RGB565 textured triangle strip; `DrawPrimitive`, stage-zero texture state, and Flip/present slots remove the former graphics AVs, with two runs reaching the later controlled `title.wav` sound-load exit
+- Platform-neutral transformed/lit vertex command plus a shared SDL3/OpenGL shader backend for the observed RGB565 textured triangle strip; the Windows facade wraps the original HWND while Linux and Web compile the same renderer contract
 - Target-limited KSND load-stage tracing with repeatable breakpoint rearming and filename attribution; `title.wav` path/open/read and 9,438,264-byte PCM parsing succeed, while system `IDirectSound::CreateSoundBuffer` returns `E_NOTIMPL` on all ten retries without an access violation
 - Platform-neutral legacy PCM/circular-lock state plus a Windows x86 DirectSound COM facade backed by pinned zlib-licensed SDL 3.4.14 and SDL_mixer 3.2.4; ordinal `DSOUND.dll` replacement advances 121 secondary buffers and 299 Lock/Unlock pairs through looping `title.wav` playback to the next Direct3D vertex-buffer boundary
 - Protected `.gidata` static import surface mapped slot-by-slot; dynamic resolution observed for WSAGetLastError only
@@ -116,3 +120,21 @@
 
 - Windows x86 warnings-as-errors builds
 - Windows x86 CTest unit suite passing
+
+## Win32 제품 loader / Win32 product loader
+
+- 일반 `re2dj --run`에서 Windows가 원본을 main image로 적재하는 original-process engine 연결
+- 제품 CLI와 진단 launcher가 공유하는 `re2dj_windows_original_process_backend` static library
+- `ez2dj1stse` canonical detached HLE policy와 미검증 target의 process-creation 전 거절
+- 기존 `re2dj_windows_x86_launcher_probe` 진단 option 호환 유지
+
+*Ordinary Windows `re2dj --run` now uses the shared `re2dj_windows_original_process_backend`, preserving Windows-loader main-image execution, canonical detached HLE policy for `ez2dj1stse`, pre-creation rejection of unverified targets, and compatibility with the existing diagnostic launcher options.*
+
+## Win32 오디오 master gain / Win32 audio master gain
+
+- DirectSound buffer dB와 분리된 SDL mixer 최종 출력 gain
+- 제품 기본값 `+6 dB`, `--audio-gain-db` 허용 범위 `-24..+18 dB`
+- original-process engine에서 injected runtime export로 linear gain 전달
+- dummy audio runtime probe에서 master gain 적용 검증
+
+*The Win32 audio path now applies an independent SDL mixer master gain after preserving per-buffer DirectSound dB. Product execution defaults to `+6 dB`, accepts `--audio-gain-db` from `-24` through `+18`, transports linear gain into the injected runtime, and verifies application with the dummy-audio runtime probe.*

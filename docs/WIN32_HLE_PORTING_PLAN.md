@@ -102,9 +102,9 @@ PE32 이미지를 게스트 주소 공간에 매핑한다.
 
 *Deferred: Web cannot execute x86 code directly, so a reusable execution engine with a permitted license is evaluated first. A custom interpreter is implemented behind the same `ExecutionBackend` interface only if no suitable engine exists.*
 
-현재 `ExecutionBackend` event/reply·memory 경계와 Windows `NativeHelperBackend` adapter가 구현되었다. protocol v3에서 helper는 요청된 non-preferred base에 PE32를 mapping하고 `HIGHLOW` relocation을 적용한 뒤 이름/ordinal native import thunk와 metadata를 구성한다. `Start` 뒤 process-attach TLS callback을 entry point 전에 실행한다. synthetic probe는 preferred `0x10000000` image를 `0x11000000`에 적재하고, 두 import 결과 44에 callback state 7을 더한 result 51과 child 정상 종료를 확인한다. TLS raw storage/index와 thread callback은 멀티스레드 backend 단계에 남아 있다.
+현재 `ExecutionBackend` event/reply·memory 경계와 desktop `NativeHelperBackend` adapter가 구현되었다. protocol v3에서 helper는 요청된 non-preferred base에 PE32를 mapping하고 `HIGHLOW` relocation을 적용한 뒤 이름/ordinal native import thunk와 metadata를 구성한다. Linux i386 helper는 guard-page guest stack, 최소 TEB/PEB와 FS selector에서 process-attach TLS callback과 entry를 실행하고, alternate signal stack에서 수집한 signal/EIP/ESP를 구조화된 fault event로 보고한다. synthetic probe는 preferred `0x10000000` image를 `0x11000000`에 적재하고 FS self·stack bounds를 확인한 callback state 7과 두 import 결과 44를 더한 result 51을 확인한다. Linux 전용 fixture는 PEB image base를 확인한 뒤 `UD2`의 `SIGILL`과 정확한 EIP/ESP를 검증한다. TLS raw storage/index와 thread callback은 멀티스레드 backend 단계에 남아 있다.
 
-*The `ExecutionBackend` event/reply/memory boundary and Windows `NativeHelperBackend` adapter are implemented. Under protocol v3, the helper maps PE32 at a requested non-preferred base, applies `HIGHLOW` relocations, then constructs named/ordinal native import thunks and metadata. After `Start`, process-attach TLS callbacks run before the entry point. The synthetic probe maps a preferred-`0x10000000` image at `0x11000000` and observes result 51 by adding callback state 7 to the two-import result 44, plus clean child exit. TLS raw storage/index and thread callbacks remain coupled to multithreaded backend work.*
+*The `ExecutionBackend` event/reply/memory boundary and desktop `NativeHelperBackend` adapters are implemented. Under protocol v3, helpers map PE32 at a requested non-preferred base, apply `HIGHLOW` relocations, and construct named/ordinal native import thunks and metadata. The Linux i386 helper runs process-attach TLS callbacks and entry code with a guarded guest stack, minimal TEB/PEB, and FS selector, then reports signal/EIP/ESP captured on an alternate signal stack as a structured fault event. The synthetic probe maps a preferred-`0x10000000` image at `0x11000000` and observes result 51 after its TLS callback validates FS self and stack bounds. A Linux-only fixture validates the PEB image base before checking exact `UD2` `SIGILL` EIP/ESP reporting. TLS raw storage/index and thread callbacks remain coupled to multithreaded backend work.*
 
 Linux에서도 x86-64 host가 별도 i386 helper를 `fork`/`exec`하고 공용 protocol v3로 실제 `__stdcall` gate event를 처리하는 최소 prototype이 구현되었다. host가 helper stack의 인자 41을 읽고 쓴 뒤 EAX 42를 응답하고 process result 42 및 child exit 0을 확인했다. 다음 Linux 작업은 PE32 mapping과 `ExecutionBackend` adapter다.
 
@@ -196,12 +196,16 @@ Windows x86 launcher는 `DEBUG_ONLY_THIS_PROCESS` child의 entry `0x0043a640`에
 Windows에서 검증한 것과 같은 코드가 Linux에서도 같은 결과를 내는지 확인한다.
 
 * 대소문자 구분 파일 시스템에서 경로 해석 검증
-* 플랫폼 backend의 Linux 구현
+* i386 native helper의 production PE32 process/thread/ABI 환경
+* x86-64 host의 공용 Win32 import/COM HLE dispatcher
+* SDL3 graphics/audio/input service와 Linux window/message 연결
 * 두 호스트에서 같은 자산으로 같은 로그와 같은 프레임이 나오는지 대조
 
 **완료 기준:** 같은 덤프로 Windows와 Linux가 같은 진행 지점에 도달한다.
 
-*Confirm the same code produces the same result on Linux: path resolution on a case-sensitive file system, the Linux platform backend, and a cross-host comparison of logs and frames. Done when the same dump reaches the same point on both hosts.*
+bring-up은 보호되지 않은 `ez2dj1.exe`의 entry와 첫 import에서 시작해 CRT/WinMain, 창·첫 자산, callback/thread, DirectX/audio/input 순서로 진행한다. 그 뒤 보호된 `ez2dj.exe`의 self-modifying code, LPTDI 환경과 raw I/O 경계를 추가한다. 세부 설계는 [Linux 원본 실행 경로](design/20260827-077-linux-original-execution.md)에 둔다.
+
+*Confirm the same code produces the same result on Linux through an i386 native helper, a shared x86-64-hosted Win32 import/COM dispatcher, SDL services, case-insensitive paths, and cross-host log/frame comparison. Bring-up proceeds from the unprotected entry and first import through CRT/WinMain, window/assets, callbacks/threads, and DirectX/audio/input before adding the protected executable's self-modification, LPTDI environment, and raw I/O. Done when the same dump reaches the same point on Windows and Linux.*
 
 ---
 

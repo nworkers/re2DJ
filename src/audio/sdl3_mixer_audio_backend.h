@@ -19,6 +19,8 @@ public:
     static Sdl3MixerAudioBackend& Instance();
     bool ready() const;
     bool has_playback_device() const;
+    bool SetMasterGain(float gain);
+    float master_gain() const;
     const std::string& error() const;
     Voice* CreateVoice();
     void DestroyVoice(Voice* voice);
