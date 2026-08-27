@@ -119,7 +119,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-directsound [--audio-gain-db <-24..18>]|--hle-io-ports|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-directsound [--audio-gain-db <-24..18>] [--audio-volume-trace]|--hle-io-ports|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -3421,6 +3421,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool hle_directsound = false;
     float audio_gain_db = 0.0f;
     bool audio_gain_set = false;
+    bool audio_volume_trace = false;
     bool hle_io_ports = false;
     bool run_detached = false;
     bool d3d_init_trace = false;
@@ -3546,6 +3547,12 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 return 1;
             }
             audio_gain_set = true;
+        }
+        else if (option == "--audio-volume-trace")
+        {
+            audio_volume_trace = true;
+            inject_runtime = true;
+            software_breakpoint = true;
         }
         else if (option == "--hle-io-ports")
         {
@@ -3680,7 +3687,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         PrintUsage();
         return 1;
     }
-    if (audio_gain_set && !hle_directsound)
+    if ((audio_gain_set || audio_volume_trace) && !hle_directsound)
     {
         PrintUsage();
         return 1;
@@ -4078,6 +4085,46 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                              static_cast<double>(audio_master_gain));
         }
     }
+    bool audio_trace_prepared = !audio_volume_trace;
+    if (audio_volume_trace && runtime_loaded)
+    {
+        const char* const winmm_imports[] = {
+            "mixerGetNumDevs", "mixerOpen", "mixerClose", "mixerGetLineInfoA",
+            "mixerGetLineControlsA", "mixerGetControlDetailsA", "mixerSetControlDetails"};
+        const char* const winmm_exports[] = {
+            "_Re2djTraceMixerGetNumDevs@0", "_Re2djTraceMixerOpen@20",
+            "_Re2djTraceMixerClose@4", "_Re2djTraceMixerGetLineInfoA@12",
+            "_Re2djTraceMixerGetLineControlsA@12", "_Re2djTraceMixerGetControlDetailsA@12",
+            "_Re2djTraceMixerSetControlDetails@12"};
+        std::uint32_t audio_trace_path_rva = 0;
+        std::filesystem::path audio_trace_path = diagnostic_log.path();
+        audio_trace_path.replace_extension(".audio.log");
+        audio_trace_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                   runtime_path, "g_re2dj_audio_trace_path",
+                                   &audio_trace_path_rva, &error) &&
+                               WriteRemoteAnsi(child.hProcess,
+                                               runtime_base + audio_trace_path_rva,
+                                               audio_trace_path.string(), &error);
+        for (std::size_t index = 0;
+             audio_trace_prepared && index < std::size(winmm_imports); ++index)
+        {
+            std::uint32_t thunk_rva = 0;
+            std::uint32_t slot_rva = 0;
+            audio_trace_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                       runtime_path, winmm_exports[index], &thunk_rva, &error) &&
+                                   re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                                       info, file.data(), file.size(), "WINMM.dll",
+                                       winmm_imports[index], &slot_rva, &error) &&
+                                   WriteRemoteU32(child.hProcess,
+                                                  main_image_base + slot_rva,
+                                                  runtime_base + thunk_rva, &error);
+        }
+        if (audio_trace_prepared)
+        {
+            RecordDiagnostic("{\"event\":\"audio_volume_trace\",\"path\":\"%s\"}",
+                             audio_trace_path.generic_string().c_str());
+        }
+    }
     const char* const vfs_exports[] = {"_Re2djVfsCreateFileA@28",
                                        "_Re2djVfsReadFile@20",
                                        "_Re2djVfsWriteFile@20",
@@ -4438,7 +4485,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     }
     re2dj::tools::windows_original_process_probe::IatVerificationResult iat;
     const bool iat_verified = reached && entry_restored && runtime_loaded && handoff_prepared &&
-                              display_prepared && d3d3_prepared && directsound_prepared && vfs_prepared &&
+                              display_prepared && d3d3_prepared && directsound_prepared && audio_trace_prepared && vfs_prepared &&
                               image_loader_prepared &&
                               io_runtime_prepared && exit_probe_prepared &&
                               exit_break_prepared && d3d_init_trace_prepared &&
@@ -4507,7 +4554,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     };
     const bool handoff_observed = run_detached
                                       ? (handoff_prepared && display_prepared && d3d3_prepared &&
-                                         directsound_prepared && vfs_prepared &&
+                                         directsound_prepared && audio_trace_prepared && vfs_prepared &&
                                          image_loader_prepared &&
                                          io_runtime_prepared && exit_probe_prepared &&
                                          exit_break_prepared && d3d_init_trace_prepared &&
@@ -4522,7 +4569,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                                  instruction_trace_max_steps,
                                                                  &error))
                                       : (!resume_for_handoff ||
-                                         (handoff_prepared && display_prepared && d3d3_prepared && directsound_prepared && vfs_prepared &&
+                                         (handoff_prepared && display_prepared && d3d3_prepared && directsound_prepared && audio_trace_prepared && vfs_prepared &&
                                           image_loader_prepared &&
                                           io_runtime_prepared &&
                                           exit_probe_prepared &&
@@ -4574,7 +4621,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     CloseHandle(child.hThread);
     CloseHandle(child.hProcess);
     if (!reached || !entry_restored || !runtime_loaded || !handoff_prepared ||
-        !display_prepared || !d3d3_prepared || !directsound_prepared || !vfs_prepared ||
+        !display_prepared || !d3d3_prepared || !directsound_prepared || !audio_trace_prepared || !vfs_prepared ||
         !image_loader_prepared ||
         !io_runtime_prepared || !exit_probe_prepared ||
         !exit_break_prepared || !d3d_init_trace_prepared || !ksnd_load_trace_prepared ||

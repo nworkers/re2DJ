@@ -8,6 +8,7 @@
 #include <dsound.h>
 
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -49,6 +50,7 @@ extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectDrawCreate(
 extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
     GUID* device_guid, LPDIRECTSOUND* direct_sound, IUnknown* outer);
 extern "C" __declspec(dllimport) volatile float g_re2dj_audio_master_gain;
+extern "C" __declspec(dllimport) char g_re2dj_audio_trace_path[MAX_PATH];
 extern "C" __declspec(dllimport) float WINAPI Re2djHleGetAudioMasterGain();
 
 namespace
@@ -133,11 +135,14 @@ int main()
         script << "logostr";
     }
     const std::filesystem::path trace = root / "vfs.log";
+    const std::filesystem::path audio_trace = root / "audio.log";
     if (!Check(strcpy_s(g_re2dj_vfs_hdd_root, hdd.string().c_str()) == 0, "cannot configure HDD root") ||
         !Check(strcpy_s(g_re2dj_vfs_overlay_root, overlay.string().c_str()) == 0,
                "cannot configure overlay root") ||
         !Check(strcpy_s(g_re2dj_vfs_trace_path, trace.string().c_str()) == 0,
-               "cannot configure VFS trace path"))
+               "cannot configure VFS trace path") ||
+        !Check(strcpy_s(g_re2dj_audio_trace_path, audio_trace.string().c_str()) == 0,
+               "cannot configure audio trace path"))
     {
         std::filesystem::remove_all(root);
         return 1;
@@ -740,7 +745,8 @@ int main()
     passed = passed && Check(IDirectSoundBuffer_Lock(sound_buffer, 0, 0, &first, &first_bytes,
                                                      &second, &second_bytes, DSBLOCK_ENTIREBUFFER) == DS_OK,
                              "DirectSound buffer lock failed");
-    if (first != nullptr) std::memset(first, 0, first_bytes);
+    const std::int16_t pcm[] = {0, 8192, -8192, 16384, -16384, 32767, -32768, 0};
+    if (first != nullptr) std::memcpy(first, pcm, (std::min)(sizeof(pcm), static_cast<std::size_t>(first_bytes)));
     if (second != nullptr) std::memset(second, 0, second_bytes);
     passed = passed && Check(IDirectSoundBuffer_Unlock(sound_buffer, first, first_bytes, second, second_bytes) == DS_OK,
                              "DirectSound buffer unlock failed") &&
@@ -780,6 +786,21 @@ int main()
     }
     if (sound_buffer != nullptr) IDirectSoundBuffer_Release(sound_buffer);
     if (direct_sound != nullptr) IDirectSound_Release(direct_sound);
+
+    std::ifstream audio_trace_stream(audio_trace, std::ios::binary);
+    const std::string audio_trace_text((std::istreambuf_iterator<char>(audio_trace_stream)),
+                                       std::istreambuf_iterator<char>());
+    passed = passed &&
+             Check(audio_trace_text.find("directsound:create-device master-linear=2.000000000") != std::string::npos,
+                   "audio trace omitted master gain") &&
+             Check(audio_trace_text.find("directsound:set-volume") != std::string::npos &&
+                       audio_trace_text.find("applied=-1200") != std::string::npos,
+                   "audio trace omitted buffer volume") &&
+             Check(audio_trace_text.find("directsound:first-play") != std::string::npos &&
+                       audio_trace_text.find("peak=1.000000000") != std::string::npos &&
+                       audio_trace_text.find("rms=") != std::string::npos,
+                   "audio trace omitted PCM statistics");
+    audio_trace_stream.close();
 
     std::filesystem::remove_all(root);
     return passed ? 0 : 1;

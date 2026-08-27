@@ -55,6 +55,10 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         "--device-mock-lptdi-target-state",
         kLptdiTargetState,
     };
+    if (options.audio_volume_trace)
+    {
+        arguments->push_back("--audio-volume-trace");
+    }
     error->clear();
     return true;
 }

@@ -13,6 +13,7 @@ struct OriginalProcessOptions
     std::filesystem::path hdd_directory;
     std::string target_id;
     float audio_gain_db = 6.0f;
+    bool audio_volume_trace = false;
 };
 
 bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,

@@ -45,6 +45,7 @@ struct Options
     std::string resolve_path;
     float audio_gain_db = 6.0f;
     bool audio_gain_explicit = false;
+    bool audio_volume_trace = false;
     bool list_targets = false;
     bool run = false;
     bool show_help = false;
@@ -72,6 +73,8 @@ void PrintUsage()
         "                      32-bit native helper used by --run on Linux.\n"
         "  --audio-gain-db <dB>\n"
         "                      Windows output gain (-24..+18, default +6).\n"
+        "  --audio-volume-trace\n"
+        "                      Record bounded DirectSound/WINMM volume evidence.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
         "\n"
@@ -155,6 +158,10 @@ bool ParseOptions(int argc, char** argv, Options* options)
                 return false;
             }
             options->audio_gain_explicit = true;
+        }
+        else if (argument == "--audio-volume-trace")
+        {
+            options->audio_volume_trace = true;
         }
         else if (argument == "--target")
         {
@@ -241,7 +248,7 @@ int main(int argc, char** argv)
         return options.show_help ? kExitOk : kExitUsage;
     }
 #if !defined(_WIN32)
-    if (options.audio_gain_explicit)
+    if (options.audio_gain_explicit || options.audio_volume_trace)
     {
         std::fprintf(stderr, "error: --audio-gain-db is currently supported only on Windows\n");
         return kExitNotImplemented;
@@ -451,6 +458,7 @@ int main(int argc, char** argv)
     run_options.hdd_directory = root.root();
     run_options.target_id = selected->id;
     run_options.audio_gain_db = options.audio_gain_db;
+    run_options.audio_volume_trace = options.audio_volume_trace;
     const int run_result =
         re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (run_result < 0)

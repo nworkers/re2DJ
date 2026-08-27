@@ -208,6 +208,8 @@ re2dj --hdd <directory> [options]
   --run               게스트 실행. Windows 제품 경로는 ez2dj1stse 지원.
   --linux-helper      Linux --run에서 사용하는 i386 helper 경로.
   --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 +6).
+  --audio-volume-trace
+                      DirectSound/WINMM 음량 증거를 별도 로그에 기록.
   --version           버전 출력.
   --help              도움말 출력.
 ```
@@ -221,6 +223,10 @@ Windows 제품 실행 예:
 기본 `+6 dB`보다 더 큰 출력이 필요하면 `--audio-gain-db 12`를 추가한다. 왜곡이나 clipping이 들리면 `6`, `3`, `0` 순서로 낮춘다. 이 값은 DirectSound buffer별 상대 음량을 바꾸지 않고 최종 SDL mix에만 적용된다.
 
 *Add `--audio-gain-db 12` when more output than the default `+6 dB` is required. Reduce it to `6`, `3`, or `0` if distortion or clipping is audible. The value affects only the final SDL mix and preserves relative DirectSound buffer levels.*
+
+`--audio-volume-trace`는 launcher 진단 로그 옆의 `.audio.log`에 buffer별 dB, PCM peak/RMS, WINMM mixer 값을 제한적으로 기록한다. 원본 WAV 샘플 자체는 기록하지 않는다.
+
+*`--audio-volume-trace` writes bounded per-buffer dB, PCM peak/RMS, and WINMM mixer values to an `.audio.log` beside the launcher diagnostic log. It does not record original WAV samples.*
 
 종료 코드: `0` 성공, `1` 잘못된 사용, `2` HDD 디렉터리 오류, `3` 지원되지 않는 실행 경로.
 

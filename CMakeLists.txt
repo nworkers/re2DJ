@@ -222,12 +222,14 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     add_library(re2dj_windows_injected_runtime SHARED
         src/device/lptdi_challenge_response.cpp
         src/input/legacy_io_port_bus.cpp
+        src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
         src/platform/windows/injected_runtime.cpp
+        src/platform/windows/winmm_mixer_trace.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
     target_link_libraries(re2dj_windows_injected_runtime
-        PRIVATE re2dj_sdl3_opengl_backend re2dj_warnings dxguid
+        PRIVATE re2dj_sdl3_opengl_backend re2dj_warnings dxguid winmm
     )
     if(RE2DJ_ENABLE_SDL3_AUDIO)
         target_sources(re2dj_windows_injected_runtime PRIVATE

@@ -31,6 +31,12 @@ int main()
             options, &arguments, &error) &&
         arguments[11] == "12.000000";
 
+    options.audio_volume_trace = true;
+    const bool audio_trace =
+        re2dj::platform::windows::BuildOriginalProcessArguments(
+            options, &arguments, &error) &&
+        arguments.size() == 17 && arguments.back() == "--audio-volume-trace";
+
     options.audio_gain_db = 19.0f;
     const bool invalid_gain =
         !re2dj::platform::windows::BuildOriginalProcessArguments(
@@ -43,7 +49,7 @@ int main()
         !re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
         error.find("ez2dj1stse") != std::string::npos;
-    if (!canonical || !custom_gain || !invalid_gain || !rejected)
+    if (!canonical || !custom_gain || !audio_trace || !invalid_gain || !rejected)
     {
         std::fprintf(stderr, "windows-product-loader-probe: %s\n", error.c_str());
         return 1;
