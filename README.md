@@ -59,12 +59,13 @@ x86-64 Windows에서는 32비트 helper backend가 구현되어 있고, Linux에
 | 호스트 | 필요한 것 |
 | --- | --- |
 | 64-bit Windows | Visual Studio 2019 이상 또는 Build Tools의 **Desktop development with C++**, CMake 3.20 이상 |
-| Linux x86-64 | GCC 11 이상 또는 Clang 14 이상, CMake 3.20 이상, Ninja |
+| Linux x86-64 | GCC 11 이상 또는 Clang 14 이상, CMake 3.20 이상, Ninja, SDL3용 X11/Wayland/OpenGL 개발 패키지 |
 | Web | Emscripten SDK (`EMSDK` 환경 변수 설정), CMake 3.20 이상, Ninja |
 
-외부 의존성은 아직 없습니다. 원본 자산 없이도 빌드되고 단위 테스트가 통과합니다.
+SDL3와 SDL_mixer는 CMake가 고정된 zlib 라이선스 버전에서 가져옵니다. 원본 자산 없이도 빌드되고 단위 테스트가 통과합니다.
+Ubuntu/WSL의 정확한 패키지 설치 명령은 [Linux SDL3/OpenGL 빌드 가이드](docs/guides/linux-sdl3-build.md)를 참고하세요.
 
-*There are no external dependencies yet, and the repository builds and passes its unit tests without any original assets.*
+*CMake fetches SDL3 and SDL_mixer from pinned zlib-licensed revisions. The repository builds and passes its unit tests without any original assets. See the [Linux SDL3/OpenGL build guide](docs/guides/linux-sdl3-build.md) for the exact Ubuntu/WSL package command.*
 
 ---
 
@@ -80,10 +81,10 @@ cd re2DJ
 ### 2. 빌드 / Build
 
 ```bash
-# 64-bit Windows
-cmake --preset windows-x64-debug
-cmake --build --preset windows-x64-debug
-ctest --preset windows-x64-debug
+# 64-bit Windows host (Win32 runtime under WOW64)
+cmake --preset windows-x86-debug
+cmake --build --preset windows-x86-debug
+ctest --preset windows-x86-debug
 
 # Linux x86-64
 cmake --preset linux-x64-debug
@@ -95,8 +96,6 @@ cmake --preset windows-x86-native-probe -DRE2DJ_WARNINGS_AS_ERRORS=ON
 cmake --build --preset windows-x86-native-probe
 ctest --preset windows-x86-native-probe
 
-# Windows x64 host / x86 helper synthetic PE32 IPC integration
-powershell -ExecutionPolicy Bypass -File scripts/test_windows_native_ipc_probe.ps1
 ```
 
 빌드 산출물은 `build/<preset>/bin/`에 생성됩니다.

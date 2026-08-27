@@ -1,9 +1,72 @@
 #include "re2dj/storage/vfs_roots.h"
 
+#include <string>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 namespace re2dj::storage
 {
+namespace
+{
+
+bool ResolveOverlayFile(const std::filesystem::path& root,
+                        const std::vector<std::string>& components,
+                        std::filesystem::path* resolved)
+{
+    if (resolved == nullptr)
+    {
+        return false;
+    }
+
+    std::filesystem::path current = root;
+    for (const std::string& component : components)
+    {
+        std::error_code code;
+        std::filesystem::directory_iterator iterator(current, code);
+        if (code)
+        {
+            return false;
+        }
+
+        std::filesystem::path exact;
+        std::filesystem::path folded;
+        const std::filesystem::directory_iterator end;
+        for (; iterator != end; iterator.increment(code))
+        {
+            if (code)
+            {
+                return false;
+            }
+            const std::string name = iterator->path().filename().string();
+            if (name == component)
+            {
+                exact = iterator->path();
+                break;
+            }
+            if (folded.empty() && EqualsIgnoreAsciiCase(name, component))
+            {
+                folded = iterator->path();
+            }
+        }
+
+        current = !exact.empty() ? std::move(exact) : std::move(folded);
+        if (current.empty())
+        {
+            return false;
+        }
+    }
+
+    std::error_code code;
+    if (!std::filesystem::is_regular_file(current, code) || code)
+    {
+        return false;
+    }
+    *resolved = std::move(current);
+    return true;
+}
+
+}  // namespace
 
 bool ResolveVfsPath(const VfsRoots& roots,
                    const GuestPath& requested,
@@ -39,10 +102,8 @@ bool ResolveVfsPath(const VfsRoots& roots,
     const std::string mounted_relative = GuestPathToRelativeString(relative_path);
     if (!write)
     {
-        const std::filesystem::path overlay_path =
-            roots.overlay_root / std::filesystem::path(mounted_relative);
-        std::error_code overlay_code;
-        if (std::filesystem::is_regular_file(overlay_path, overlay_code) && !overlay_code)
+        std::filesystem::path overlay_path;
+        if (ResolveOverlayFile(roots.overlay_root, relative_path.components, &overlay_path))
         {
             *host_path = overlay_path;
             return true;

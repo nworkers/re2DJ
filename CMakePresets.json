@@ -22,36 +22,6 @@
       }
     },
     {
-      "name": "windows-x64-debug",
-      "displayName": "Windows x64 Debug (MSVC)",
-      "generator": "Visual Studio 18 2026",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-x64",
-      "cacheVariables": {
-        "RE2DJ_BUILD_TESTS": "ON"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      }
-    },
-    {
-      "name": "windows-x64-ninja",
-      "displayName": "Windows x64 (Ninja, single config)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/windows-x64-ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "RE2DJ_BUILD_TESTS": "ON"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      }
-    },
-    {
       "name": "windows-x86-native-probe",
       "displayName": "Windows x86 Native Helper Probe (MSVC)",
       "generator": "Visual Studio 18 2026",
@@ -98,6 +68,7 @@
       "binaryDir": "${sourceDir}/build/linux-x86-native-probe",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-m32",
         "CMAKE_CXX_FLAGS": "-m32",
         "CMAKE_EXE_LINKER_FLAGS": "-m32",
         "RE2DJ_BUILD_TESTS": "OFF",
@@ -128,15 +99,6 @@
       "configuration": "Debug"
     },
     {
-      "name": "windows-x64-debug",
-      "configurePreset": "windows-x64-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "windows-x64-ninja",
-      "configurePreset": "windows-x64-ninja"
-    },
-    {
       "name": "windows-x86-native-probe",
       "configurePreset": "windows-x86-native-probe",
       "configuration": "Debug",
@@ -164,14 +126,6 @@
     {
       "name": "windows-x86-debug",
       "configurePreset": "windows-x86-debug",
-      "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "windows-x64-debug",
-      "configurePreset": "windows-x64-debug",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true
