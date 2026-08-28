@@ -26,6 +26,15 @@ secondary buffer 생성 뒤 일반적인 upload는 `IDirectSoundBuffer::Lock`으
 
 - [IDirectSound::DuplicateSoundBuffer — Microsoft Learn](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/mt708944%28v%3Dvs.85%29)
 
+## streaming 변환 주의점
+
+`Lock/Unlock`의 pointer와 길이는 응용 프로그램이 접근할 수 있었던 범위를 뜻하며 실제로 변경한 byte 범위를 직접 나타내지 않는다. 응용 프로그램은 `DSBLOCK_ENTIREBUFFER`로 전체 ring을 받은 뒤 일부 frame만 고칠 수 있다. HLE가 Unlock 길이 전체를 producer queue에 추가하면 같은 PCM을 중복 큐잉하고 latency가 계속 증가한다.
+
+복사형 host streaming API로 변환할 때는 guest ring의 committed snapshot과 현재 frame을 비교해 실제 dirty circular 구간을 찾거나, 동등한 동기화된 pull model을 사용해야 한다. SDL3의 `SDL_AudioStream`과 SDL_mixer의 `MIX_SetTrackAudioStream`은 응용 프로그램이 공급하는 streaming PCM 입력을 위한 계약이다.
+
+- [SDL_AudioStream — SDL Wiki](https://wiki.libsdl.org/SDL3/SDL_AudioStream)
+- [MIX_SetTrackAudioStream — SDL_mixer Wiki](https://wiki.libsdl.org/SDL3_mixer/MIX_SetTrackAudioStream)
+
 ---
 
 # Legacy DirectSound Secondary-Buffer Contract
@@ -35,3 +44,5 @@ IDirectSound::CreateSoundBuffer accepts a DSBUFFERDESC, an output IDirectSoundBu
 Generic COM value 0x80004001 is E_NOTIMPL. Observing it from a DirectSound call does not by itself establish why that particular host path rejected the request; interface identity, descriptor values, and repeatable runtime evidence are still required.
 
 IDirectSound::DuplicateSoundBuffer creates a separate secondary-buffer object sharing the original sample memory. Initial parameters match, but cursor, controls, and Play/Stop state can diverge independently. Writes through either object's Lock are visible through the other; primary buffers cannot be duplicated.
+
+Lock/Unlock pointer-length pairs describe the region an application could access, not necessarily every byte it changed. An application can lock an entire ring with `DSBLOCK_ENTIREBUFFER` and modify only a subset of frames. Appending the whole Unlock range to a copied host producer queue duplicates stale PCM and grows latency. A translation should compare a committed ring snapshot to locate the dirty circular frame interval, or use an equivalent synchronized pull model. SDL3 `SDL_AudioStream` connected through SDL_mixer `MIX_SetTrackAudioStream` provides the streaming-PCM input contract used here.

@@ -46,6 +46,7 @@ struct Options
     float audio_gain_db = 6.0f;
     bool audio_gain_explicit = false;
     bool audio_volume_trace = false;
+    bool fullscreen = false;
     bool list_targets = false;
     bool run = false;
     bool show_help = false;
@@ -75,6 +76,7 @@ void PrintUsage()
         "                      Windows output gain (-24..+18, default +6).\n"
         "  --audio-volume-trace\n"
         "                      Record bounded DirectSound/WINMM volume evidence.\n"
+        "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
         "\n"
@@ -163,6 +165,10 @@ bool ParseOptions(int argc, char** argv, Options* options)
         {
             options->audio_volume_trace = true;
         }
+        else if (argument == "--fullscreen")
+        {
+            options->fullscreen = true;
+        }
         else if (argument == "--target")
         {
             if (!TakeValue(argc, argv, &index, argument, &options->target_id))
@@ -248,9 +254,9 @@ int main(int argc, char** argv)
         return options.show_help ? kExitOk : kExitUsage;
     }
 #if !defined(_WIN32)
-    if (options.audio_gain_explicit || options.audio_volume_trace)
+    if (options.audio_gain_explicit || options.audio_volume_trace || options.fullscreen)
     {
-        std::fprintf(stderr, "error: --audio-gain-db is currently supported only on Windows\n");
+        std::fprintf(stderr, "error: selected execution options are currently supported only on Windows\n");
         return kExitNotImplemented;
     }
 #endif
@@ -459,6 +465,7 @@ int main(int argc, char** argv)
     run_options.target_id = selected->id;
     run_options.audio_gain_db = options.audio_gain_db;
     run_options.audio_volume_trace = options.audio_volume_trace;
+    run_options.fullscreen = options.fullscreen;
     const int run_result =
         re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (run_result < 0)

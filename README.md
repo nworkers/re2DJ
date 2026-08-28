@@ -210,6 +210,7 @@ re2dj --hdd <directory> [options]
   --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 +6).
   --audio-volume-trace
                       DirectSound/WINMM 음량 증거를 별도 로그에 기록.
+  --fullscreen        Windows에서 monitor 크기 borderless fullscreen 사용.
   --version           버전 출력.
   --help              도움말 출력.
 ```
@@ -219,6 +220,10 @@ Windows 제품 실행 예:
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe --hdd D:\EZ2DJ\1stSE --target ez2dj1stse --run
 ```
+
+기본값은 `re2DJ` 제목과 고정 640×480 client 영역을 가진 일반 창이다. 원본 INI를 바꾸지 않고 fullscreen을 선택하려면 `--fullscreen`을 추가한다.
+
+*The default is a normal window titled `re2DJ` with a fixed 640x480 client area. Add `--fullscreen` to select fullscreen without changing the original INI.*
 
 기본 `+6 dB`보다 더 큰 출력이 필요하면 `--audio-gain-db 12`를 추가한다. 왜곡이나 clipping이 들리면 `6`, `3`, `0` 순서로 낮춘다. 이 값은 DirectSound buffer별 상대 음량을 바꾸지 않고 최종 SDL mix에만 적용된다.
 

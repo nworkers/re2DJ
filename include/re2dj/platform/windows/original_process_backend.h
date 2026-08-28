@@ -14,6 +14,7 @@ struct OriginalProcessOptions
     std::string target_id;
     float audio_gain_db = 6.0f;
     bool audio_volume_trace = false;
+    bool fullscreen = false;
 };
 
 bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,

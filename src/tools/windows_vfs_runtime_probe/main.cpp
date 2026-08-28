@@ -51,6 +51,7 @@ extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
     GUID* device_guid, LPDIRECTSOUND* direct_sound, IUnknown* outer);
 extern "C" __declspec(dllimport) volatile float g_re2dj_audio_master_gain;
 extern "C" __declspec(dllimport) char g_re2dj_audio_trace_path[MAX_PATH];
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_fullscreen;
 extern "C" __declspec(dllimport) float WINAPI Re2djHleGetAudioMasterGain();
 
 namespace
@@ -287,7 +288,33 @@ int main()
     LPDIRECT3D3 direct3d = nullptr;
     IUnknown* draw_identity = nullptr;
     IUnknown* d3d_identity = nullptr;
+    constexpr char graphics_window_class[] = "re2dj-runtime-probe-window";
+    const HINSTANCE module = GetModuleHandleA(nullptr);
+    WNDCLASSA window_class = {};
+    window_class.style = CS_OWNDC;
+    window_class.lpfnWndProc = DefWindowProcA;
+    window_class.hInstance = module;
+    window_class.lpszClassName = graphics_window_class;
+    const ATOM window_class_atom = RegisterClassA(&window_class);
+    HWND graphics_window = nullptr;
+    if (window_class_atom != 0)
+    {
+        graphics_window = CreateWindowExA(0,
+                                          graphics_window_class,
+                                          "before",
+                                          WS_POPUP,
+                                          0,
+                                          0,
+                                          100,
+                                          100,
+                                          nullptr,
+                                          nullptr,
+                                          module,
+                                          nullptr);
+    }
     passed = passed &&
+             Check(window_class_atom != 0 && graphics_window != nullptr,
+                   "cannot create graphics policy probe window") &&
              Check(Re2djHleDirectDrawCreate(nullptr, &direct_draw, nullptr) == DD_OK &&
                        direct_draw != nullptr,
                    "cannot create DirectDraw HLE facade") &&
@@ -339,9 +366,10 @@ int main()
     bool texture_format_captured = false;
     if (direct_draw4 != nullptr && direct3d != nullptr)
     {
+        g_re2dj_fullscreen = FALSE;
         passed = passed &&
                  Check(IDirectDraw4_SetCooperativeLevel(
-                           direct_draw4, GetDesktopWindow(), DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
+                           direct_draw4, graphics_window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
                        "logical DirectDraw cooperative level failed") &&
                  Check(IDirectDraw4_SetDisplayMode(direct_draw4, 640, 480, 16, 0, 0) == DD_OK,
                        "logical DirectDraw display mode failed") &&
@@ -354,6 +382,48 @@ int main()
                                                     &zbuffer_captured) == DD_OK &&
                            zbuffer_captured,
                        "virtual Z-buffer enumeration failed");
+
+        char window_title[32] = {};
+        RECT client_rectangle = {};
+        const LONG_PTR windowed_style = GetWindowLongPtrA(graphics_window, GWL_STYLE);
+        passed = passed &&
+                 Check(GetWindowTextA(graphics_window, window_title, sizeof(window_title)) != 0 &&
+                           std::strcmp(window_title, "re2DJ") == 0,
+                       "window title policy failed") &&
+                 Check((windowed_style & WS_CAPTION) == WS_CAPTION &&
+                           (windowed_style & WS_SYSMENU) != 0 &&
+                           (windowed_style & WS_THICKFRAME) == 0 &&
+                           (windowed_style & WS_MAXIMIZEBOX) == 0,
+                       "windowed style policy failed") &&
+                 Check(GetClientRect(graphics_window, &client_rectangle) != FALSE &&
+                           client_rectangle.right - client_rectangle.left == 640 &&
+                           client_rectangle.bottom - client_rectangle.top == 480,
+                       "windowed client size policy failed");
+
+        g_re2dj_fullscreen = TRUE;
+        passed = passed &&
+                 Check(IDirectDraw4_SetCooperativeLevel(
+                           direct_draw4, graphics_window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
+                       "fullscreen DirectDraw cooperative level failed");
+        RECT fullscreen_rectangle = {};
+        MONITORINFO monitor_info = {};
+        monitor_info.cbSize = sizeof(monitor_info);
+        const HMONITOR graphics_monitor =
+            MonitorFromWindow(graphics_window, MONITOR_DEFAULTTONEAREST);
+        passed = passed &&
+                 Check((GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_POPUP) != 0 &&
+                           (GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_CAPTION) == 0,
+                       "fullscreen style policy failed") &&
+                 Check(GetWindowRect(graphics_window, &fullscreen_rectangle) != FALSE &&
+                           graphics_monitor != nullptr &&
+                           GetMonitorInfoA(graphics_monitor, &monitor_info) != FALSE &&
+                           EqualRect(&fullscreen_rectangle, &monitor_info.rcMonitor) != FALSE,
+                       "fullscreen monitor bounds policy failed");
+        g_re2dj_fullscreen = FALSE;
+        passed = passed &&
+                 Check(IDirectDraw4_SetCooperativeLevel(
+                           direct_draw4, graphics_window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
+                       "windowed DirectDraw policy restore failed");
 
         DDSURFACEDESC2 descriptor = {};
         descriptor.dwSize = sizeof(descriptor);
@@ -499,6 +569,14 @@ int main()
                  Check(IDirectDraw4_RestoreDisplayMode(direct_draw4) == DD_OK,
                        "logical display mode restore failed");
         IDirectDraw4_Release(direct_draw4);
+    }
+    if (graphics_window != nullptr)
+    {
+        DestroyWindow(graphics_window);
+    }
+    if (window_class_atom != 0)
+    {
+        UnregisterClassA(graphics_window_class, module);
     }
 
     handle = Re2djVfsCreateFileA("D:\\ez2dj\\DATA\\ORIGINAL.TXT",
@@ -784,6 +862,89 @@ int main()
                        "DirectSound duplicate stop failed");
         IDirectSoundBuffer_Release(duplicate_buffer);
     }
+
+    DSBUFFERDESC streaming_desc = sound_desc;
+    streaming_desc.dwFlags = DSBCAPS_STATIC | DSBCAPS_LOCHARDWARE |
+                             DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN |
+                             DSBCAPS_STICKYFOCUS | DSBCAPS_GETCURRENTPOSITION2;
+    streaming_desc.dwBufferBytes = 32;
+    LPDIRECTSOUNDBUFFER streaming_buffer = nullptr;
+    passed = passed &&
+             Check(IDirectSound_CreateSoundBuffer(direct_sound,
+                                                   &streaming_desc,
+                                                   &streaming_buffer,
+                                                   nullptr) == DS_OK,
+                   "DirectSound streaming buffer creation failed");
+    if (streaming_buffer != nullptr)
+    {
+        void* stream_first = nullptr;
+        DWORD stream_first_bytes = 0;
+        void* stream_second = nullptr;
+        DWORD stream_second_bytes = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Lock(streaming_buffer,
+                                               0,
+                                               0,
+                                               &stream_first,
+                                               &stream_first_bytes,
+                                               &stream_second,
+                                               &stream_second_bytes,
+                                               DSBLOCK_ENTIREBUFFER) == DS_OK,
+                       "DirectSound streaming initial lock failed");
+        if (stream_first != nullptr) std::memset(stream_first, 0x11, stream_first_bytes);
+        if (stream_second != nullptr) std::memset(stream_second, 0x11, stream_second_bytes);
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Unlock(streaming_buffer,
+                                                 stream_first,
+                                                 stream_first_bytes,
+                                                 stream_second,
+                                                 stream_second_bytes) == DS_OK,
+                       "DirectSound streaming initial unlock failed") &&
+                 Check(IDirectSoundBuffer_SetCurrentPosition(streaming_buffer, 12) == DS_OK,
+                       "DirectSound streaming initial position failed") &&
+                 Check(IDirectSoundBuffer_Play(streaming_buffer, 0, 0, DSBPLAY_LOOPING) == DS_OK,
+                       "DirectSound streaming play failed");
+
+        stream_first = nullptr;
+        stream_first_bytes = 0;
+        stream_second = nullptr;
+        stream_second_bytes = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Lock(streaming_buffer,
+                                               24,
+                                               16,
+                                               &stream_first,
+                                               &stream_first_bytes,
+                                               &stream_second,
+                                               &stream_second_bytes,
+                                               0) == DS_OK,
+                       "DirectSound streaming wrap lock failed") &&
+                 Check(stream_first_bytes == 8 && stream_second_bytes == 8,
+                       "DirectSound streaming wrap regions are incorrect");
+        if (stream_first != nullptr) std::memset(stream_first, 0x22, stream_first_bytes);
+        if (stream_second != nullptr) std::memset(stream_second, 0x33, stream_second_bytes);
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Unlock(streaming_buffer,
+                                                 stream_first,
+                                                 stream_first_bytes,
+                                                 stream_second,
+                                                 stream_second_bytes) == DS_OK,
+                       "DirectSound streaming wrap unlock failed");
+        DWORD streaming_cursor = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_GetCurrentPosition(streaming_buffer,
+                                                             &streaming_cursor,
+                                                             nullptr) == DS_OK &&
+                           streaming_cursor < streaming_desc.dwBufferBytes,
+                       "DirectSound streaming cursor is outside the ring") &&
+                 Check(IDirectSoundBuffer_Stop(streaming_buffer) == DS_OK,
+                       "DirectSound streaming stop failed") &&
+                 Check(IDirectSoundBuffer_Play(streaming_buffer, 0, 0, DSBPLAY_LOOPING) == DS_OK,
+                       "DirectSound streaming restart failed") &&
+                 Check(IDirectSoundBuffer_Stop(streaming_buffer) == DS_OK,
+                       "DirectSound streaming second stop failed");
+        IDirectSoundBuffer_Release(streaming_buffer);
+    }
     if (sound_buffer != nullptr) IDirectSoundBuffer_Release(sound_buffer);
     if (direct_sound != nullptr) IDirectSound_Release(direct_sound);
 
@@ -799,7 +960,14 @@ int main()
              Check(audio_trace_text.find("directsound:first-play") != std::string::npos &&
                        audio_trace_text.find("peak=1.000000000") != std::string::npos &&
                        audio_trace_text.find("rms=") != std::string::npos,
-                   "audio trace omitted PCM statistics");
+                   "audio trace omitted PCM statistics") &&
+             Check(audio_trace_text.find("directsound:streaming-start") != std::string::npos &&
+                       audio_trace_text.find("streaming=1") != std::string::npos,
+                   "audio trace omitted streaming start") &&
+             Check(audio_trace_text.find("lock-offset=24 first=8 second=8") != std::string::npos &&
+                       audio_trace_text.find("dirty-offset=24 dirty-bytes=16") != std::string::npos &&
+                       audio_trace_text.find("backend-refresh=1") != std::string::npos,
+                   "audio trace omitted streaming wrap refresh");
     audio_trace_stream.close();
 
     std::filesystem::remove_all(root);

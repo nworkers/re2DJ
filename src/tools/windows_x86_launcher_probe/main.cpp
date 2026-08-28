@@ -119,7 +119,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3|--hle-directsound [--audio-gain-db <-24..18>] [--audio-volume-trace]|--hle-io-ports|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--audio-volume-trace]|--hle-io-ports|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -3418,6 +3418,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool hle_vfs = false;
     bool hle_display_mode = false;
     bool hle_d3d3 = false;
+    bool fullscreen = false;
     bool hle_directsound = false;
     float audio_gain_db = 0.0f;
     bool audio_gain_set = false;
@@ -3520,6 +3521,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             hle_display_mode = true;
             inject_runtime = true;
             software_breakpoint = true;
+        }
+        else if (option == "--fullscreen")
+        {
+            fullscreen = true;
         }
         else if (option == "--hle-directsound")
         {
@@ -3692,6 +3697,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         PrintUsage();
         return 1;
     }
+    if (fullscreen && !hle_d3d3)
+    {
+        PrintUsage();
+        return 1;
+    }
     if (instruction_trace && (probe_handoff || hle_command_line || hle_windows_directory ||
                               hle_vfs || hle_display_mode || hle_d3d3 || hle_directsound || hle_io_ports || d3d_init_trace || ksnd_load_trace || probe_exit_process ||
                               break_exit_process))
@@ -3812,7 +3822,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      trace ? "true" : "false",
@@ -3821,6 +3831,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      api_trace ? "true" : "false",
                      hle_display_mode ? "true" : "false",
                      hle_d3d3 ? "true" : "false",
+                     fullscreen ? "true" : "false",
                      hle_directsound ? "true" : "false",
                      hle_io_ports ? "true" : "false",
                      run_detached ? "true" : "false",
@@ -4006,6 +4017,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::uint32_t d3d3_thunk_rva = 0;
         std::uint32_t d3d3_slot_rva = 0;
         std::uint32_t graphics_trace_path_rva = 0;
+        std::uint32_t fullscreen_rva = 0;
+        const DWORD fullscreen_value = fullscreen ? TRUE : FALSE;
         std::filesystem::path graphics_trace_path = diagnostic_log.path();
         graphics_trace_path.replace_extension(".ddraw.log");
         d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
@@ -4017,6 +4030,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                             runtime_path,
                             "g_re2dj_graphics_trace_path",
                             &graphics_trace_path_rva,
+                            &error) &&
+                        re2dj::platform::windows::FindPe32ExportRva(
+                            runtime_path,
+                            "g_re2dj_fullscreen",
+                            &fullscreen_rva,
                             &error) &&
                         re2dj::tools::windows_original_process_probe::FindIatSlotByName(
                             info,
@@ -4033,7 +4051,13 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                         WriteRemoteAnsi(child.hProcess,
                                         runtime_base + graphics_trace_path_rva,
                                         graphics_trace_path.string(),
-                                       &error);
+                                        &error) &&
+                        WriteRemoteBytes(
+                            child.hProcess,
+                            runtime_base + fullscreen_rva,
+                            reinterpret_cast<const std::uint8_t*>(&fullscreen_value),
+                            sizeof(fullscreen_value),
+                            &error);
         if (d3d3_prepared)
         {
             RecordDiagnostic("{\"event\":\"graphics_trace\",\"path\":\"%s\"}",

@@ -225,6 +225,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
         src/platform/windows/injected_runtime.cpp
+        src/platform/windows/window_mode.cpp
         src/platform/windows/winmm_mixer_trace.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)

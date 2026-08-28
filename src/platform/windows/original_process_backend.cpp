@@ -59,6 +59,10 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     {
         arguments->push_back("--audio-volume-trace");
     }
+    if (options.fullscreen)
+    {
+        arguments->push_back("--fullscreen");
+    }
     error->clear();
     return true;
 }

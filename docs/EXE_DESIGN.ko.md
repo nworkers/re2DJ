@@ -48,7 +48,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 | 항목 | 값 |
 | --- | --- |
 | 그래픽 | **DirectDraw/Direct3D Immediate Mode 계열**. runtime은 `QueryInterface(IID_IDirect3D3)`로 Direct3D를 얻고 XYZ/NORMAL/TEX1 정점 121개를 `CreateVertexBuffer`로 만든 뒤 null-size `Lock`과 stride 32의 11×11 grid fill을 수행한다. 확인된 draw state는 stage-zero texture/diffuse modulate, linear filtering, RGB565 source color key, alpha test와 `ZERO/SRCALPHA`·`ONE/ZERO` blending이다. `%s.bmp` 지연 로딩은 `DDSCAPS_OFFSCREENPLAIN` RGB565 surface를 만들고 GDI 복사 뒤 source-key `BltFast`/`Blt`로 합성한다. 전역 `[0x01eb7cc0]`의 호출 형태는 `IDirect3DDevice3` vtable과 일치한다. |
-| 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨. buffer 생성·Lock/Unlock·Play 뒤 `DuplicateSoundBuffer`를 사용한다. |
+| 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨. 정적 buffer와 360,448바이트 looping ring buffer를 만들며, streaming 경로는 전체 Lock 안에서 45,056바이트 PCM 청크를 순환 갱신한다. `DuplicateSoundBuffer`도 사용한다. |
 | 입력 | **`GetAsyncKeyState` 하나가 전부. DirectInput 없음** |
 | 설정 | `GetPrivateProfile*` / `WritePrivateProfileStringA` — INI |
 | 레지스트리 | `RegFlushKey` 하나 |

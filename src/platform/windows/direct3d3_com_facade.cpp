@@ -22,6 +22,7 @@
 #include "re2dj/graphics/legacy_texture.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
+#include "window_mode.h"
 
 extern "C" __declspec(dllexport) char g_re2dj_graphics_trace_path[MAX_PATH] = {};
 
@@ -1381,11 +1382,16 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
 
 HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD)
 {
+    RootFacade* const root = RootFromDirectDraw(self);
     if (window == nullptr)
     {
         return DDERR_INVALIDPARAMS;
     }
-    RootFromDirectDraw(self)->window = window;
+    if (!ApplyRe2djWindowMode(window, root->width, root->height))
+    {
+        return DDERR_GENERIC;
+    }
+    root->window = window;
     return DD_OK;
 }
 

@@ -682,6 +682,10 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     {
         return false;
     }
+    SDL_Event event = {};
+    while (SDL_PollEvent(&event))
+    {
+    }
     if (!SDL_GL_SwapWindow(impl_->window))
     {
         *error = std::string("cannot swap the SDL3 OpenGL buffers: ") + SDL_GetError();
