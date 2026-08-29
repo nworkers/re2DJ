@@ -24,6 +24,7 @@
 | [sdl3-mixer-raw-audio.md](sdl3-mixer-raw-audio.md) | SDL3_mixer raw PCM, track 재생 상태와 zlib 라이선스 경계 |
 | [x86-io-port-trapping.md](x86-io-port-trapping.md) | x86 `IN`/`OUT` 권한, Windows exception debug event, 제한된 장치 HLE trap |
 | [windows-vectored-io-trap.md](windows-vectored-io-trap.md) | Windows vectored exception 처리 순서와 debugger 분리 실행 경계 |
+| [win32-dpi-window-frame.md](win32-dpi-window-frame.md) | DPI-aware Win32 client/outer frame 계산과 초기화 순서 |
 
 새 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 

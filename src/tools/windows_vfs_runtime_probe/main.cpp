@@ -155,28 +155,40 @@ int RunWindowCloseExitChild()
                                         nullptr);
     LPDIRECTDRAW direct_draw = nullptr;
     LPDIRECTDRAW4 direct_draw4 = nullptr;
-    if (window == nullptr ||
-        Re2djHleDirectDrawCreate(nullptr, &direct_draw, nullptr) != DD_OK ||
-        direct_draw == nullptr ||
-        IDirectDraw_QueryInterface(direct_draw,
-                                   IID_IDirectDraw4,
-                                   reinterpret_cast<void**>(&direct_draw4)) != S_OK ||
-        direct_draw4 == nullptr ||
-        IDirectDraw4_SetCooperativeLevel(
-            direct_draw4, window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) != DD_OK)
+    const HRESULT direct_draw_result =
+        Re2djHleDirectDrawCreate(nullptr, &direct_draw, nullptr);
+    const HRESULT query_result = direct_draw == nullptr
+                                     ? E_POINTER
+                                     : IDirectDraw_QueryInterface(
+                                           direct_draw,
+                                           IID_IDirectDraw4,
+                                           reinterpret_cast<void**>(&direct_draw4));
+    const HRESULT cooperative_result = direct_draw4 == nullptr
+                                           ? E_POINTER
+                                           : IDirectDraw4_SetCooperativeLevel(
+                                                 direct_draw4,
+                                                 window,
+                                                 DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN);
+    if (window == nullptr || direct_draw_result != DD_OK || direct_draw == nullptr ||
+        query_result != S_OK || direct_draw4 == nullptr || cooperative_result != DD_OK)
     {
+        std::fprintf(stderr,
+                     "close child setup failed: hwnd=%p parent=%p style=0x%08lx dd=0x%08lx qi=0x%08lx coop=0x%08lx error=%lu\n",
+                     reinterpret_cast<void*>(window),
+                     reinterpret_cast<void*>(GetParent(window)),
+                     static_cast<unsigned long>(GetWindowLongPtrA(window, GWL_STYLE)),
+                     static_cast<unsigned long>(direct_draw_result),
+                     static_cast<unsigned long>(query_result),
+                     static_cast<unsigned long>(cooperative_result),
+                     static_cast<unsigned long>(GetLastError()));
         return 3;
     }
-    SetLastError(ERROR_SUCCESS);
-    const LONG_PTR adapter = SetWindowLongPtrA(
-        window,
-        GWLP_WNDPROC,
-        reinterpret_cast<LONG_PTR>(&CloseConsumingWindowProcedure));
-    if (adapter == 0 && GetLastError() != ERROR_SUCCESS)
+    const HWND host_window = GetParent(window);
+    if (host_window == nullptr)
     {
         return 4;
     }
-    SendMessageA(window, WM_SYSCOMMAND, SC_CLOSE, 0);
+    SendMessageA(host_window, WM_SYSCOMMAND, SC_CLOSE, 0);
     Sleep(2000);
     return 5;
 }
@@ -237,8 +249,7 @@ bool RunWindowCloseExitProbe()
                             std::istreambuf_iterator<char>());
     DeleteFileA(trace_path);
     return exited && trace.find("event=target") != std::string::npos &&
-           trace.find("event=sample") != std::string::npos &&
-           trace.find("event=watcher-exit") != std::string::npos;
+           trace.find("event=close-message") != std::string::npos;
 }
 
 }  // namespace
@@ -573,14 +584,16 @@ int main()
         RECT client_rectangle = {};
         RECT window_rectangle = {};
         BOOL non_client_rendering_enabled = TRUE;
-        const LONG_PTR windowed_style = GetWindowLongPtrA(graphics_window, GWL_STYLE);
-        GetWindowRect(graphics_window, &window_rectangle);
+        const HWND presentation_window = GetParent(graphics_window);
+        const LONG_PTR windowed_style =
+            GetWindowLongPtrA(presentation_window, GWL_STYLE);
+        GetWindowRect(presentation_window, &window_rectangle);
         const int caption_test_x =
             window_rectangle.left + (window_rectangle.right - window_rectangle.left) / 2;
         const int caption_test_y = window_rectangle.top + GetSystemMetrics(SM_CYSIZEFRAME) +
                                    GetSystemMetrics(SM_CYCAPTION) / 2;
         const int window_title_length =
-            GetWindowTextA(graphics_window, window_title, sizeof(window_title));
+            GetWindowTextA(presentation_window, window_title, sizeof(window_title));
         const bool window_title_valid =
             window_title_length != 0 &&
             std::strncmp(window_title, "re2DJ v", std::strlen("re2DJ v")) == 0 &&
@@ -596,43 +609,46 @@ int main()
         }
         passed = passed &&
                  Check(window_title_valid, "window title policy failed") &&
+                 Check(presentation_window != nullptr &&
+                           (GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_CHILD) != 0,
+                       "host window shell policy failed") &&
                  Check((windowed_style & WS_CAPTION) == WS_CAPTION &&
                            (windowed_style & WS_SYSMENU) != 0 &&
                            (windowed_style & WS_THICKFRAME) != 0 &&
                            (windowed_style & WS_MAXIMIZEBOX) != 0,
                        "windowed style policy failed") &&
                  Check(SUCCEEDED(DwmGetWindowAttribute(
-                           graphics_window,
+                           presentation_window,
                            DWMWA_NCRENDERING_ENABLED,
                            &non_client_rendering_enabled,
                            sizeof(non_client_rendering_enabled))) &&
-                           non_client_rendering_enabled == FALSE,
+                           non_client_rendering_enabled != FALSE,
                        "windowed DWM non-client policy failed") &&
-                 Check(SendMessageA(graphics_window,
+                 Check(SendMessageA(presentation_window,
                                     WM_NCHITTEST,
                                     0,
                                     MAKELPARAM(caption_test_x, caption_test_y)) == HTCAPTION,
                        "window caption hit-test policy failed") &&
-                 Check(SendMessageA(graphics_window, WM_GETICON, ICON_SMALL, 0) != 0,
+                 Check(SendMessageA(presentation_window, WM_GETICON, ICON_SMALL, 0) != 0,
                        "window caption icon policy failed") &&
-                 Check(SendMessageA(graphics_window,
+                 Check(SendMessageA(presentation_window,
                                     WM_SETTEXT,
                                     0,
                                     reinterpret_cast<LPARAM>("")) != FALSE &&
-                           SendMessageA(graphics_window, WM_SETICON, ICON_SMALL, 0) != FALSE &&
+                           SendMessageA(presentation_window, WM_SETICON, ICON_SMALL, 0) != FALSE &&
                            GetWindowTextA(
-                               graphics_window, window_title, sizeof(window_title)) != 0 &&
+                               presentation_window, window_title, sizeof(window_title)) != 0 &&
                            std::strstr(window_title,
                                        " - SDL3 OpenGL - FPS : 0.0") != nullptr &&
-                           SendMessageA(graphics_window, WM_GETICON, ICON_SMALL, 0) != 0,
+                           SendMessageA(presentation_window, WM_GETICON, ICON_SMALL, 0) != 0,
                        "window caption overwrite guard failed") &&
-                 Check(GetClientRect(graphics_window, &client_rectangle) != FALSE &&
+                 Check(GetClientRect(presentation_window, &client_rectangle) != FALSE &&
                            client_rectangle.right - client_rectangle.left == 1280 &&
                            client_rectangle.bottom - client_rectangle.top == 960,
                        "windowed client size policy failed") &&
                  Check(Re2djUpdateWindowTitle(graphics_window, 59.94) != FALSE &&
                            GetWindowTextA(
-                               graphics_window, window_title, sizeof(window_title)) != 0 &&
+                               presentation_window, window_title, sizeof(window_title)) != 0 &&
                            std::strstr(window_title, " - FPS : 59.9") != nullptr,
                        "window FPS title policy failed");
 
@@ -645,19 +661,19 @@ int main()
         MONITORINFO monitor_info = {};
         monitor_info.cbSize = sizeof(monitor_info);
         const HMONITOR graphics_monitor =
-            MonitorFromWindow(graphics_window, MONITOR_DEFAULTTONEAREST);
+            MonitorFromWindow(presentation_window, MONITOR_DEFAULTTONEAREST);
         passed = passed &&
-                 Check((GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_POPUP) != 0 &&
-                           (GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_CAPTION) == 0,
+                 Check((GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_POPUP) != 0 &&
+                           (GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_CAPTION) == 0,
                        "fullscreen style policy failed") &&
                  Check(SUCCEEDED(DwmGetWindowAttribute(
-                           graphics_window,
+                           presentation_window,
                            DWMWA_NCRENDERING_ENABLED,
                            &non_client_rendering_enabled,
                            sizeof(non_client_rendering_enabled))) &&
                            non_client_rendering_enabled != FALSE,
                        "fullscreen DWM non-client policy failed") &&
-                 Check(GetWindowRect(graphics_window, &fullscreen_rectangle) != FALSE &&
+                 Check(GetWindowRect(presentation_window, &fullscreen_rectangle) != FALSE &&
                            graphics_monitor != nullptr &&
                            GetMonitorInfoA(graphics_monitor, &monitor_info) != FALSE &&
                            EqualRect(&fullscreen_rectangle, &monitor_info.rcMonitor) != FALSE,

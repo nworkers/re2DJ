@@ -2612,7 +2612,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         auto* const backend = new (std::nothrow) re2dj::graphics::Sdl3OpenGlBackend;
         const re2dj::graphics::Sdl3OpenGlWindowConfig window_config = {
             root->window, root->width, root->height, "re2DJ"};
-        if (backend == nullptr || !backend->Initialize(window_config, &error))
+        if (backend == nullptr || !backend->Initialize(window_config, &error) ||
+            !ApplyRe2djWindowMode(root->window, root->width, root->height))
         {
             delete backend;
             OutputDebugStringA(kOpenGlFailureMessage);

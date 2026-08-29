@@ -228,6 +228,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
         src/platform/windows/ez2dj_keyboard_input.cpp
+        src/platform/windows/host_window_shell.cpp
         src/platform/windows/ini_profile_hle.cpp
         src/platform/windows/injected_runtime.cpp
         src/platform/windows/window_mode.cpp
