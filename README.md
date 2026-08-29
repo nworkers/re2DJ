@@ -223,9 +223,9 @@ Windows 제품 실행 예:
 .\build\windows-x86\bin\Debug\re2dj.exe --hdd D:\EZ2DJ\1stSE --target ez2dj1stse --run
 ```
 
-기본값은 `re2DJ` 제목과 고정 640×480 client 영역을 가진 일반 창이다. 원본 INI를 바꾸지 않고 fullscreen을 선택하려면 `--fullscreen`을 추가한다.
+기본값은 version, build date, SDL3 OpenGL renderer와 FPS를 표시하는 제목 및 1280×960 client 영역을 가진 resize 가능한 일반 창이다. 원본의 640×480 논리 표시는 기본 가로·세로 정확히 2배로 확대된다. 원본 INI를 바꾸지 않고 fullscreen을 선택하려면 `--fullscreen`을 추가한다.
 
-*The default is a normal window titled `re2DJ` with a fixed 640x480 client area. Add `--fullscreen` to select fullscreen without changing the original INI.*
+*The default is a normal resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. The original 640x480 logical display starts at exactly 2x in both dimensions. Add `--fullscreen` to select fullscreen without changing the original INI.*
 
 키보드 입력은 `config/ez2dj-io.example.ini`를 복사·수정하고 `--io-config <path>`로 주입한다. 옵션을 생략하면 I/O board는 idle 상태를 유지한다.
 

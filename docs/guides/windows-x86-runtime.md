@@ -10,7 +10,7 @@
 
 관련 데모 음량 설계: [DirectSound 데모 음량 설정 HLE](../design/20260829-086-directsound-volume-transition.md)
 
-관련 창 설계: [Win32 창 모드와 메시지 pump](../design/20260828-084-window-mode-message-pump.md)
+관련 창 설계: [Win32 창 모드와 메시지 pump](../design/20260828-084-window-mode-message-pump.md), [Win32 실행 창 제목과 기본 2배 확대](../design/20260829-091-window-title-default-scale.md)
 
 관련 작업 로그: [렌더링 정확성·성능 회복](../work-logs/20260826-072-render-correctness-performance.md), [Win32 제품 loader 통합](../work-logs/20260828-079-win32-product-loader.md)
 
@@ -22,7 +22,7 @@
 
 제품 facade는 command line, Windows directory, VFS, DirectDraw/Direct3D 3, DirectSound, legacy I/O port, LPTDI target state와 detached 실행의 현재 canonical policy를 선택한다. 초기 복원과 IAT 검증 뒤 debugger를 분리하므로 실제 화면·오디오·입력과 성능 확인에 사용한다. 창을 닫으면 loader도 종료된다.
 
-기본 실행은 제목이 `re2DJ`인 고정 640×480 client-area 창이다. monitor 크기의 borderless fullscreen을 선택하려면 원본 INI를 수정하지 않고 다음처럼 외부 옵션을 추가한다.
+기본 실행은 version, build date, SDL3 OpenGL renderer와 FPS를 제목에 표시하는 resize 가능한 1280×960 client-area 창이다. 원본의 640×480 논리 표시는 기본 가로·세로 2배로 확대된다. monitor 크기의 borderless fullscreen을 선택하려면 원본 INI를 수정하지 않고 다음처럼 외부 옵션을 추가한다.
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe --hdd .\roms\ez2dj1stse --target ez2dj1stse --run --fullscreen
@@ -62,7 +62,7 @@ debugger mode는 I/O마다 exception 왕복이 발생하므로 성능 기준으�
 
 Run the product-loader command above from the repository root in PowerShell, replacing `--hdd` with a legally owned 1st SE HDD directory. The facade selects the current canonical command-line, Windows-directory, VFS, graphics, audio, legacy-I/O, LPTDI, and detached-runtime policy. It restores and verifies the process, detaches the debugger, and lets the injected runtime handle confirmed boundaries. Close the game window to finish the loader.
 
-The default run uses a fixed 640x480 client-area window titled `re2DJ`. Add `--fullscreen` to the same command for monitor-sized borderless fullscreen without editing the original INI. After clicking or moving the window, confirm that frames continue and Task Manager still reports it as responsive. The desktop resolution must remain unchanged after fullscreen exits.
+The default run uses a resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. It initially scales the original 640x480 logical display by 2x in each dimension. Add `--fullscreen` to the same command for monitor-sized borderless fullscreen without editing the original INI. After clicking or moving the window, confirm that frames continue and Task Manager still reports it as responsive. The desktop resolution must remain unchanged after fullscreen exits.
 
 For keyboard I/O, copy and edit [`config/ez2dj-io.example.ini`](../../config/ez2dj-io.example.ini), then add `--io-config <path>` to the product command. Button values accept `A` through `Z`, digits, `F1` through `F24`, the named navigation/numpad keys shown above, or `NONE`; turntable `step` accepts 1 through 32. Omitting the option leaves the emulated board idle.
 

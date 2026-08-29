@@ -389,8 +389,41 @@ struct RootFacade
     std::uint32_t untextured_draw_diagnostic_count = 0;
     std::uint32_t late_draw_diagnostic_count = 0;
     std::uint64_t frame_number = 0;
+    LARGE_INTEGER fps_frequency = {};
+    LARGE_INTEGER fps_interval_start = {};
+    std::uint32_t fps_interval_frames = 0;
     re2dj::graphics::Sdl3OpenGlBackend* render_backend = nullptr;
 };
+
+void RecordPresentedFrame(RootFacade* root)
+{
+    LARGE_INTEGER now = {};
+    if (root == nullptr || QueryPerformanceCounter(&now) == FALSE)
+    {
+        return;
+    }
+    if (root->fps_frequency.QuadPart == 0)
+    {
+        if (QueryPerformanceFrequency(&root->fps_frequency) == FALSE ||
+            root->fps_frequency.QuadPart <= 0)
+        {
+            return;
+        }
+        root->fps_interval_start = now;
+    }
+    ++root->fps_interval_frames;
+    const LONGLONG elapsed_ticks = now.QuadPart - root->fps_interval_start.QuadPart;
+    if (elapsed_ticks < root->fps_frequency.QuadPart)
+    {
+        return;
+    }
+    const double fps = static_cast<double>(root->fps_interval_frames) *
+                       static_cast<double>(root->fps_frequency.QuadPart) /
+                       static_cast<double>(elapsed_ticks);
+    Re2djUpdateWindowTitle(root->window, fps);
+    root->fps_interval_start = now;
+    root->fps_interval_frames = 0;
+}
 
 struct SurfaceFacade
 {
@@ -1472,6 +1505,9 @@ HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD)
         return DDERR_GENERIC;
     }
     root->window = window;
+    root->fps_frequency = {};
+    root->fps_interval_start = {};
+    root->fps_interval_frames = 0;
     return DD_OK;
 }
 
@@ -1882,6 +1918,7 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
     {
         Re2djExitIfWindowClosed(surface->root->window);
     }
+    RecordPresentedFrame(surface->root);
     return finish(DD_OK);
 }
 

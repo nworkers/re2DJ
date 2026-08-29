@@ -234,8 +234,11 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/winmm_mixer_trace.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
+    target_compile_definitions(re2dj_windows_injected_runtime PRIVATE
+        RE2DJ_VERSION="${RE2DJ_VERSION}"
+    )
     target_link_libraries(re2dj_windows_injected_runtime
-        PRIVATE re2dj_sdl3_opengl_backend re2dj_warnings dxguid winmm
+        PRIVATE re2dj_sdl3_opengl_backend re2dj_warnings dwmapi dxguid winmm
     )
     if(RE2DJ_ENABLE_SDL3_AUDIO)
         target_sources(re2dj_windows_injected_runtime PRIVATE
@@ -251,8 +254,11 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         add_executable(re2dj_windows_vfs_runtime_probe
             src/tools/windows_vfs_runtime_probe/main.cpp
         )
+        target_compile_definitions(re2dj_windows_vfs_runtime_probe PRIVATE
+            RE2DJ_VERSION="${RE2DJ_VERSION}"
+        )
         target_link_libraries(re2dj_windows_vfs_runtime_probe
-            PRIVATE re2dj_windows_injected_runtime re2dj_warnings dxguid
+            PRIVATE re2dj_windows_injected_runtime re2dj_warnings dwmapi dxguid
         )
         add_test(NAME re2dj_windows_vfs_runtime_probe COMMAND re2dj_windows_vfs_runtime_probe)
         set_tests_properties(re2dj_windows_vfs_runtime_probe PROPERTIES

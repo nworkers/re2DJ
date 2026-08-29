@@ -3,6 +3,7 @@
 #define DIRECT3D_VERSION 0x0600
 #define DIRECTSOUND_VERSION 0x0300
 #include <windows.h>
+#include <dwmapi.h>
 #include <ddraw.h>
 #include <d3d.h>
 #include <dsound.h>
@@ -56,6 +57,7 @@ extern "C" __declspec(dllimport) char g_re2dj_audio_trace_path[MAX_PATH];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_audio_image_base;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_demo_volume;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_fullscreen;
+extern "C" __declspec(dllimport) BOOL WINAPI Re2djUpdateWindowTitle(HWND window, double fps);
 extern "C" __declspec(dllimport) char g_re2dj_io_config_path[MAX_PATH];
 extern "C" __declspec(dllimport) float WINAPI Re2djHleGetAudioMasterGain();
 extern "C" __declspec(dllimport) UINT WINAPI Re2djHleGetPrivateProfileIntA(
@@ -95,6 +97,23 @@ HRESULT CALLBACK CaptureTextureFormat(DDPIXELFORMAT* format, void* context)
         *captured = true;
     }
     return D3DENUMRET_CANCEL;
+}
+
+LRESULT CALLBACK CaptionConsumingWindowProcedure(HWND window,
+                                                 UINT message,
+                                                 WPARAM wparam,
+                                                 LPARAM lparam)
+{
+    if (message == WM_SETTEXT || message == WM_GETTEXT || message == WM_GETTEXTLENGTH ||
+        message == WM_NCCALCSIZE || message == WM_NCPAINT || message == WM_NCACTIVATE)
+    {
+        return 0;
+    }
+    if (message == WM_NCHITTEST)
+    {
+        return HTCLIENT;
+    }
+    return DefWindowProcA(window, message, wparam, lparam);
 }
 
 LRESULT CALLBACK CloseConsumingWindowProcedure(HWND window,
@@ -459,7 +478,7 @@ int main()
     const HINSTANCE module = GetModuleHandleA(nullptr);
     WNDCLASSA window_class = {};
     window_class.style = CS_OWNDC;
-    window_class.lpfnWndProc = DefWindowProcA;
+    window_class.lpfnWndProc = CaptionConsumingWindowProcedure;
     window_class.hInstance = module;
     window_class.lpszClassName = graphics_window_class;
     const ATOM window_class_atom = RegisterClassA(&window_class);
@@ -550,22 +569,72 @@ int main()
                            zbuffer_captured,
                        "virtual Z-buffer enumeration failed");
 
-        char window_title[32] = {};
+        char window_title[192] = {};
         RECT client_rectangle = {};
+        RECT window_rectangle = {};
+        BOOL non_client_rendering_enabled = TRUE;
         const LONG_PTR windowed_style = GetWindowLongPtrA(graphics_window, GWL_STYLE);
+        GetWindowRect(graphics_window, &window_rectangle);
+        const int caption_test_x =
+            window_rectangle.left + (window_rectangle.right - window_rectangle.left) / 2;
+        const int caption_test_y = window_rectangle.top + GetSystemMetrics(SM_CYSIZEFRAME) +
+                                   GetSystemMetrics(SM_CYCAPTION) / 2;
+        const int window_title_length =
+            GetWindowTextA(graphics_window, window_title, sizeof(window_title));
+        const bool window_title_valid =
+            window_title_length != 0 &&
+            std::strncmp(window_title, "re2DJ v", std::strlen("re2DJ v")) == 0 &&
+            std::strstr(window_title, RE2DJ_VERSION) != nullptr &&
+            std::strstr(window_title, " - Build ") != nullptr &&
+            std::strstr(window_title, " - SDL3 OpenGL - FPS : 0.0") != nullptr;
+        if (!window_title_valid)
+        {
+            std::fprintf(stderr,
+                         "observed window title length=%d text=[%s]\n",
+                         window_title_length,
+                         window_title);
+        }
         passed = passed &&
-                 Check(GetWindowTextA(graphics_window, window_title, sizeof(window_title)) != 0 &&
-                           std::strcmp(window_title, "re2DJ") == 0,
-                       "window title policy failed") &&
+                 Check(window_title_valid, "window title policy failed") &&
                  Check((windowed_style & WS_CAPTION) == WS_CAPTION &&
                            (windowed_style & WS_SYSMENU) != 0 &&
-                           (windowed_style & WS_THICKFRAME) == 0 &&
-                           (windowed_style & WS_MAXIMIZEBOX) == 0,
+                           (windowed_style & WS_THICKFRAME) != 0 &&
+                           (windowed_style & WS_MAXIMIZEBOX) != 0,
                        "windowed style policy failed") &&
+                 Check(SUCCEEDED(DwmGetWindowAttribute(
+                           graphics_window,
+                           DWMWA_NCRENDERING_ENABLED,
+                           &non_client_rendering_enabled,
+                           sizeof(non_client_rendering_enabled))) &&
+                           non_client_rendering_enabled == FALSE,
+                       "windowed DWM non-client policy failed") &&
+                 Check(SendMessageA(graphics_window,
+                                    WM_NCHITTEST,
+                                    0,
+                                    MAKELPARAM(caption_test_x, caption_test_y)) == HTCAPTION,
+                       "window caption hit-test policy failed") &&
+                 Check(SendMessageA(graphics_window, WM_GETICON, ICON_SMALL, 0) != 0,
+                       "window caption icon policy failed") &&
+                 Check(SendMessageA(graphics_window,
+                                    WM_SETTEXT,
+                                    0,
+                                    reinterpret_cast<LPARAM>("")) != FALSE &&
+                           SendMessageA(graphics_window, WM_SETICON, ICON_SMALL, 0) != FALSE &&
+                           GetWindowTextA(
+                               graphics_window, window_title, sizeof(window_title)) != 0 &&
+                           std::strstr(window_title,
+                                       " - SDL3 OpenGL - FPS : 0.0") != nullptr &&
+                           SendMessageA(graphics_window, WM_GETICON, ICON_SMALL, 0) != 0,
+                       "window caption overwrite guard failed") &&
                  Check(GetClientRect(graphics_window, &client_rectangle) != FALSE &&
-                           client_rectangle.right - client_rectangle.left == 640 &&
-                           client_rectangle.bottom - client_rectangle.top == 480,
-                       "windowed client size policy failed");
+                           client_rectangle.right - client_rectangle.left == 1280 &&
+                           client_rectangle.bottom - client_rectangle.top == 960,
+                       "windowed client size policy failed") &&
+                 Check(Re2djUpdateWindowTitle(graphics_window, 59.94) != FALSE &&
+                           GetWindowTextA(
+                               graphics_window, window_title, sizeof(window_title)) != 0 &&
+                           std::strstr(window_title, " - FPS : 59.9") != nullptr,
+                       "window FPS title policy failed");
 
         g_re2dj_fullscreen = TRUE;
         passed = passed &&
@@ -581,6 +650,13 @@ int main()
                  Check((GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_POPUP) != 0 &&
                            (GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_CAPTION) == 0,
                        "fullscreen style policy failed") &&
+                 Check(SUCCEEDED(DwmGetWindowAttribute(
+                           graphics_window,
+                           DWMWA_NCRENDERING_ENABLED,
+                           &non_client_rendering_enabled,
+                           sizeof(non_client_rendering_enabled))) &&
+                           non_client_rendering_enabled != FALSE,
+                       "fullscreen DWM non-client policy failed") &&
                  Check(GetWindowRect(graphics_window, &fullscreen_rectangle) != FALSE &&
                            graphics_monitor != nullptr &&
                            GetMonitorInfoA(graphics_monitor, &monitor_info) != FALSE &&
