@@ -8,7 +8,7 @@
 
 **[첫 구현 완료]** 공용 raw byte bus와 Windows x86 trap을 구현했고 두 canonical 실행에서 port 경계를 통과했다. 아래의 정적 근거와 미확정 범위는 그대로 유지한다.
 
-`0x101`, `0x102`, `0x106` 입력은 bitwise NOT 뒤 24개의 boolean 입력으로 풀린다. 따라서 이 세 port는 **active-low 입력으로 확인됨**이다. `0x103`~`0x105` 입력은 이전값과 비교되고 세 번째 바이트는 modulo-256 누적값으로 쓰인다. 카운터 또는 상태 레지스터라는 역할은 확인되지만 물리 장치와 축 의미는 **미확정**이다. 출력의 물리적 의미도 미확정이다.
+`0x101`, `0x102`, `0x106` 입력은 bitwise NOT 뒤 24개의 boolean 입력으로 풀린다. 따라서 이 세 port는 **active-low 입력으로 확인됨**이다. `0x103`~`0x105` 입력은 이전값과 비교되고 세 번째 바이트는 modulo-256 누적값으로 쓰인다. 이 첫 구현 이후 Task 85가 공개 구현과 교차 확인한 의미 기반 board를 추가했다. 원본 확인과 외부 추정의 구분은 [I/O port map](../analysis/ez2dj-io-map.md)에 둔다.
 
 ## 경계
 
@@ -61,7 +61,7 @@ Related work order: [Legacy I/O Port HLE Work Order](../work-orders/20260825-062
 
 **[First implementation complete.]** Canonical Task 61 execution raised `0xc0000096` at `0x00438987: in al,dx` after Direct3D initialization. Static inspection confirms byte reads from ports `0x101` through `0x106` and byte writes to `0x100` through `0x103` plus `0x106`. The executable also contains 16/32-bit helpers, but no callers have been confirmed.
 
-Inputs `0x101`, `0x102`, and `0x106` are inverted and expanded into 24 booleans, confirming active-low semantics. Inputs `0x103` through `0x105` are compared with prior values; the third contributes a modulo-256 delta. Their physical device and axis meanings remain unresolved, as do output meanings.
+Inputs `0x101`, `0x102`, and `0x106` are inverted and expanded into 24 booleans, confirming active-low semantics. Inputs `0x103` through `0x105` are compared with prior values; the third contributes a modulo-256 delta. Task 85 later added a semantic board based on cross-checking an independent public implementation. The [I/O port map](../analysis/ez2dj-io-map.md) keeps original confirmation separate from external inference.
 
 ## Boundary and policy
 

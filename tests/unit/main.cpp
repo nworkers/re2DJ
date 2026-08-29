@@ -16,9 +16,11 @@ int main()
     RunVfsFileTableTests(context);
     RunLptdiChallengeResponseTests(context);
     RunLptdiResponseProfileTests(context);
+    RunEz2DjIoBoardTests(context);
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);
     RunLegacyTextureTests(context);
+    RunLegacyTransformTests(context);
     RunLegacyVertexBufferTests(context);
     RunLegacyAudioBufferTests(context);
 

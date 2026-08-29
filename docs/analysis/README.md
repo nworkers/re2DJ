@@ -19,6 +19,8 @@
 | [ez2dj-import-surface.md](ez2dj-import-surface.md) | 원본이 실제로 호출하는 Win32 API 집합과 HLE 우선순위 | `ez2dj1.exe`·보호 빌드 `.gidata`로 확인됨 |
 | [ez2dj-asset-loading-path.md](ez2dj-asset-loading-path.md) | 자산 검색 경로 테이블, BMP `LoadImageA` 경계, `.str` 스크립트 참조, 이중 IAT 구조 | 1st SE `ez2dj.exe` 정적 분석과 detached 실행 로그로 확인됨 |
 | [windows-original-process-loader.md](windows-original-process-loader.md) | Windows loader가 원본 EXE를 주 이미지로 배치한 관찰 | `ez2dj1.exe` suspended process로 확인됨 |
+| [ez2dj-io-map.md](ez2dj-io-map.md) | legacy I/O port 범위와 공개 구현 교차 확인 의미 | 원본 확인/외부 추정/미확정 분리 |
+| [ez2dj-demo-volume.md](ez2dj-demo-volume.md) | `DemoVolume` INI 경로, 원본 DirectSound profile table과 실제 실행 귀속 | 1st SE 대응 unprotected binary와 실제 실행으로 확인됨 |
 
 새 분석 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 

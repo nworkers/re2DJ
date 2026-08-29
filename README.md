@@ -207,9 +207,12 @@ re2dj --hdd <directory> [options]
   --resolve <path>    게스트 경로 하나를 해석하고 종료.
   --run               게스트 실행. Windows 제품 경로는 ez2dj1stse 지원.
   --linux-helper      Linux --run에서 사용하는 i386 helper 경로.
-  --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 +6).
+  --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 0).
+  --demo-volume       Windows title/demo 프로필(0..3, 기본값 3=0 dB).
   --audio-volume-trace
                       DirectSound/WINMM 음량 증거를 별도 로그에 기록.
+  --fullscreen        Windows에서 monitor 크기 borderless fullscreen 사용.
+  --io-config <path>  Windows EZ2DJ 키보드 I/O mapping INI.
   --version           버전 출력.
   --help              도움말 출력.
 ```
@@ -220,9 +223,17 @@ Windows 제품 실행 예:
 .\build\windows-x86\bin\Debug\re2dj.exe --hdd D:\EZ2DJ\1stSE --target ez2dj1stse --run
 ```
 
-기본 `+6 dB`보다 더 큰 출력이 필요하면 `--audio-gain-db 12`를 추가한다. 왜곡이나 clipping이 들리면 `6`, `3`, `0` 순서로 낮춘다. 이 값은 DirectSound buffer별 상대 음량을 바꾸지 않고 최종 SDL mix에만 적용된다.
+기본값은 `re2DJ` 제목과 고정 640×480 client 영역을 가진 일반 창이다. 원본 INI를 바꾸지 않고 fullscreen을 선택하려면 `--fullscreen`을 추가한다.
 
-*Add `--audio-gain-db 12` when more output than the default `+6 dB` is required. Reduce it to `6`, `3`, or `0` if distortion or clipping is audible. The value affects only the final SDL mix and preserves relative DirectSound buffer levels.*
+*The default is a normal window titled `re2DJ` with a fixed 640x480 client area. Add `--fullscreen` to select fullscreen without changing the original INI.*
+
+키보드 입력은 `config/ez2dj-io.example.ini`를 복사·수정하고 `--io-config <path>`로 주입한다. 옵션을 생략하면 I/O board는 idle 상태를 유지한다.
+
+*For keyboard input, copy and edit `config/ez2dj-io.example.ini`, then inject it with `--io-config <path>`. Omitting the option leaves the I/O board idle.*
+
+제품은 원본 HDD의 `DemoVolume=0`을 수정하지 않고 title/demo 프로필을 기본 3(0 dB)으로 재정의한다. 원본 프로필을 선택하려면 `--demo-volume 0..3`을 사용한다. 대응 DirectSound 값은 각각 `-10000`, `-2222`, `-1111`, `0`이다. 최종 출력 보정이 별도로 필요할 때만 `--audio-gain-db`를 사용하며 기본값은 0 dB다.
+
+*Without modifying the original HDD's `DemoVolume=0`, the product overrides the title/demo profile to 3 (0 dB) by default. Use `--demo-volume 0..3` to select the original profiles, which map to DirectSound values `-10000`, `-2222`, `-1111`, and `0`. Use `--audio-gain-db` only for separate final-output adjustment; its default is 0 dB.*
 
 `--audio-volume-trace`는 launcher 진단 로그 옆의 `.audio.log`에 buffer별 dB, PCM peak/RMS, WINMM mixer 값을 제한적으로 기록한다. 원본 WAV 샘플 자체는 기록하지 않는다.
 

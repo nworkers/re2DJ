@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 extern "C" __declspec(dllimport) char g_re2dj_vfs_hdd_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_overlay_root[MAX_PATH];
@@ -24,6 +25,7 @@ extern "C" __declspec(dllimport) unsigned char g_re2dj_device_response_410[8];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_response_414_size;
 extern "C" __declspec(dllimport) unsigned char g_re2dj_device_response_414[104];
 extern "C" __declspec(dllimport) unsigned char g_re2dj_device_target_state[8];
+extern "C" __declspec(dllimport) char g_re2dj_graphics_trace_path[MAX_PATH];
 extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsCreateFileA(
     LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
     DWORD disposition, DWORD flags, HANDLE template_handle);
@@ -51,7 +53,13 @@ extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
     GUID* device_guid, LPDIRECTSOUND* direct_sound, IUnknown* outer);
 extern "C" __declspec(dllimport) volatile float g_re2dj_audio_master_gain;
 extern "C" __declspec(dllimport) char g_re2dj_audio_trace_path[MAX_PATH];
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_audio_image_base;
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_demo_volume;
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_fullscreen;
+extern "C" __declspec(dllimport) char g_re2dj_io_config_path[MAX_PATH];
 extern "C" __declspec(dllimport) float WINAPI Re2djHleGetAudioMasterGain();
+extern "C" __declspec(dllimport) UINT WINAPI Re2djHleGetPrivateProfileIntA(
+    LPCSTR section, LPCSTR key, INT default_value, LPCSTR filename);
 
 namespace
 {
@@ -89,10 +97,150 @@ HRESULT CALLBACK CaptureTextureFormat(DDPIXELFORMAT* format, void* context)
     return D3DENUMRET_CANCEL;
 }
 
+LRESULT CALLBACK CloseConsumingWindowProcedure(HWND window,
+                                               UINT message,
+                                               WPARAM wparam,
+                                               LPARAM lparam)
+{
+    if (message == WM_SYSCOMMAND && (wparam & 0xfff0U) == SC_CLOSE)
+    {
+        DestroyWindow(window);
+        return 0;
+    }
+    return DefWindowProcA(window, message, wparam, lparam);
+}
+
+int RunWindowCloseExitChild()
+{
+    constexpr char window_class_name[] = "re2dj-window-close-exit-child";
+    const HINSTANCE module = GetModuleHandleA(nullptr);
+    WNDCLASSA window_class = {};
+    window_class.lpfnWndProc = CloseConsumingWindowProcedure;
+    window_class.hInstance = module;
+    window_class.lpszClassName = window_class_name;
+    if (RegisterClassA(&window_class) == 0)
+    {
+        return 2;
+    }
+    const HWND window = CreateWindowExA(0,
+                                        window_class_name,
+                                        "close child",
+                                        WS_POPUP,
+                                        0,
+                                        0,
+                                        100,
+                                        100,
+                                        nullptr,
+                                        nullptr,
+                                        module,
+                                        nullptr);
+    LPDIRECTDRAW direct_draw = nullptr;
+    LPDIRECTDRAW4 direct_draw4 = nullptr;
+    if (window == nullptr ||
+        Re2djHleDirectDrawCreate(nullptr, &direct_draw, nullptr) != DD_OK ||
+        direct_draw == nullptr ||
+        IDirectDraw_QueryInterface(direct_draw,
+                                   IID_IDirectDraw4,
+                                   reinterpret_cast<void**>(&direct_draw4)) != S_OK ||
+        direct_draw4 == nullptr ||
+        IDirectDraw4_SetCooperativeLevel(
+            direct_draw4, window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) != DD_OK)
+    {
+        return 3;
+    }
+    SetLastError(ERROR_SUCCESS);
+    const LONG_PTR adapter = SetWindowLongPtrA(
+        window,
+        GWLP_WNDPROC,
+        reinterpret_cast<LONG_PTR>(&CloseConsumingWindowProcedure));
+    if (adapter == 0 && GetLastError() != ERROR_SUCCESS)
+    {
+        return 4;
+    }
+    SendMessageA(window, WM_SYSCOMMAND, SC_CLOSE, 0);
+    Sleep(2000);
+    return 5;
+}
+
+bool RunWindowCloseExitProbe()
+{
+    constexpr char trace_environment[] = "RE2DJ_WINDOW_TRACE_PROBE";
+    char executable[MAX_PATH] = {};
+    char temporary_directory[MAX_PATH] = {};
+    char trace_path[MAX_PATH] = {};
+    if (GetModuleFileNameA(nullptr, executable, MAX_PATH) == 0 ||
+        GetTempPathA(MAX_PATH, temporary_directory) == 0 ||
+        GetTempFileNameA(temporary_directory, "r2w", 0, trace_path) == 0 ||
+        DeleteFileA(trace_path) == FALSE)
+    {
+        return false;
+    }
+    std::string command_line = std::string("\"") + executable +
+                               "\" --window-close-exit-child";
+    std::vector<char> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back('\0');
+    STARTUPINFOA startup = {};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process = {};
+    if (SetEnvironmentVariableA(trace_environment, trace_path) == FALSE)
+    {
+        return false;
+    }
+    if (CreateProcessA(executable,
+                       mutable_command.data(),
+                       nullptr,
+                       nullptr,
+                       FALSE,
+                       CREATE_NO_WINDOW,
+                       nullptr,
+                       nullptr,
+                       &startup,
+                       &process) == FALSE)
+    {
+        SetEnvironmentVariableA(trace_environment, nullptr);
+        return false;
+    }
+    SetEnvironmentVariableA(trace_environment, nullptr);
+    CloseHandle(process.hThread);
+    const DWORD wait = WaitForSingleObject(process.hProcess, 5000);
+    DWORD exit_code = 0xffffffff;
+    const bool exited = wait == WAIT_OBJECT_0 &&
+                        GetExitCodeProcess(process.hProcess, &exit_code) != FALSE &&
+                        exit_code == 0;
+    if (wait == WAIT_TIMEOUT)
+    {
+        TerminateProcess(process.hProcess, 5);
+        WaitForSingleObject(process.hProcess, 5000);
+    }
+    CloseHandle(process.hProcess);
+    std::ifstream trace_file(trace_path, std::ios::binary);
+    const std::string trace((std::istreambuf_iterator<char>(trace_file)),
+                            std::istreambuf_iterator<char>());
+    DeleteFileA(trace_path);
+    return exited && trace.find("event=target") != std::string::npos &&
+           trace.find("event=sample") != std::string::npos &&
+           trace.find("event=watcher-exit") != std::string::npos;
+}
+
 }  // namespace
 
 int main()
 {
+    char window_trace_path[MAX_PATH] = {};
+    const DWORD window_trace_length = GetEnvironmentVariableA(
+        "RE2DJ_WINDOW_TRACE_PROBE", window_trace_path, MAX_PATH);
+    if (window_trace_length > 0 && window_trace_length < MAX_PATH)
+    {
+        strcpy_s(g_re2dj_graphics_trace_path, window_trace_path);
+    }
+    if (std::strstr(GetCommandLineA(), "--window-close-exit-child") != nullptr)
+    {
+        return RunWindowCloseExitChild();
+    }
+    if (!Check(RunWindowCloseExitProbe(), "window close did not exit the child process"))
+    {
+        return 1;
+    }
     char temporary_directory[MAX_PATH] = {};
     char temporary[MAX_PATH] = {};
     if (GetTempPathA(MAX_PATH, temporary_directory) == 0 ||
@@ -108,6 +256,11 @@ int main()
     {
         std::ofstream original(hdd / "DATA" / "ORIGINAL.TXT", std::ios::binary);
         original << "original";
+    }
+    const std::filesystem::path profile = root / "ez2dj.ini";
+    {
+        std::ofstream ini(profile, std::ios::binary);
+        ini << "[GAMEASSIGNMENTS]\nDemoVolume=0\n[OTHER]\nValue=7\n";
     }
     {
         BITMAPFILEHEADER file_header = {};
@@ -142,7 +295,10 @@ int main()
         !Check(strcpy_s(g_re2dj_vfs_trace_path, trace.string().c_str()) == 0,
                "cannot configure VFS trace path") ||
         !Check(strcpy_s(g_re2dj_audio_trace_path, audio_trace.string().c_str()) == 0,
-               "cannot configure audio trace path"))
+               "cannot configure audio trace path") ||
+        !Check(strcpy_s(g_re2dj_io_config_path, "synthetic-io.ini") == 0 &&
+                   std::strcmp(g_re2dj_io_config_path, "synthetic-io.ini") == 0,
+               "cannot configure I/O mapping path"))
     {
         std::filesystem::remove_all(root);
         return 1;
@@ -157,11 +313,23 @@ int main()
                                          nullptr);
     char contents[16] = {};
     DWORD read = 0;
-    bool passed = Check(handle != INVALID_HANDLE_VALUE, "cannot open original through VFS") &&
-                  Check(Re2djVfsReadFile(handle, contents, sizeof(contents), &read, nullptr) != FALSE,
-                        "cannot read original through VFS") &&
-                  Check(std::string(contents, read) == "original", "VFS read returned wrong original data") &&
-                  Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close original VFS handle");
+    g_re2dj_demo_volume = 3;
+    bool passed =
+        Check(Re2djHleGetPrivateProfileIntA("GAMEASSIGNMENTS",
+                                            "DemoVolume",
+                                            1,
+                                            profile.string().c_str()) == 3,
+              "demo volume profile override failed") &&
+        Check(Re2djHleGetPrivateProfileIntA("OTHER",
+                                            "Value",
+                                            1,
+                                            profile.string().c_str()) == 7,
+              "unrelated profile read did not pass through") &&
+        Check(handle != INVALID_HANDLE_VALUE, "cannot open original through VFS") &&
+        Check(Re2djVfsReadFile(handle, contents, sizeof(contents), &read, nullptr) != FALSE,
+              "cannot read original through VFS") &&
+        Check(std::string(contents, read) == "original", "VFS read returned wrong original data") &&
+        Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close original VFS handle");
 
     HBITMAP bitmap = static_cast<HBITMAP>(Re2djVfsLoadImageA(
         nullptr,
@@ -287,7 +455,33 @@ int main()
     LPDIRECT3D3 direct3d = nullptr;
     IUnknown* draw_identity = nullptr;
     IUnknown* d3d_identity = nullptr;
+    constexpr char graphics_window_class[] = "re2dj-runtime-probe-window";
+    const HINSTANCE module = GetModuleHandleA(nullptr);
+    WNDCLASSA window_class = {};
+    window_class.style = CS_OWNDC;
+    window_class.lpfnWndProc = DefWindowProcA;
+    window_class.hInstance = module;
+    window_class.lpszClassName = graphics_window_class;
+    const ATOM window_class_atom = RegisterClassA(&window_class);
+    HWND graphics_window = nullptr;
+    if (window_class_atom != 0)
+    {
+        graphics_window = CreateWindowExA(0,
+                                          graphics_window_class,
+                                          "before",
+                                          WS_POPUP,
+                                          0,
+                                          0,
+                                          100,
+                                          100,
+                                          nullptr,
+                                          nullptr,
+                                          module,
+                                          nullptr);
+    }
     passed = passed &&
+             Check(window_class_atom != 0 && graphics_window != nullptr,
+                   "cannot create graphics policy probe window") &&
              Check(Re2djHleDirectDrawCreate(nullptr, &direct_draw, nullptr) == DD_OK &&
                        direct_draw != nullptr,
                    "cannot create DirectDraw HLE facade") &&
@@ -339,9 +533,10 @@ int main()
     bool texture_format_captured = false;
     if (direct_draw4 != nullptr && direct3d != nullptr)
     {
+        g_re2dj_fullscreen = FALSE;
         passed = passed &&
                  Check(IDirectDraw4_SetCooperativeLevel(
-                           direct_draw4, GetDesktopWindow(), DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
+                           direct_draw4, graphics_window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
                        "logical DirectDraw cooperative level failed") &&
                  Check(IDirectDraw4_SetDisplayMode(direct_draw4, 640, 480, 16, 0, 0) == DD_OK,
                        "logical DirectDraw display mode failed") &&
@@ -354,6 +549,48 @@ int main()
                                                     &zbuffer_captured) == DD_OK &&
                            zbuffer_captured,
                        "virtual Z-buffer enumeration failed");
+
+        char window_title[32] = {};
+        RECT client_rectangle = {};
+        const LONG_PTR windowed_style = GetWindowLongPtrA(graphics_window, GWL_STYLE);
+        passed = passed &&
+                 Check(GetWindowTextA(graphics_window, window_title, sizeof(window_title)) != 0 &&
+                           std::strcmp(window_title, "re2DJ") == 0,
+                       "window title policy failed") &&
+                 Check((windowed_style & WS_CAPTION) == WS_CAPTION &&
+                           (windowed_style & WS_SYSMENU) != 0 &&
+                           (windowed_style & WS_THICKFRAME) == 0 &&
+                           (windowed_style & WS_MAXIMIZEBOX) == 0,
+                       "windowed style policy failed") &&
+                 Check(GetClientRect(graphics_window, &client_rectangle) != FALSE &&
+                           client_rectangle.right - client_rectangle.left == 640 &&
+                           client_rectangle.bottom - client_rectangle.top == 480,
+                       "windowed client size policy failed");
+
+        g_re2dj_fullscreen = TRUE;
+        passed = passed &&
+                 Check(IDirectDraw4_SetCooperativeLevel(
+                           direct_draw4, graphics_window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
+                       "fullscreen DirectDraw cooperative level failed");
+        RECT fullscreen_rectangle = {};
+        MONITORINFO monitor_info = {};
+        monitor_info.cbSize = sizeof(monitor_info);
+        const HMONITOR graphics_monitor =
+            MonitorFromWindow(graphics_window, MONITOR_DEFAULTTONEAREST);
+        passed = passed &&
+                 Check((GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_POPUP) != 0 &&
+                           (GetWindowLongPtrA(graphics_window, GWL_STYLE) & WS_CAPTION) == 0,
+                       "fullscreen style policy failed") &&
+                 Check(GetWindowRect(graphics_window, &fullscreen_rectangle) != FALSE &&
+                           graphics_monitor != nullptr &&
+                           GetMonitorInfoA(graphics_monitor, &monitor_info) != FALSE &&
+                           EqualRect(&fullscreen_rectangle, &monitor_info.rcMonitor) != FALSE,
+                       "fullscreen monitor bounds policy failed");
+        g_re2dj_fullscreen = FALSE;
+        passed = passed &&
+                 Check(IDirectDraw4_SetCooperativeLevel(
+                           direct_draw4, graphics_window, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN) == DD_OK,
+                       "windowed DirectDraw policy restore failed");
 
         DDSURFACEDESC2 descriptor = {};
         descriptor.dwSize = sizeof(descriptor);
@@ -428,6 +665,209 @@ int main()
                            "current viewport setup failed") &&
                      Check(IDirect3DDevice3_SetTexture(device, 0, nullptr) == DD_OK,
                            "null texture reset failed");
+
+            D3DVERTEX vertex_vertices[3] = {};
+            vertex_vertices[0].x = -0.5f;
+            vertex_vertices[0].y = -0.5f;
+            vertex_vertices[1].x = 0.0f;
+            vertex_vertices[1].y = 0.5f;
+            vertex_vertices[2].x = 0.5f;
+            vertex_vertices[2].y = -0.5f;
+            for (D3DVERTEX& vertex : vertex_vertices)
+            {
+                vertex.z = 0.5f;
+                vertex.nz = 1.0f;
+            }
+            D3DLVERTEX lit_vertices[3] = {};
+            lit_vertices[0].x = -0.5f;
+            lit_vertices[0].y = -0.5f;
+            lit_vertices[1].x = 0.0f;
+            lit_vertices[1].y = 0.5f;
+            lit_vertices[2].x = 0.5f;
+            lit_vertices[2].y = -0.5f;
+            for (D3DLVERTEX& vertex : lit_vertices)
+            {
+                vertex.z = 0.5f;
+                vertex.color = 0xffffffff;
+            }
+            passed = passed &&
+                     Check(sizeof(D3DVERTEX) == 32 && sizeof(D3DLVERTEX) == 32 &&
+                               IDirect3DDevice3_DrawPrimitive(device,
+                                                              D3DPT_TRIANGLESTRIP,
+                                                              D3DFVF_VERTEX,
+                                                              vertex_vertices,
+                                                              3,
+                                                              0) == DD_OK &&
+                               IDirect3DDevice3_DrawPrimitive(device,
+                                                              D3DPT_TRIANGLESTRIP,
+                                                              D3DFVF_LVERTEX,
+                                                              lit_vertices,
+                                                              3,
+                                                              0) == DD_OK,
+                           "untransformed Direct3D draw probe failed");
+        }
+
+        LPDIRECTDRAWSURFACE4 texture_source = nullptr;
+        LPDIRECTDRAWSURFACE4 texture_destination = nullptr;
+        LPDIRECTDRAWSURFACE4 texture_mismatch = nullptr;
+        LPDIRECTDRAWSURFACE4 texture_copy_target = nullptr;
+        LPDIRECT3DTEXTURE2 source_texture = nullptr;
+        LPDIRECT3DTEXTURE2 destination_texture = nullptr;
+        DDSURFACEDESC2 texture_descriptor = {};
+        texture_descriptor.dwSize = sizeof(texture_descriptor);
+        texture_descriptor.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT |
+                                     DDSD_PIXELFORMAT;
+        texture_descriptor.dwWidth = 3;
+        texture_descriptor.dwHeight = 2;
+        texture_descriptor.ddsCaps.dwCaps = DDSCAPS_TEXTURE;
+        texture_descriptor.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+        texture_descriptor.ddpfPixelFormat.dwFlags = DDPF_RGB;
+        texture_descriptor.ddpfPixelFormat.dwRGBBitCount = 16;
+        texture_descriptor.ddpfPixelFormat.dwRBitMask = 0xf800;
+        texture_descriptor.ddpfPixelFormat.dwGBitMask = 0x07e0;
+        texture_descriptor.ddpfPixelFormat.dwBBitMask = 0x001f;
+        passed = passed &&
+                 Check(IDirectDraw4_CreateSurface(direct_draw4,
+                                                  &texture_descriptor,
+                                                  &texture_source,
+                                                  nullptr) == DD_OK &&
+                           IDirectDraw4_CreateSurface(direct_draw4,
+                                                      &texture_descriptor,
+                                                      &texture_destination,
+                                                      nullptr) == DD_OK,
+                       "texture Load probe surface creation failed");
+        texture_descriptor.dwWidth = 2;
+        passed = passed &&
+                 Check(IDirectDraw4_CreateSurface(direct_draw4,
+                                                  &texture_descriptor,
+                                                  &texture_mismatch,
+                                                  nullptr) == DD_OK,
+                       "texture Load mismatch surface creation failed");
+        texture_descriptor.dwWidth = 3;
+        texture_descriptor.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+        passed = passed &&
+                 Check(IDirectDraw4_CreateSurface(direct_draw4,
+                                                  &texture_descriptor,
+                                                  &texture_copy_target,
+                                                  nullptr) == DD_OK,
+                       "texture Load color-key target creation failed");
+        if (texture_source != nullptr && texture_destination != nullptr &&
+            texture_mismatch != nullptr && texture_copy_target != nullptr)
+        {
+            DDBLTFX fill = {};
+            fill.dwSize = sizeof(fill);
+            fill.dwFillColor = 0xf800;
+            DDCOLORKEY red_key = {0xf800, 0xf800};
+            passed = passed &&
+                     Check(IDirectDrawSurface4_Blt(texture_source,
+                                                   nullptr,
+                                                   nullptr,
+                                                   nullptr,
+                                                   DDBLT_COLORFILL,
+                                                   &fill) == DD_OK &&
+                               IDirectDrawSurface4_SetColorKey(
+                                   texture_source, DDCKEY_SRCBLT, &red_key) == DD_OK &&
+                               IDirectDrawSurface4_QueryInterface(
+                                   texture_source,
+                                   IID_IDirect3DTexture2,
+                                   reinterpret_cast<void**>(&source_texture)) == S_OK &&
+                               IDirectDrawSurface4_QueryInterface(
+                                   texture_destination,
+                                   IID_IDirect3DTexture2,
+                                   reinterpret_cast<void**>(&destination_texture)) == S_OK,
+                           "texture Load probe setup failed");
+            if (source_texture != nullptr && destination_texture != nullptr)
+            {
+                passed = passed &&
+                         Check(IDirect3DTexture2_Load(destination_texture, nullptr) ==
+                                   DDERR_INVALIDPARAMS &&
+                                   IDirect3DTexture2_Load(destination_texture,
+                                                          destination_texture) == DD_OK,
+                               "texture Load null/self contract failed");
+                LPDIRECT3DTEXTURE2 mismatch_texture = nullptr;
+                passed = passed &&
+                         Check(IDirectDrawSurface4_QueryInterface(
+                                   texture_mismatch,
+                                   IID_IDirect3DTexture2,
+                                   reinterpret_cast<void**>(&mismatch_texture)) == S_OK &&
+                                   mismatch_texture != nullptr &&
+                                   IDirect3DTexture2_Load(destination_texture,
+                                                          mismatch_texture) ==
+                                       D3DERR_TEXTURE_LOAD_FAILED,
+                               "texture Load size mismatch contract failed");
+                if (mismatch_texture != nullptr)
+                {
+                    IDirect3DTexture2_Release(mismatch_texture);
+                }
+                passed = passed &&
+                         Check(IDirect3DTexture2_Load(destination_texture, source_texture) ==
+                                   DD_OK,
+                               "texture Load RGB565 copy failed");
+                HDC destination_dc = nullptr;
+                if (IDirectDrawSurface4_GetDC(texture_destination, &destination_dc) == DD_OK)
+                {
+                    passed = passed &&
+                             Check(GetPixel(destination_dc, 1, 1) == RGB(255, 0, 0),
+                                   "texture Load copied incorrect RGB565 pixels");
+                    IDirectDrawSurface4_ReleaseDC(texture_destination, destination_dc);
+                }
+                else
+                {
+                    passed = false;
+                }
+
+                fill.dwFillColor = 0x07e0;
+                passed = passed &&
+                         Check(IDirectDrawSurface4_Blt(texture_copy_target,
+                                                       nullptr,
+                                                       nullptr,
+                                                       nullptr,
+                                                       DDBLT_COLORFILL,
+                                                       &fill) == DD_OK &&
+                                   IDirectDrawSurface4_BltFast(texture_copy_target,
+                                                               0,
+                                                               0,
+                                                               texture_destination,
+                                                               nullptr,
+                                                               DDBLTFAST_SRCCOLORKEY) == DD_OK,
+                               "texture Load source color-key propagation failed");
+                HDC target_dc = nullptr;
+                if (IDirectDrawSurface4_GetDC(texture_copy_target, &target_dc) == DD_OK)
+                {
+                    passed = passed &&
+                             Check(GetPixel(target_dc, 1, 1) == RGB(0, 255, 0),
+                                   "texture Load did not preserve the source color key");
+                    IDirectDrawSurface4_ReleaseDC(texture_copy_target, target_dc);
+                }
+                else
+                {
+                    passed = false;
+                }
+            }
+        }
+        if (destination_texture != nullptr)
+        {
+            IDirect3DTexture2_Release(destination_texture);
+        }
+        if (source_texture != nullptr)
+        {
+            IDirect3DTexture2_Release(source_texture);
+        }
+        if (texture_copy_target != nullptr)
+        {
+            IDirectDrawSurface4_Release(texture_copy_target);
+        }
+        if (texture_mismatch != nullptr)
+        {
+            IDirectDrawSurface4_Release(texture_mismatch);
+        }
+        if (texture_destination != nullptr)
+        {
+            IDirectDrawSurface4_Release(texture_destination);
+        }
+        if (texture_source != nullptr)
+        {
+            IDirectDrawSurface4_Release(texture_source);
         }
 
         IDirect3DVertexBuffer* vertex_buffer = nullptr;
@@ -499,6 +939,14 @@ int main()
                  Check(IDirectDraw4_RestoreDisplayMode(direct_draw4) == DD_OK,
                        "logical display mode restore failed");
         IDirectDraw4_Release(direct_draw4);
+    }
+    if (graphics_window != nullptr)
+    {
+        DestroyWindow(graphics_window);
+    }
+    if (window_class_atom != 0)
+    {
+        UnregisterClassA(graphics_window_class, module);
     }
 
     handle = Re2djVfsCreateFileA("D:\\ez2dj\\DATA\\ORIGINAL.TXT",
@@ -722,6 +1170,8 @@ int main()
              Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close device mock handle");
 
     g_re2dj_audio_master_gain = 2.0f;
+    g_re2dj_audio_image_base = static_cast<DWORD>(
+        reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
     LPDIRECTSOUND direct_sound = nullptr;
     passed = passed && Check(Re2djHleDirectSoundCreate(nullptr, &direct_sound, nullptr) == DS_OK,
                              "DirectSound facade creation failed") &&
@@ -784,6 +1234,89 @@ int main()
                        "DirectSound duplicate stop failed");
         IDirectSoundBuffer_Release(duplicate_buffer);
     }
+
+    DSBUFFERDESC streaming_desc = sound_desc;
+    streaming_desc.dwFlags = DSBCAPS_STATIC | DSBCAPS_LOCHARDWARE |
+                             DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN |
+                             DSBCAPS_STICKYFOCUS | DSBCAPS_GETCURRENTPOSITION2;
+    streaming_desc.dwBufferBytes = 32;
+    LPDIRECTSOUNDBUFFER streaming_buffer = nullptr;
+    passed = passed &&
+             Check(IDirectSound_CreateSoundBuffer(direct_sound,
+                                                   &streaming_desc,
+                                                   &streaming_buffer,
+                                                   nullptr) == DS_OK,
+                   "DirectSound streaming buffer creation failed");
+    if (streaming_buffer != nullptr)
+    {
+        void* stream_first = nullptr;
+        DWORD stream_first_bytes = 0;
+        void* stream_second = nullptr;
+        DWORD stream_second_bytes = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Lock(streaming_buffer,
+                                               0,
+                                               0,
+                                               &stream_first,
+                                               &stream_first_bytes,
+                                               &stream_second,
+                                               &stream_second_bytes,
+                                               DSBLOCK_ENTIREBUFFER) == DS_OK,
+                       "DirectSound streaming initial lock failed");
+        if (stream_first != nullptr) std::memset(stream_first, 0x11, stream_first_bytes);
+        if (stream_second != nullptr) std::memset(stream_second, 0x11, stream_second_bytes);
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Unlock(streaming_buffer,
+                                                 stream_first,
+                                                 stream_first_bytes,
+                                                 stream_second,
+                                                 stream_second_bytes) == DS_OK,
+                       "DirectSound streaming initial unlock failed") &&
+                 Check(IDirectSoundBuffer_SetCurrentPosition(streaming_buffer, 12) == DS_OK,
+                       "DirectSound streaming initial position failed") &&
+                 Check(IDirectSoundBuffer_Play(streaming_buffer, 0, 0, DSBPLAY_LOOPING) == DS_OK,
+                       "DirectSound streaming play failed");
+
+        stream_first = nullptr;
+        stream_first_bytes = 0;
+        stream_second = nullptr;
+        stream_second_bytes = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Lock(streaming_buffer,
+                                               24,
+                                               16,
+                                               &stream_first,
+                                               &stream_first_bytes,
+                                               &stream_second,
+                                               &stream_second_bytes,
+                                               0) == DS_OK,
+                       "DirectSound streaming wrap lock failed") &&
+                 Check(stream_first_bytes == 8 && stream_second_bytes == 8,
+                       "DirectSound streaming wrap regions are incorrect");
+        if (stream_first != nullptr) std::memset(stream_first, 0x22, stream_first_bytes);
+        if (stream_second != nullptr) std::memset(stream_second, 0x33, stream_second_bytes);
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Unlock(streaming_buffer,
+                                                 stream_first,
+                                                 stream_first_bytes,
+                                                 stream_second,
+                                                 stream_second_bytes) == DS_OK,
+                       "DirectSound streaming wrap unlock failed");
+        DWORD streaming_cursor = 0;
+        passed = passed &&
+                 Check(IDirectSoundBuffer_GetCurrentPosition(streaming_buffer,
+                                                             &streaming_cursor,
+                                                             nullptr) == DS_OK &&
+                           streaming_cursor < streaming_desc.dwBufferBytes,
+                       "DirectSound streaming cursor is outside the ring") &&
+                 Check(IDirectSoundBuffer_Stop(streaming_buffer) == DS_OK,
+                       "DirectSound streaming stop failed") &&
+                 Check(IDirectSoundBuffer_Play(streaming_buffer, 0, 0, DSBPLAY_LOOPING) == DS_OK,
+                       "DirectSound streaming restart failed") &&
+                 Check(IDirectSoundBuffer_Stop(streaming_buffer) == DS_OK,
+                       "DirectSound streaming second stop failed");
+        IDirectSoundBuffer_Release(streaming_buffer);
+    }
     if (sound_buffer != nullptr) IDirectSoundBuffer_Release(sound_buffer);
     if (direct_sound != nullptr) IDirectSound_Release(direct_sound);
 
@@ -791,15 +1324,26 @@ int main()
     const std::string audio_trace_text((std::istreambuf_iterator<char>(audio_trace_stream)),
                                        std::istreambuf_iterator<char>());
     passed = passed &&
+             Check(audio_trace_text.find("ini:demo-volume configured=3") != std::string::npos,
+                   "audio trace omitted demo volume override") &&
              Check(audio_trace_text.find("directsound:create-device master-linear=2.000000000") != std::string::npos,
                    "audio trace omitted master gain") &&
              Check(audio_trace_text.find("directsound:set-volume") != std::string::npos &&
-                       audio_trace_text.find("applied=-1200") != std::string::npos,
+                       audio_trace_text.find("applied=-1200") != std::string::npos &&
+                       audio_trace_text.find("caller-rva=0x") != std::string::npos &&
+                       audio_trace_text.find("track-gain=") != std::string::npos,
                    "audio trace omitted buffer volume") &&
              Check(audio_trace_text.find("directsound:first-play") != std::string::npos &&
                        audio_trace_text.find("peak=1.000000000") != std::string::npos &&
                        audio_trace_text.find("rms=") != std::string::npos,
-                   "audio trace omitted PCM statistics");
+                   "audio trace omitted PCM statistics") &&
+             Check(audio_trace_text.find("directsound:streaming-start") != std::string::npos &&
+                       audio_trace_text.find("streaming=1") != std::string::npos,
+                   "audio trace omitted streaming start") &&
+             Check(audio_trace_text.find("lock-offset=24 first=8 second=8") != std::string::npos &&
+                       audio_trace_text.find("dirty-offset=24 dirty-bytes=16") != std::string::npos &&
+                       audio_trace_text.find("backend-refresh=1") != std::string::npos,
+                   "audio trace omitted streaming wrap refresh");
     audio_trace_stream.close();
 
     std::filesystem::remove_all(root);

@@ -22,6 +22,7 @@ struct LegacyVertexBufferDesc
 inline constexpr std::uint32_t kFvfXyz = 0x002;
 inline constexpr std::uint32_t kFvfXyzRhw = 0x004;
 inline constexpr std::uint32_t kFvfNormal = 0x010;
+inline constexpr std::uint32_t kFvfReserved1 = 0x020;
 inline constexpr std::uint32_t kFvfDiffuse = 0x040;
 inline constexpr std::uint32_t kFvfSpecular = 0x080;
 inline constexpr std::uint32_t kFvfTextureCountMask = 0xf00;

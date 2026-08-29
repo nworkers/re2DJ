@@ -20,8 +20,10 @@
 
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/legacy_transform.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
+#include "window_mode.h"
 
 extern "C" __declspec(dllexport) char g_re2dj_graphics_trace_path[MAX_PATH] = {};
 
@@ -380,6 +382,7 @@ struct RootFacade
     std::uint32_t create_surface_diagnostic_count = 0;
     std::uint32_t surface_dc_diagnostic_count = 0;
     std::uint32_t source_blt_diagnostic_count = 0;
+    std::uint32_t texture_load_diagnostic_count = 0;
     std::uint32_t color_fill_diagnostic_count = 0;
     std::uint32_t flip_diagnostic_count = 0;
     std::uint32_t draw_failure_diagnostic_count = 0;
@@ -440,6 +443,7 @@ struct DeviceFacade
 };
 
 SurfaceFacade* SurfaceFromTexture(IDirect3DTexture2* self);
+ViewportFacade* ViewportFromInterface(IDirect3DViewport3* self);
 
 void MarkSurfaceDirty(SurfaceFacade* surface)
 {
@@ -627,6 +631,31 @@ void ReportSurfaceDiagnostic(const char* operation,
                   static_cast<unsigned long long>(surface->texture_revision),
                   static_cast<unsigned long>(result));
     ReportCompositionDiagnostic(surface->root, detail);
+}
+
+void ReportTextureLoadDiagnostic(const SurfaceFacade* destination,
+                                 const SurfaceFacade* source,
+                                 HRESULT result)
+{
+    if (destination == nullptr || destination->root == nullptr)
+    {
+        return;
+    }
+    constexpr std::uint32_t kMaximumTextureLoadDiagnostics = 256;
+    if (++destination->root->texture_load_diagnostic_count >
+        kMaximumTextureLoadDiagnostics)
+    {
+        return;
+    }
+    char detail[192] = {};
+    std::snprintf(detail,
+                  sizeof(detail),
+                  "TextureLoad:dst=%lu:src=%lu:revision=%llu:result=0x%08lx",
+                  static_cast<unsigned long>(destination->diagnostic_id),
+                  source == nullptr ? 0UL : static_cast<unsigned long>(source->diagnostic_id),
+                  static_cast<unsigned long long>(destination->texture_revision),
+                  static_cast<unsigned long>(result));
+    ReportCompositionDiagnostic(destination->root, detail);
 }
 
 void ReportDrawDiagnostic(DeviceFacade* device,
@@ -1038,6 +1067,58 @@ struct ViewportFacade
     D3DVIEWPORT2 viewport = {};
 };
 
+D3DMATRIX IdentityMatrix()
+{
+    D3DMATRIX matrix = {};
+    matrix._11 = 1.0f;
+    matrix._22 = 1.0f;
+    matrix._33 = 1.0f;
+    matrix._44 = 1.0f;
+    return matrix;
+}
+
+void CopyMatrix(const D3DMATRIX& source, re2dj::graphics::LegacyMatrix4x4* destination)
+{
+    static_assert(sizeof(D3DMATRIX) == sizeof(destination->values));
+    std::memcpy(destination->values.data(), &source, sizeof(source));
+}
+
+bool BuildLegacyTransformState(const DeviceFacade& device,
+                               re2dj::graphics::LegacyTransformState* transform,
+                               std::string* error)
+{
+    if (transform == nullptr || error == nullptr || device.current_viewport == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "untransformed draw has no current viewport";
+        }
+        return false;
+    }
+    const ViewportFacade* const viewport = ViewportFromInterface(device.current_viewport);
+    if (viewport->magic != kViewportMagic)
+    {
+        *error = "untransformed draw has an invalid viewport";
+        return false;
+    }
+    CopyMatrix(device.transforms[D3DTRANSFORMSTATE_WORLD], &transform->world);
+    CopyMatrix(device.transforms[D3DTRANSFORMSTATE_VIEW], &transform->view);
+    CopyMatrix(device.transforms[D3DTRANSFORMSTATE_PROJECTION], &transform->projection);
+    const D3DVIEWPORT2& source = viewport->viewport;
+    transform->viewport.screen_x = static_cast<float>(source.dwX);
+    transform->viewport.screen_y = static_cast<float>(source.dwY);
+    transform->viewport.screen_width = static_cast<float>(source.dwWidth);
+    transform->viewport.screen_height = static_cast<float>(source.dwHeight);
+    transform->viewport.clip_x = source.dvClipX;
+    transform->viewport.clip_y = source.dvClipY;
+    transform->viewport.clip_width = source.dvClipWidth;
+    transform->viewport.clip_height = source.dvClipHeight;
+    transform->viewport.min_z = source.dvMinZ;
+    transform->viewport.max_z = source.dvMaxZ;
+    error->clear();
+    return true;
+}
+
 struct VertexBufferFacade
 {
     IDirect3DVertexBuffer interface_value = {VertexBufferVtable()};
@@ -1381,11 +1462,16 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
 
 HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD)
 {
+    RootFacade* const root = RootFromDirectDraw(self);
     if (window == nullptr)
     {
         return DDERR_INVALIDPARAMS;
     }
-    RootFromDirectDraw(self)->window = window;
+    if (!ApplyRe2djWindowMode(window, root->width, root->height))
+    {
+        return DDERR_GENERIC;
+    }
+    root->window = window;
     return DD_OK;
 }
 
@@ -1515,6 +1601,9 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
     facade->texture_stage_states[0][D3DTSS_COLORARG2] = D3DTA_DIFFUSE;
     facade->texture_stage_states[0][D3DTSS_MINFILTER] = D3DTFN_POINT;
     facade->texture_stage_states[0][D3DTSS_MAGFILTER] = D3DTFG_POINT;
+    facade->transforms[D3DTRANSFORMSTATE_WORLD] = IdentityMatrix();
+    facade->transforms[D3DTRANSFORMSTATE_VIEW] = IdentityMatrix();
+    facade->transforms[D3DTRANSFORMSTATE_PROJECTION] = IdentityMatrix();
     AddRootReference(facade->root);
     SurfaceAddRef(render_target);
     *device = &facade->interface_value;
@@ -1781,11 +1870,17 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
     if (surface->root->render_backend != nullptr)
     {
         std::string error;
-        if (!surface->root->render_backend->Present(&error))
+        const bool presented = surface->root->render_backend->Present(&error);
+        Re2djExitIfWindowClosed(surface->root->window);
+        if (!presented)
         {
             OutputDebugStringA(kOpenGlFailureMessage);
             return finish(DDERR_GENERIC);
         }
+    }
+    else
+    {
+        Re2djExitIfWindowClosed(surface->root->window);
     }
     return finish(DD_OK);
 }
@@ -1942,9 +2037,64 @@ HRESULT WINAPI TexturePaletteChanged(IDirect3DTexture2*, DWORD, DWORD)
     return DDERR_UNSUPPORTED;
 }
 
-HRESULT WINAPI TextureLoad(IDirect3DTexture2*, IDirect3DTexture2*)
+HRESULT WINAPI TextureLoad(IDirect3DTexture2* self, IDirect3DTexture2* source)
 {
-    return DDERR_UNSUPPORTED;
+    SurfaceFacade* const destination = SurfaceFromTexture(self);
+    SurfaceFacade* source_surface = nullptr;
+    const auto finish = [&](HRESULT result) {
+        ReportTextureLoadDiagnostic(destination, source_surface, result);
+        return result;
+    };
+    if (source == nullptr)
+    {
+        return finish(DDERR_INVALIDPARAMS);
+    }
+    if (source == self)
+    {
+        return finish(DD_OK);
+    }
+    if (IsBadReadPtr(source, sizeof(*source)) != FALSE)
+    {
+        return finish(DDERR_INVALIDOBJECT);
+    }
+    source_surface = SurfaceFromTexture(source);
+    if (IsBadReadPtr(source_surface, sizeof(*source_surface)) != FALSE ||
+        destination->magic != kSurfaceMagic || source_surface->magic != kSurfaceMagic ||
+        destination->root != source_surface->root ||
+        (destination->capabilities & DDSCAPS_TEXTURE) == 0 ||
+        (source_surface->capabilities & DDSCAPS_TEXTURE) == 0 ||
+        destination->pixels == nullptr || source_surface->pixels == nullptr)
+    {
+        return finish(DDERR_INVALIDOBJECT);
+    }
+    if (destination->width != source_surface->width ||
+        destination->height != source_surface->height ||
+        destination->bits_per_pixel != source_surface->bits_per_pixel)
+    {
+        return finish(D3DERR_TEXTURE_LOAD_FAILED);
+    }
+    if (destination->dc_acquired || source_surface->dc_acquired)
+    {
+        return finish(DDERR_SURFACEBUSY);
+    }
+
+    const std::size_t row_bytes = static_cast<std::size_t>(destination->width) *
+                                  sizeof(std::uint16_t);
+    auto* const destination_bytes = static_cast<unsigned char*>(destination->pixels);
+    const auto* const source_bytes = static_cast<const unsigned char*>(source_surface->pixels);
+    for (DWORD y = 0; y < destination->height; ++y)
+    {
+        unsigned char* const destination_row = destination_bytes + y * destination->pitch;
+        const unsigned char* const source_row = source_bytes + y * source_surface->pitch;
+        std::memcpy(destination_row, source_row, row_bytes);
+        std::fill(destination_row + row_bytes,
+                  destination_row + destination->pitch,
+                  static_cast<unsigned char>(0));
+    }
+    destination->has_source_blt_color_key = source_surface->has_source_blt_color_key;
+    destination->source_blt_color_key = source_surface->source_blt_color_key;
+    MarkSurfaceDirty(destination);
+    return finish(DD_OK);
 }
 
 HRESULT WINAPI DeviceQueryInterface(IDirect3DDevice3* self, REFIID iid, void** object)
@@ -2338,11 +2488,17 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     const bool is_triangle_strip = primitive == D3DPT_TRIANGLESTRIP && vertex_count >= 3;
     const bool is_line_list =
         primitive == D3DPT_LINELIST && vertex_count >= 2 && vertex_count % 2 == 0;
-    if ((!is_triangle_strip && !is_line_list) || vertex_type != D3DFVF_TLVERTEX ||
-        vertices == nullptr ||
+    const bool is_transformed = vertex_type == D3DFVF_TLVERTEX;
+    const bool is_untransformed =
+        vertex_type == D3DFVF_VERTEX || vertex_type == D3DFVF_LVERTEX;
+    const std::size_t vertex_stride =
+        is_transformed ? re2dj::graphics::kTransformedLitVertexStride
+                       : re2dj::graphics::VertexStrideFromFvf(vertex_type);
+    if ((!is_triangle_strip && !is_line_list) ||
+        (!is_transformed && !is_untransformed) || vertices == nullptr ||
         !re2dj::graphics::AreLegacyDrawFlagsSupported(flags) ||
-        vertex_count > (std::numeric_limits<DWORD>::max)() /
-                           re2dj::graphics::kTransformedLitVertexStride)
+        vertex_stride == 0 ||
+        vertex_count > (std::numeric_limits<std::size_t>::max)() / vertex_stride)
     {
         ReportDrawDiagnostic(device,
                              primitive,
@@ -2353,8 +2509,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
                              "unsupported-arguments");
         return DDERR_UNSUPPORTED;
     }
-    const std::size_t bytes = static_cast<std::size_t>(vertex_count) *
-                              re2dj::graphics::kTransformedLitVertexStride;
+    const std::size_t bytes = static_cast<std::size_t>(vertex_count) * vertex_stride;
     if (IsBadReadPtr(vertices, bytes) != FALSE)
     {
         ReportDrawDiagnostic(device,
@@ -2371,12 +2526,27 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     const re2dj::graphics::PrimitiveTopology topology =
         is_line_list ? re2dj::graphics::PrimitiveTopology::kLineList
                      : re2dj::graphics::PrimitiveTopology::kTriangleStrip;
-    if (!re2dj::graphics::DecodeTransformedLitVertices(
-            std::span<const std::byte>(static_cast<const std::byte*>(vertices), bytes),
-            vertex_count,
-            topology,
-            &command,
-            &error))
+    const std::span<const std::byte> vertex_bytes(
+        static_cast<const std::byte*>(vertices), bytes);
+    bool decoded = false;
+    if (is_transformed)
+    {
+        decoded = re2dj::graphics::DecodeTransformedLitVertices(
+            vertex_bytes, vertex_count, topology, &command, &error);
+    }
+    else
+    {
+        re2dj::graphics::LegacyTransformState transform;
+        decoded = BuildLegacyTransformState(*device, &transform, &error) &&
+                  re2dj::graphics::DecodeUntransformedVertices(vertex_bytes,
+                                                               vertex_count,
+                                                               vertex_type,
+                                                               topology,
+                                                               transform,
+                                                               &command,
+                                                               &error);
+    }
+    if (!decoded)
     {
         ReportDrawDiagnostic(device,
                              primitive,

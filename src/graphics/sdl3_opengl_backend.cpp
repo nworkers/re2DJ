@@ -678,7 +678,15 @@ void Sdl3OpenGlBackend::DiscardTexture(std::uint64_t identity)
 
 bool Sdl3OpenGlBackend::Present(std::string* error)
 {
-    if (impl_ == nullptr || error == nullptr || !impl_->MakeCurrent(error))
+    if (impl_ == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    SDL_Event event = {};
+    while (SDL_PollEvent(&event))
+    {
+    }
+    if (!impl_->MakeCurrent(error))
     {
         return false;
     }

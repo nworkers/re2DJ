@@ -41,11 +41,15 @@ struct Options
 {
     std::filesystem::path hdd_directory;
     std::filesystem::path linux_helper;
+    std::filesystem::path io_config;
     std::string target_id;
     std::string resolve_path;
-    float audio_gain_db = 6.0f;
+    float audio_gain_db = 0.0f;
+    unsigned demo_volume = 3;
     bool audio_gain_explicit = false;
+    bool demo_volume_explicit = false;
     bool audio_volume_trace = false;
+    bool fullscreen = false;
     bool list_targets = false;
     bool run = false;
     bool show_help = false;
@@ -72,9 +76,13 @@ void PrintUsage()
         "  --linux-helper <path>\n"
         "                      32-bit native helper used by --run on Linux.\n"
         "  --audio-gain-db <dB>\n"
-        "                      Windows output gain (-24..+18, default +6).\n"
+        "                      Windows output gain (-24..+18, default 0).\n"
+        "  --demo-volume <0..3>\n"
+        "                      Windows title/demo profile (default 3 = 0 dB).\n"
         "  --audio-volume-trace\n"
         "                      Record bounded DirectSound/WINMM volume evidence.\n"
+        "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
+        "  --io-config <path>  Windows EZ2DJ keyboard I/O mapping INI.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
         "\n"
@@ -163,6 +171,43 @@ bool ParseOptions(int argc, char** argv, Options* options)
         {
             options->audio_volume_trace = true;
         }
+        else if (argument == "--demo-volume")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            try
+            {
+                std::size_t parsed = 0;
+                const unsigned long parsed_value = std::stoul(value, &parsed);
+                if (parsed != value.size() || parsed_value > 3)
+                {
+                    throw std::out_of_range("demo volume");
+                }
+                options->demo_volume = static_cast<unsigned>(parsed_value);
+            }
+            catch (const std::exception&)
+            {
+                std::fprintf(stderr, "error: --demo-volume must be between 0 and 3\n");
+                return false;
+            }
+            options->demo_volume_explicit = true;
+        }
+        else if (argument == "--fullscreen")
+        {
+            options->fullscreen = true;
+        }
+        else if (argument == "--io-config")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            options->io_config = std::filesystem::path(value);
+        }
         else if (argument == "--target")
         {
             if (!TakeValue(argc, argv, &index, argument, &options->target_id))
@@ -248,9 +293,11 @@ int main(int argc, char** argv)
         return options.show_help ? kExitOk : kExitUsage;
     }
 #if !defined(_WIN32)
-    if (options.audio_gain_explicit || options.audio_volume_trace)
+    if (options.audio_gain_explicit || options.demo_volume_explicit ||
+        options.audio_volume_trace || options.fullscreen ||
+        !options.io_config.empty())
     {
-        std::fprintf(stderr, "error: --audio-gain-db is currently supported only on Windows\n");
+        std::fprintf(stderr, "error: selected execution options are currently supported only on Windows\n");
         return kExitNotImplemented;
     }
 #endif
@@ -458,7 +505,10 @@ int main(int argc, char** argv)
     run_options.hdd_directory = root.root();
     run_options.target_id = selected->id;
     run_options.audio_gain_db = options.audio_gain_db;
+    run_options.demo_volume = options.demo_volume;
     run_options.audio_volume_trace = options.audio_volume_trace;
+    run_options.fullscreen = options.fullscreen;
+    run_options.io_config = options.io_config;
     const int run_result =
         re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (run_result < 0)

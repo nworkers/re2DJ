@@ -119,6 +119,7 @@ endif()
 add_library(re2dj_legacy_graphics STATIC
     src/graphics/legacy_draw_command.cpp
     src/graphics/legacy_texture.cpp
+    src/graphics/legacy_transform.cpp
     src/graphics/legacy_vertex_buffer.cpp
 )
 target_include_directories(re2dj_legacy_graphics PUBLIC include)
@@ -141,6 +142,7 @@ add_library(re2dj_core STATIC
     src/audio/legacy_audio_buffer.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
+    src/input/ez2dj_io_board.cpp
     src/input/legacy_io_port_bus.cpp
     src/exe/pe_image.cpp
     src/hdd/hdd_root.cpp
@@ -221,10 +223,14 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
 
     add_library(re2dj_windows_injected_runtime SHARED
         src/device/lptdi_challenge_response.cpp
+        src/input/ez2dj_io_board.cpp
         src/input/legacy_io_port_bus.cpp
         src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
+        src/platform/windows/ez2dj_keyboard_input.cpp
+        src/platform/windows/ini_profile_hle.cpp
         src/platform/windows/injected_runtime.cpp
+        src/platform/windows/window_mode.cpp
         src/platform/windows/winmm_mixer_trace.cpp
     )
     target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
@@ -319,6 +325,7 @@ if(RE2DJ_BUILD_TESTS)
     add_executable(re2dj_unit_tests
         tests/unit/address_space_test.cpp
         tests/unit/execution_backend_test.cpp
+        tests/unit/ez2dj_io_board_test.cpp
         tests/unit/guest_path_test.cpp
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp
@@ -327,6 +334,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/legacy_io_port_bus_test.cpp
         tests/unit/legacy_draw_command_test.cpp
         tests/unit/legacy_texture_test.cpp
+        tests/unit/legacy_transform_test.cpp
         tests/unit/legacy_vertex_buffer_test.cpp
         tests/unit/legacy_audio_buffer_test.cpp
         tests/unit/pe_image_test.cpp

@@ -5,9 +5,11 @@
 #include <cstdint>
 #include <cstring>
 #include <intrin.h>
+#include <string>
 
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/input/legacy_io_port_bus.h"
+#include "ez2dj_keyboard_input.h"
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
@@ -29,6 +31,7 @@ extern "C" __declspec(dllexport) unsigned char g_re2dj_device_response_414[104] 
 extern "C" __declspec(dllexport) unsigned char g_re2dj_device_target_state[8] = {};
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_io_ports = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_image_base = 0;
+extern "C" __declspec(dllexport) char g_re2dj_io_config_path[MAX_PATH] = {};
 
 namespace
 {
@@ -43,6 +46,8 @@ constexpr char kDisplayModeMessage[] = "re2dj:hle:ChangeDisplaySettingsExA";
 constexpr char kExitProcessMessage[] = "re2dj:probe:ExitProcess";
 
 re2dj::input::LegacyIoPortBus g_legacy_io_port_bus;
+re2dj::platform::windows::Ez2DjKeyboardInput g_keyboard_input;
+volatile LONG g_keyboard_input_state = 0;
 volatile LONG g_vfs_image_trace_count = 0;
 volatile LONG g_vfs_script_trace_count = 0;
 
@@ -167,6 +172,28 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
 
     const std::uint16_t port = static_cast<std::uint16_t>(exception->ContextRecord->Edx);
     std::uint8_t value = static_cast<std::uint8_t>(exception->ContextRecord->Eax);
+    if (is_read && g_re2dj_io_config_path[0] != '\0')
+    {
+        if (g_keyboard_input_state == 0)
+        {
+            std::string error;
+            if (g_keyboard_input.Initialize(g_re2dj_io_config_path, &error))
+            {
+                InterlockedExchange(&g_keyboard_input_state, 1);
+            }
+            else
+            {
+                const std::string message = "re2dj:io-config:" + error + "\n";
+                OutputDebugStringA(message.c_str());
+                InterlockedExchange(&g_keyboard_input_state, 2);
+            }
+        }
+        if (g_keyboard_input_state == 1)
+        {
+            g_keyboard_input.Poll(&g_legacy_io_port_bus,
+                                 static_cast<std::uint64_t>(GetTickCount()));
+        }
+    }
     const bool handled = is_read ? g_legacy_io_port_bus.ReadByte(port, &value)
                                  : g_legacy_io_port_bus.WriteByte(port, value);
     if (!handled)

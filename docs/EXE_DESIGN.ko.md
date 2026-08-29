@@ -48,7 +48,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 | 항목 | 값 |
 | --- | --- |
 | 그래픽 | **DirectDraw/Direct3D Immediate Mode 계열**. runtime은 `QueryInterface(IID_IDirect3D3)`로 Direct3D를 얻고 XYZ/NORMAL/TEX1 정점 121개를 `CreateVertexBuffer`로 만든 뒤 null-size `Lock`과 stride 32의 11×11 grid fill을 수행한다. 확인된 draw state는 stage-zero texture/diffuse modulate, linear filtering, RGB565 source color key, alpha test와 `ZERO/SRCALPHA`·`ONE/ZERO` blending이다. `%s.bmp` 지연 로딩은 `DDSCAPS_OFFSCREENPLAIN` RGB565 surface를 만들고 GDI 복사 뒤 source-key `BltFast`/`Blt`로 합성한다. 전역 `[0x01eb7cc0]`의 호출 형태는 `IDirect3DDevice3` vtable과 일치한다. |
-| 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨. buffer 생성·Lock/Unlock·Play 뒤 `DuplicateSoundBuffer`를 사용한다. |
+| 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨. 정적 buffer와 360,448바이트 looping ring buffer를 만들며, streaming 경로는 전체 Lock 안에서 45,056바이트 PCM 청크를 순환 갱신한다. `GAMEASSIGNMENTS/DemoVolume` 인덱스 0..3은 `[-10000, -2222, -1111, 0]`의 DirectSound volume table을 선택한다. `DuplicateSoundBuffer`도 사용한다. |
 | 입력 | **`GetAsyncKeyState` 하나가 전부. DirectInput 없음** |
 | 설정 | `GetPrivateProfile*` / `WritePrivateProfileStringA` — INI |
 | 레지스트리 | `RegFlushKey` 하나 |
@@ -76,7 +76,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 
 | 항목 | 상태 |
 | --- | --- |
-| 아케이드 I/O 보드 | **부분 확인** — 3rd의 `EZ2DJ.INI`에 `"UseIOCard" = 1`이 있어 I/O 카드 사용은 확실하다. 접근 경로는 미확정이다. 1st SE 덤프에 `Tdsd.vxd111`(Windows 9x VxD)이 있으나 `ez2dj1.exe`는 `DeviceIoControl`을 import하지 않고, 확장자 `111`은 비활성화를 시사한다 |
+| 아케이드 I/O 보드 | **부분 확인** — 3rd의 `EZ2DJ.INI`에 `"UseIOCard" = 1`이 있어 I/O 카드 사용은 확실하다. 1st SE 보호 실행 파일의 byte `IN`/`OUT` port 범위와 active-low bank는 확인됐다. 공개 독립 구현과 교차 확인한 button/turntable/coin/light 의미는 [I/O port map](analysis/ez2dj-io-map.md)에 **추정**으로 분리했다. `OUT 0x106` 의미는 미확정이다 |
 | 동글·보호 장치 | **부분 확인** — 보호 stub이 `\\.\LPTDI1`을 열고 4→8바이트, 24→104바이트 IOCTL 두 건을 보낸다. 두 단계 모두 output 첫 DWORD 0이 진행 조건이다. 첫 단계는 최대 3회 반복한다. 두 번째 input DWORD에 `0x01ed4141` 변환을 두 번 적용한 8바이트 mask가 response offset 4~11과 XOR되어 `.data` 복원 상태가 된다. 이 상태의 첫 DWORD는 `0x01ed7296`에 seed되고 같은 변환으로 바이트마다 갱신되며, 하위 바이트가 보호 `.data`에서 빠진다. 최소 target state `0900000000000000`은 정상 initializer를 반복 복원했다. 이는 바이너리 복원값이며 실제 동글 key나 vendor protocol의 확정은 아니다. HASP4 `HaspCode`의 첫 shape 유사성은 있으나 classic HASP 공개 경로·packet과 전체 LPTDI interface가 달라 vendor는 미확정이다 |
 | 타이머 소스 | **확인됨** — `timeGetTime` |
 

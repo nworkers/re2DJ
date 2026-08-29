@@ -22,6 +22,11 @@ void RunLegacyVertexBufferTests(re2dj::test::Context& context)
                    re2dj::graphics::VertexStrideFromFvf(re2dj::graphics::kFvfXyz |
                                                             re2dj::graphics::kFvfNormal | 0x100),
                    std::uint32_t{32});
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::graphics::VertexStrideFromFvf(
+                       re2dj::graphics::kFvfXyz | re2dj::graphics::kFvfReserved1 |
+                       re2dj::graphics::kFvfDiffuse | re2dj::graphics::kFvfSpecular | 0x100),
+                   std::uint32_t{32});
     RE2DJ_CHECK_EQ(context, re2dj::graphics::VertexStrideFromFvf(0x140), std::uint32_t{0});
     RE2DJ_CHECK_EQ(context,
                    re2dj::graphics::VertexStrideFromFvf(transformed_lit | 0x900),

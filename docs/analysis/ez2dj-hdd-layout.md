@@ -211,6 +211,10 @@
 
 *Confirmed — 2026-08-24. After normal restoration, original code passes class registration, window creation, and display, then requests SetCurrentDirectoryA("c:\\ez2dj"). Its 640×480×16 ChangeDisplaySettingsExA returns through the branch that is neither success zero nor restart one, causing PostQuitMessage(0). Both host-baseline and VFS runs end before the first file API. The HDD input remains an external user directory and guest C: mapping belongs in HLE; no host path is created.*
 
+**확인됨 — 2026-08-28, 작업 084.** 원본이 만든 HWND가 HLE `IDirectDraw4::SetCooperativeLevel`에 전달되며, 그 경계에서 host가 제목·style·client 크기를 바꿔도 원본의 Direct3D draw/Flip 루프는 계속 진행된다. 기본 windowed와 외부 주입 fullscreen 두 실제 실행 모두 DrawPrimitive까지 도달했다. 이는 guest 창 생명주기를 대체한 결과가 아니라 원본 HWND의 host 표시 정책만 조정한 결과다.
+
+*Confirmed — 2026-08-28, Task 084. The original-created HWND reaches HLE `IDirectDraw4::SetCooperativeLevel`, and its Direct3D draw/Flip loop continues after the host changes title, style, and client size at that boundary. Both the default windowed run and an externally injected fullscreen run reached DrawPrimitive. This adjusts only host presentation policy for the original HWND; it does not replace guest window lifetime.*
+
 **추정 — 2026-08-24.** 공개 HASP4 `HaspCode`의 seed input과 네 개 16-bit return code는 첫 LPTDI IOCTL의 4→8바이트 형태와 맞는다. 그러나 Aladdin driver 자료와 독립 호환성 조사에서 classic HASP device는 `\\.\HASP`, packet은 28바이트 계열로 기술되어 LPTDI의 4/24→8/104 interface와 직접 일치하지 않는다. EZ2DJ가 HASP 계열 병렬포트 동글을 사용했다는 외부 정보는 유력한 방향이지만 현재 바이너리 증거만으로 vendor protocol을 확정할 수 없다.
 
 *Inferred — 2026-08-24. Public HASP4 HaspCode takes a seed and returns four 16-bit codes, matching the first LPTDI IOCTL's four-to-eight-byte shape. However, Aladdin driver material and an independent compatibility study describe classic HASP as `\\.\HASP` with a 28-byte packet family, not LPTDI's 4/24→8/104 interface. External identification of EZ2DJ's parallel dongle as HASP is a strong direction, but current binary evidence does not confirm the vendor protocol.*

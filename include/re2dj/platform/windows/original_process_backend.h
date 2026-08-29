@@ -11,9 +11,12 @@ namespace re2dj::platform::windows
 struct OriginalProcessOptions
 {
     std::filesystem::path hdd_directory;
+    std::filesystem::path io_config;
     std::string target_id;
-    float audio_gain_db = 6.0f;
+    float audio_gain_db = 0.0f;
+    unsigned demo_volume = 3;
     bool audio_volume_trace = false;
+    bool fullscreen = false;
 };
 
 bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,

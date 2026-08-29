@@ -6,6 +6,7 @@
 #include <cstring>
 
 extern "C" __declspec(dllexport) char g_re2dj_audio_trace_path[MAX_PATH] = {};
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_audio_image_base = 0;
 
 namespace
 {

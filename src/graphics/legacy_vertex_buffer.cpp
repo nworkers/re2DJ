@@ -15,6 +15,7 @@ std::uint32_t VertexStrideFromFvf(std::uint32_t fvf)
     {
         stride = 12;
         if ((fvf & kFvfNormal) != 0) stride += 12;
+        if ((fvf & kFvfReserved1) != 0) stride += 4;
     }
     else
     {

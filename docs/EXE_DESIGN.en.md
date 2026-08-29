@@ -48,7 +48,7 @@ The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layo
 | Item | Value |
 | --- | --- |
 | Graphics | **DirectDraw plus Direct3D Immediate Mode**. The runtime obtains Direct3D through `QueryInterface(IID_IDirect3D3)`, creates 121 XYZ/NORMAL/TEX1 vertices, null-size-locks the buffer, and fills an 11×11 grid at stride 32. Confirmed draw state uses stage-zero texture/diffuse modulation, linear filtering, an RGB565 source color key, alpha testing, and ZERO/SRCALPHA versus ONE/ZERO blending. Lazy `%s.bmp` loading creates RGB565 `DDSCAPS_OFFSCREENPLAIN` surfaces, performs a GDI copy, and composes them through source-key `BltFast`/`Blt`. Calls through global `[0x01eb7cc0]` match the `IDirect3DDevice3` vtable. |
-| Audio | **DirectSound** (ordinal `#1`) plus `winmm` mixer volume. It uses buffer creation, Lock/Unlock, Play, and DuplicateSoundBuffer. |
+| Audio | **DirectSound** (ordinal `#1`) plus `winmm` mixer volume. It creates static buffers and a 360,448-byte looping ring, whose streaming path cyclically updates 45,056-byte PCM chunks inside whole-buffer locks. `GAMEASSIGNMENTS/DemoVolume` index 0..3 selects the DirectSound volume table `[-10000, -2222, -1111, 0]`. It also uses DuplicateSoundBuffer. |
 | Input | **A single `GetAsyncKeyState`. No DirectInput** |
 | Configuration | `GetPrivateProfile*` and `WritePrivateProfileStringA` — INI files |
 | Registry | `RegFlushKey` only |
@@ -76,7 +76,7 @@ The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, 
 
 | Item | State |
 | --- | --- |
-| Arcade I/O board | **Partly confirmed** — the 3rd `EZ2DJ.INI` carries `"UseIOCard" = 1`, so an I/O card is definitely used; the access path is unresolved. The 1st SE dump holds `Tdsd.vxd111`, a Windows 9x VxD, but `ez2dj1.exe` imports no `DeviceIoControl` and the `111` suffix suggests the driver is disabled |
+| Arcade I/O board | **Partly confirmed** — the 3rd `EZ2DJ.INI` carries `"UseIOCard" = 1`, so an I/O card is definitely used. The protected 1st SE executable confirms its byte `IN`/`OUT` port range and active-low banks. Button, turntable, coin, and light meanings cross-checked against an independent public implementation remain marked **inferred** in the [I/O port map](analysis/ez2dj-io-map.md). `OUT 0x106` remains unresolved |
 | Dongle or protection device | **Partially confirmed** — the protection stub opens `\\.\LPTDI1` and sends two IOCTLs shaped 4→8 bytes and 24→104 bytes. A zero first output DWORD is the advance condition at both stages, and the first stage retries up to three times. Applying the transform at 0x01ed4141 twice to the second input DWORD produces an eight-byte mask that is XORed with response offsets 4 through 11 to form the `.data` restoration state. Its first DWORD seeds `0x01ed7296`, advances once per byte with the same transform, and its low byte is subtracted from protected `.data`. Minimal target state `0900000000000000` repeatedly restores the normal initializer. This is a binary-restoration value, not confirmation of a physical-dongle key or vendor protocol. The first shape resembles HASP4 HaspCode, but the published classic-HASP path and packet differ from the full LPTDI interface, so the vendor remains unresolved |
 | Timer source | **Confirmed** — `timeGetTime` |
 

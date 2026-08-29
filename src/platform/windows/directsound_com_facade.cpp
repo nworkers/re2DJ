@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <intrin.h>
 #include <new>
 
 #include "../../audio/sdl3_mixer_audio_backend.h"
@@ -70,6 +71,46 @@ void TraceBuffer(const char* operation, DWORD flags, DWORD bytes)
     OutputDebugStringA(message);
 }
 
+DWORD FindOriginalCallerRva(const void* return_address_slot)
+{
+    const DWORD image_base = g_re2dj_audio_image_base;
+    if (image_base == 0 || return_address_slot == nullptr)
+    {
+        return 0xffffffffUL;
+    }
+    DWORD stack_words[32] = {};
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(GetCurrentProcess(), return_address_slot, stack_words,
+                          sizeof(stack_words), &copied) == FALSE)
+    {
+        return 0xffffffffUL;
+    }
+    const std::size_t count = copied / sizeof(stack_words[0]);
+    constexpr std::size_t kObservedSetVolumeWrapperCallerIndex = 23;
+    if (count > kObservedSetVolumeWrapperCallerIndex)
+    {
+        const DWORD value = stack_words[kObservedSetVolumeWrapperCallerIndex];
+        if (value >= image_base && value < image_base + 0x02000000UL)
+        {
+            return value - image_base;
+        }
+    }
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        const DWORD value = stack_words[index];
+        if (value < image_base || value >= image_base + 0x02000000UL)
+        {
+            continue;
+        }
+        const DWORD rva = value - image_base;
+        if (rva < 0x00024b00UL || rva >= 0x00024e00UL)
+        {
+            return rva;
+        }
+    }
+    return 0xffffffffUL;
+}
+
 class DirectSoundBufferFacade final : public IDirectSoundBuffer
 {
 public:
@@ -98,28 +139,53 @@ public:
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
     ULONG STDMETHODCALLTYPE Release() override { const ULONG value = --refs_; if (!value) delete this; return value; }
     HRESULT STDMETHODCALLTYPE GetCaps(DSBCAPS* caps) override { if (!caps || caps->dwSize < sizeof(DSBCAPS)) return DSERR_INVALIDPARAM; std::memset(caps, 0, sizeof(*caps)); caps->dwSize = sizeof(DSBCAPS); caps->dwFlags = flags_; caps->dwBufferBytes = static_cast<DWORD>(buffer_.byte_count()); return DS_OK; }
-    HRESULT STDMETHODCALLTYPE GetCurrentPosition(DWORD* play, DWORD* write) override { if (play) *play = Sdl3MixerAudioBackend::Instance().PositionBytes(voice_, buffer_); if (write) *write = play ? *play : buffer_.current_position(); return DS_OK; }
+    HRESULT STDMETHODCALLTYPE GetCurrentPosition(DWORD* play, DWORD* write) override { if (play) *play = Sdl3MixerAudioBackend::Instance().PositionBytes(voice_, buffer_); if (write) *write = play ? *play : buffer_.current_position(); if (is_streaming() && state_query_traces_ < 32) { Re2djAudioTrace("directsound:get-position buffer=%p play=%lu write=%lu volume=%ld track-gain=%.9f", this, static_cast<unsigned long>(play ? *play : 0), static_cast<unsigned long>(write ? *write : 0), static_cast<long>(buffer_.volume()), static_cast<double>(Sdl3MixerAudioBackend::Instance().TrackGain(voice_))); ++state_query_traces_; } return DS_OK; }
     HRESULT STDMETHODCALLTYPE GetFormat(WAVEFORMATEX* format, DWORD size, DWORD* written) override { if (written) *written = sizeof(WAVEFORMATEX); if (!format) return size == 0 ? DS_OK : DSERR_INVALIDPARAM; if (size < sizeof(WAVEFORMATEX)) return DSERR_INVALIDPARAM; *format = wave_; return DS_OK; }
-    HRESULT STDMETHODCALLTYPE GetVolume(LONG* value) override { if (!value) return DSERR_INVALIDPARAM; *value = buffer_.volume(); return DS_OK; }
+    HRESULT STDMETHODCALLTYPE GetVolume(LONG* value) override { if (!value) return DSERR_INVALIDPARAM; *value = buffer_.volume(); if (is_streaming() && state_query_traces_ < 32) { Re2djAudioTrace("directsound:get-volume buffer=%p value=%ld track-gain=%.9f", this, static_cast<long>(*value), static_cast<double>(Sdl3MixerAudioBackend::Instance().TrackGain(voice_))); ++state_query_traces_; } return DS_OK; }
     HRESULT STDMETHODCALLTYPE GetPan(LONG* value) override { if (!value) return DSERR_INVALIDPARAM; *value = buffer_.pan(); return DS_OK; }
     HRESULT STDMETHODCALLTYPE GetFrequency(DWORD* value) override { if (!value) return DSERR_INVALIDPARAM; *value = buffer_.frequency(); return DS_OK; }
-    HRESULT STDMETHODCALLTYPE GetStatus(DWORD* status) override { if (!status) return DSERR_INVALIDPARAM; *status = Sdl3MixerAudioBackend::Instance().IsPlaying(voice_) ? DSBSTATUS_PLAYING | (buffer_.looping() ? DSBSTATUS_LOOPING : 0) : 0; return DS_OK; }
+    HRESULT STDMETHODCALLTYPE GetStatus(DWORD* status) override { if (!status) return DSERR_INVALIDPARAM; *status = Sdl3MixerAudioBackend::Instance().IsPlaying(voice_) ? DSBSTATUS_PLAYING | (buffer_.looping() ? DSBSTATUS_LOOPING : 0) : 0; if (is_streaming() && state_query_traces_ < 32) { Re2djAudioTrace("directsound:get-status buffer=%p status=0x%08lx volume=%ld track-gain=%.9f", this, static_cast<unsigned long>(*status), static_cast<long>(buffer_.volume()), static_cast<double>(Sdl3MixerAudioBackend::Instance().TrackGain(voice_))); ++state_query_traces_; } return DS_OK; }
     HRESULT STDMETHODCALLTYPE Initialize(LPDIRECTSOUND, const DSBUFFERDESC*) override { return DSERR_ALREADYINITIALIZED; }
-    HRESULT STDMETHODCALLTYPE Lock(DWORD offset, DWORD bytes, void** first, DWORD* first_bytes, void** second, DWORD* second_bytes, DWORD flags) override { if (!first || !first_bytes) return DSERR_INVALIDPARAM; LegacyAudioLock lock; if (!buffer_.Lock(offset, bytes, (flags & DSBLOCK_ENTIREBUFFER) != 0, &lock)) return DSERR_INVALIDPARAM; active_lock_ = lock; *first = lock.first.data(); *first_bytes = static_cast<DWORD>(lock.first.size()); if (second) *second = lock.second.empty() ? nullptr : lock.second.data(); if (second_bytes) *second_bytes = static_cast<DWORD>(lock.second.size()); TraceBuffer("lock", flags, *first_bytes + (second_bytes ? *second_bytes : 0)); return DS_OK; }
-    HRESULT STDMETHODCALLTYPE Play(DWORD, DWORD, DWORD flags) override { buffer_.set_playing(true, (flags & DSBPLAY_LOOPING) != 0); TraceBuffer("play", flags, static_cast<DWORD>(buffer_.byte_count())); if (!play_traced_) { const PcmLevels levels = MeasurePcm(buffer_); Re2djAudioTrace("directsound:first-play buffer=%p flags=0x%08lx bytes=%lu samples=%lu peak=%.9f rms=%.9f volume=%ld linear=%.9f pan=%ld frequency=%lu", this, static_cast<unsigned long>(flags), static_cast<unsigned long>(buffer_.byte_count()), static_cast<unsigned long>(levels.sample_count), levels.peak, levels.rms, static_cast<long>(buffer_.volume()), std::pow(10.0, static_cast<double>(buffer_.volume()) / 2000.0), static_cast<long>(buffer_.pan()), static_cast<unsigned long>(buffer_.frequency())); play_traced_ = true; } return Sdl3MixerAudioBackend::Instance().Play(voice_, buffer_) ? DS_OK : DSERR_GENERIC; }
+    HRESULT STDMETHODCALLTYPE Lock(DWORD offset, DWORD bytes, void** first, DWORD* first_bytes, void** second, DWORD* second_bytes, DWORD flags) override { if (!first || !first_bytes) return DSERR_INVALIDPARAM; LegacyAudioLock lock; if (!buffer_.Lock(offset, bytes, (flags & DSBLOCK_ENTIREBUFFER) != 0, &lock)) return DSERR_INVALIDPARAM; active_lock_ = lock; active_lock_offset_ = (flags & DSBLOCK_ENTIREBUFFER) != 0 ? 0 : offset; *first = lock.first.data(); *first_bytes = static_cast<DWORD>(lock.first.size()); if (second) *second = lock.second.empty() ? nullptr : lock.second.data(); if (second_bytes) *second_bytes = static_cast<DWORD>(lock.second.size()); TraceBuffer("lock", flags, *first_bytes + (second_bytes ? *second_bytes : 0)); if (is_streaming() && streaming_lock_traces_ < 16) { Re2djAudioTrace("directsound:lock buffer=%p offset=%lu requested=%lu first=%lu second=%lu flags=0x%08lx play-cursor=%lu", this, static_cast<unsigned long>(active_lock_offset_), static_cast<unsigned long>(bytes), static_cast<unsigned long>(*first_bytes), static_cast<unsigned long>(second_bytes ? *second_bytes : 0), static_cast<unsigned long>(flags), static_cast<unsigned long>(Sdl3MixerAudioBackend::Instance().PositionBytes(voice_, buffer_))); ++streaming_lock_traces_; } return DS_OK; }
+    HRESULT STDMETHODCALLTYPE Play(DWORD, DWORD, DWORD flags) override { buffer_.set_playing(true, (flags & DSBPLAY_LOOPING) != 0); TraceBuffer("play", flags, static_cast<DWORD>(buffer_.byte_count())); if (!play_traced_) { const PcmLevels levels = MeasurePcm(buffer_); Re2djAudioTrace("directsound:first-play buffer=%p flags=0x%08lx bytes=%lu samples=%lu peak=%.9f rms=%.9f volume=%ld linear=%.9f pan=%ld frequency=%lu streaming=%u", this, static_cast<unsigned long>(flags), static_cast<unsigned long>(buffer_.byte_count()), static_cast<unsigned long>(levels.sample_count), levels.peak, levels.rms, static_cast<long>(buffer_.volume()), std::pow(10.0, static_cast<double>(buffer_.volume()) / 2000.0), static_cast<long>(buffer_.pan()), static_cast<unsigned long>(buffer_.frequency()), is_streaming() ? 1U : 0U); play_traced_ = true; } const bool played = Sdl3MixerAudioBackend::Instance().Play(voice_, buffer_, is_streaming()); if (played && is_streaming()) { Re2djAudioTrace("directsound:streaming-start buffer=%p cursor=%lu queued=%d", this, static_cast<unsigned long>(buffer_.current_position()), Sdl3MixerAudioBackend::Instance().StreamingQueuedBytes(voice_)); } return played ? DS_OK : DSERR_GENERIC; }
     HRESULT STDMETHODCALLTYPE SetCurrentPosition(DWORD position) override { buffer_.set_current_position(position); return Sdl3MixerAudioBackend::Instance().SetPosition(voice_, buffer_) ? DS_OK : DSERR_GENERIC; }
     HRESULT STDMETHODCALLTYPE SetFormat(const WAVEFORMATEX* format) override { if (!format) return DSERR_INVALIDPARAM; wave_ = *format; return DS_OK; }
-    HRESULT STDMETHODCALLTYPE SetVolume(LONG value) override { buffer_.set_volume(value); Re2djAudioTrace("directsound:set-volume buffer=%p requested=%ld applied=%ld linear=%.9f", this, static_cast<long>(value), static_cast<long>(buffer_.volume()), std::pow(10.0, static_cast<double>(buffer_.volume()) / 2000.0)); return Sdl3MixerAudioBackend::Instance().UpdateControls(voice_, buffer_) ? DS_OK : DSERR_GENERIC; }
+    HRESULT STDMETHODCALLTYPE SetVolume(LONG value) override
+    {
+        const void* const return_slot = _AddressOfReturnAddress();
+        const std::uintptr_t caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+        const DWORD image_base = g_re2dj_audio_image_base;
+        const DWORD original_caller_rva = FindOriginalCallerRva(return_slot);
+        buffer_.set_volume(value);
+        const bool updated =
+            Sdl3MixerAudioBackend::Instance().UpdateControls(voice_, buffer_);
+        Re2djAudioTrace(
+            "directsound:set-volume buffer=%p caller=0x%08lx caller-rva=0x%08lx original-caller-rva=0x%08lx requested=%ld applied=%ld linear=%.9f track-gain=%.9f master-gain=%.9f result=0x%08lx",
+            this,
+            static_cast<unsigned long>(caller),
+            static_cast<unsigned long>(image_base != 0 && caller >= image_base
+                                           ? caller - image_base
+                                           : 0xffffffffUL),
+            static_cast<unsigned long>(original_caller_rva),
+            static_cast<long>(value),
+            static_cast<long>(buffer_.volume()),
+            std::pow(10.0, static_cast<double>(buffer_.volume()) / 2000.0),
+            static_cast<double>(Sdl3MixerAudioBackend::Instance().TrackGain(voice_)),
+            static_cast<double>(Sdl3MixerAudioBackend::Instance().master_gain()),
+            static_cast<unsigned long>(updated ? DS_OK : DSERR_GENERIC));
+        return updated ? DS_OK : DSERR_GENERIC;
+    }
     HRESULT STDMETHODCALLTYPE SetPan(LONG value) override { buffer_.set_pan(value); return Sdl3MixerAudioBackend::Instance().UpdateControls(voice_, buffer_) ? DS_OK : DSERR_GENERIC; }
     HRESULT STDMETHODCALLTYPE SetFrequency(DWORD value) override { buffer_.set_frequency(value == DSBFREQUENCY_ORIGINAL ? wave_.nSamplesPerSec : value); return Sdl3MixerAudioBackend::Instance().UpdateControls(voice_, buffer_) ? DS_OK : DSERR_GENERIC; }
-    HRESULT STDMETHODCALLTYPE Stop() override { buffer_.set_playing(false, false); return Sdl3MixerAudioBackend::Instance().Stop(voice_) ? DS_OK : DSERR_GENERIC; }
-    HRESULT STDMETHODCALLTYPE Unlock(void* first, DWORD first_bytes, void* second, DWORD second_bytes) override { LegacyAudioLock lock{std::span<std::byte>(static_cast<std::byte*>(first), first_bytes), std::span<std::byte>(static_cast<std::byte*>(second), second_bytes)}; if (!buffer_.ValidateUnlock(lock) || first != active_lock_.first.data() || first_bytes != active_lock_.first.size() || second_bytes != active_lock_.second.size() || (second_bytes && second != active_lock_.second.data())) return DSERR_INVALIDPARAM; active_lock_ = {}; TraceBuffer("unlock", flags_, first_bytes + second_bytes); if (buffer_.playing() && streaming_unlock_traces_ < 8) { const PcmLevels levels = MeasurePcm(buffer_); Re2djAudioTrace("directsound:streaming-unlock buffer=%p update=%u bytes=%lu peak=%.9f rms=%.9f backend-refresh=0", this, streaming_unlock_traces_ + 1, static_cast<unsigned long>(first_bytes + second_bytes), levels.peak, levels.rms); ++streaming_unlock_traces_; } return DS_OK; }
+    HRESULT STDMETHODCALLTYPE Stop() override { buffer_.set_current_position(Sdl3MixerAudioBackend::Instance().PositionBytes(voice_, buffer_)); buffer_.set_playing(false, false); return Sdl3MixerAudioBackend::Instance().Stop(voice_) ? DS_OK : DSERR_GENERIC; }
+    HRESULT STDMETHODCALLTYPE Unlock(void* first, DWORD first_bytes, void* second, DWORD second_bytes) override { LegacyAudioLock lock{std::span<std::byte>(static_cast<std::byte*>(first), first_bytes), std::span<std::byte>(static_cast<std::byte*>(second), second_bytes)}; if (!buffer_.ValidateUnlock(lock) || first != active_lock_.first.data() || first_bytes != active_lock_.first.size() || second_bytes != active_lock_.second.size() || (second_bytes && second != active_lock_.second.data())) return DSERR_INVALIDPARAM; Sdl3MixerAudioBackend::StreamingWriteResult commit; commit.success = true; if (is_streaming()) commit = Sdl3MixerAudioBackend::Instance().CommitStreamingWrite(voice_, buffer_); active_lock_ = {}; TraceBuffer("unlock", flags_, first_bytes + second_bytes); if (buffer_.playing() && streaming_unlock_traces_ < 16) { const PcmLevels levels = MeasurePcm(buffer_); Re2djAudioTrace("directsound:streaming-unlock buffer=%p update=%u lock-offset=%lu first=%lu second=%lu dirty-offset=%lu dirty-bytes=%lu peak=%.9f rms=%.9f backend-refresh=%u queued=%d", this, streaming_unlock_traces_ + 1, static_cast<unsigned long>(active_lock_offset_), static_cast<unsigned long>(first_bytes), static_cast<unsigned long>(second_bytes), static_cast<unsigned long>(commit.offset), static_cast<unsigned long>(commit.bytes), levels.peak, levels.rms, commit.success && is_streaming() ? 1U : 0U, commit.queued_bytes); ++streaming_unlock_traces_; } return commit.success ? DS_OK : DSERR_GENERIC; }
     HRESULT STDMETHODCALLTYPE Restore() override { return DS_OK; }
     bool is_primary() const { return (flags_ & DSBCAPS_PRIMARYBUFFER) != 0; }
+    bool is_streaming() const { return !is_primary() && (flags_ & DSBCAPS_LOCHARDWARE) != 0; }
     DWORD flags() const { return flags_; }
     DWORD byte_count() const { return static_cast<DWORD>(buffer_.byte_count()); }
 private:
-    std::atomic<ULONG> refs_{1}; DWORD flags_; WAVEFORMATEX wave_{}; LegacyAudioBuffer buffer_; LegacyAudioLock active_lock_{}; Sdl3MixerAudioBackend::Voice* voice_ = nullptr; bool play_traced_ = false; unsigned streaming_unlock_traces_ = 0;
+    std::atomic<ULONG> refs_{1}; DWORD flags_; WAVEFORMATEX wave_{}; LegacyAudioBuffer buffer_; LegacyAudioLock active_lock_{}; DWORD active_lock_offset_ = 0; Sdl3MixerAudioBackend::Voice* voice_ = nullptr; bool play_traced_ = false; unsigned streaming_lock_traces_ = 0; unsigned streaming_unlock_traces_ = 0; unsigned state_query_traces_ = 0;
 };
 
 class DirectSoundFacade final : public IDirectSound

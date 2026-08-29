@@ -4,21 +4,11 @@
 
 *This file contains only active work and unresolved items. Completed items are moved to [Implemented](IMPLEMENTED.md).*
 
-다음 세션은 [작업 082 오디오 음량 추적 결과](work-logs/20260828-082-win32-audio-volume-trace.md)에서 시작한다. Win32 DirectSound streaming 수정과 검증을 우선하며 Linux 작업 077은 사용자 결정에 따라 잠시 보류한다.
+작업 086의 `DemoVolume` HLE로 확인된 title 음량 저하 원인은 제거됐다. 실제 전체 곡·효과음 청취 정확성은 작업 072의 사용자 재검증 항목으로 유지하며 Linux 작업 077은 사용자 결정에 따라 잠시 보류한다.
 
-*Start the next session from the [Task 082 audio-volume trace result](work-logs/20260828-082-win32-audio-volume-trace.md). Prioritize Win32 DirectSound streaming correction and verification; Linux Task 077 is temporarily paused by user decision.*
+*Task 086's `DemoVolume` HLE removes the confirmed title-volume attenuation. Audible accuracy across complete songs and effects remains a user-revalidation item under Task 072; Linux Task 077 remains temporarily paused by user decision.*
 
 ## 현재 진행 / In progress
-
-- [ ] 작업 083 — DirectSound streaming/ring-buffer 동기화
-  - [ ] 원본 `Lock/Unlock` write region과 재생 cursor의 시간 관계를 설계에 명시
-  - [ ] static buffer snapshot과 streaming buffer backend를 분리
-  - [ ] 재생 중 `Unlock` 갱신을 SDL 출력에 반영하고 wrap-around를 보존
-  - [ ] stop/restart, looping, current position, duplicate buffer 상태 계약 회귀 검증
-  - [ ] `title.wav`를 `0 dB`에서 재실행하여 청크 진행, 전체 곡 음량과 clipping 확인
-  - [ ] streaming 수정 후 기본 `+6 dB` 보정값 유지·축소·제거 여부 재평가
-
-  *Task 083 — Synchronize DirectSound streaming/ring-buffer writes with SDL playback. Preserve cursor, wrapping, loop, restart, and duplicate-buffer semantics, then reassess the temporary product master gain from real 0 dB listening evidence.*
 
 - [ ] 작업 077 — Linux 원본 실행 경로
   - [x] Linux x86-64 host/i386 helper synthetic PE32 mapping·relocation·TLS·import gate IPC 검증
@@ -29,7 +19,7 @@
   - [ ] kernel32·USER32·VFS·INI·GDI HLE로 창과 첫 자산 접근 도달
   - [ ] guest callback, nested import, thread·TLS·동기화 구현
   - [ ] 공용 DirectDraw/Direct3D/DirectSound COM facade를 SDL graphics/audio/input에 연결
-  - [ ] 보호된 `ez2dj.exe` self-modifying code·LPTDI 환경·raw I/O 지원
+  - [x] 보호된 `ez2dj.exe` self-modifying code·LPTDI 환경·의미 기반 I/O board 지원
   - [ ] helper 자동 탐색, overlay CLI, synthetic CI와 Linux 원본 실행 가이드 완성
 
   *Task 077 — Execute the original x86 PE32 in a Linux i386 helper behind the shared Win32 HLE and x86-64 SDL services. Bring up the unprotected build first, then add the protected cabinet executable's environment boundaries.*
@@ -39,10 +29,14 @@
   - [x] RGB565 source color-key 범위와 관찰된 texture-stage/render state를 적용
   - [x] draw/I/O 고빈도 진단을 bounded trace로 바꾸고 debugger 분리 실행을 추가
   - [ ] 작업 073 offscreen/blit 크래시 수정본에서 누락 그림, 투명 테두리, 합성 순서와 애니메이션 속도를 사용자 화면으로 재검증
-  - [ ] 작업 083 streaming 수정 뒤 `title.wav`, 효과음, volume/pan/frequency와 duplicate 동시 재생을 청취 확인
-  - [ ] 키보드와 legacy I/O port 입력으로 메뉴·게임 상태 전이가 가능한지 확인
+  - [ ] 작업 083 streaming 및 작업 086 `DemoVolume` 수정 뒤 `title.wav`, 효과음, volume/pan/frequency와 duplicate 동시 재생을 청취 확인
+  - [ ] `--io-config` 키보드 입력으로 메뉴·게임 상태 전이가 가능한지 실제 사용자 검증
+  - [ ] 작업 087 counter 수정 뒤 F3 press/release 한 번마다 credit이 정확히 1 증가하는지 실제 사용자 검증
+  - [x] 작업 088 `Texture2::Load` 직접 원인 추정은 사용자 재검증과 `TextureLoad` 호출 0회 trace로 기각
+  - [x] 작업 089 변환 전 FVF `0x112`/`0x1e2` 지원 뒤 Music Select 중앙 곡 그림 표시를 사용자 검증
+  - [x] 작업 090 current-process hard-termination 보정 뒤 창 닫기 시 `ez2dj.exe`와 대기 중인 `re2dj.exe` 종료를 사용자 검증
 
-  *Task 072 — Rendering and detached-runtime implementation is complete. User revalidation of visuals, audio, and input remains active.*
+  *Task 072 — Rendering and detached-runtime implementation is complete. The user confirmed that Task 089 restores the Music Select center artwork and Task 090 terminates both `ez2dj.exe` and its waiting `re2dj.exe` on window close. Audio and input revalidation remains active.*
 
 - [ ] 작업 074 — 누락 이미지 합성 추적
   - [x] `USER32!LoadImageA` VFS wrapper 구현과 IAT 패치 동작 확인

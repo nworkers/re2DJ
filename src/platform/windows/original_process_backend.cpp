@@ -36,6 +36,11 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         *error = "Windows audio master gain must be between -24 and +18 dB";
         return false;
     }
+    if (options.demo_volume > 3)
+    {
+        *error = "Windows demo volume must be between 0 and 3";
+        return false;
+    }
 
     *arguments = {
         "re2dj",
@@ -50,6 +55,8 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         "--hle-directsound",
         "--audio-gain-db",
         std::to_string(options.audio_gain_db),
+        "--demo-volume",
+        std::to_string(options.demo_volume),
         "--hle-io-ports",
         "--run-detached",
         "--device-mock-lptdi-target-state",
@@ -58,6 +65,15 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     if (options.audio_volume_trace)
     {
         arguments->push_back("--audio-volume-trace");
+    }
+    if (options.fullscreen)
+    {
+        arguments->push_back("--fullscreen");
+    }
+    if (!options.io_config.empty())
+    {
+        arguments->push_back("--io-config");
+        arguments->push_back(options.io_config.string());
     }
     error->clear();
     return true;
