@@ -8,7 +8,7 @@
 
 | 식별자 | 내용 | 파일 수 |
 | --- | --- | --- |
-| 1st SE | EZ2DJ 1st Trax Special Edition | 245 디렉터리 / 16,613 파일 |
+| 1st SE | EZ2DJ The 1st Tracks Special Edition | 245 디렉터리 / 16,613 파일 |
 | 3rd | EZ2DJ 3rd Trax | 199 디렉터리 / 25,054 파일 |
 
 측정 방법: `re2dj_hdd_probe <dir>`, `re2dj_pe_analyzer <file>`, 그리고 import 테이블 확인용 일회성 스크립트.

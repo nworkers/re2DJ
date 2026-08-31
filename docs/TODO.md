@@ -24,6 +24,16 @@
 
   *Task 077 — Execute the original x86 PE32 in a Linux i386 helper behind the shared Win32 HLE and x86-64 SDL services. Bring up the unprotected build first, then add the protected cabinet executable's environment boundaries.*
 
+## 사용자 보류 / Paused by user
+
+- [ ] 작업 111 — ez2dj3rd Hardlock `0x9c402458` Function `0x0e` 응답 판별 경계 복원
+  - [ ] 264바이트 in-place descriptor 마지막 8바이트의 반환 뒤 소비 경로 추적
+  - [ ] Task 107 seed 후보별 synthetic 응답을 기본 비활성 분석 경계에서 생성·검증
+  - [ ] 원본 실행의 다음 분기 oracle로 후보 교집합을 축소하되 실제 seed로 성급히 확정하지 않기
+  - 재개 기준: [Hardlock 보류 체크포인트](work-logs/20260901-112-3rd-hardlock-pause-checkpoint.md)의 `0x450` replay, `0x44c` tail 분기와 남은 미확정 목록을 먼저 읽습니다.
+
+  *Task 111 — reconstruct the post-return consumer for the final eight bytes of the 264-byte Function-`0x0e` descriptor, generate and test Task 107 candidate responses only behind a default-off analysis boundary, and reduce their intersection using the original execution's next-branch oracle without prematurely identifying physical seeds. Resume from the [Hardlock pause checkpoint](work-logs/20260901-112-3rd-hardlock-pause-checkpoint.md), which records the `0x450` replay, the `0x44c` tail branch, and unresolved items.*
+
 - [ ] 작업 072 — 렌더링 정확성·성능 회복
   - [x] surface별 OpenGL texture cache와 dirty revision으로 매 draw 전체 upload를 제거
   - [x] RGB565 source color-key 범위와 관찰된 texture-stage/render state를 적용
@@ -80,3 +90,10 @@
 
 - [ ] Windows x64 host expansion
 - [ ] Custom x86-32 interpreter, only if no permitted Web execution engine is suitable
+
+- [ ] Task 096 visual revalidation: confirm scene-transition flicker/fade-out and z-order behavior with the user's current display setup
+- [ ] 작업 097 Music Select 좌표·창 pixel viewport 재검증 (창 크기/DPI 변경 포함)
+
+*Task 097's trace shows internally centered logical coordinates for the Music Select composition, while the SDL/OpenGL backend now refreshes its pixel viewport after native child-window or DPI size changes. The exact user-visible artwork position still needs a reproducible Music Select capture.*
+
+- [ ] Task 097 coordinate revalidation: confirm Music Select artwork placement after window resize or DPI changes

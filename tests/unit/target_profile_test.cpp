@@ -23,7 +23,7 @@ std::vector<std::uint8_t> GuestExecutable()
     return re2dj::test::MakeSyntheticPe32Image();
 }
 
-// Mirrors the confirmed EZ2DJ 1st Trax Special Edition layout. Only the entries
+// Mirrors the confirmed EZ2DJ The 1st Tracks Special Edition layout. Only the entries
 // the fingerprint names are created; the real dump holds thousands more.
 void WriteFirstSeLayout(const TemporaryTree& tree, const std::string& prefix)
 {
@@ -96,7 +96,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, entry.profile.executable_relative_path.empty());
     }
 
-    // ---- 1st Trax Special Edition ----
+    // ---- The 1st Tracks Special Edition ----
     {
         const TemporaryTree tree;
         WriteFirstSeLayout(tree, "");
@@ -118,8 +118,19 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, canonical != nullptr);
         if (canonical != nullptr)
         {
+            RE2DJ_CHECK_EQ(
+                context, canonical->display_name,
+                std::string("EZ2DJ The 1st Tracks Special Edition"));
             RE2DJ_CHECK(context, !canonical->detected);
             RE2DJ_CHECK(context, !canonical->bring_up_target);
+            RE2DJ_CHECK(context, canonical->run_defaults.lptdi.legacy_io_ports);
+            RE2DJ_CHECK(context, canonical->run_defaults.lptdi.device_mock_enabled);
+            RE2DJ_CHECK_EQ(context,
+                           canonical->run_defaults.lptdi.device_mock_path_prefix,
+                           std::string("\\\\.\\LPTDI"));
+            RE2DJ_CHECK_EQ(context,
+                           canonical->run_defaults.lptdi.device_mock_target_state_hex,
+                           std::string("0900000000000000"));
             // Confirmed from the System.ini shell entry in the real dump.
             RE2DJ_CHECK_EQ(context, canonical->guest_drive_letter, 'D');
             RE2DJ_CHECK_EQ(context, canonical->guest_directory, std::string("\\ez2dj"));
@@ -131,6 +142,10 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, unpacked != nullptr);
         if (unpacked != nullptr)
         {
+            RE2DJ_CHECK_EQ(
+                context, unpacked->display_name,
+                std::string(
+                    "EZ2DJ The 1st Tracks Special Edition (unprotected build)"));
             RE2DJ_CHECK_EQ(context, unpacked->executable_relative_path,
                            std::string("ez2dj1.exe"));
             // Marked so behavior seen through it is never cited as original.
@@ -175,6 +190,26 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             // rather than being copied from the 1st SE profile.
             RE2DJ_CHECK_EQ(context, third->guest_drive_letter, '\0');
             RE2DJ_CHECK(context, third->guest_directory.empty());
+            RE2DJ_CHECK_EQ(context,
+                           third->run_defaults.default_hdd_directory_relative_path,
+                           std::string("roms/ez2dj3rd"));
+            RE2DJ_CHECK_EQ(context, third->hle_profile_id, std::string("ez2dj3rd"));
+            RE2DJ_CHECK(context, third->run_defaults.hle_vfs);
+            RE2DJ_CHECK(context, third->run_defaults.hle_directsound);
+            RE2DJ_CHECK(context, third->run_defaults.run_detached);
+            RE2DJ_CHECK(context, !third->run_defaults.fullscreen);
+            RE2DJ_CHECK(context, !third->run_defaults.hle_command_line);
+            RE2DJ_CHECK(context, !third->run_defaults.hle_windows_directory);
+            RE2DJ_CHECK(context, !third->run_defaults.hle_d3d3);
+            RE2DJ_CHECK(context, !third->run_defaults.lptdi.legacy_io_ports);
+            RE2DJ_CHECK(context, third->run_defaults.lptdi.device_mock_enabled);
+            RE2DJ_CHECK_EQ(context,
+                           third->run_defaults.lptdi.device_mock_path_prefix,
+                           std::string("\\\\.\\FEnteDev"));
+            RE2DJ_CHECK(context,
+                        third->run_defaults.lptdi.device_mock_target_state_hex ==
+                            "0000000000000000");
+            RE2DJ_CHECK(context, !third->run_defaults.demo_volume.has_value());
         }
 
         RE2DJ_CHECK(context, Find(profiles, "ez2dj1stse") == nullptr);

@@ -52,6 +52,7 @@ bool DecodeTransformedLitVertices(std::span<const std::byte> source,
         topology == PrimitiveTopology::kLineList ? 2 : 3;
     if (vertex_count < minimum_vertex_count ||
         (topology == PrimitiveTopology::kLineList && vertex_count % 2 != 0) ||
+        (topology == PrimitiveTopology::kTriangleList && vertex_count % 3 != 0) ||
         vertex_count > (std::numeric_limits<std::size_t>::max)() /
                            kTransformedLitVertexStride)
     {

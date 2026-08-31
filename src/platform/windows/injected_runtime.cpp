@@ -7,6 +7,7 @@
 #include <intrin.h>
 #include <string>
 
+#include "re2dj/device/hardlock_api_descriptor.h"
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/input/legacy_io_port_bus.h"
 #include "ez2dj_keyboard_input.h"
@@ -17,6 +18,7 @@ extern "C" __declspec(dllexport) char g_re2dj_hle_windows_directory[MAX_PATH] = 
 extern "C" __declspec(dllexport) char g_re2dj_vfs_hdd_root[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_overlay_root[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_trace_path[MAX_PATH] = {};
+extern "C" __declspec(dllexport) char g_re2dj_device_mock_path_prefix[MAX_PATH] = {};
 // Device-emulation policy: 0 keeps the natural open failure, 1 lets the
 // emulated \\.\ devices open successfully.
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_mock = 0;
@@ -29,6 +31,11 @@ extern "C" __declspec(dllexport) unsigned char g_re2dj_device_response_410[8] = 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_device_response_414_size = 0;
 extern "C" __declspec(dllexport) unsigned char g_re2dj_device_response_414[104] = {};
 extern "C" __declspec(dllexport) unsigned char g_re2dj_device_target_state[8] = {};
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_response_450_enabled = 0;
+extern "C" __declspec(dllexport) unsigned char g_re2dj_hardlock_response_450[6] = {};
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_44c_tail_enabled = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_44c_tail_word = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_wts_console_session_mock = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_io_ports = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_image_base = 0;
 extern "C" __declspec(dllexport) char g_re2dj_io_config_path[MAX_PATH] = {};
@@ -50,6 +57,18 @@ re2dj::platform::windows::Ez2DjKeyboardInput g_keyboard_input;
 volatile LONG g_keyboard_input_state = 0;
 volatile LONG g_vfs_image_trace_count = 0;
 volatile LONG g_vfs_script_trace_count = 0;
+volatile LONG g_vfs_device_trace_count = 0;
+volatile LONG g_dynamic_resolver_trace_count = 0;
+volatile LONG g_wts_query_trace_count = 0;
+volatile LONG g_hardlock_450_trace_count = 0;
+
+using WtsQuerySessionInformationAProc = BOOL(WINAPI*)(
+    HANDLE server,
+    DWORD session_id,
+    DWORD info_class,
+    LPSTR* buffer,
+    DWORD* bytes_returned);
+WtsQuerySessionInformationAProc g_original_wts_query_session_information_a = nullptr;
 
 // Asset classes the bounded open diagnostic reports on. Images answer which
 // bitmaps a scene resolved, scripts answer whether the scene description that
@@ -86,6 +105,12 @@ VfsAssetKind ClassifyVfsAsset(const char* path)
     return VfsAssetKind::kNone;
 }
 
+bool IsWin32DevicePath(const char* path)
+{
+    return path != nullptr && std::strlen(path) >= 4 && path[0] == '\\' && path[1] == '\\' && path[2] == '.' &&
+           path[3] == '\\';
+}
+
 // Separate budgets so the attract loop's bitmap sweep cannot exhaust the log
 // before the rarer script requests appear in it.
 bool ClaimVfsTraceBudget(VfsAssetKind kind)
@@ -102,6 +127,98 @@ bool ClaimVfsTraceBudget(VfsAssetKind kind)
         break;
     }
     return false;
+}
+
+bool ClaimVfsDeviceTraceBudget()
+{
+    constexpr LONG kMaximumDeviceDiagnostics = 128;
+    return InterlockedIncrement(&g_vfs_device_trace_count) <= kMaximumDeviceDiagnostics;
+}
+
+bool ClaimDynamicResolverTraceBudget()
+{
+    constexpr LONG kMaximumResolverDiagnostics = 128;
+    return InterlockedIncrement(&g_dynamic_resolver_trace_count) <=
+           kMaximumResolverDiagnostics;
+}
+
+bool ClaimWtsQueryTraceBudget()
+{
+    constexpr LONG kMaximumWtsQueryDiagnostics = 32;
+    return InterlockedIncrement(&g_wts_query_trace_count) <=
+           kMaximumWtsQueryDiagnostics;
+}
+
+void AppendVfsTraceMessage(const char* message)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || message == nullptr)
+    {
+        return;
+    }
+    HANDLE trace = CreateFileA(g_re2dj_vfs_trace_path,
+                               FILE_APPEND_DATA,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               nullptr,
+                               OPEN_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL,
+                               nullptr);
+    if (trace == INVALID_HANDLE_VALUE)
+    {
+        return;
+    }
+    DWORD written = 0;
+    WriteFile(trace,
+              message,
+              static_cast<DWORD>(std::strlen(message)),
+              &written,
+              nullptr);
+    CloseHandle(trace);
+}
+
+void ReportDynamicResolverName(const char* name, const char* route)
+{
+    if (name == nullptr || route == nullptr || !ClaimDynamicResolverTraceBudget())
+    {
+        return;
+    }
+    char message[256] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:dynamic-resolver:name=%.127s:route=%s\r\n",
+                  name,
+                  route);
+    AppendVfsTraceMessage(message);
+}
+
+void ReportWtsQuery(DWORD session_id,
+                    DWORD info_class,
+                    BOOL success,
+                    LPSTR* buffer,
+                    DWORD* bytes_returned)
+{
+    if (!ClaimWtsQueryTraceBudget())
+    {
+        return;
+    }
+    const DWORD size = bytes_returned == nullptr ? 0 : *bytes_returned;
+    std::uint32_t scalar = 0;
+    DWORD scalar_size = 0;
+    if (success != FALSE && buffer != nullptr && *buffer != nullptr && size != 0)
+    {
+        scalar_size = size < sizeof(scalar) ? size : sizeof(scalar);
+        std::memcpy(&scalar, *buffer, scalar_size);
+    }
+    char message[256] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:wts-query:session=%lu:class=%lu:success=%u:bytes=%lu:scalar_size=%lu:scalar=0x%08x\r\n",
+                  static_cast<unsigned long>(session_id),
+                  static_cast<unsigned long>(info_class),
+                  success != FALSE ? 1U : 0U,
+                  static_cast<unsigned long>(size),
+                  static_cast<unsigned long>(scalar_size),
+                  static_cast<unsigned>(scalar));
+    AppendVfsTraceMessage(message);
 }
 
 void ReportVfsAssetOpen(const char* api,
@@ -124,24 +241,147 @@ void ReportVfsAssetOpen(const char* api,
                   mapped == nullptr ? "" : mapped,
                   result != INVALID_HANDLE_VALUE ? 1U : 0U,
                   static_cast<unsigned long>(error));
-    HANDLE trace = CreateFileA(g_re2dj_vfs_trace_path,
-                               FILE_APPEND_DATA,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               nullptr,
-                               OPEN_ALWAYS,
-                               FILE_ATTRIBUTE_NORMAL,
-                               nullptr);
-    if (trace == INVALID_HANDLE_VALUE)
+    AppendVfsTraceMessage(message);
+}
+
+void ReportVfsDeviceOpen(const char* api,
+                         const char* requested,
+                         HANDLE result,
+                         DWORD error)
+{
+    if (!IsWin32DevicePath(requested) || !ClaimVfsDeviceTraceBudget())
     {
         return;
     }
-    DWORD written = 0;
-    WriteFile(trace,
-              message,
-              static_cast<DWORD>(std::strlen(message)),
-              &written,
-              nullptr);
-    CloseHandle(trace);
+    char message[900] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:device-open:api=%s:request=%s:success=%u:error=%lu\r\n",
+                  api,
+                  requested,
+                  result != INVALID_HANDLE_VALUE ? 1U : 0U,
+                  static_cast<unsigned long>(error));
+    AppendVfsTraceMessage(message);
+}
+
+void ReportDeviceIoControlCode(DWORD control_code,
+                               DWORD input_size,
+                               DWORD output_size)
+{
+    if (!ClaimVfsDeviceTraceBudget())
+    {
+        return;
+    }
+    char message[160] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:device-ioctl-entry:code=0x%08lx:input_size=%lu:output_size=%lu\r\n",
+                  static_cast<unsigned long>(control_code),
+                  static_cast<unsigned long>(input_size),
+                  static_cast<unsigned long>(output_size));
+    AppendVfsTraceMessage(message);
+}
+
+void ReportHardlock450Packet(DWORD control_code,
+                             const void* input,
+                             DWORD input_size,
+                             const void* output,
+                             DWORD output_size)
+{
+    constexpr DWORD kHardlockQuery = 0x9c402450;
+    constexpr DWORD kPacketSize = 6;
+    constexpr LONG kMaximumPacketDiagnostics = 16;
+    if (control_code != kHardlockQuery || input == nullptr || output == nullptr ||
+        input_size != kPacketSize || output_size != kPacketSize)
+    {
+        return;
+    }
+    const LONG index = InterlockedIncrement(&g_hardlock_450_trace_count);
+    if (index > kMaximumPacketDiagnostics)
+    {
+        return;
+    }
+    const auto* const bytes = static_cast<const unsigned char*>(input);
+    char message[192] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:hardlock-450-packet:index=%ld:in_place=%u:"
+                  "input=%02x%02x%02x%02x%02x%02x\r\n",
+                  static_cast<long>(index),
+                  input == output ? 1U : 0U,
+                  static_cast<unsigned>(bytes[0]),
+                  static_cast<unsigned>(bytes[1]),
+                  static_cast<unsigned>(bytes[2]),
+                  static_cast<unsigned>(bytes[3]),
+                  static_cast<unsigned>(bytes[4]),
+                  static_cast<unsigned>(bytes[5]));
+    AppendVfsTraceMessage(message);
+}
+
+void FormatHexBytes(const std::array<std::uint8_t, 8>& bytes,
+                    char output[17])
+{
+    constexpr char kDigits[] = "0123456789abcdef";
+    for (std::size_t index = 0; index < bytes.size(); ++index)
+    {
+        output[index * 2] = kDigits[bytes[index] >> 4];
+        output[index * 2 + 1] = kDigits[bytes[index] & 0x0f];
+    }
+    output[16] = '\0';
+}
+
+void ReportHardlockDescriptor(DWORD control_code,
+                              const void* input,
+                              DWORD input_size)
+{
+    constexpr DWORD kHardlockApiCall = 0x9c40244c;
+    constexpr DWORD kHardlockEnvelopeCall = 0x9c402458;
+    if ((control_code != kHardlockApiCall &&
+         control_code != kHardlockEnvelopeCall) ||
+        input == nullptr ||
+        input_size < re2dj::device::kHardlockApiDescriptorSize ||
+        !ClaimVfsDeviceTraceBudget())
+    {
+        return;
+    }
+
+    const auto* const input_bytes = static_cast<const std::uint8_t*>(input);
+    re2dj::device::HardlockApiDescriptorHeader header;
+    if (!re2dj::device::ParseHardlockApiDescriptorHeader(
+            std::span<const std::uint8_t>(input_bytes, input_size), &header))
+    {
+        return;
+    }
+    std::uint16_t tail_word = 0;
+    if (!re2dj::device::ParseHardlockApiDescriptorTailWord(
+            std::span<const std::uint8_t>(input_bytes, input_size), &tail_word))
+    {
+        return;
+    }
+
+    char reference[17] = {};
+    char verify[17] = {};
+    FormatHexBytes(header.id_reference, reference);
+    FormatHexBytes(header.id_verify, verify);
+    char message[440] = {};
+    std::snprintf(
+        message,
+        sizeof(message),
+        "re2dj:vfs:hardlock-descriptor:code=0x%08lx:version=%02x%02x:module_id=0x%04x:module_address=0x%04x:block_count=%u:function=0x%04x:status=%u:remote=%u:port=0x%04x:id_ref=%s:id_verify=%s:tail_word=0x%04x\r\n",
+        static_cast<unsigned long>(control_code),
+        static_cast<unsigned>(header.api_version[0]),
+        static_cast<unsigned>(header.api_version[1]),
+        static_cast<unsigned>(header.module_id),
+        static_cast<unsigned>(header.module_address),
+        static_cast<unsigned>(header.block_count),
+        static_cast<unsigned>(header.function),
+        static_cast<unsigned>(header.status),
+        static_cast<unsigned>(header.remote),
+        static_cast<unsigned>(header.port),
+        reference,
+        verify,
+        static_cast<unsigned>(tail_word));
+    AppendVfsTraceMessage(message);
 }
 
 LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
@@ -295,16 +535,21 @@ bool IsDeviceMockHandle(HANDLE handle)
     return value > kDeviceMockHandleBase && value <= kDeviceMockHandleBase + 0xff;
 }
 
-// Matches device paths such as \\.\LPTDI1 case-insensitively. A plain prefix
-// test is used because the port digit varies at guest runtime.
+// Matches the profile-selected device path prefix case-insensitively. A plain
+// prefix test is used because the LPTDI port digit varies at guest runtime.
 bool HasDeviceMockPrefix(const char* name)
 {
-    constexpr char kPrefix[] = "\\\\.\\lptdi";
     if (g_re2dj_device_mock == 0 || name == nullptr)
     {
         return false;
     }
-    return _strnicmp(name, kPrefix, sizeof(kPrefix) - 1) == 0;
+    const char* prefix = g_re2dj_device_mock_path_prefix;
+    if (prefix[0] == '\0')
+    {
+        prefix = "\\\\.\\lptdi";
+    }
+    const std::size_t prefix_length = std::strlen(prefix);
+    return prefix_length != 0 && _strnicmp(name, prefix, prefix_length) == 0;
 }
 
 bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[MAX_PATH])
@@ -448,6 +693,10 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     }
     if (HasDeviceMockPrefix(name))
     {
+        ReportVfsDeviceOpen("CreateFileA",
+                            name,
+                            reinterpret_cast<HANDLE>(kDeviceMockHandleBase + 1),
+                            ERROR_SUCCESS);
         SetLastError(ERROR_SUCCESS);
         return reinterpret_cast<HANDLE>(kDeviceMockHandleBase + 1);
     }
@@ -456,6 +705,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     const bool write = (access & (GENERIC_WRITE | FILE_APPEND_DATA | DELETE)) != 0;
     if (!MapVfsPath(name, write, path, source))
     {
+        ReportVfsDeviceOpen("CreateFileA", name, INVALID_HANDLE_VALUE, ERROR_INVALID_NAME);
         ReportVfsAssetOpen("CreateFileA", name, "", INVALID_HANDLE_VALUE, ERROR_INVALID_NAME);
         SetLastError(ERROR_INVALID_NAME);
         return INVALID_HANDLE_VALUE;
@@ -601,6 +851,81 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djDeviceIoControlMock(
     OutputDebugStringA(kDeviceIoControlMessage);
     if (IsDeviceMockHandle(handle))
     {
+        ReportDeviceIoControlCode(control_code, input_size, output_size);
+        ReportHardlock450Packet(control_code,
+                                input,
+                                input_size,
+                                output,
+                                output_size);
+        ReportHardlockDescriptor(control_code, input, input_size);
+        if (g_re2dj_hardlock_response_450_enabled != 0 &&
+            control_code == 0x9c402450)
+        {
+            if (bytes_returned != nullptr)
+            {
+                *bytes_returned = 0;
+            }
+            if (input == nullptr || input_size != 6)
+            {
+                SetLastError(ERROR_INVALID_DATA);
+                return FALSE;
+            }
+            if (output == nullptr || output_size != 6)
+            {
+                SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                return FALSE;
+            }
+            std::memcpy(output,
+                        g_re2dj_hardlock_response_450,
+                        sizeof(g_re2dj_hardlock_response_450));
+            if (bytes_returned != nullptr)
+            {
+                *bytes_returned = sizeof(g_re2dj_hardlock_response_450);
+            }
+            SetLastError(ERROR_SUCCESS);
+            return TRUE;
+        }
+        if (g_re2dj_hardlock_44c_tail_enabled != 0 &&
+            control_code == 0x9c40244c)
+        {
+            if (bytes_returned != nullptr)
+            {
+                *bytes_returned = 0;
+            }
+            if (input == nullptr || input_size != 256)
+            {
+                SetLastError(ERROR_INVALID_DATA);
+                return FALSE;
+            }
+            if (output == nullptr || output_size != 256)
+            {
+                SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                return FALSE;
+            }
+            re2dj::device::HardlockApiDescriptorHeader header;
+            if (!re2dj::device::ParseHardlockApiDescriptorHeader(
+                    std::span<const std::uint8_t>(
+                        static_cast<const std::uint8_t*>(input), input_size),
+                    &header))
+            {
+                SetLastError(ERROR_INVALID_DATA);
+                return FALSE;
+            }
+            if (header.function == 0)
+            {
+                const std::uint16_t tail_word =
+                    static_cast<std::uint16_t>(g_re2dj_hardlock_44c_tail_word);
+                std::memcpy(static_cast<unsigned char*>(output) + 0xfe,
+                            &tail_word,
+                            sizeof(tail_word));
+                if (bytes_returned != nullptr)
+                {
+                    *bytes_returned = output_size;
+                }
+                SetLastError(ERROR_SUCCESS);
+                return TRUE;
+            }
+        }
         if (g_re2dj_device_ioctl_mode == 4)
         {
             if (bytes_returned != nullptr)
@@ -721,6 +1046,99 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djDeviceIoControlMock(
                            output_size,
                            bytes_returned,
                            overlapped);
+}
+
+// The protected 3rd executable resolves its device APIs dynamically. Keep the
+// dynamic hook narrow so unrelated GetProcAddress requests retain Win32
+// behavior while device operations use the same wrappers as static imports.
+BOOL WINAPI Re2djObserveWtsQuerySessionInformationA(
+    HANDLE server,
+    DWORD session_id,
+    DWORD info_class,
+    LPSTR* buffer,
+    DWORD* bytes_returned)
+{
+    if (g_original_wts_query_session_information_a == nullptr)
+    {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return FALSE;
+    }
+    const BOOL result = g_original_wts_query_session_information_a(
+        server, session_id, info_class, buffer, bytes_returned);
+    const DWORD error = GetLastError();
+    constexpr DWORD kWtsCurrentSession = 0xffffffffu;
+    constexpr DWORD kWtsConnectState = 4;
+    if (result != FALSE && g_re2dj_wts_console_session_mock != 0 &&
+        session_id == kWtsCurrentSession && info_class == kWtsConnectState &&
+        buffer != nullptr && *buffer != nullptr && bytes_returned != nullptr &&
+        *bytes_returned == sizeof(std::uint32_t))
+    {
+        const std::uint32_t active_state = 0;
+        std::memcpy(*buffer, &active_state, sizeof(active_state));
+    }
+    ReportWtsQuery(session_id, info_class, result, buffer, bytes_returned);
+    SetLastError(error);
+    return result;
+}
+
+extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
+    HMODULE module, LPCSTR name)
+{
+    if (g_re2dj_device_mock != 0 && name != nullptr &&
+        reinterpret_cast<std::uintptr_t>(name) > 0xffffu)
+    {
+        if (_stricmp(name, "CreateFileA") == 0)
+        {
+            ReportDynamicResolverName(name, "hle");
+            return reinterpret_cast<FARPROC>(&Re2djVfsCreateFileA);
+        }
+        if (_stricmp(name, "ReadFile") == 0)
+        {
+            return reinterpret_cast<FARPROC>(&Re2djVfsReadFile);
+        }
+        if (_stricmp(name, "WriteFile") == 0)
+        {
+            return reinterpret_cast<FARPROC>(&Re2djVfsWriteFile);
+        }
+        if (_stricmp(name, "SetFilePointer") == 0)
+        {
+            return reinterpret_cast<FARPROC>(&Re2djVfsSetFilePointer);
+        }
+        if (_stricmp(name, "GetFileSize") == 0)
+        {
+            return reinterpret_cast<FARPROC>(&Re2djVfsGetFileSize);
+        }
+        if (_stricmp(name, "CloseHandle") == 0)
+        {
+            return reinterpret_cast<FARPROC>(&Re2djVfsCloseHandle);
+        }
+        if (_stricmp(name, "GetFileType") == 0)
+        {
+            return reinterpret_cast<FARPROC>(&Re2djVfsGetFileType);
+        }
+        if (_stricmp(name, "DeviceIoControl") == 0)
+        {
+            ReportDynamicResolverName(name, "hle");
+            return reinterpret_cast<FARPROC>(&Re2djDeviceIoControlMock);
+        }
+        if (_stricmp(name, "WTSQuerySessionInformationA") == 0)
+        {
+            const FARPROC original = GetProcAddress(module, name);
+            if (original != nullptr)
+            {
+                g_original_wts_query_session_information_a =
+                    reinterpret_cast<WtsQuerySessionInformationAProc>(original);
+                ReportDynamicResolverName(name, "observe");
+                return reinterpret_cast<FARPROC>(
+                    &Re2djObserveWtsQuerySessionInformationA);
+            }
+        }
+    }
+    if (name != nullptr && reinterpret_cast<std::uintptr_t>(name) > 0xffffu)
+    {
+        ReportDynamicResolverName(name, "win32");
+    }
+    return GetProcAddress(module, name);
 }
 
 extern "C" __declspec(dllexport) __declspec(noinline) void WINAPI Re2djProbeExitProcess(UINT code)

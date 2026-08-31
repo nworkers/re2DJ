@@ -60,6 +60,23 @@ void RunLegacyDrawCommandTests(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context,
                    command.topology,
                    re2dj::graphics::PrimitiveTopology::kTriangleStrip);
+    RE2DJ_CHECK(context,
+                re2dj::graphics::DecodeTransformedLitVertices(
+                    bytes,
+                    3,
+                    re2dj::graphics::PrimitiveTopology::kTriangleList,
+                    &command,
+                    &error));
+    RE2DJ_CHECK_EQ(context,
+                   command.topology,
+                   re2dj::graphics::PrimitiveTopology::kTriangleList);
+    RE2DJ_CHECK(context,
+                !re2dj::graphics::DecodeTransformedLitVertices(
+                    bytes,
+                    4,
+                    re2dj::graphics::PrimitiveTopology::kTriangleList,
+                    &command,
+                    &error));
 
     RE2DJ_CHECK(context,
                 !re2dj::graphics::DecodeTransformedLitVertices(

@@ -6,7 +6,7 @@
 
 | 덤프 | 이전 기본 타깃 | 현재 기본 타깃 |
 | --- | --- | --- |
-| 1st Trax Special Edition | `Test.exe` (서비스 도구) | `ez2dj1stse` → `ez2dj.exe` |
+| The 1st Tracks Special Edition | `Test.exe` (서비스 도구) | `ez2dj1stse` → `ez2dj.exe` |
 | 3rd Trax | `EZ2DJ.EXE` (우연히 맞음) | `ez2dj3rd` → `EZ2DJ.EXE` |
 
 ## 사용자 지적이 바꾼 것

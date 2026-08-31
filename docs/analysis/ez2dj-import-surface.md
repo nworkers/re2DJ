@@ -4,7 +4,7 @@
 
 *Topic: the set of Win32 APIs the original executable actually calls. This is the document that fixes the HLE implementation scope.*
 
-측정 대상: `ez2dj1.exe` (1st Trax Special Edition 덤프, 1999-12-24 빌드, 보호되지 않음). 측정 방법: PE import 디렉터리 직접 해석. 근거는 [HDD 레이아웃 분석](ez2dj-hdd-layout.md)에 있다.
+측정 대상: `ez2dj1.exe` (The 1st Tracks Special Edition 덤프, 1999-12-24 빌드, 보호되지 않음). 측정 방법: PE import 디렉터리 직접 해석. 근거는 [HDD 레이아웃 분석](ez2dj-hdd-layout.md)에 있다.
 
 *Measured on `ez2dj1.exe`, the unprotected 1999-12-24 build in the 1st SE dump, by parsing the PE import directory directly.*
 

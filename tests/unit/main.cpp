@@ -16,6 +16,8 @@ int main()
     RunVfsFileTableTests(context);
     RunLptdiChallengeResponseTests(context);
     RunLptdiResponseProfileTests(context);
+    RunHardlock450ResponseTests(context);
+    RunHardlockApiDescriptorTests(context);
     RunEz2DjIoBoardTests(context);
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);

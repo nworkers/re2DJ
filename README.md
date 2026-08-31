@@ -48,9 +48,9 @@ flowchart LR
     HLE --> PLAT["Platform backend<br/>windows / linux / web"]
 ```
 
-x86-64 Windows에서는 Win32 `re2dj --run`이 원본 `ez2dj.exe`를 Windows main image로 시작하고 injected runtime의 선택적 HLE 경계를 연결합니다. Linux에서는 x86-64 제품 CLI가 별도 i386 helper를 통해 원본 PE32 entry의 첫 import·exit·fault 경계까지 실행합니다. Linux는 아직 Win32 import를 처리하지 않으므로 게임 창까지 진행되지는 않습니다. WebAssembly에는 별도 x86 실행 엔진이 필요합니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86-64 제품 CLI가 별도 i386 helper를 통해 원본 PE32 entry의 첫 import·exit·fault 경계까지 실행합니다. Linux는 아직 Win32 import를 처리하지 않으므로 게임 창까지 진행되지는 않습니다. WebAssembly에는 별도 x86 실행 엔진이 필요합니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On x86-64 Windows, Win32 `re2dj --run` starts the original `ez2dj.exe` as the Windows main image and connects selected HLE boundaries through the injected runtime. On Linux, the x86-64 product CLI uses a separate i386 helper to execute the original PE32 entry up to its first import, exit, or fault boundary; it does not reach a game window yet because Win32 imports are not handled. WebAssembly needs a separate x86 execution engine. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, the x86-64 product CLI uses a separate i386 helper to execute the original PE32 entry up to its first import, exit, or fault boundary; it does not reach a game window yet because Win32 imports are not handled. WebAssembly needs a separate x86 execution engine. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -108,9 +108,9 @@ ctest --preset windows-x86-native-probe
 
 *Original HDD contents arrive as a **directory path**. Disk images are not mounted directly, so extract the image first and point at the resulting directory. It may live anywhere, including outside the repository.*
 
-EZ2DJ 1st Trax Special Edition 덤프의 실제 구성은 다음과 같습니다.
+EZ2DJ The 1st Tracks Special Edition 덤프의 실제 구성은 다음과 같습니다.
 
-*A real EZ2DJ 1st Trax Special Edition dump looks like this.*
+*A real EZ2DJ The 1st Tracks Special Edition dump looks like this.*
 
 ```text
 /path/to/ez2dj_hdd/
@@ -147,9 +147,9 @@ build/linux-x64-debug/bin/re2dj --hdd /path/to/ez2dj_hdd
 
 *It selects a launch target from the scan and prints a summary. Use `--target <id>` to choose a different candidate and `--list-targets` to list candidates only.*
 
-확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 것은 EZ2DJ 1st Trax Special Edition과 3rd Trax이며, 그 밖의 덤프도 스캔으로 감지됩니다.
+확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 것은 EZ2DJ The 1st Tracks Special Edition과 3rd Trax이며, 그 밖의 덤프도 스캔으로 감지됩니다.
 
-*A recognised dump is matched by a built-in profile. EZ2DJ 1st Trax Special Edition and 3rd Trax are built in today; anything else is still found by scanning.*
+*A recognised dump is matched by a built-in profile. EZ2DJ The 1st Tracks Special Edition and 3rd Trax are built in today; anything else is still found by scanning.*
 
 ```text
 targets:
@@ -199,19 +199,21 @@ PE32 이미지를 게스트 주소 공간에 적재하고 진입점, TLS directo
 ## 명령행 / Command line
 
 ```text
+re2dj <profile-id> [options]
 re2dj --hdd <directory> [options]
 
-  --hdd <directory>   추출한 원본 HDD 내용. 필수.
+  --hdd <directory>   추출한 원본 HDD 내용. 프로파일 shortcut 경로보다 우선.
   --target <id>       사용할 타깃 프로파일. 기본값은 첫 번째 후보.
   --list-targets      후보 타깃 프로파일을 나열하고 종료.
   --resolve <path>    게스트 경로 하나를 해석하고 종료.
-  --run               게스트 실행. Windows 제품 경로는 ez2dj1stse 지원.
+  --run               게스트 실행. positional 프로파일은 자동으로 --run을 선택.
   --linux-helper      Linux --run에서 사용하는 i386 helper 경로.
   --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 0).
   --demo-volume       Windows title/demo 프로필(0..3, 기본값 3=0 dB).
   --audio-volume-trace
                       DirectSound/WINMM 음량 증거를 별도 로그에 기록.
   --fullscreen        Windows에서 monitor 크기 borderless fullscreen 사용.
+  --windowed          프로파일의 fullscreen 기본값을 끄기.
   --io-config <path>  Windows EZ2DJ 키보드 I/O mapping INI.
   --version           버전 출력.
   --help              도움말 출력.
@@ -221,7 +223,17 @@ Windows 제품 실행 예:
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe --hdd D:\EZ2DJ\1stSE --target ez2dj1stse --run
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd --hdd D:\EZ2DJ\3rd --audio-gain-db 3
 ```
+
+`ez2dj3rd` shortcut은 저장소 root 기준 `roms/ez2dj3rd`를 HDD 기본 경로로 사용하고, 첫 번째 positional profile ID만으로 실행을 선택한다. `--hdd`가 있으면 shortcut 경로를 덮어쓰며, 프로파일이 지원하는 오디오·fullscreen·I/O 관련 명령행 값은 프로파일 기본값보다 우선한다. 3rd의 `EZ2DJ.INI`에는 `FullScreen=1`이 있지만, 이 빌드는 `DirectDrawCreateEx`를 import하므로 현재 3rd 기본값은 확인된 VFS·DirectSound hook만 활성화한다.
+
+*The `ez2dj3rd` shortcut uses `roms/ez2dj3rd` relative to the repository root and selects execution from the first positional profile ID. `--hdd` overrides that convenience path, and supported command-line audio, fullscreen, and I/O values take precedence over profile defaults. The 3rd `EZ2DJ.INI` contains `FullScreen=1`, but this build imports `DirectDrawCreateEx`, so the current 3rd baseline enables only the confirmed VFS and DirectSound hooks.*
+
+실제 `re2dj ez2dj3rd` 최신 실행(`20260831-000859-972.jsonl`)은 프로파일별 `\\.\\FEnteDev` mock 경로와 별도 zero target-state probe를 전달한 뒤 원본 프로세스의 runtime 주입·detached 실행까지 확인했다. VFS trace에는 `GetProcAddress` resolver 슬롯 2개와 `\\.\\NTICE`, `\\.\\FEnteDev` 장치 open이 기록되었다. 이후 256바이트 Hardlock descriptor와 Function `0x0e` 요청까지는 별도 계측으로 확인했지만 유효한 암호 응답과 게임 화면 도달은 아직 확인되지 않았다. zero state도 실제 동글 seed로 확정하지 않는다.
+
+*The latest `re2dj ez2dj3rd` run (`20260831-000859-972.jsonl`) passed the profile-specific `\\.\\FEnteDev` mock path and separate zero target-state probe, then confirmed runtime injection and detached execution of the original process. Its VFS trace recorded two `GetProcAddress` resolver slots and device opens for `\\.\\NTICE` and `\\.\\FEnteDev`. The later 256-byte Hardlock descriptor and Function `0x0e` request are confirmed by a separate instrumentation run, but the valid encrypted response and game-screen reach remain unconfirmed. Zero is not identified as the physical dongle seed.*
 
 기본값은 version, build date, SDL3 OpenGL renderer와 FPS를 표시하는 제목 및 1280×960 client 영역을 가진 resize 가능한 일반 창이다. 원본의 640×480 논리 표시는 기본 가로·세로 정확히 2배로 확대된다. 원본 INI를 바꾸지 않고 fullscreen을 선택하려면 `--fullscreen`을 추가한다.
 

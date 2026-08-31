@@ -48,7 +48,7 @@ flowchart LR
 - `graphics/`: `LegacyVertexBuffer`가 descriptor 4필드, FVF 유도 stride, 정점 storage와 lock 상태를 host API 없이 보존한다. stride 계산은 확인된 FVF 비트만 반영한다: `D3DFVF_XYZ`(12바이트), `D3DFVF_XYZRHW`(16바이트), `D3DFVF_NORMAL`(+12), `D3DFVF_DIFFUSE`(+4), `D3DFVF_SPECULAR`(+4), texture 좌표 세트당 +4(최대 8). 위치 비트가 없으면 stride 0으로 생성을 거절한다.
 - `platform/windows/direct3d3_com_facade.cpp`: `VertexBufferFacade` struct와 완전한 `IDirect3DVertexBufferVtbl`, `D3dCreateVertexBuffer` 구현. aggregation(`outer != nullptr`)은 형제 facade와 동일하게 `DDERR_INVALIDPARAMS`. QI는 `IID_IUnknown`과 `IID_IDirect3DVertexBuffer`만 수용한다. `Lock`은 `lplpData`만 필수로 요구하며 `lpdwSize == nullptr`인 원본 호출도 성공시켜야 한다. 진입 marker는 검증보다 먼저 남겨 이후 잘못된 인자를 포함한 실제 호출도 관찰 가능하게 한다.
 - 관찰 marker: `re2dj:hle:IDirect3D3::CreateVertexBuffer:caps=…:fvf=…:vertices=…:flags=…`, `re2dj:hle:IDirect3DVertexBuffer::Lock:size=…:flags=…`, `…:Unlock`, `…:GetVertexBufferDesc`, `…:ProcessVertices`, `…:Optimize`.
-- device 연계는 유보한다. 게스트가 실제로 `DrawPrimitiveVB`/`DrawIndexedPrimitiveVB`를 호출하는 순간까지 device 쪽 VB 소비 슬롯은 의도적 미래 경계로 남긴다. 현재 렌더링은 `DrawPrimitive` 사용자 포인터 경로로 계속된다.
+- device 연계 중 `DrawIndexedPrimitiveVB`는 작업 095에서 실제 원본 호출이 확인되어 triangle-list와 16-bit index 전개 경로로 구현됐다. 관찰되지 않은 `DrawPrimitiveVB`는 계속 명시적 미래 경계로 남긴다.
 
 ## 미확정
 
@@ -84,7 +84,7 @@ The returned IDirect3DVertexBuffer exposes Lock (+0x0c), Unlock (+0x10), Process
 - `graphics/`: a neutral LegacyVertexBuffer preserves the four descriptor fields, the FVF-derived stride, vertex storage, and lock state without host APIs. Stride reflects only confirmed FVF bits: XYZ (12 bytes), XYZRHW (16), NORMAL (+12), DIFFUSE (+4), SPECULAR (+4), plus 4 per texture-coordinate set up to 8. Creation rejects descriptors without a position bit (stride 0).
 - `platform/windows/direct3d3_com_facade.cpp`: VertexBufferFacade plus a complete IDirect3DVertexBufferVtbl and D3dCreateVertexBuffer. Aggregation fails like sibling facades with DDERR_INVALIDPARAMS; QI accepts IID_IUnknown and IID_IDirect3DVertexBuffer only. Lock requires only `lplpData` and accepts the original call's null `lpdwSize`; its entry marker precedes validation so malformed calls remain observable.
 - Observation markers follow the established `re2dj:hle:` naming with parameterized values.
-- Device integration is deferred: DrawPrimitiveVB/DrawIndexedPrimitiveVB slots remain intentional future boundaries until the guest calls them; rendering continues through the existing DrawPrimitive user-pointer path.
+- Task 095 implements device-side `DrawIndexedPrimitiveVB` after observing the original call, using triangle-list topology and 16-bit index expansion. The unobserved `DrawPrimitiveVB` remains an explicit future boundary.
 
 ## Unresolved
 

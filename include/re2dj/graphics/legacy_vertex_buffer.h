@@ -41,6 +41,8 @@ public:
     static std::unique_ptr<LegacyVertexBuffer> Create(const LegacyVertexBufferDesc& descriptor);
     const LegacyVertexBufferDesc& descriptor() const;
     std::uint32_t stride() const;
+    std::span<const std::byte> vertices() const;
+    bool locked() const;
     std::span<std::byte> Lock();
     bool Unlock();
 
@@ -51,6 +53,12 @@ private:
     std::vector<std::byte> vertices_;
     bool locked_ = false;
 };
+
+bool ExpandIndexedVertices(std::span<const std::byte> source,
+                           std::size_t stride,
+                           std::size_t vertex_count,
+                           std::span<const std::uint16_t> indices,
+                           std::vector<std::byte>* expanded);
 }  // namespace re2dj::graphics
 
 #endif  // RE2DJ_GRAPHICS_LEGACY_VERTEX_BUFFER_H_

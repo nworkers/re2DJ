@@ -2,7 +2,7 @@
 
 ## 배경
 
-작업 중 사용자가 EZ2DJ 1st Trax Special Edition과 3rd Trax의 HDD 덤프를 `roms/` 아래에 배치했다. 그 시점까지 `docs/analysis/`와 `docs/EXE_DESIGN.*`의 거의 모든 항목이 "미확정 — 덤프 미확인" 상태로 막혀 있었다.
+작업 중 사용자가 EZ2DJ The 1st Tracks Special Edition과 3rd Trax의 HDD 덤프를 `roms/` 아래에 배치했다. 그 시점까지 `docs/analysis/`와 `docs/EXE_DESIGN.*`의 거의 모든 항목이 "미확정 — 덤프 미확인" 상태로 막혀 있었다.
 
 ## 목표
 
@@ -36,7 +36,7 @@
 
 ## Background
 
-During the work the user placed EZ2DJ 1st Trax Special Edition and 3rd Trax HDD dumps under `roms/`. Until then nearly every item in `docs/analysis/` and the `EXE_DESIGN` documents was blocked as "unresolved — no dump inspected".
+During the work the user placed EZ2DJ The 1st Tracks Special Edition and 3rd Trax HDD dumps under `roms/`. Until then nearly every item in `docs/analysis/` and the `EXE_DESIGN` documents was blocked as "unresolved — no dump inspected".
 
 ## Goal
 

@@ -1,6 +1,8 @@
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 
+#include <cstring>
 #include <limits>
+#include <new>
 
 namespace re2dj::graphics
 {
@@ -46,6 +48,8 @@ std::unique_ptr<LegacyVertexBuffer> LegacyVertexBuffer::Create(const LegacyVerte
 
 const LegacyVertexBufferDesc& LegacyVertexBuffer::descriptor() const { return descriptor_; }
 std::uint32_t LegacyVertexBuffer::stride() const { return stride_; }
+std::span<const std::byte> LegacyVertexBuffer::vertices() const { return vertices_; }
+bool LegacyVertexBuffer::locked() const { return locked_; }
 
 std::span<std::byte> LegacyVertexBuffer::Lock()
 {
@@ -58,6 +62,47 @@ bool LegacyVertexBuffer::Unlock()
 {
     if (!locked_) return false;
     locked_ = false;
+    return true;
+}
+
+bool ExpandIndexedVertices(std::span<const std::byte> source,
+                           std::size_t stride,
+                           std::size_t vertex_count,
+                           std::span<const std::uint16_t> indices,
+                           std::vector<std::byte>* expanded)
+{
+    if (expanded == nullptr)
+    {
+        return false;
+    }
+    expanded->clear();
+    if (stride == 0 || vertex_count == 0 || indices.empty() ||
+        vertex_count > (std::numeric_limits<std::size_t>::max)() / stride ||
+        source.size() < vertex_count * stride ||
+        indices.size() > expanded->max_size() / stride)
+    {
+        return false;
+    }
+    try
+    {
+        expanded->resize(indices.size() * stride);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return false;
+    }
+    for (std::size_t output_index = 0; output_index < indices.size(); ++output_index)
+    {
+        const std::size_t source_index = indices[output_index];
+        if (source_index >= vertex_count)
+        {
+            expanded->clear();
+            return false;
+        }
+        std::memcpy(expanded->data() + output_index * stride,
+                    source.data() + source_index * stride,
+                    stride);
+    }
     return true;
 }
 }  // namespace re2dj::graphics

@@ -57,7 +57,12 @@ bool QueueRingRange(SDL_AudioStream* stream, std::span<const std::byte> samples,
 }
 }  // namespace
 
-Sdl3MixerAudioBackend& Sdl3MixerAudioBackend::Instance() { static Sdl3MixerAudioBackend backend; return backend; }
+Sdl3MixerAudioBackend& Sdl3MixerAudioBackend::Instance()
+{
+    // SDL audio teardown is unsafe after Windows has begun process-wide thread shutdown.
+    static Sdl3MixerAudioBackend* const backend = new Sdl3MixerAudioBackend;
+    return *backend;
+}
 Sdl3MixerAudioBackend::Sdl3MixerAudioBackend()
 {
     initialized_ = SDL_InitSubSystem(SDL_INIT_AUDIO) && MIX_Init();

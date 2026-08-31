@@ -20,6 +20,7 @@
 extern "C" __declspec(dllimport) char g_re2dj_vfs_hdd_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_overlay_root[MAX_PATH];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_mock;
+extern "C" __declspec(dllimport) char g_re2dj_device_mock_path_prefix[MAX_PATH];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_ioctl_mode;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_response_410_size;
 extern "C" __declspec(dllimport) unsigned char g_re2dj_device_response_410[8];
@@ -30,6 +31,8 @@ extern "C" __declspec(dllimport) char g_re2dj_graphics_trace_path[MAX_PATH];
 extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsCreateFileA(
     LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
     DWORD disposition, DWORD flags, HANDLE template_handle);
+extern "C" __declspec(dllimport) FARPROC WINAPI Re2djHleGetProcAddress(
+    HMODULE module, LPCSTR name);
 extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsLoadImageA(
     HINSTANCE instance, LPCSTR name, UINT type, int desired_width,
     int desired_height, UINT flags);
@@ -252,6 +255,63 @@ bool RunWindowCloseExitProbe()
            trace.find("event=close-message") != std::string::npos;
 }
 
+int RunAudioExitChild()
+{
+    if (SetEnvironmentVariableA("SDL_AUDIODRIVER", "wasapi") == FALSE)
+    {
+        return 2;
+    }
+    LPDIRECTSOUND direct_sound = nullptr;
+    if (Re2djHleDirectSoundCreate(nullptr, &direct_sound, nullptr) != DS_OK ||
+        direct_sound == nullptr)
+    {
+        return 3;
+    }
+    IDirectSound_Release(direct_sound);
+    ExitProcess(0);
+}
+
+bool RunAudioExitProbe()
+{
+    char executable[MAX_PATH] = {};
+    if (GetModuleFileNameA(nullptr, executable, MAX_PATH) == 0)
+    {
+        return false;
+    }
+    std::string command_line = std::string("\"") + executable + "\" --audio-exit-child";
+    std::vector<char> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back('\0');
+    STARTUPINFOA startup = {};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process = {};
+    if (CreateProcessA(executable,
+                       mutable_command.data(),
+                       nullptr,
+                       nullptr,
+                       FALSE,
+                       CREATE_NO_WINDOW,
+                       nullptr,
+                       nullptr,
+                       &startup,
+                       &process) == FALSE)
+    {
+        return false;
+    }
+    CloseHandle(process.hThread);
+    const DWORD wait = WaitForSingleObject(process.hProcess, 5000);
+    DWORD exit_code = 0xffffffff;
+    const bool exited = wait == WAIT_OBJECT_0 &&
+                        GetExitCodeProcess(process.hProcess, &exit_code) != FALSE &&
+                        exit_code == 0;
+    if (wait == WAIT_TIMEOUT)
+    {
+        TerminateProcess(process.hProcess, 5);
+        WaitForSingleObject(process.hProcess, 5000);
+    }
+    CloseHandle(process.hProcess);
+    return exited;
+}
+
 }  // namespace
 
 int main()
@@ -267,7 +327,15 @@ int main()
     {
         return RunWindowCloseExitChild();
     }
+    if (std::strstr(GetCommandLineA(), "--audio-exit-child") != nullptr)
+    {
+        return RunAudioExitChild();
+    }
     if (!Check(RunWindowCloseExitProbe(), "window close did not exit the child process"))
+    {
+        return 1;
+    }
+    if (!Check(RunAudioExitProbe(), "audio backend blocked native process exit"))
     {
         return 1;
     }
@@ -437,6 +505,20 @@ int main()
              Check(rejected_error == ERROR_INVALID_NAME,
                    "rejected script path reported the wrong Win32 error");
 
+    SetLastError(ERROR_SUCCESS);
+    const HANDLE hardlock = Re2djVfsCreateFileA("\\\\.\\Hardlock",
+                                                GENERIC_READ,
+                                                FILE_SHARE_READ,
+                                                nullptr,
+                                                OPEN_EXISTING,
+                                                FILE_ATTRIBUTE_NORMAL,
+                                                nullptr);
+    const DWORD hardlock_error = GetLastError();
+    passed = passed &&
+             Check(hardlock == INVALID_HANDLE_VALUE, "unconfigured device path was not rejected") &&
+             Check(hardlock_error == ERROR_INVALID_NAME,
+                   "unconfigured device path reported the wrong Win32 error");
+
     std::string trace_contents;
     {
         std::ifstream trace_file(trace, std::ios::binary);
@@ -449,7 +531,10 @@ int main()
              Check(trace_contents.find("api=LoadImageA") != std::string::npos,
                    "VFS trace is missing a LoadImageA marker") &&
              Check(trace_contents.find("logo.str") != std::string::npos,
-                   "VFS trace is missing a script marker");
+                   "VFS trace is missing a script marker") &&
+             Check(trace_contents.find("device-open:api=CreateFileA:request=\\\\.\\Hardlock") !=
+                       std::string::npos,
+                   "VFS trace is missing a device marker");
 
     DEVMODEA guest_mode = {};
     guest_mode.dmSize = sizeof(guest_mode);
@@ -797,6 +882,57 @@ int main()
                                                               3,
                                                               0) == DD_OK,
                            "untransformed Direct3D draw probe failed");
+
+            const HRESULT depth_state_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_ZENABLE, TRUE);
+            const HRESULT depth_write_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_ZWRITEENABLE, TRUE);
+            const HRESULT depth_function_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_ZFUNC, D3DCMP_LESSEQUAL);
+            const HRESULT inverse_alpha_source_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_ALPHABLENDENABLE, TRUE);
+            const HRESULT inverse_alpha_src_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_SRCBLEND,
+                                                D3DBLEND_SRCALPHA);
+            const HRESULT inverse_alpha_dst_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_DESTBLEND,
+                                                D3DBLEND_INVSRCALPHA);
+            const HRESULT inverse_alpha_draw_result =
+                IDirect3DDevice3_DrawPrimitive(device,
+                                               D3DPT_TRIANGLESTRIP,
+                                               D3DFVF_LVERTEX,
+                                               lit_vertices,
+                                               3,
+                                               0);
+            const HRESULT inverse_color_dst_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_DESTBLEND,
+                                                D3DBLEND_INVSRCCOLOR);
+            const HRESULT depth_blend_draw_result =
+                IDirect3DDevice3_DrawPrimitive(device,
+                                               D3DPT_TRIANGLESTRIP,
+                                               D3DFVF_LVERTEX,
+                                               lit_vertices,
+                                               3,
+                                               0);
+            const HRESULT depth_reset_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_ZENABLE, FALSE);
+            const HRESULT depth_write_reset_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_ZWRITEENABLE, FALSE);
+            const HRESULT blend_reset_result =
+                IDirect3DDevice3_SetRenderState(device, D3DRENDERSTATE_ALPHABLENDENABLE, FALSE);
+            passed = passed &&
+                     Check(depth_state_result == DD_OK && depth_write_result == DD_OK &&
+                               depth_function_result == DD_OK &&
+                               inverse_alpha_source_result == DD_OK &&
+                               inverse_alpha_src_result == DD_OK &&
+                               inverse_alpha_dst_result == DD_OK &&
+                               inverse_alpha_draw_result == DD_OK &&
+                               inverse_color_dst_result == DD_OK &&
+                               depth_blend_draw_result == DD_OK &&
+                               depth_reset_result == DD_OK &&
+                               depth_write_reset_result == DD_OK &&
+                               blend_reset_result == DD_OK,
+                           "depth and inverse-color blend state probe failed");
         }
 
         LPDIRECTDRAWSURFACE4 texture_source = nullptr;
@@ -966,7 +1102,7 @@ int main()
         D3DVERTEXBUFFERDESC vertex_descriptor = {};
         vertex_descriptor.dwSize = sizeof(vertex_descriptor);
         vertex_descriptor.dwCaps = D3DVBCAPS_SYSTEMMEMORY;
-        vertex_descriptor.dwFVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1;
+        vertex_descriptor.dwFVF = D3DFVF_VERTEX;
         vertex_descriptor.dwNumVertices = 4;
         passed = passed &&
                  Check(IDirect3D3_CreateVertexBuffer(direct3d,
@@ -988,7 +1124,32 @@ int main()
                            "vertex buffer nullable-size lock failed");
             if (vertices != nullptr)
             {
-                std::memset(vertices, 0, 4 * 32);
+                D3DVERTEX quad[4] = {};
+                quad[0].x = -0.5f;
+                quad[0].y = -0.5f;
+                quad[1].x = -0.5f;
+                quad[1].y = 0.5f;
+                quad[2].x = 0.5f;
+                quad[2].y = -0.5f;
+                quad[3].x = 0.5f;
+                quad[3].y = 0.5f;
+                for (D3DVERTEX& vertex : quad)
+                {
+                    vertex.z = 0.5f;
+                    vertex.nz = 1.0f;
+                }
+                std::memcpy(vertices, quad, sizeof(quad));
+                WORD locked_indices[3] = {0, 1, 2};
+                passed = passed &&
+                         Check(device != nullptr &&
+                                   IDirect3DDevice3_DrawIndexedPrimitiveVB(
+                                       device,
+                                       D3DPT_TRIANGLELIST,
+                                       vertex_buffer,
+                                       locked_indices,
+                                       3,
+                                       0) == D3DERR_VERTEXBUFFERLOCKED,
+                               "locked indexed vertex buffer draw contract failed");
             }
             passed = passed &&
                      Check(IDirect3DVertexBuffer_Unlock(vertex_buffer) == DD_OK,
@@ -1001,6 +1162,26 @@ int main()
                                stored_descriptor.dwFVF == vertex_descriptor.dwFVF &&
                                stored_descriptor.dwNumVertices == vertex_descriptor.dwNumVertices,
                            "vertex buffer descriptor query failed");
+            WORD indices[6] = {0, 1, 2, 2, 1, 3};
+            passed = passed &&
+                     Check(device != nullptr &&
+                               IDirect3DDevice3_DrawIndexedPrimitiveVB(device,
+                                                                       D3DPT_TRIANGLELIST,
+                                                                       vertex_buffer,
+                                                                       indices,
+                                                                       6,
+                                                                       0) == DD_OK,
+                           "indexed triangle-list vertex buffer draw failed");
+            WORD invalid_index[3] = {0, 1, 4};
+            passed = passed &&
+                     Check(device != nullptr &&
+                               IDirect3DDevice3_DrawIndexedPrimitiveVB(device,
+                                                                       D3DPT_TRIANGLELIST,
+                                                                       vertex_buffer,
+                                                                       invalid_index,
+                                                                       3,
+                                                                       0) == DDERR_INVALIDPARAMS,
+                           "indexed vertex buffer range validation failed");
             IDirect3DVertexBuffer_Release(vertex_buffer);
         }
     }
@@ -1111,10 +1292,88 @@ int main()
     passed = passed && Check(Re2djVfsGetFileType(handle) == FILE_TYPE_CHAR,
                              "device mock did not report character-device type");
 
+    std::strcpy(g_re2dj_device_mock_path_prefix, "\\\\.\\Hardlock");
+    HANDLE hardlock_handle = Re2djVfsCreateFileA("\\\\.\\Hardlock",
+                                                 GENERIC_READ,
+                                                 FILE_SHARE_READ,
+                                                 nullptr,
+                                                 OPEN_EXISTING,
+                                                 FILE_ATTRIBUTE_NORMAL,
+                                                 nullptr);
+    passed = passed && Check(hardlock_handle != INVALID_HANDLE_VALUE,
+                             "profile-selected Hardlock path was not recognized") &&
+             Check(Re2djVfsCloseHandle(hardlock_handle) != FALSE,
+                   "profile-selected Hardlock handle did not close");
+
+    using CreateFileAProc = HANDLE(WINAPI*)(LPCSTR,
+                                            DWORD,
+                                            DWORD,
+                                            LPSECURITY_ATTRIBUTES,
+                                            DWORD,
+                                            DWORD,
+                                            HANDLE);
+    const CreateFileAProc dynamic_create_file =
+        reinterpret_cast<CreateFileAProc>(Re2djHleGetProcAddress(
+            GetModuleHandleA("KERNEL32.dll"), "CreateFileA"));
+    passed = passed && Check(dynamic_create_file != nullptr,
+                             "dynamic CreateFileA resolver returned null");
+    if (dynamic_create_file != nullptr)
+    {
+        HANDLE dynamic_hardlock_handle = dynamic_create_file(
+            "\\\\.\\Hardlock",
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        passed = passed && Check(dynamic_hardlock_handle != INVALID_HANDLE_VALUE,
+                                 "dynamic CreateFileA did not use the selected Hardlock path");
+        if (dynamic_hardlock_handle != INVALID_HANDLE_VALUE)
+        {
+            passed = passed && Check(Re2djVfsCloseHandle(dynamic_hardlock_handle) != FALSE,
+                                     "dynamic Hardlock handle did not close");
+        }
+    }
+    g_re2dj_device_mock_path_prefix[0] = '\0';
+
     std::uint8_t ioctl_input[4] = {1, 2, 3, 4};
     std::uint8_t ioctl_output[8] = {5, 6, 7, 8, 9, 10, 11, 12};
     const std::uint8_t expected_output[8] = {5, 6, 7, 8, 9, 10, 11, 12};
     DWORD bytes_returned = 99;
+    using DeviceIoControlProc = BOOL(WINAPI*)(HANDLE,
+                                               DWORD,
+                                               LPVOID,
+                                               DWORD,
+                                               LPVOID,
+                                               DWORD,
+                                               LPDWORD,
+                                               LPOVERLAPPED);
+    const DeviceIoControlProc dynamic_device_io_control =
+        reinterpret_cast<DeviceIoControlProc>(Re2djHleGetProcAddress(
+            GetModuleHandleA("KERNEL32.dll"), "DeviceIoControl"));
+    passed = passed && Check(dynamic_device_io_control != nullptr,
+                             "dynamic DeviceIoControl resolver returned null");
+    g_re2dj_device_ioctl_mode = 1;
+    SetLastError(ERROR_INVALID_FUNCTION);
+    if (dynamic_device_io_control != nullptr)
+    {
+        bytes_returned = 99;
+        passed = passed &&
+                 Check(dynamic_device_io_control(handle,
+                                                 0x9c406410,
+                                                 ioctl_input,
+                                                 sizeof(ioctl_input),
+                                                 ioctl_output,
+                                                 sizeof(ioctl_output),
+                                                 &bytes_returned,
+                                                 nullptr) != FALSE,
+                       "dynamic DeviceIoControl mock failed") &&
+                 Check(bytes_returned == 0,
+                       "dynamic DeviceIoControl mock returned nonzero bytes") &&
+                 Check(GetLastError() == ERROR_SUCCESS,
+                       "dynamic DeviceIoControl mock did not clear last error");
+    }
     g_re2dj_device_ioctl_mode = 1;
     SetLastError(ERROR_INVALID_FUNCTION);
     passed = passed &&
@@ -1260,6 +1519,18 @@ int main()
     }
     passed = passed &&
              Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close device mock handle");
+
+    std::string ioctl_trace_contents;
+    {
+        std::ifstream trace_file(trace, std::ios::binary);
+        ioctl_trace_contents.assign(std::istreambuf_iterator<char>(trace_file),
+                                    std::istreambuf_iterator<char>());
+    }
+    passed = passed &&
+             Check(ioctl_trace_contents.find(
+                       "device-ioctl-entry:code=0x9c406410:input_size=4:output_size=8") !=
+                       std::string::npos,
+                   "VFS trace is missing the device IOCTL entry marker");
 
     g_re2dj_audio_master_gain = 2.0f;
     g_re2dj_audio_image_base = static_cast<DWORD>(

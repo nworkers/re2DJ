@@ -232,10 +232,38 @@ bool FindIatSlotByName(const exe::PeImageInfo& info,
                        std::uint32_t* slot_rva,
                        std::string* error)
 {
-    if (file == nullptr || slot_rva == nullptr || error == nullptr)
+    if (slot_rva == nullptr || error == nullptr)
     {
         return false;
     }
+    std::vector<std::uint32_t> slot_rvas;
+    if (!FindIatSlotsByName(info,
+                            file,
+                            file_size,
+                            module,
+                            function,
+                            &slot_rvas,
+                            error))
+    {
+        return false;
+    }
+    *slot_rva = slot_rvas.front();
+    return true;
+}
+
+bool FindIatSlotsByName(const exe::PeImageInfo& info,
+                        const std::uint8_t* file,
+                        std::size_t file_size,
+                        const std::string& module,
+                        const std::string& function,
+                        std::vector<std::uint32_t>* slot_rvas,
+                        std::string* error)
+{
+    if (file == nullptr || slot_rvas == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    slot_rvas->clear();
     const exe::PeDataDirectory* directory = info.Directory(exe::PeDirectoryIndex::kImport);
     if (directory == nullptr || directory->virtual_address == 0 || directory->size == 0)
     {
@@ -305,10 +333,13 @@ bool FindIatSlotByName(const exe::PeImageInfo& info,
             }
             if (imported_function == function)
             {
-                *slot_rva = first_thunk + static_cast<std::uint32_t>(offset_bytes);
-                return true;
+                slot_rvas->push_back(first_thunk + static_cast<std::uint32_t>(offset_bytes));
             }
         }
+    }
+    if (!slot_rvas->empty())
+    {
+        return true;
     }
     *error = "requested import is not present";
     return false;

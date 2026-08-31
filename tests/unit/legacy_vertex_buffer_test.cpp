@@ -1,5 +1,6 @@
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 
+#include <array>
 #include <cstring>
 
 #include "test_support.h"
@@ -45,14 +46,39 @@ void RunLegacyVertexBufferTests(re2dj::test::Context& context)
 
     std::span<std::byte> vertices = buffer->Lock();
     RE2DJ_CHECK_EQ(context, vertices.size(), std::size_t{128});
+    RE2DJ_CHECK(context, buffer->locked());
     if (!vertices.empty()) std::memset(vertices.data(), 0xab, vertices.size());
     RE2DJ_CHECK(context, buffer->Lock().empty());
     RE2DJ_CHECK(context, buffer->Unlock());
+    RE2DJ_CHECK(context, !buffer->locked());
     RE2DJ_CHECK(context, !buffer->Unlock());
     vertices = buffer->Lock();
     RE2DJ_CHECK_EQ(context, vertices.size(), std::size_t{128});
     RE2DJ_CHECK_EQ(context, static_cast<unsigned char>(vertices[127]), 0xab);
     buffer->Unlock();
+    RE2DJ_CHECK_EQ(context, buffer->vertices().size(), std::size_t{128});
+
+    const std::array<std::uint16_t, 6> indices = {0, 1, 2, 2, 1, 3};
+    std::vector<std::byte> expanded;
+    RE2DJ_CHECK(context,
+                re2dj::graphics::ExpandIndexedVertices(buffer->vertices(),
+                                                       buffer->stride(),
+                                                       buffer->descriptor().vertex_count,
+                                                       indices,
+                                                       &expanded));
+    RE2DJ_CHECK_EQ(context, expanded.size(), std::size_t{192});
+    RE2DJ_CHECK(context,
+                std::memcmp(expanded.data() + 3 * buffer->stride(),
+                            buffer->vertices().data() + 2 * buffer->stride(),
+                            buffer->stride()) == 0);
+    const std::array<std::uint16_t, 1> invalid_indices = {4};
+    RE2DJ_CHECK(context,
+                !re2dj::graphics::ExpandIndexedVertices(buffer->vertices(),
+                                                        buffer->stride(),
+                                                        buffer->descriptor().vertex_count,
+                                                        invalid_indices,
+                                                        &expanded));
+    RE2DJ_CHECK(context, expanded.empty());
 
     re2dj::graphics::LegacyVertexBufferDesc invalid = descriptor;
     invalid.fvf = 0x140;

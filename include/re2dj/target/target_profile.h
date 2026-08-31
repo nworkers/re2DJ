@@ -1,6 +1,7 @@
 #ifndef RE2DJ_TARGET_TARGET_PROFILE_H_
 #define RE2DJ_TARGET_TARGET_PROFILE_H_
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,40 @@ namespace re2dj::target
 enum class ExecutableFormatHint
 {
     kWin32Pe32,
+};
+
+// LPTDI and legacy I/O policy for one executable profile. An empty or false
+// setting means that the profile does not claim that capability.
+struct TargetLptdiPolicy
+{
+    // Enables the confirmed raw IN/OUT adapter for this profile.
+    bool legacy_io_ports = false;
+    // Case-insensitive prefix for the synthetic Win32 device path.
+    std::string device_mock_path_prefix;
+    // Allows the diagnostic synthetic LPTDI device boundary for this profile.
+    bool device_mock_enabled = false;
+    // Profile-specific response state for the synthetic device.
+    std::string device_mock_target_state_hex;
+};
+
+// Baseline settings for the supported product execution path. An empty or
+// false setting means that the profile does not claim that capability.
+struct TargetRunDefaults
+{
+    // Repository-relative convenience path used by the profile shortcut.
+    std::string default_hdd_directory_relative_path;
+    // Optional values are omitted when the original build has no corresponding
+    // configuration import that the runtime can override safely.
+    std::optional<float> audio_gain_db;
+    std::optional<unsigned> demo_volume;
+    bool fullscreen = false;
+    bool hle_command_line = false;
+    bool hle_windows_directory = false;
+    bool hle_vfs = false;
+    bool hle_d3d3 = false;
+    bool hle_directsound = false;
+    TargetLptdiPolicy lptdi;
+    bool run_detached = false;
 };
 
 // How a built-in profile recognises the dump it belongs to.
@@ -55,6 +90,7 @@ struct TargetProfile
     // Names the set of HLE services this version needs. Empty until real HLE
     // profiles exist.
     std::string hle_profile_id;
+    TargetRunDefaults run_defaults;
     ExecutableFormatHint format_hint = ExecutableFormatHint::kWin32Pe32;
 
     // True when the profile came from a scan rather than the built-in table.
@@ -77,6 +113,8 @@ struct BuiltInTargetProfile
 };
 
 const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles();
+
+const BuiltInTargetProfile* FindBuiltInTargetProfileById(std::string_view id);
 
 // Built-in profiles whose fingerprint matches this dump, with their paths
 // filled in from the match.

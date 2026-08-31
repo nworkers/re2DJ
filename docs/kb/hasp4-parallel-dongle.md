@@ -20,6 +20,14 @@ Hardlock은 같은 시기 Aladdin 제품이지만 별도 API/driver 계열이다
 
 출처: [Microsoft DeviceIoControl](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-deviceiocontrol), [Microsoft IOCTL buffer descriptions](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/buffer-descriptions-for-i-o-control-codes)
 
+## Hardlock HL_API 고정 헤더
+
+공개된 동시대 `fastapi.h`의 32비트 packed `HL_API` 정의를 기준으로 하면 API version은 offset `0x00`, module ID는 `0x06`, module address 첫 word는 `0x08`, guest `Data` pointer는 `0x12`, `Bcnt`는 `0x16`, `Function`은 `0x18`에 있습니다. 이어서 `Status`, `Remote`, `Port`, `Speed`, `NetUsers`가 각각 16비트로 놓이고, `ID_Ref[8]`은 `0x24`, `ID_Verify[8]`은 `0x2c`에서 시작합니다. 이 고정 prefix는 52바이트입니다.
+
+이 구조 정보는 raw guest bytes를 bounded 진단으로 해석하는 데만 사용합니다. guest pointer는 역참조하지 않고, reserved 영역이나 전체 256/264바이트 packet은 기록하지 않습니다. 공개 reverse-engineering 자료는 Function `0x0e`가 세 개의 16비트 seed와 8바이트 블록을 사용한다고 설명하지만 공식 사양이 아니므로 프로젝트 고유 분석에서는 추정으로만 취급합니다. seed 복구 구현을 공개 GPL 코드에서 복사하거나 연결하지 않습니다.
+
+출처: [공개 Hardlock `fastapi.h`](https://github.com/richschonthal/Certificate-Server/blob/master/Hardlock/api/src/fastapi.h), [동시대 Function 0x0e 분석](https://www.accessroot.com/crackz/Dongles.htm)
+
 ## 적용 경계
 
 HASP4의 공개 API shape는 특정 실행 파일의 동글 종류나 password/return code를 증명하지 않는다. 4바이트 input과 8바이트 output의 일치는 `HaspCode` 후보를 강화할 뿐이다. 실제 응답은 원본 바이너리 실행 관찰이나 합법적으로 보유한 장치의 캡처로 확인해야 한다.
@@ -47,6 +55,14 @@ Reference: [haspnt64 architecture notes](https://github.com/leecher1337/haspnt64
 DeviceIoControl writes the actual number of bytes stored in the output buffer to `lpBytesReturned`. METHOD_BUFFERED uses one kernel system buffer for input and output, while user mode still sees separate pointers and sizes. A guest can therefore distinguish TRUE with zero returned bytes from TRUE with the declared output length.
 
 Sources: [Microsoft DeviceIoControl](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-deviceiocontrol), [Microsoft IOCTL buffer descriptions](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/buffer-descriptions-for-i-o-control-codes)
+
+## Hardlock HL_API fixed header
+
+In the public contemporary packed 32-bit `HL_API` definition, the API version is at offset `0x00`, module ID at `0x06`, the first module-address word at `0x08`, the guest `Data` pointer at `0x12`, `Bcnt` at `0x16`, and `Function` at `0x18`. Sixteen-bit `Status`, `Remote`, `Port`, `Speed`, and `NetUsers` follow; `ID_Ref[8]` begins at `0x24` and `ID_Verify[8]` at `0x2c`. This fixed prefix is 52 bytes.
+
+The project uses this layout only to decode bounded diagnostics from raw guest bytes. It does not dereference the guest pointer or record reserved space or complete 256/264-byte packets. Public reverse-engineering material describes Function `0x0e` as using three 16-bit seeds and an eight-byte block, but this is not an official specification and remains an inference in project-specific analysis. No public GPL seed-recovery implementation is copied or linked.
+
+Sources: [public Hardlock `fastapi.h`](https://github.com/richschonthal/Certificate-Server/blob/master/Hardlock/api/src/fastapi.h), [contemporary Function 0x0e analysis](https://www.accessroot.com/crackz/Dongles.htm)
 
 ## Application boundary
 

@@ -140,6 +140,8 @@ endif()
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
     src/audio/legacy_audio_buffer.cpp
+    src/device/hardlock_450_response.cpp
+    src/device/hardlock_api_descriptor.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/ez2dj_io_board.cpp
@@ -222,6 +224,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     endif()
 
     add_library(re2dj_windows_injected_runtime SHARED
+        src/device/hardlock_api_descriptor.cpp
         src/device/lptdi_challenge_response.cpp
         src/input/ez2dj_io_board.cpp
         src/input/legacy_io_port_bus.cpp
@@ -265,6 +268,14 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         set_tests_properties(re2dj_windows_vfs_runtime_probe PROPERTIES
             ENVIRONMENT "SDL_AUDIODRIVER=dummy"
         )
+        add_executable(re2dj_windows_hardlock_descriptor_probe
+            src/tools/windows_hardlock_descriptor_probe/main.cpp
+        )
+        target_link_libraries(re2dj_windows_hardlock_descriptor_probe
+            PRIVATE re2dj_windows_injected_runtime re2dj_warnings
+        )
+        add_test(NAME re2dj_windows_hardlock_descriptor_probe
+                 COMMAND re2dj_windows_hardlock_descriptor_probe)
     endif()
     add_library(re2dj_windows_original_process_backend STATIC
         src/tools/windows_original_process_probe/iat_verifier.cpp
@@ -334,6 +345,8 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/execution_backend_test.cpp
         tests/unit/ez2dj_io_board_test.cpp
         tests/unit/guest_path_test.cpp
+        tests/unit/hardlock_450_response_test.cpp
+        tests/unit/hardlock_api_descriptor_test.cpp
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp
         tests/unit/lptdi_challenge_response_test.cpp

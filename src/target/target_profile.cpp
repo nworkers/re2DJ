@@ -80,7 +80,23 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
         {
             BuiltInTargetProfile entry;
             entry.profile.id = "ez2dj1stse";
-            entry.profile.display_name = "EZ2DJ 1st Trax Special Edition";
+            entry.profile.display_name = "EZ2DJ The 1st Tracks Special Edition";
+            entry.profile.hle_profile_id = "ez2dj1stse";
+            entry.profile.run_defaults.default_hdd_directory_relative_path =
+                "roms/ez2dj1stse";
+            entry.profile.run_defaults.audio_gain_db = 0.0f;
+            entry.profile.run_defaults.demo_volume = 3;
+            entry.profile.run_defaults.hle_command_line = true;
+            entry.profile.run_defaults.hle_windows_directory = true;
+            entry.profile.run_defaults.hle_vfs = true;
+            entry.profile.run_defaults.hle_d3d3 = true;
+            entry.profile.run_defaults.hle_directsound = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\LPTDI";
+            entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            entry.profile.run_defaults.run_detached = true;
+            entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
+                "0900000000000000";
             entry.profile.working_directory_relative_path = {};
             // System.ini in this dump reads "shell=d:\ez2dj\ez2dj.exe", which is
             // what Windows 98 launches in place of Explorer. That single line
@@ -101,7 +117,9 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             BuiltInTargetProfile entry;
             entry.profile.id = "ez2dj1stse_unpacked";
             entry.profile.display_name =
-                "EZ2DJ 1st Trax Special Edition (unprotected build)";
+                "EZ2DJ The 1st Tracks Special Edition (unprotected build)";
+            entry.profile.run_defaults.default_hdd_directory_relative_path =
+                "roms/ez2dj1stse";
             entry.profile.guest_drive_letter = 'D';
             entry.profile.guest_directory = "\\ez2dj";
             entry.profile.bring_up_target = true;
@@ -120,6 +138,20 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             BuiltInTargetProfile entry;
             entry.profile.id = "ez2dj3rd";
             entry.profile.display_name = "EZ2DJ 3rd Trax";
+            entry.profile.hle_profile_id = "ez2dj3rd";
+            entry.profile.run_defaults.default_hdd_directory_relative_path =
+                "roms/ez2dj3rd";
+            entry.profile.run_defaults.audio_gain_db = 0.0f;
+            entry.profile.run_defaults.demo_volume.reset();
+            entry.profile.run_defaults.hle_vfs = true;
+            entry.profile.run_defaults.hle_directsound = true;
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\FEnteDev";
+            entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            // This zero-state probe is separate from 1st SE and is not a
+            // confirmed physical Hardlock seed.
+            entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
+                "0000000000000000";
+            entry.profile.run_defaults.run_detached = true;
             // This dump carries no System.ini, so the drive letter and guest
             // directory stay empty rather than being copied from 1st SE.
             entry.profile.note =
@@ -135,6 +167,18 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
         return table;
     }();
     return profiles;
+}
+
+const BuiltInTargetProfile* FindBuiltInTargetProfileById(std::string_view id)
+{
+    for (const BuiltInTargetProfile& profile : GetBuiltInTargetProfiles())
+    {
+        if (storage::EqualsIgnoreAsciiCase(profile.profile.id, id))
+        {
+            return &profile;
+        }
+    }
+    return nullptr;
 }
 
 std::string MakeProfileId(std::string_view executable_relative_path)

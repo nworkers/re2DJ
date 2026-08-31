@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/device/hardlock_450_response.h"
+#include "re2dj/device/hardlock_api_descriptor.h"
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/device/lptdi_response_profile.h"
 #include "re2dj/exe/pe_image.h"
@@ -119,7 +121,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps>|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--target <id>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--api-trace] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -1829,6 +1831,7 @@ bool InstallApiTraceBreakpoints(HANDLE process,
                 RecordDiagnostic("{\"event\":\"api_watch\",\"api\":\"%s\",\"module\":\"%s\",\"status\":\"missing\"}",
                                  api,
                                  module.name);
+                error->clear();
                 continue;
             }
             if (resolution.forwarded)
@@ -2050,6 +2053,7 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                   bool scan_fault_references,
                                   bool trace,
                                   std::uint32_t lptdi_post_ioctl_trace_steps,
+                                  std::uint32_t lptdi_post_ioctl_trace_code,
                                   std::uintptr_t image_base,
                                   const re2dj::exe::PeImageInfo* image_info,
                                   GuestReturnWatchMap* guest_return_watches,
@@ -2821,7 +2825,9 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                         SIZE_T written = 0;
                         context.Eip = pending.return_address;
                         if (lptdi_post_ioctl_trace_steps != 0 &&
-                            IsSyntheticDeviceHandle(pending.args[0]))
+                            IsSyntheticDeviceHandle(pending.args[0]) &&
+                            (lptdi_post_ioctl_trace_code == 0 ||
+                             pending.args[1] == lptdi_post_ioctl_trace_code))
                         {
                             MEMORY_BASIC_INFORMATION region = {};
                             if (VirtualQueryEx(process,
@@ -3401,6 +3407,65 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
     return false;
 }
 
+bool FindOptionalIatSlotByName(const re2dj::exe::PeImageInfo& info,
+                               const std::uint8_t* file,
+                               std::size_t file_size,
+                               const std::string& module,
+                               const std::string& function,
+                               std::uint32_t* slot_rva,
+                               bool* present,
+                               std::string* error)
+{
+    if (slot_rva == nullptr || present == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    error->clear();
+    if (re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+            info, file, file_size, module, function, slot_rva, error))
+    {
+        *present = true;
+        return true;
+    }
+    if (*error == "requested import is not present")
+    {
+        error->clear();
+        *present = false;
+        return true;
+    }
+    return false;
+}
+
+bool FindOptionalIatSlotsByName(const re2dj::exe::PeImageInfo& info,
+                                const std::uint8_t* file,
+                                std::size_t file_size,
+                                const std::string& module,
+                                const std::string& function,
+                                std::vector<std::uint32_t>* slot_rvas,
+                                bool* present,
+                                std::string* error)
+{
+    if (slot_rvas == nullptr || present == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    error->clear();
+    if (re2dj::tools::windows_original_process_probe::FindIatSlotsByName(
+            info, file, file_size, module, function, slot_rvas, error))
+    {
+        *present = true;
+        return true;
+    }
+    if (*error == "requested import is not present")
+    {
+        error->clear();
+        slot_rvas->clear();
+        *present = false;
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char** argv)
@@ -3433,13 +3498,19 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool device_mock_lptdi = false;
     bool device_mock_lptdi_ioctl_success = false;
     bool device_mock_lptdi_ioctl_full_success = false;
+    bool device_mock_wts_console_session = false;
+    std::string device_mock_hardlock_450_response_hex;
+    std::string device_mock_hardlock_44c_tail_hex;
+    std::string device_mock_lptdi_path_prefix;
     std::filesystem::path device_mock_lptdi_response_profile_path;
     std::string device_mock_lptdi_target_state_hex;
     bool probe_exit_process = false;
     bool break_exit_process = false;
     bool scan_fault_references = false;
     bool api_trace = false;
+    bool system_api_trace = false;
     std::uint32_t lptdi_post_ioctl_trace_steps = 0;
+    std::uint32_t lptdi_post_ioctl_trace_code = 0;
     std::filesystem::path runtime_path;
     for (int index = 1; index < argc; ++index)
     {
@@ -3621,6 +3692,14 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             inject_runtime = true;
             software_breakpoint = true;
         }
+        else if (option == "--device-mock-lptdi-path-prefix" && index + 1 < argc)
+        {
+            device_mock_lptdi_path_prefix = argv[++index];
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
         else if (option == "--device-mock-lptdi-ioctl-success")
         {
             device_mock_lptdi_ioctl_success = true;
@@ -3632,6 +3711,32 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         else if (option == "--device-mock-lptdi-ioctl-full-success")
         {
             device_mock_lptdi_ioctl_full_success = true;
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--device-mock-wts-console-session")
+        {
+            device_mock_wts_console_session = true;
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--device-mock-hardlock-450-response" &&
+                 index + 1 < argc)
+        {
+            device_mock_hardlock_450_response_hex = argv[++index];
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--device-mock-hardlock-44c-tail" &&
+                 index + 1 < argc)
+        {
+            device_mock_hardlock_44c_tail_hex = argv[++index];
             device_mock_lptdi = true;
             hle_vfs = true;
             inject_runtime = true;
@@ -3675,6 +3780,26 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             break_exit_process = true;
             software_breakpoint = true;
         }
+        else if (option == "--lptdi-post-ioctl-code" && index + 1 < argc)
+        {
+            try
+            {
+                std::size_t parsed = 0;
+                const std::string value = argv[++index];
+                const unsigned long parsed_value = std::stoul(value, &parsed, 0);
+                if (parsed != value.size() ||
+                    parsed_value > (std::numeric_limits<std::uint32_t>::max)())
+                {
+                    throw std::out_of_range("post IOCTL trace code");
+                }
+                lptdi_post_ioctl_trace_code = static_cast<std::uint32_t>(parsed_value);
+            }
+            catch (const std::exception&)
+            {
+                PrintUsage();
+                return 1;
+            }
+        }
         else if (option == "--probe-exit-process")
         {
             probe_exit_process = true;
@@ -3695,6 +3820,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         else if (option == "--api-trace")
         {
             api_trace = true;
+            system_api_trace = true;
             break_exit_process = true;
             software_breakpoint = true;
         }
@@ -3725,6 +3851,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         PrintUsage();
         return 1;
     }
+    if (lptdi_post_ioctl_trace_code != 0 && lptdi_post_ioctl_trace_steps == 0)
+    {
+        PrintUsage();
+        return 1;
+    }
     if ((audio_gain_set || audio_volume_trace) && !hle_directsound)
     {
         PrintUsage();
@@ -3748,7 +3879,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 1;
     }
     if (run_detached &&
-        (!hle_io_ports || trace || instruction_trace || d3d_init_trace || ksnd_load_trace ||
+        (trace || instruction_trace || d3d_init_trace || ksnd_load_trace ||
          api_trace || probe_exit_process || scan_fault_references ||
          lptdi_post_ioctl_trace_steps != 0))
     {
@@ -3764,6 +3895,26 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
 
     std::string error;
     re2dj::device::LptdiTargetState device_target_state = {};
+    re2dj::device::Hardlock450Response hardlock_450_response = {};
+    std::uint16_t hardlock_44c_tail_word = 0;
+    if (!device_mock_hardlock_44c_tail_hex.empty() &&
+        !re2dj::device::ParseHardlockApiTailWordHex(
+            device_mock_hardlock_44c_tail_hex,
+            &hardlock_44c_tail_word,
+            &error))
+    {
+        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        return 1;
+    }
+    if (!device_mock_hardlock_450_response_hex.empty() &&
+        !re2dj::device::ParseHardlock450Response(
+            device_mock_hardlock_450_response_hex,
+            &hardlock_450_response,
+            &error))
+    {
+        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        return 1;
+    }
     if (!device_mock_lptdi_target_state_hex.empty() &&
         !re2dj::device::ParseLptdiTargetState(
             device_mock_lptdi_target_state_hex, &device_target_state, &error))
@@ -3834,19 +3985,33 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::fprintf(stderr, "{\"error\":\"KSND load trace requires ez2dj1stse target\"}\\n");
         return 2;
     }
-    if (hle_d3d3 && target->id != "ez2dj1stse")
+    if (hle_d3d3 && !target->run_defaults.hle_d3d3)
     {
-        std::fprintf(stderr, "{\"error\":\"Direct3D3 HLE requires ez2dj1stse target\"}\\n");
+        std::fprintf(stderr, "{\"error\":\"Direct3D3 HLE is not configured for this target\"}\\n");
         return 2;
     }
-    if (hle_directsound && target->id != "ez2dj1stse")
+    if (hle_directsound && !target->run_defaults.hle_directsound)
     {
-        std::fprintf(stderr, "{\"error\":\"DirectSound HLE requires ez2dj1stse target\"}\\n");
+        std::fprintf(stderr, "{\"error\":\"DirectSound HLE is not configured for this target\"}\\n");
         return 2;
     }
-    if (hle_io_ports && target->id != "ez2dj1stse")
+    if (hle_io_ports && !target->run_defaults.lptdi.legacy_io_ports)
     {
-        std::fprintf(stderr, "{\"error\":\"legacy I/O port HLE requires ez2dj1stse target\"}\\n");
+        std::fprintf(stderr, "{\"error\":\"legacy I/O port HLE is not configured for this target\"}\\n");
+        return 2;
+    }
+    if (device_mock_lptdi && !target->run_defaults.lptdi.device_mock_enabled)
+    {
+        std::fprintf(stderr, "{\"error\":\"LPTDI device mock is not configured for this target\"}\\n");
+        return 2;
+    }
+    const std::string profile_device_mock_path_prefix =
+        device_mock_lptdi_path_prefix.empty()
+            ? target->run_defaults.lptdi.device_mock_path_prefix
+            : device_mock_lptdi_path_prefix;
+    if (device_mock_lptdi && profile_device_mock_path_prefix.empty())
+    {
+        std::fprintf(stderr, "{\"error\":\"LPTDI device mock has no path prefix\"}\\n");
         return 2;
     }
     std::filesystem::path vfs_source_root = root.root();
@@ -3870,7 +4035,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\"}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      trace ? "true" : "false",
@@ -3888,9 +4053,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      device_mock_lptdi ? "true" : "false",
                      device_mock_lptdi_ioctl_success ? "true" : "false",
                      device_mock_lptdi_ioctl_full_success ? "true" : "false",
+                     device_mock_wts_console_session ? "true" : "false",
                      static_cast<unsigned>(device_response_profile.entries.size()),
                      device_mock_lptdi_target_state_hex.empty() ? "false" : "true",
-                     lptdi_post_ioctl_trace_steps);
+                     lptdi_post_ioctl_trace_steps,
+                     lptdi_post_ioctl_trace_code);
     std::string hle_value = executable.filename().string();
     if (hle_windows_directory)
     {
@@ -4257,7 +4424,12 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::uint32_t overlay_root_rva = 0;
         std::uint32_t vfs_trace_path_rva = 0;
         std::uint32_t device_mock_rva = 0;
+        std::uint32_t device_mock_path_prefix_rva = 0;
+        std::uint32_t get_proc_address_thunk_rva = 0;
+        std::vector<std::uint32_t> get_proc_address_slot_rvas;
+        bool get_proc_address_import_present = false;
         std::uint32_t device_ioctl_mode_rva = 0;
+        std::uint32_t wts_console_session_mock_rva = 0;
         const std::filesystem::path overlay = std::filesystem::current_path() / "overlays" / target->id;
         std::filesystem::path vfs_trace_path = diagnostic_log.path();
         vfs_trace_path.replace_extension(".vfs.log");
@@ -4293,12 +4465,74 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         {
             vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                runtime_path,
+                               "_Re2djHleGetProcAddress@8",
+                               &get_proc_address_thunk_rva,
+                               &error) &&
+                           FindOptionalIatSlotsByName(
+                               info,
+                               file.data(),
+                               file.size(),
+                               "KERNEL32.dll",
+                               "GetProcAddress",
+                               &get_proc_address_slot_rvas,
+                               &get_proc_address_import_present,
+                               &error);
+            for (const std::uint32_t slot_rva : get_proc_address_slot_rvas)
+            {
+                if (!vfs_prepared ||
+                    !WriteRemoteU32(child.hProcess,
+                                    main_image_base + slot_rva,
+                                    runtime_base + get_proc_address_thunk_rva,
+                                    &error))
+                {
+                    vfs_prepared = false;
+                    break;
+                }
+            }
+            if (vfs_prepared)
+            {
+                RecordDiagnostic("{\"event\":\"device_mock_dynamic_resolver_slots\",\"count\":%u}",
+                                 static_cast<unsigned>(get_proc_address_slot_rvas.size()));
+            }
+            if (!vfs_prepared)
+            {
+                error = "device mock dynamic resolver setup: " + error;
+            }
+        }
+        if (vfs_prepared && device_mock_wts_console_session)
+        {
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_wts_console_session_mock",
+                               &wts_console_session_mock_rva,
+                               &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + wts_console_session_mock_rva,
+                                          1,
+                                          &error);
+        }
+        if (vfs_prepared && device_mock_lptdi)
+        {
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
                                "g_re2dj_device_mock",
                                &device_mock_rva,
                                &error) &&
                            WriteRemoteU32(child.hProcess,
                                           runtime_base + device_mock_rva,
                                           1,
+                                          &error);
+        }
+        if (vfs_prepared && device_mock_lptdi)
+        {
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_device_mock_path_prefix",
+                               &device_mock_path_prefix_rva,
+                               &error) &&
+                           WriteRemoteAnsi(child.hProcess,
+                                           runtime_base + device_mock_path_prefix_rva,
+                                           profile_device_mock_path_prefix,
                                            &error);
         }
         if (vfs_prepared &&
@@ -4337,6 +4571,64 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             {
                 RecordDiagnostic("{\"event\":\"lptdi_target_state\",\"bytes\":\"%s\"}",
                                  device_mock_lptdi_target_state_hex.c_str());
+            }
+        }
+        if (vfs_prepared && !device_mock_hardlock_450_response_hex.empty())
+        {
+            std::uint32_t response_rva = 0;
+            std::uint32_t enabled_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_hardlock_response_450",
+                               &response_rva,
+                               &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_hardlock_response_450_enabled",
+                               &enabled_rva,
+                               &error) &&
+                           WriteRemoteBytes(child.hProcess,
+                                            runtime_base + response_rva,
+                                            hardlock_450_response.data(),
+                                            hardlock_450_response.size(),
+                                            &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + enabled_rva,
+                                          1,
+                                          &error);
+            if (vfs_prepared)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"hardlock_450_response_replay\",\"size\":6}");
+            }
+        }
+        if (vfs_prepared && !device_mock_hardlock_44c_tail_hex.empty())
+        {
+            std::uint32_t tail_rva = 0;
+            std::uint32_t enabled_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_hardlock_44c_tail_word",
+                               &tail_rva,
+                               &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_hardlock_44c_tail_enabled",
+                               &enabled_rva,
+                               &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + tail_rva,
+                                          hardlock_44c_tail_word,
+                                          &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + enabled_rva,
+                                          1,
+                                          &error);
+            if (vfs_prepared)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"hardlock_44c_tail_patch\",\"value\":%u}",
+                    static_cast<unsigned>(hardlock_44c_tail_word));
             }
         }
         for (const re2dj::device::LptdiResponseEntry& profile_entry :
@@ -4380,42 +4672,52 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         {
             std::uint32_t export_rva = 0;
             std::uint32_t slot_rva = 0;
+            bool import_present = false;
             vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                runtime_path, vfs_exports[index], &export_rva, &error) &&
-                           re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                           FindOptionalIatSlotByName(
                                info,
                                file.data(),
                                file.size(),
                                "KERNEL32.dll",
                                vfs_imports[index],
                                &slot_rva,
+                               &import_present,
                                &error) &&
-                           WriteRemoteU32(child.hProcess,
-                                          main_image_base + slot_rva,
-                                          runtime_base + export_rva,
-                                          &error);
+                           (!import_present ||
+                            WriteRemoteU32(child.hProcess,
+                                           main_image_base + slot_rva,
+                                           runtime_base + export_rva,
+                                           &error));
+        }
+        if (!vfs_prepared)
+        {
+            error = "VFS wrapper setup: " + error;
         }
         if (vfs_prepared)
         {
             std::uint32_t export_rva = 0;
             std::uint32_t slot_rva = 0;
+            bool import_present = false;
             image_loader_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                         runtime_path,
                                         "_Re2djVfsLoadImageA@24",
                                         &export_rva,
                                         &error) &&
-                                    re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                                    FindOptionalIatSlotByName(
                                         info,
                                         file.data(),
                                         file.size(),
                                         "USER32.dll",
                                         "LoadImageA",
                                         &slot_rva,
+                                        &import_present,
                                         &error) &&
-                                    WriteRemoteU32(child.hProcess,
-                                                   main_image_base + slot_rva,
-                                                   runtime_base + export_rva,
-                                                   &error);
+                                    (!import_present ||
+                                     WriteRemoteU32(child.hProcess,
+                                                    main_image_base + slot_rva,
+                                                    runtime_base + export_rva,
+                                                    &error));
             RecordDiagnostic("{\"event\":\"vfs_image_loader\",\"import\":\"USER32.dll!LoadImageA\",\"prepared\":%s}",
                              image_loader_prepared ? "true" : "false");
         }
@@ -4424,31 +4726,34 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         {
             std::uint32_t export_rva = 0;
             std::uint32_t slot_rva = 0;
+            bool import_present = false;
             vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                runtime_path,
                                "_Re2djDeviceIoControlMock@32",
                                &export_rva,
                                &error) &&
-                           re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                           FindOptionalIatSlotByName(
                                info,
                                file.data(),
                                file.size(),
                                "KERNEL32.dll",
                                "DeviceIoControl",
                                &slot_rva,
+                               &import_present,
                                &error) &&
-                           WriteRemoteU32(child.hProcess,
-                                          main_image_base + slot_rva,
-                                          runtime_base + export_rva,
-                                          &error);
+                           (!import_present ||
+                            WriteRemoteU32(child.hProcess,
+                                           main_image_base + slot_rva,
+                                           runtime_base + export_rva,
+                                           &error));
             if (vfs_prepared)
             {
                 device_ioctl_wrapper_address = runtime_base + export_rva;
             }
         }
     }
-    bool io_runtime_prepared = !run_detached;
-    if (run_detached && runtime_loaded)
+    bool io_runtime_prepared = !run_detached || !hle_io_ports;
+    if (run_detached && hle_io_ports && runtime_loaded)
     {
         std::uint32_t enable_rva = 0;
         std::uint32_t image_base_rva = 0;
@@ -4514,24 +4819,38 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     {
         std::uint32_t exit_break_slot_rva = 0;
         SIZE_T copied = 0;
-        exit_break_prepared = re2dj::tools::windows_original_process_probe::FindIatSlotByName(
-                                  info,
-                                  file.data(),
-                                  file.size(),
-                                  "KERNEL32.dll",
-                                  "ExitProcess",
-                                  &exit_break_slot_rva,
-                                  &error) &&
-                              ReadProcessMemory(child.hProcess,
-                                                reinterpret_cast<const void*>(main_image_base + exit_break_slot_rva),
-                                                &exit_break_target,
-                                                sizeof(exit_break_target),
-                                                &copied) != FALSE &&
-                              copied == sizeof(exit_break_target) &&
-                              SetSoftwareEntryBreakpoint(child.hProcess,
-                                                         exit_break_target,
-                                                         &original_exit_byte,
-                                                         &error);
+        const bool exit_import_present =
+            re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                info,
+                file.data(),
+                file.size(),
+                "KERNEL32.dll",
+                "ExitProcess",
+                &exit_break_slot_rva,
+                &error);
+        if (!exit_import_present && lptdi_post_ioctl_trace_steps != 0 &&
+            error == "requested import is not present")
+        {
+            error.clear();
+            exit_break_prepared = true;
+            RecordDiagnostic("{\"event\":\"exit_breakpoint\",\"status\":\"bounded_trace_without_static_import\"}");
+        }
+        else
+        {
+            exit_break_prepared =
+                exit_import_present &&
+                ReadProcessMemory(
+                    child.hProcess,
+                    reinterpret_cast<const void*>(main_image_base + exit_break_slot_rva),
+                    &exit_break_target,
+                    sizeof(exit_break_target),
+                    &copied) != FALSE &&
+                copied == sizeof(exit_break_target) &&
+                SetSoftwareEntryBreakpoint(child.hProcess,
+                                           exit_break_target,
+                                           &original_exit_byte,
+                                           &error);
+        }
         if (!exit_break_prepared && error.empty())
         {
             error = "cannot set ExitProcess software breakpoint";
@@ -4570,13 +4889,14 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     if (api_trace)
     {
         const bool system_watches_installed =
-            reached && entry_restored && exit_break_prepared &&
-            InstallApiTraceBreakpoints(child.hProcess,
-                                       kernel32_base,
-                                       kernelbase_base,
-                                       user32_base,
-                                       &api_watches,
-                                       &error);
+            !system_api_trace ||
+            (reached && entry_restored && exit_break_prepared &&
+             InstallApiTraceBreakpoints(child.hProcess,
+                                        kernel32_base,
+                                        kernelbase_base,
+                                        user32_base,
+                                        &api_watches,
+                                        &error));
         const bool runtime_watch_installed =
             lptdi_post_ioctl_trace_steps == 0 ||
             (system_watches_installed &&
@@ -4705,6 +5025,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                                                scan_fault_references,
                                                                                trace,
                                                                                lptdi_post_ioctl_trace_steps,
+                                                                               lptdi_post_ioctl_trace_code,
                                                                                main_image_base,
                                                                                &info,
                                                                                &guest_return_watches,

@@ -16,7 +16,7 @@
 
 ## 1. 현재 상태
 
-EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정적 분석으로 확인할 수 있는 항목은 대부분 채워졌고, 실행해야 알 수 있는 항목이 남아 있다.
+EZ2DJ The 1st Tracks Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정적 분석으로 확인할 수 있는 항목은 대부분 채워졌고, 실행해야 알 수 있는 항목이 남아 있다.
 
 상세 근거는 [HDD 레이아웃 분석](analysis/ez2dj-hdd-layout.md), [실행 파일 구조 분석](analysis/ez2dj-exe-structures.md), [import 표면 분석](analysis/ez2dj-import-surface.md)에 있다. 실행 파일별 PE 구조·보호 계층 해부·데이터 인벤토리는 구조 문서가 담당하며, 새 실행 파일이 확인될 때마다 그 문서에 섹션이 추가된다. 여기에는 결론만 둔다.
 
@@ -47,7 +47,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 
 | 항목 | 값 |
 | --- | --- |
-| 그래픽 | **DirectDraw/Direct3D Immediate Mode 계열**. runtime은 `QueryInterface(IID_IDirect3D3)`로 Direct3D를 얻고 XYZ/NORMAL/TEX1 정점 121개를 `CreateVertexBuffer`로 만든 뒤 null-size `Lock`과 stride 32의 11×11 grid fill을 수행한다. 확인된 draw state는 stage-zero texture/diffuse modulate, linear filtering, RGB565 source color key, alpha test와 `ZERO/SRCALPHA`·`ONE/ZERO` blending이다. `%s.bmp` 지연 로딩은 `DDSCAPS_OFFSCREENPLAIN` RGB565 surface를 만들고 GDI 복사 뒤 source-key `BltFast`/`Blt`로 합성한다. 전역 `[0x01eb7cc0]`의 호출 형태는 `IDirect3DDevice3` vtable과 일치한다. |
+| 그래픽 | **DirectDraw/Direct3D Immediate Mode 계열**. runtime은 `QueryInterface(IID_IDirect3D3)`로 Direct3D를 얻고 XYZ/NORMAL/TEX1 정점 121개를 `CreateVertexBuffer`로 만든 뒤 null-size `Lock`과 stride 32의 11×11 grid fill을 수행한다. 원본 `0x0042069d`는 전역 device `[0x01eb7cc0]`의 vtable `+0x8c`를 통해 `DrawIndexedPrimitiveVB(D3DPT_TRIANGLELIST, vb, indices, 600, 0)`를 호출한다. 확인된 draw state는 stage-zero texture/diffuse modulate, linear filtering, RGB565 source color key, alpha test와 `ZERO/SRCALPHA`·`ONE/ZERO` blending이다. `%s.bmp` 지연 로딩은 `DDSCAPS_OFFSCREENPLAIN` RGB565 surface를 만들고 GDI 복사 뒤 source-key `BltFast`/`Blt`로 합성한다. 전역 `[0x01eb7cc0]`의 호출 형태는 `IDirect3DDevice3` vtable과 일치한다. |
 | 오디오 | **DirectSound** (ordinal `#1`) + `winmm` 믹서 볼륨. 정적 buffer와 360,448바이트 looping ring buffer를 만들며, streaming 경로는 전체 Lock 안에서 45,056바이트 PCM 청크를 순환 갱신한다. `GAMEASSIGNMENTS/DemoVolume` 인덱스 0..3은 `[-10000, -2222, -1111, 0]`의 DirectSound volume table을 선택한다. `DuplicateSoundBuffer`도 사용한다. |
 | 입력 | **`GetAsyncKeyState` 하나가 전부. DirectInput 없음** |
 | 설정 | `GetPrivateProfile*` / `WritePrivateProfileStringA` — INI |
@@ -77,7 +77,7 @@ EZ2DJ 1st Trax Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정�
 | 항목 | 상태 |
 | --- | --- |
 | 아케이드 I/O 보드 | **부분 확인** — 3rd의 `EZ2DJ.INI`에 `"UseIOCard" = 1`이 있어 I/O 카드 사용은 확실하다. 1st SE 보호 실행 파일의 byte `IN`/`OUT` port 범위와 active-low bank는 확인됐다. 공개 독립 구현과 교차 확인한 button/turntable/coin/light 의미는 [I/O port map](analysis/ez2dj-io-map.md)에 **추정**으로 분리했다. `OUT 0x106` 의미는 미확정이다 |
-| 동글·보호 장치 | **부분 확인** — 보호 stub이 `\\.\LPTDI1`을 열고 4→8바이트, 24→104바이트 IOCTL 두 건을 보낸다. 두 단계 모두 output 첫 DWORD 0이 진행 조건이다. 첫 단계는 최대 3회 반복한다. 두 번째 input DWORD에 `0x01ed4141` 변환을 두 번 적용한 8바이트 mask가 response offset 4~11과 XOR되어 `.data` 복원 상태가 된다. 이 상태의 첫 DWORD는 `0x01ed7296`에 seed되고 같은 변환으로 바이트마다 갱신되며, 하위 바이트가 보호 `.data`에서 빠진다. 최소 target state `0900000000000000`은 정상 initializer를 반복 복원했다. 이는 바이너리 복원값이며 실제 동글 key나 vendor protocol의 확정은 아니다. HASP4 `HaspCode`의 첫 shape 유사성은 있으나 classic HASP 공개 경로·packet과 전체 LPTDI interface가 달라 vendor는 미확정이다 |
+| 동글·보호 장치 | **부분 확인** — 보호 stub이 `\\.\LPTDI1`을 열고 4→8바이트, 24→104바이트 IOCTL 두 건을 보낸다. 두 단계 모두 output 첫 DWORD 0이 진행 조건이다. 첫 단계는 최대 3회 반복한다. 두 번째 input DWORD에 `0x01ed4141` 변환을 두 번 적용한 8바이트 mask가 response offset 4~11과 XOR되어 `.data` 복원 상태가 된다. 이 상태의 첫 DWORD는 `0x01ed7296`에 seed되고 같은 변환으로 바이트마다 갱신되며, 하위 바이트가 보호 `.data`에서 빠진다. 최소 target state `0900000000000000`은 정상 initializer를 반복 복원했다. 이는 바이너리 복원값이며 실제 동글 key나 vendor protocol의 확정은 아니다. HASP4 `HaspCode`의 첫 shape 유사성은 있으나 classic HASP 공개 경로·packet과 전체 LPTDI interface가 달라 vendor는 미확정이다. 3rd는 별도 `\\.\FEnteDev` 경계에서 `0x9c402468→450→44c→458` 계약을 사용한다. `0x450`은 6바이트 in-place packet이며 offset 2의 `0xFAFA` marker가 맞을 때 offset 4 word를 반환한다. 과거 synthetic `0100fafa0010` replay로 Function 0 `0x44c` 도달을 확인했다. Function 0 descriptor offset `0xfe`의 nonzero byte는 handle 유지와 Function 6 `0x44c`/Function `0x0e` `0x458` 도달에 인과적이지만, 실험값 `0x0001`은 실제 driver 응답이 아니며 Function `0x0e` 출력도 미확정이다. 상세 근거는 [3rd Hardlock 분석](analysis/ez2dj3rd-hardlock-function-0e.md)에 둔다 |
 | 타이머 소스 | **확인됨** — `timeGetTime` |
 
 ---

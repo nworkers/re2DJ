@@ -92,6 +92,7 @@ bool DecodeUntransformedVertices(std::span<const std::byte> source,
     if ((fvf != kFvfVertex && fvf != kFvfLitVertex) || stride != 32 ||
         vertex_count < minimum_vertex_count ||
         (topology == PrimitiveTopology::kLineList && vertex_count % 2 != 0) ||
+        (topology == PrimitiveTopology::kTriangleList && vertex_count % 3 != 0) ||
         vertex_count > (std::numeric_limits<std::size_t>::max)() / stride)
     {
         *error = "unsupported untransformed vertex format or count";

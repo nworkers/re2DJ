@@ -25,4 +25,8 @@
 
 새 분석 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 
+| [graphics-transition-depth.md](graphics-transition-depth.md) | 장면 전환 fade 후보와 Direct3D/OpenGL 깊이 상태 경계 | 작업 096 ddraw trace와 Win32 실행으로 확인 |
+
+| [ez2dj3rd-hardlock-function-0e.md](ez2dj3rd-hardlock-function-0e.md) | 3rd Hardlock device name, API descriptor, and Function 0x0e boundary | Device/API boundary confirmed; valid 0x0e response unresolved |
+
 *Update this table in the same task whenever an analysis document is added or renamed.*

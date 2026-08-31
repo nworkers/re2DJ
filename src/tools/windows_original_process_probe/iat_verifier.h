@@ -44,6 +44,14 @@ bool FindIatSlotByName(const exe::PeImageInfo& info,
                        std::uint32_t* slot_rva,
                        std::string* error);
 
+bool FindIatSlotsByName(const exe::PeImageInfo& info,
+                        const std::uint8_t* file,
+                        std::size_t file_size,
+                        const std::string& module,
+                        const std::string& function,
+                        std::vector<std::uint32_t>* slot_rvas,
+                        std::string* error);
+
 bool FindIatSlotByOrdinal(const exe::PeImageInfo& info,
                           const std::uint8_t* file,
                           std::size_t file_size,

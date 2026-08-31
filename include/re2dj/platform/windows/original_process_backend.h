@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/target/target_profile.h"
+
 namespace re2dj::platform::windows
 {
 
@@ -13,10 +15,9 @@ struct OriginalProcessOptions
     std::filesystem::path hdd_directory;
     std::filesystem::path io_config;
     std::string target_id;
-    float audio_gain_db = 0.0f;
-    unsigned demo_volume = 3;
+    std::string hle_profile_id;
+    re2dj::target::TargetRunDefaults profile_defaults;
     bool audio_volume_trace = false;
-    bool fullscreen = false;
 };
 
 bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,

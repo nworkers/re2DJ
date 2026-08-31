@@ -48,10 +48,13 @@ struct Options
     unsigned demo_volume = 3;
     bool audio_gain_explicit = false;
     bool demo_volume_explicit = false;
+    bool fullscreen_explicit = false;
     bool audio_volume_trace = false;
     bool fullscreen = false;
     bool list_targets = false;
     bool run = false;
+    bool positional_target = false;
+    bool target_option_explicit = false;
     bool show_help = false;
     bool show_version = false;
 };
@@ -62,17 +65,18 @@ void PrintUsage()
         "re2DJ %s - run the original EZ2DJ executable on modern hosts\n"
         "\n"
         "Usage:\n"
+        "  re2dj <profile-id> [options]\n"
         "  re2dj --hdd <directory> [options]\n"
         "\n"
         "Options:\n"
-        "  --hdd <directory>   Extracted original HDD contents. Required.\n"
+        "  --hdd <directory>   Extracted original HDD contents. Overrides a\n"
+        "                      profile shortcut path.\n"
         "  --target <id>       Target profile to select. Defaults to the first\n"
         "                      detected candidate.\n"
         "  --list-targets      List target profiles found in the directory.\n"
         "  --resolve <path>    Resolve one guest path (for example\n"
         "                      \"C:\\\\EZ2DJ\\\\DATA\\\\SONG.EZ\") and exit.\n"
-        "  --run               Start the selected guest executable. Windows\n"
-        "                      currently supports target ez2dj1stse.\n"
+        "  --run               Start the selected guest executable.\n"
         "  --linux-helper <path>\n"
         "                      32-bit native helper used by --run on Linux.\n"
         "  --audio-gain-db <dB>\n"
@@ -82,6 +86,7 @@ void PrintUsage()
         "  --audio-volume-trace\n"
         "                      Record bounded DirectSound/WINMM volume evidence.\n"
         "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
+        "  --windowed          Override a profile's fullscreen default on Windows.\n"
         "  --io-config <path>  Windows EZ2DJ keyboard I/O mapping INI.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
@@ -198,6 +203,12 @@ bool ParseOptions(int argc, char** argv, Options* options)
         else if (argument == "--fullscreen")
         {
             options->fullscreen = true;
+            options->fullscreen_explicit = true;
+        }
+        else if (argument == "--windowed")
+        {
+            options->fullscreen = false;
+            options->fullscreen_explicit = true;
         }
         else if (argument == "--io-config")
         {
@@ -214,6 +225,7 @@ bool ParseOptions(int argc, char** argv, Options* options)
             {
                 return false;
             }
+            options->target_option_explicit = true;
         }
         else if (argument == "--resolve")
         {
@@ -221,6 +233,20 @@ bool ParseOptions(int argc, char** argv, Options* options)
             {
                 return false;
             }
+        }
+        else if (!argument.empty() && argument.front() != '-')
+        {
+            if (options->positional_target)
+            {
+                std::fprintf(stderr, "error: only one profile id may be specified\n");
+                return false;
+            }
+            options->positional_target = true;
+            if (!options->target_option_explicit)
+            {
+                options->target_id = std::string(argument);
+            }
+            options->run = true;
         }
         else
         {
@@ -294,13 +320,29 @@ int main(int argc, char** argv)
     }
 #if !defined(_WIN32)
     if (options.audio_gain_explicit || options.demo_volume_explicit ||
-        options.audio_volume_trace || options.fullscreen ||
+        options.audio_volume_trace || options.fullscreen_explicit ||
         !options.io_config.empty())
     {
         std::fprintf(stderr, "error: selected execution options are currently supported only on Windows\n");
         return kExitNotImplemented;
     }
 #endif
+    if (options.hdd_directory.empty() && !options.target_id.empty())
+    {
+        const re2dj::target::BuiltInTargetProfile* shortcut =
+            re2dj::target::FindBuiltInTargetProfileById(options.target_id);
+        if (shortcut == nullptr ||
+            shortcut->profile.run_defaults.default_hdd_directory_relative_path.empty())
+        {
+            std::fprintf(stderr,
+                         "error: profile '%s' has no default HDD directory; pass --hdd <directory>\n",
+                         options.target_id.c_str());
+            return kExitUsage;
+        }
+        options.hdd_directory = std::filesystem::current_path() /
+                                shortcut->profile.run_defaults
+                                    .default_hdd_directory_relative_path;
+    }
     if (options.hdd_directory.empty())
     {
         std::fprintf(stderr, "error: --hdd <directory> is required\n");
@@ -501,13 +543,53 @@ int main(int argc, char** argv)
         return kExitNotImplemented;
     }
 #elif defined(_WIN32)
+    if (options.fullscreen && !selected->run_defaults.hle_d3d3)
+    {
+        std::fprintf(stderr,
+                     "\nerror: --fullscreen is not supported by profile '%s'.\n",
+                     selected->id.c_str());
+        return kExitNotImplemented;
+    }
+    if ((options.audio_gain_explicit || options.audio_volume_trace) &&
+        !selected->run_defaults.hle_directsound)
+    {
+        std::fprintf(stderr,
+                     "\nerror: audio options are not supported by profile '%s'.\n",
+                     selected->id.c_str());
+        return kExitNotImplemented;
+    }
+    if (options.demo_volume_explicit && !selected->run_defaults.demo_volume.has_value())
+    {
+        std::fprintf(stderr,
+                     "\nerror: --demo-volume is not supported by profile '%s'.\n",
+                     selected->id.c_str());
+        return kExitNotImplemented;
+    }
+    if (!options.io_config.empty() && !selected->run_defaults.lptdi.legacy_io_ports)
+    {
+        std::fprintf(stderr,
+                     "\nerror: --io-config is not supported by profile '%s'.\n",
+                     selected->id.c_str());
+        return kExitNotImplemented;
+    }
     re2dj::platform::windows::OriginalProcessOptions run_options;
     run_options.hdd_directory = root.root();
     run_options.target_id = selected->id;
-    run_options.audio_gain_db = options.audio_gain_db;
-    run_options.demo_volume = options.demo_volume;
+    run_options.hle_profile_id = selected->hle_profile_id;
+    run_options.profile_defaults = selected->run_defaults;
+    if (options.audio_gain_explicit)
+    {
+        run_options.profile_defaults.audio_gain_db = options.audio_gain_db;
+    }
+    if (options.demo_volume_explicit)
+    {
+        run_options.profile_defaults.demo_volume = options.demo_volume;
+    }
+    if (options.fullscreen_explicit)
+    {
+        run_options.profile_defaults.fullscreen = options.fullscreen;
+    }
     run_options.audio_volume_trace = options.audio_volume_trace;
-    run_options.fullscreen = options.fullscreen;
     run_options.io_config = options.io_config;
     const int run_result =
         re2dj::platform::windows::RunOriginalProcess(run_options, &error);

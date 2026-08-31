@@ -48,6 +48,8 @@ using VertexAttribPointerFunction = void(APIENTRY*)(GLuint, GLint, GLenum, GLboo
 using DeleteTexturesFunction = void(APIENTRY*)(GLsizei, const GLuint*);
 using ViewportFunction = void(APIENTRY*)(GLint, GLint, GLsizei, GLsizei);
 using DisableFunction = void(APIENTRY*)(GLenum);
+using DepthFuncFunction = void(APIENTRY*)(GLenum);
+using DepthMaskFunction = void(APIENTRY*)(GLboolean);
 using ClearColorFunction = void(APIENTRY*)(GLfloat, GLfloat, GLfloat, GLfloat);
 using ClearFunction = void(APIENTRY*)(GLbitfield);
 using GenTexturesFunction = void(APIENTRY*)(GLsizei, GLuint*);
@@ -110,6 +112,8 @@ struct Sdl3OpenGlBackend::Impl
     GLuint program = 0;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
     bool frame_started = false;
+    int viewport_width = 0;
+    int viewport_height = 0;
 
     CreateShaderFunction create_shader = nullptr;
     ShaderSourceFunction shader_source = nullptr;
@@ -135,6 +139,8 @@ struct Sdl3OpenGlBackend::Impl
     DeleteTexturesFunction delete_textures = nullptr;
     ViewportFunction viewport = nullptr;
     DisableFunction disable = nullptr;
+    DepthFuncFunction depth_func = nullptr;
+    DepthMaskFunction depth_mask = nullptr;
     ClearColorFunction clear_color = nullptr;
     ClearFunction clear = nullptr;
     GenTexturesFunction gen_textures = nullptr;
@@ -339,12 +345,14 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES) &&
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2) &&
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0) &&
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16) &&
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 #else
     const bool attributes_set =
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY) &&
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2) &&
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1) &&
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16) &&
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 #endif
     if (!attributes_set)
@@ -420,6 +428,8 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
         LoadGlFunction("glDeleteTextures", &impl->delete_textures) &&
         LoadGlFunction("glViewport", &impl->viewport) &&
         LoadGlFunction("glDisable", &impl->disable) &&
+        LoadGlFunction("glDepthFunc", &impl->depth_func) &&
+        LoadGlFunction("glDepthMask", &impl->depth_mask) &&
         LoadGlFunction("glClearColor", &impl->clear_color) &&
         LoadGlFunction("glClear", &impl->clear) &&
         LoadGlFunction("glGenTextures", &impl->gen_textures) &&
@@ -452,6 +462,8 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
 {
     if (impl_ == nullptr || error == nullptr || logical_width == 0 || logical_height == 0 ||
         (command.topology == PrimitiveTopology::kTriangleStrip && command.vertices.size() < 3) ||
+        (command.topology == PrimitiveTopology::kTriangleList &&
+         (command.vertices.size() < 3 || command.vertices.size() % 3 != 0)) ||
         (command.topology == PrimitiveTopology::kLineList &&
          (command.vertices.size() < 2 || command.vertices.size() % 2 != 0)) ||
         !impl_->MakeCurrent(error))
@@ -466,12 +478,19 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
         *error = std::string("cannot query the SDL3 OpenGL window size: ") + SDL_GetError();
         return false;
     }
-    if (!impl_->frame_started)
+    const bool viewport_changed = pixel_width != impl_->viewport_width ||
+                                  pixel_height != impl_->viewport_height;
+    if (!impl_->frame_started || viewport_changed)
     {
         impl_->viewport(0, 0, pixel_width, pixel_height);
-        impl_->disable(GL_DEPTH_TEST);
+        impl_->viewport_width = pixel_width;
+        impl_->viewport_height = pixel_height;
+    }
+    if (!impl_->frame_started)
+    {
+        impl_->depth_mask(GL_TRUE);
         impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-        impl_->clear(GL_COLOR_BUFFER_BIT);
+        impl_->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         impl_->frame_started = true;
     }
 
@@ -610,6 +629,39 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
                                                                                     : GL_NEAREST);
     }
 
+    if (state.depth_test_enabled)
+    {
+        const auto to_gl_compare = [](CompareFunction function) {
+            switch (function)
+            {
+            case CompareFunction::kNever:
+                return GL_NEVER;
+            case CompareFunction::kLess:
+                return GL_LESS;
+            case CompareFunction::kEqual:
+                return GL_EQUAL;
+            case CompareFunction::kLessEqual:
+                return GL_LEQUAL;
+            case CompareFunction::kGreater:
+                return GL_GREATER;
+            case CompareFunction::kNotEqual:
+                return GL_NOTEQUAL;
+            case CompareFunction::kGreaterEqual:
+                return GL_GEQUAL;
+            case CompareFunction::kAlways:
+                return GL_ALWAYS;
+            }
+            return GL_LEQUAL;
+        };
+        impl_->enable(GL_DEPTH_TEST);
+        impl_->depth_func(to_gl_compare(state.depth_function));
+    }
+    else
+    {
+        impl_->disable(GL_DEPTH_TEST);
+    }
+    impl_->depth_mask(state.depth_write_enabled ? GL_TRUE : GL_FALSE);
+
     if (state.alpha_blend_enabled)
     {
         const auto to_gl_blend = [](BlendFactor factor) {
@@ -621,8 +673,12 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
                 return GL_ONE;
             case BlendFactor::kSourceColor:
                 return GL_SRC_COLOR;
+            case BlendFactor::kInverseSourceColor:
+                return GL_ONE_MINUS_SRC_COLOR;
             case BlendFactor::kSourceAlpha:
                 return GL_SRC_ALPHA;
+            case BlendFactor::kInverseSourceAlpha:
+                return GL_ONE_MINUS_SRC_ALPHA;
             }
             return GL_ONE;
         };
@@ -641,8 +697,11 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
     impl_->vertex_attrib_pointer(0, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].position);
     impl_->vertex_attrib_pointer(1, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].color);
     impl_->vertex_attrib_pointer(2, 2, GL_FLOAT, GL_FALSE, stride, &vertices[0].texture);
-    const GLenum primitive_mode =
-        command.topology == PrimitiveTopology::kLineList ? GL_LINES : GL_TRIANGLE_STRIP;
+    const GLenum primitive_mode = command.topology == PrimitiveTopology::kLineList
+                                      ? GL_LINES
+                                      : command.topology == PrimitiveTopology::kTriangleList
+                                            ? GL_TRIANGLES
+                                            : GL_TRIANGLE_STRIP;
     impl_->draw_arrays(primitive_mode, 0, static_cast<GLsizei>(vertices.size()));
     impl_->disable_vertex_attrib_array(2);
     impl_->disable_vertex_attrib_array(1);

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -208,6 +209,12 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
                                    void* vertices,
                                    DWORD vertex_count,
                                    DWORD flags);
+HRESULT WINAPI DeviceDrawIndexedPrimitiveVB(IDirect3DDevice3* self,
+                                            D3DPRIMITIVETYPE primitive,
+                                            IDirect3DVertexBuffer* vertex_buffer,
+                                            WORD* indices,
+                                            DWORD index_count,
+                                            DWORD flags);
 
 HRESULT WINAPI ViewportQueryInterface(IDirect3DViewport3* self, REFIID iid, void** object);
 ULONG WINAPI ViewportAddRef(IDirect3DViewport3* self);
@@ -326,6 +333,7 @@ IDirect3DDevice3Vtbl* DeviceVtable()
         table.GetTextureStageState = DeviceGetTextureStageState;
         table.SetTextureStageState = DeviceSetTextureStageState;
         table.DrawPrimitive = DeviceDrawPrimitive;
+        table.DrawIndexedPrimitiveVB = DeviceDrawIndexedPrimitiveVB;
         initialized = true;
     }
     return &table;
@@ -382,12 +390,15 @@ struct RootFacade
     std::uint32_t create_surface_diagnostic_count = 0;
     std::uint32_t surface_dc_diagnostic_count = 0;
     std::uint32_t source_blt_diagnostic_count = 0;
+    std::uint32_t source_blt_target_diagnostic_count = 0;
     std::uint32_t texture_load_diagnostic_count = 0;
     std::uint32_t color_fill_diagnostic_count = 0;
     std::uint32_t flip_diagnostic_count = 0;
     std::uint32_t draw_failure_diagnostic_count = 0;
     std::uint32_t untextured_draw_diagnostic_count = 0;
     std::uint32_t late_draw_diagnostic_count = 0;
+    std::uint32_t late_draw_target_diagnostic_count = 0;
+    std::uint32_t transform_diagnostic_count = 0;
     std::uint64_t frame_number = 0;
     LARGE_INTEGER fps_frequency = {};
     LARGE_INTEGER fps_interval_start = {};
@@ -451,6 +462,16 @@ struct SurfaceFacade
     bool content_diagnostic_computed = false;
     std::uint64_t diagnostic_non_key_pixels = 0;
     std::uint64_t diagnostic_nonzero_pixels = 0;
+    bool diagnostic_non_key_bounds_valid = false;
+    bool diagnostic_nonzero_bounds_valid = false;
+    std::uint32_t diagnostic_non_key_min_x = 0;
+    std::uint32_t diagnostic_non_key_min_y = 0;
+    std::uint32_t diagnostic_non_key_max_x = 0;
+    std::uint32_t diagnostic_non_key_max_y = 0;
+    std::uint32_t diagnostic_nonzero_min_x = 0;
+    std::uint32_t diagnostic_nonzero_min_y = 0;
+    std::uint32_t diagnostic_nonzero_max_x = 0;
+    std::uint32_t diagnostic_nonzero_max_y = 0;
     DDCOLORKEY source_blt_color_key = {};
 };
 
@@ -488,6 +509,16 @@ void MarkSurfaceDirty(SurfaceFacade* surface)
     surface->content_diagnostic_computed = false;
     surface->diagnostic_non_key_pixels = 0;
     surface->diagnostic_nonzero_pixels = 0;
+    surface->diagnostic_non_key_bounds_valid = false;
+    surface->diagnostic_nonzero_bounds_valid = false;
+    surface->diagnostic_non_key_min_x = 0;
+    surface->diagnostic_non_key_min_y = 0;
+    surface->diagnostic_non_key_max_x = 0;
+    surface->diagnostic_non_key_max_y = 0;
+    surface->diagnostic_nonzero_min_x = 0;
+    surface->diagnostic_nonzero_min_y = 0;
+    surface->diagnostic_nonzero_max_x = 0;
+    surface->diagnostic_nonzero_max_y = 0;
 }
 
 std::uint64_t AllocateSurfaceIdentity(RootFacade* root)
@@ -592,15 +623,28 @@ void ReportBltDiagnostic(const char* operation,
     {
         return;
     }
+    constexpr std::uint64_t kTargetFrame = 3000;
     constexpr std::uint32_t kMaximumSourceBltDiagnostics = 256;
+    constexpr std::uint32_t kMaximumSourceBltTargetDiagnostics = 2048;
     constexpr std::uint32_t kMaximumColorFillDiagnostics = 8;
-    std::uint32_t& diagnostic_count = source == nullptr
-                                          ? destination->root->color_fill_diagnostic_count
-                                          : destination->root->source_blt_diagnostic_count;
-    const std::uint32_t maximum_diagnostics = source == nullptr
-                                                  ? kMaximumColorFillDiagnostics
-                                                  : kMaximumSourceBltDiagnostics;
-    if (++diagnostic_count > maximum_diagnostics)
+    std::uint32_t* diagnostic_count = nullptr;
+    std::uint32_t maximum_diagnostics = 0;
+    if (source == nullptr)
+    {
+        diagnostic_count = &destination->root->color_fill_diagnostic_count;
+        maximum_diagnostics = kMaximumColorFillDiagnostics;
+    }
+    else if (destination->root->frame_number >= kTargetFrame)
+    {
+        diagnostic_count = &destination->root->source_blt_target_diagnostic_count;
+        maximum_diagnostics = kMaximumSourceBltTargetDiagnostics;
+    }
+    else
+    {
+        diagnostic_count = &destination->root->source_blt_diagnostic_count;
+        maximum_diagnostics = kMaximumSourceBltDiagnostics;
+    }
+    if (++(*diagnostic_count) > maximum_diagnostics)
     {
         return;
     }
@@ -615,17 +659,26 @@ void ReportBltDiagnostic(const char* operation,
     const RECT& destination_region =
         destination_rectangle == nullptr ? destination_full : *destination_rectangle;
     const RECT& source_region = source_rectangle == nullptr ? source_full : *source_rectangle;
-    char detail[320] = {};
+    char detail[640] = {};
     std::snprintf(detail,
                   sizeof(detail),
-                  "%s:dst=%lu:dstrect=%ld,%ld,%ld,%ld:src=%lu:srcrect=%ld,%ld,%ld,%ld:flags=0x%08lx:result=0x%08lx",
+                  "%s:frame=%llu:dst=%lu:dstsize=%lux%lu:dstcaps=0x%08lx:dstkey=%u:dstrect=%ld,%ld,%ld,%ld:src=%lu:srcsize=%lux%lu:srccaps=0x%08lx:srckey=%u:srcrect=%ld,%ld,%ld,%ld:flags=0x%08lx:result=0x%08lx",
                   operation,
+                  static_cast<unsigned long long>(destination->root->frame_number),
                   static_cast<unsigned long>(destination->diagnostic_id),
+                  static_cast<unsigned long>(destination->width),
+                  static_cast<unsigned long>(destination->height),
+                  static_cast<unsigned long>(destination->capabilities),
+                  destination->has_source_blt_color_key ? 1U : 0U,
                   destination_region.left,
                   destination_region.top,
                   destination_region.right,
                   destination_region.bottom,
                   source == nullptr ? 0UL : static_cast<unsigned long>(source->diagnostic_id),
+                  source == nullptr ? 0UL : static_cast<unsigned long>(source->width),
+                  source == nullptr ? 0UL : static_cast<unsigned long>(source->height),
+                  source == nullptr ? 0UL : static_cast<unsigned long>(source->capabilities),
+                  source != nullptr && source->has_source_blt_color_key ? 1U : 0U,
                   source_region.left,
                   source_region.top,
                   source_region.right,
@@ -756,25 +809,45 @@ void ReportDrawDiagnostic(DeviceFacade* device,
     ReportCompositionDiagnostic(device->root, detail);
 }
 
-void ReportLateDrawDiagnostic(DeviceFacade* device,
-                              const re2dj::graphics::LegacyDrawCommand& command,
-                              DWORD flags)
+void ReportLateDrawDiagnostic(
+    DeviceFacade* device,
+    const re2dj::graphics::LegacyDrawCommand& command,
+    const re2dj::graphics::LegacyFixedFunctionState& state,
+    DWORD flags,
+    DWORD vertex_type)
 {
     if (device == nullptr || device->root == nullptr || command.vertices.empty())
     {
         return;
     }
-    constexpr std::uint32_t kMaximumLateDrawDiagnostics = 512;
-    if (++device->root->late_draw_diagnostic_count > kMaximumLateDrawDiagnostics)
+    const SurfaceFacade* texture_surface = device->texture_stage_zero == nullptr
+                                               ? nullptr
+                                               : SurfaceFromTexture(device->texture_stage_zero);
+    // Keep the trace bounded while retaining the later menu composition after
+    // the high-volume attract/demo draws have filled the general budget.
+    constexpr std::uint64_t kTargetFrame = 3000;
+    constexpr std::uint32_t kMaximumLateDrawDiagnostics = 16384;
+    constexpr std::uint32_t kMaximumLateDrawTargetDiagnostics = 4096;
+    if (device->root->frame_number >= kTargetFrame)
+    {
+        if (++device->root->late_draw_target_diagnostic_count >
+            kMaximumLateDrawTargetDiagnostics)
+        {
+            return;
+        }
+    }
+    else if (++device->root->late_draw_diagnostic_count > kMaximumLateDrawDiagnostics)
     {
         return;
     }
     float minimum_x = command.vertices.front().x;
     float minimum_y = command.vertices.front().y;
     float minimum_z = command.vertices.front().z;
+    float minimum_reciprocal_w = command.vertices.front().reciprocal_w;
     float maximum_x = minimum_x;
     float maximum_y = minimum_y;
     float maximum_z = minimum_z;
+    float maximum_reciprocal_w = minimum_reciprocal_w;
     float minimum_u = command.vertices.front().texture_u;
     float minimum_v = command.vertices.front().texture_v;
     float maximum_u = minimum_u;
@@ -784,17 +857,16 @@ void ReportLateDrawDiagnostic(DeviceFacade* device,
         minimum_x = (std::min)(minimum_x, vertex.x);
         minimum_y = (std::min)(minimum_y, vertex.y);
         minimum_z = (std::min)(minimum_z, vertex.z);
+        minimum_reciprocal_w = (std::min)(minimum_reciprocal_w, vertex.reciprocal_w);
         maximum_x = (std::max)(maximum_x, vertex.x);
         maximum_y = (std::max)(maximum_y, vertex.y);
         maximum_z = (std::max)(maximum_z, vertex.z);
+        maximum_reciprocal_w = (std::max)(maximum_reciprocal_w, vertex.reciprocal_w);
         minimum_u = (std::min)(minimum_u, vertex.texture_u);
         minimum_v = (std::min)(minimum_v, vertex.texture_v);
         maximum_u = (std::max)(maximum_u, vertex.texture_u);
         maximum_v = (std::max)(maximum_v, vertex.texture_v);
     }
-    const SurfaceFacade* texture_surface = device->texture_stage_zero == nullptr
-                                               ? nullptr
-                                               : SurfaceFromTexture(device->texture_stage_zero);
     if (texture_surface != nullptr && !texture_surface->content_diagnostic_computed &&
         texture_surface->pixels != nullptr)
     {
@@ -810,6 +882,25 @@ void ReportLateDrawDiagnostic(DeviceFacade* device,
                 if (pixel != 0)
                 {
                     ++mutable_surface->diagnostic_nonzero_pixels;
+                    if (!mutable_surface->diagnostic_nonzero_bounds_valid)
+                    {
+                        mutable_surface->diagnostic_nonzero_bounds_valid = true;
+                        mutable_surface->diagnostic_nonzero_min_x = x;
+                        mutable_surface->diagnostic_nonzero_min_y = y;
+                        mutable_surface->diagnostic_nonzero_max_x = x;
+                        mutable_surface->diagnostic_nonzero_max_y = y;
+                    }
+                    else
+                    {
+                        mutable_surface->diagnostic_nonzero_min_x =
+                            (std::min)(mutable_surface->diagnostic_nonzero_min_x, x);
+                        mutable_surface->diagnostic_nonzero_min_y =
+                            (std::min)(mutable_surface->diagnostic_nonzero_min_y, y);
+                        mutable_surface->diagnostic_nonzero_max_x =
+                            (std::max)(mutable_surface->diagnostic_nonzero_max_x, x);
+                        mutable_surface->diagnostic_nonzero_max_y =
+                            (std::max)(mutable_surface->diagnostic_nonzero_max_y, y);
+                    }
                 }
                 const bool matches_key = texture_surface->has_source_blt_color_key &&
                                          pixel >= texture_surface->source_blt_color_key
@@ -819,20 +910,44 @@ void ReportLateDrawDiagnostic(DeviceFacade* device,
                 if (!matches_key)
                 {
                     ++mutable_surface->diagnostic_non_key_pixels;
+                    if (!mutable_surface->diagnostic_non_key_bounds_valid)
+                    {
+                        mutable_surface->diagnostic_non_key_bounds_valid = true;
+                        mutable_surface->diagnostic_non_key_min_x = x;
+                        mutable_surface->diagnostic_non_key_min_y = y;
+                        mutable_surface->diagnostic_non_key_max_x = x;
+                        mutable_surface->diagnostic_non_key_max_y = y;
+                    }
+                    else
+                    {
+                        mutable_surface->diagnostic_non_key_min_x =
+                            (std::min)(mutable_surface->diagnostic_non_key_min_x, x);
+                        mutable_surface->diagnostic_non_key_min_y =
+                            (std::min)(mutable_surface->diagnostic_non_key_min_y, y);
+                        mutable_surface->diagnostic_non_key_max_x =
+                            (std::max)(mutable_surface->diagnostic_non_key_max_x, x);
+                        mutable_surface->diagnostic_non_key_max_y =
+                            (std::max)(mutable_surface->diagnostic_non_key_max_y, y);
+                    }
                 }
             }
         }
         mutable_surface->content_diagnostic_computed = true;
     }
-    char detail[760] = {};
+    char detail[960] = {};
     std::snprintf(detail,
                   sizeof(detail),
-                  "LateDraw:frame=%llu:texture=%lu:topology=%u:vertices=%lu:bounds=%.3f,%.3f,%.3f,%.3f:z=%.6f,%.6f:uv=%.6f,%.6f,%.6f,%.6f:diffuse=0x%08lx:flags=0x%08lx:blend=%lu:srcblend=%lu:dstblend=%lu:zenable=%lu:zwrite=%lu:zfunc=%lu:texsize=%lux%lu:key=%u:colorkey=%lu:alphatest=%lu:keylow=0x%04lx:keyhigh=0x%04lx:nonkey=%llu:nonzero=%llu",
+                  "LateDraw:frame=%llu:fvf=0x%08lx:texture=%lu:topology=%u:vertices=%lu:bounds=%.3f,%.3f,%.3f,%.3f:z=%.6f,%.6f:rhw=%.6f,%.6f:uv=%.6f,%.6f,%.6f,%.6f:diffuse=0x%08lx:flags=0x%08lx:blend=%lu:srcblend=%lu:dstblend=%lu:zenable=%lu:zwrite=%lu:zfunc=%lu:texsize=%lux%lu:key=%u:colorkey=%lu:alphatest=%lu:keylow=0x%04lx:keyhigh=0x%04lx:nonkey=%llu:nonzero=%llu:nonkeybbox=%lu,%lu,%lu,%lu:nonzerobbox=%lu,%lu,%lu,%lu:effectiveblend=%u:effectivesrcblend=%u:effectivedstblend=%u:effectivedepth=%u:%u:%u:fadecompat=%u",
                   static_cast<unsigned long long>(device->root->frame_number),
+                  static_cast<unsigned long>(vertex_type),
                   texture_surface == nullptr
                       ? 0UL
                       : static_cast<unsigned long>(texture_surface->diagnostic_id),
-                  command.topology == re2dj::graphics::PrimitiveTopology::kLineList ? 2U : 5U,
+                  command.topology == re2dj::graphics::PrimitiveTopology::kLineList
+                      ? 2U
+                      : command.topology == re2dj::graphics::PrimitiveTopology::kTriangleList
+                            ? 4U
+                            : 5U,
                   static_cast<unsigned long>(command.vertices.size()),
                   minimum_x,
                   minimum_y,
@@ -840,6 +955,8 @@ void ReportLateDrawDiagnostic(DeviceFacade* device,
                   maximum_y,
                   minimum_z,
                   maximum_z,
+                  minimum_reciprocal_w,
+                  maximum_reciprocal_w,
                   minimum_u,
                   minimum_v,
                   maximum_u,
@@ -881,7 +998,38 @@ void ReportLateDrawDiagnostic(DeviceFacade* device,
                   texture_surface == nullptr
                       ? 0ULL
                       : static_cast<unsigned long long>(
-                            texture_surface->diagnostic_nonzero_pixels));
+                            texture_surface->diagnostic_nonzero_pixels),
+                  texture_surface != nullptr && texture_surface->diagnostic_non_key_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_non_key_min_x)
+                      : 0UL,
+                  texture_surface != nullptr && texture_surface->diagnostic_non_key_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_non_key_min_y)
+                      : 0UL,
+                  texture_surface != nullptr && texture_surface->diagnostic_non_key_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_non_key_max_x)
+                      : 0UL,
+                  texture_surface != nullptr && texture_surface->diagnostic_non_key_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_non_key_max_y)
+                      : 0UL,
+                  texture_surface != nullptr && texture_surface->diagnostic_nonzero_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_nonzero_min_x)
+                      : 0UL,
+                  texture_surface != nullptr && texture_surface->diagnostic_nonzero_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_nonzero_min_y)
+                      : 0UL,
+                  texture_surface != nullptr && texture_surface->diagnostic_nonzero_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_nonzero_max_x)
+                      : 0UL,
+                  texture_surface != nullptr && texture_surface->diagnostic_nonzero_bounds_valid
+                      ? static_cast<unsigned long>(texture_surface->diagnostic_nonzero_max_y)
+                      : 0UL,
+                  static_cast<unsigned>(state.alpha_blend_enabled ? 1 : 0),
+                  static_cast<unsigned>(state.source_blend),
+                  static_cast<unsigned>(state.destination_blend),
+                  static_cast<unsigned>(state.depth_test_enabled ? 1 : 0),
+                  static_cast<unsigned>(state.depth_write_enabled ? 1 : 0),
+                  static_cast<unsigned>(state.depth_function),
+                  static_cast<unsigned>(state.fade_compatibility_applied ? 1 : 0));
     ReportCompositionDiagnostic(device->root, detail);
 }
 
@@ -1037,6 +1185,48 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
     state->alpha_blend_enabled =
         device.render_states[D3DRENDERSTATE_ALPHABLENDENABLE] != 0;
 
+    state->depth_test_enabled = device.render_states[D3DRENDERSTATE_ZENABLE] != 0;
+    state->depth_write_enabled = device.render_states[D3DRENDERSTATE_ZWRITEENABLE] != 0;
+    const auto convert_compare = [](DWORD value,
+                                    re2dj::graphics::CompareFunction* output) {
+        switch (value)
+        {
+        case D3DCMP_NEVER:
+            *output = re2dj::graphics::CompareFunction::kNever;
+            return true;
+        case D3DCMP_LESS:
+            *output = re2dj::graphics::CompareFunction::kLess;
+            return true;
+        case D3DCMP_EQUAL:
+            *output = re2dj::graphics::CompareFunction::kEqual;
+            return true;
+        case D3DCMP_LESSEQUAL:
+            *output = re2dj::graphics::CompareFunction::kLessEqual;
+            return true;
+        case D3DCMP_GREATER:
+            *output = re2dj::graphics::CompareFunction::kGreater;
+            return true;
+        case D3DCMP_NOTEQUAL:
+            *output = re2dj::graphics::CompareFunction::kNotEqual;
+            return true;
+        case D3DCMP_GREATEREQUAL:
+            *output = re2dj::graphics::CompareFunction::kGreaterEqual;
+            return true;
+        case D3DCMP_ALWAYS:
+            *output = re2dj::graphics::CompareFunction::kAlways;
+            return true;
+        default:
+            return false;
+        }
+    };
+    if (state->depth_test_enabled &&
+        !convert_compare(device.render_states[D3DRENDERSTATE_ZFUNC],
+                          &state->depth_function))
+    {
+        *error = "unsupported Direct3D3 depth comparison function";
+        return false;
+    }
+
     const auto convert_blend = [](DWORD value,
                                   re2dj::graphics::BlendFactor* output) {
         switch (value)
@@ -1050,8 +1240,14 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
             case D3DBLEND_SRCCOLOR:
                 *output = re2dj::graphics::BlendFactor::kSourceColor;
                 return true;
+            case D3DBLEND_INVSRCCOLOR:
+                *output = re2dj::graphics::BlendFactor::kInverseSourceColor;
+                return true;
             case D3DBLEND_SRCALPHA:
                 *output = re2dj::graphics::BlendFactor::kSourceAlpha;
+                return true;
+            case D3DBLEND_INVSRCALPHA:
+                *output = re2dj::graphics::BlendFactor::kInverseSourceAlpha;
                 return true;
             default:
                 return false;
@@ -1089,6 +1285,47 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
     }
     error->clear();
     return true;
+}
+
+bool IsFullScreenBlackFadeCandidate(
+    const re2dj::graphics::LegacyDrawCommand& command,
+    const re2dj::graphics::LegacyTextureView* texture,
+    std::uint32_t logical_width,
+    std::uint32_t logical_height)
+{
+    if (texture != nullptr || command.topology != re2dj::graphics::PrimitiveTopology::kTriangleStrip ||
+        command.vertices.size() != 4 || logical_width == 0 || logical_height == 0)
+    {
+        return false;
+    }
+    constexpr float kPositionTolerance = 0.01f;
+    float minimum_x = command.vertices.front().x;
+    float minimum_y = command.vertices.front().y;
+    float maximum_x = minimum_x;
+    float maximum_y = minimum_y;
+    const std::uint32_t first_color = command.vertices.front().diffuse_argb;
+    const std::uint32_t first_rgb = first_color & 0x00ffffffU;
+    const std::uint32_t first_alpha = first_color >> 24;
+    if (first_rgb != 0 || first_alpha == 0 || first_alpha == 0xff)
+    {
+        return false;
+    }
+    for (const auto& vertex : command.vertices)
+    {
+        minimum_x = (std::min)(minimum_x, vertex.x);
+        minimum_y = (std::min)(minimum_y, vertex.y);
+        maximum_x = (std::max)(maximum_x, vertex.x);
+        maximum_y = (std::max)(maximum_y, vertex.y);
+        if ((vertex.diffuse_argb & 0x00ffffffU) != 0 ||
+            (vertex.diffuse_argb >> 24) != first_alpha)
+        {
+            return false;
+        }
+    }
+    return std::fabs(minimum_x) <= kPositionTolerance &&
+           std::fabs(minimum_y) <= kPositionTolerance &&
+           std::fabs(maximum_x - static_cast<float>(logical_width)) <= kPositionTolerance &&
+           std::fabs(maximum_y - static_cast<float>(logical_height)) <= kPositionTolerance;
 }
 
 struct ViewportFacade
@@ -1150,6 +1387,93 @@ bool BuildLegacyTransformState(const DeviceFacade& device,
     transform->viewport.max_z = source.dvMaxZ;
     error->clear();
     return true;
+}
+
+void ReportTransformDiagnostic(const DeviceFacade& device,
+                               DWORD vertex_type,
+                               const re2dj::graphics::LegacyTransformState& transform,
+                               std::span<const std::byte> source,
+                               std::size_t vertex_count,
+                               const re2dj::graphics::LegacyDrawCommand& command)
+{
+    if (device.root == nullptr || ++device.root->transform_diagnostic_count > 128)
+    {
+        return;
+    }
+    const auto& viewport = transform.viewport;
+    const auto& world = transform.world.values;
+    const auto& projection = transform.projection.values;
+    float raw_minimum_x = 0.0f;
+    float raw_minimum_y = 0.0f;
+    float raw_maximum_x = 0.0f;
+    float raw_maximum_y = 0.0f;
+    if (vertex_count != 0 && source.size() >= 12)
+    {
+        auto read_float = [](const std::byte* address) {
+            float value = 0.0f;
+            std::memcpy(&value, address, sizeof(value));
+            return value;
+        };
+        raw_minimum_x = raw_maximum_x = read_float(source.data());
+        raw_minimum_y = raw_maximum_y = read_float(source.data() + 4);
+        const std::size_t stride = re2dj::graphics::VertexStrideFromFvf(vertex_type);
+        for (std::size_t index = 1; index < vertex_count; ++index)
+        {
+            const std::byte* const vertex = source.data() + index * stride;
+            const float x = read_float(vertex);
+            const float y = read_float(vertex + 4);
+            raw_minimum_x = (std::min)(raw_minimum_x, x);
+            raw_minimum_y = (std::min)(raw_minimum_y, y);
+            raw_maximum_x = (std::max)(raw_maximum_x, x);
+            raw_maximum_y = (std::max)(raw_maximum_y, y);
+        }
+    }
+    float screen_minimum_x = command.vertices.front().x;
+    float screen_minimum_y = command.vertices.front().y;
+    float screen_maximum_x = screen_minimum_x;
+    float screen_maximum_y = screen_minimum_y;
+    for (const auto& vertex : command.vertices)
+    {
+        screen_minimum_x = (std::min)(screen_minimum_x, vertex.x);
+        screen_minimum_y = (std::min)(screen_minimum_y, vertex.y);
+        screen_maximum_x = (std::max)(screen_maximum_x, vertex.x);
+        screen_maximum_y = (std::max)(screen_maximum_y, vertex.y);
+    }
+    char detail[760] = {};
+    std::snprintf(detail,
+                  sizeof(detail),
+                  "TransformDraw:frame=%llu:fvf=0x%08lx:raw=%.3f,%.3f,%.3f,%.3f:screen=%.3f,%.3f,%.3f,%.3f:v0=%.3f,%.3f,%.3f,%.3f:viewport=%lu,%lu,%lu,%lu:clip=%.3f,%.3f,%.3f,%.3f:world=%.3f,%.3f,%.3f,%.3f:projection=%.3f,%.3f,%.3f,%.3f",
+                  static_cast<unsigned long long>(device.root->frame_number),
+                  static_cast<unsigned long>(vertex_type),
+                  raw_minimum_x,
+                  raw_minimum_y,
+                  raw_maximum_x,
+                  raw_maximum_y,
+                  screen_minimum_x,
+                  screen_minimum_y,
+                  screen_maximum_x,
+                  screen_maximum_y,
+                  command.vertices.front().x,
+                  command.vertices.front().y,
+                  command.vertices.front().z,
+                  command.vertices.front().reciprocal_w,
+                  static_cast<unsigned long>(viewport.screen_x),
+                  static_cast<unsigned long>(viewport.screen_y),
+                  static_cast<unsigned long>(viewport.screen_width),
+                  static_cast<unsigned long>(viewport.screen_height),
+                  viewport.clip_x,
+                  viewport.clip_y,
+                  viewport.clip_width,
+                  viewport.clip_height,
+                  world[0],
+                  world[5],
+                  world[10],
+                  world[12],
+                  projection[0],
+                  projection[5],
+                  projection[10],
+                  projection[12]);
+    ReportCompositionDiagnostic(device.root, detail);
 }
 
 struct VertexBufferFacade
@@ -2523,6 +2847,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
 {
     DeviceFacade* const device = DeviceFromInterface(self);
     const bool is_triangle_strip = primitive == D3DPT_TRIANGLESTRIP && vertex_count >= 3;
+    const bool is_triangle_list =
+        primitive == D3DPT_TRIANGLELIST && vertex_count >= 3 && vertex_count % 3 == 0;
     const bool is_line_list =
         primitive == D3DPT_LINELIST && vertex_count >= 2 && vertex_count % 2 == 0;
     const bool is_transformed = vertex_type == D3DFVF_TLVERTEX;
@@ -2531,7 +2857,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     const std::size_t vertex_stride =
         is_transformed ? re2dj::graphics::kTransformedLitVertexStride
                        : re2dj::graphics::VertexStrideFromFvf(vertex_type);
-    if ((!is_triangle_strip && !is_line_list) ||
+    if ((!is_triangle_strip && !is_triangle_list && !is_line_list) ||
         (!is_transformed && !is_untransformed) || vertices == nullptr ||
         !re2dj::graphics::AreLegacyDrawFlagsSupported(flags) ||
         vertex_stride == 0 ||
@@ -2562,7 +2888,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     std::string error;
     const re2dj::graphics::PrimitiveTopology topology =
         is_line_list ? re2dj::graphics::PrimitiveTopology::kLineList
-                     : re2dj::graphics::PrimitiveTopology::kTriangleStrip;
+                     : is_triangle_list ? re2dj::graphics::PrimitiveTopology::kTriangleList
+                                        : re2dj::graphics::PrimitiveTopology::kTriangleStrip;
     const std::span<const std::byte> vertex_bytes(
         static_cast<const std::byte*>(vertices), bytes);
     bool decoded = false;
@@ -2574,14 +2901,26 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     else
     {
         re2dj::graphics::LegacyTransformState transform;
-        decoded = BuildLegacyTransformState(*device, &transform, &error) &&
-                  re2dj::graphics::DecodeUntransformedVertices(vertex_bytes,
-                                                               vertex_count,
-                                                               vertex_type,
-                                                               topology,
-                                                               transform,
-                                                               &command,
-                                                               &error);
+        const bool transform_built = BuildLegacyTransformState(*device, &transform, &error);
+        if (transform_built)
+        {
+            decoded = re2dj::graphics::DecodeUntransformedVertices(vertex_bytes,
+                                                                    vertex_count,
+                                                                    vertex_type,
+                                                                    topology,
+                                                                    transform,
+                                                                    &command,
+                                                                    &error);
+            if (decoded)
+            {
+                ReportTransformDiagnostic(*device,
+                                          vertex_type,
+                                          transform,
+                                          vertex_bytes,
+                                          vertex_count,
+                                          command);
+            }
+        }
     }
     if (!decoded)
     {
@@ -2649,6 +2988,19 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     re2dj::graphics::LegacyFixedFunctionState fixed_function_state;
     const bool state_built = BuildFixedFunctionState(*device, &fixed_function_state, &error);
+    if (state_built && !fixed_function_state.alpha_blend_enabled &&
+        !fixed_function_state.alpha_test_enabled &&
+        IsFullScreenBlackFadeCandidate(command,
+                                       texture,
+                                       root->width,
+                                       root->height))
+    {
+        fixed_function_state.alpha_blend_enabled = true;
+        fixed_function_state.source_blend = re2dj::graphics::BlendFactor::kSourceAlpha;
+        fixed_function_state.destination_blend =
+            re2dj::graphics::BlendFactor::kInverseSourceAlpha;
+        fixed_function_state.fade_compatibility_applied = true;
+    }
     const bool drawn = state_built && root->render_backend->Draw(command,
                                                                  fixed_function_state,
                                                                  root->width,
@@ -2684,8 +3036,73 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     ReportDrawDiagnostic(
         device, primitive, vertex_type, vertex_count, flags, DD_OK, "success");
-    ReportLateDrawDiagnostic(device, command, flags);
+    ReportLateDrawDiagnostic(device, command, fixed_function_state, flags, vertex_type);
     return DD_OK;
+}
+
+HRESULT WINAPI DeviceDrawIndexedPrimitiveVB(IDirect3DDevice3* self,
+                                            D3DPRIMITIVETYPE primitive,
+                                            IDirect3DVertexBuffer* vertex_buffer,
+                                            WORD* indices,
+                                            DWORD index_count,
+                                            DWORD flags)
+{
+    DeviceFacade* const device = DeviceFromInterface(self);
+    if (vertex_buffer == nullptr || indices == nullptr || index_count == 0 ||
+        index_count > (std::numeric_limits<std::size_t>::max)() / sizeof(WORD) ||
+        IsBadReadPtr(vertex_buffer, sizeof(*vertex_buffer)) != FALSE ||
+        IsBadReadPtr(indices, static_cast<std::size_t>(index_count) * sizeof(WORD)) != FALSE ||
+        vertex_buffer->lpVtbl != VertexBufferVtable())
+    {
+        ReportDrawDiagnostic(
+            device, primitive, 0, index_count, flags, DDERR_INVALIDPARAMS, "invalid-indexed-vb");
+        return DDERR_INVALIDPARAMS;
+    }
+
+    VertexBufferFacade* const facade = VertexBufferFromInterface(vertex_buffer);
+    if (IsBadReadPtr(facade, sizeof(*facade)) != FALSE || facade->magic != kVertexBufferMagic ||
+        facade->root != device->root || facade->buffer == nullptr)
+    {
+        ReportDrawDiagnostic(
+            device, primitive, 0, index_count, flags, DDERR_INVALIDPARAMS, "foreign-indexed-vb");
+        return DDERR_INVALIDPARAMS;
+    }
+    if (facade->buffer->locked())
+    {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             facade->descriptor.fvf,
+                             index_count,
+                             flags,
+                             D3DERR_VERTEXBUFFERLOCKED,
+                             "locked-indexed-vb");
+        return D3DERR_VERTEXBUFFERLOCKED;
+    }
+
+    const std::span<const std::uint16_t> index_values(
+        reinterpret_cast<const std::uint16_t*>(indices), index_count);
+    std::vector<std::byte> expanded;
+    if (!re2dj::graphics::ExpandIndexedVertices(facade->buffer->vertices(),
+                                                facade->buffer->stride(),
+                                                facade->descriptor.vertex_count,
+                                                index_values,
+                                                &expanded))
+    {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             facade->descriptor.fvf,
+                             index_count,
+                             flags,
+                             DDERR_INVALIDPARAMS,
+                             "invalid-indexed-vertices");
+        return DDERR_INVALIDPARAMS;
+    }
+    return DeviceDrawPrimitive(self,
+                               primitive,
+                               facade->descriptor.fvf,
+                               expanded.data(),
+                               index_count,
+                               flags);
 }
 
 HRESULT WINAPI ViewportQueryInterface(IDirect3DViewport3* self, REFIID iid, void** object)

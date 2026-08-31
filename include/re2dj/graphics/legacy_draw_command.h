@@ -13,6 +13,7 @@ namespace re2dj::graphics
 enum class PrimitiveTopology
 {
     kTriangleStrip,
+    kTriangleList,
     kLineList,
 };
 
@@ -21,12 +22,21 @@ enum class BlendFactor
     kZero,
     kOne,
     kSourceColor,
+    kInverseSourceColor,
     kSourceAlpha,
+    kInverseSourceAlpha,
 };
 
 enum class CompareFunction
 {
+    kNever,
+    kLess,
+    kEqual,
+    kLessEqual,
+    kGreater,
     kNotEqual,
+    kGreaterEqual,
+    kAlways,
 };
 
 enum class TextureFilter
@@ -44,6 +54,10 @@ struct LegacyFixedFunctionState
     bool alpha_blend_enabled = false;
     BlendFactor source_blend = BlendFactor::kOne;
     BlendFactor destination_blend = BlendFactor::kZero;
+    bool depth_test_enabled = false;
+    bool depth_write_enabled = false;
+    CompareFunction depth_function = CompareFunction::kLessEqual;
+    bool fade_compatibility_applied = false;
     TextureFilter minification_filter = TextureFilter::kNearest;
     TextureFilter magnification_filter = TextureFilter::kNearest;
 };

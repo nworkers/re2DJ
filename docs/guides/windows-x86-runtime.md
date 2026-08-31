@@ -14,13 +14,31 @@
 
 관련 작업 로그: [렌더링 정확성·성능 회복](../work-logs/20260826-072-render-correctness-performance.md), [Win32 제품 loader 통합](../work-logs/20260828-079-win32-product-loader.md)
 
+관련 프로파일 설계: [타깃 프로파일 실행 기본값과 shortcut](../design/20260830-099-profile-defaults-and-shortcut.md)
+
+관련 프로파일 작업 로그: [타깃 프로파일 실행 기본값과 shortcut](../work-logs/20260830-099-profile-defaults-and-shortcut.md)
+
 저장소 root의 PowerShell에서 제품 loader를 실행한다. `--hdd`에는 합법적으로 보유한 1st SE HDD dump 디렉터리를 지정한다.
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe --hdd .\roms\ez2dj1stse --target ez2dj1stse --run
 ```
 
-제품 facade는 command line, Windows directory, VFS, DirectDraw/Direct3D 3, DirectSound, legacy I/O port, LPTDI target state와 detached 실행의 현재 canonical policy를 선택한다. 초기 복원과 IAT 검증 뒤 debugger를 분리하므로 실제 화면·오디오·입력과 성능 확인에 사용한다. 창을 닫으면 loader도 종료된다.
+3rd 프로파일은 저장소 root 기준 `roms\ez2dj3rd`를 기본 HDD 경로로 사용한다. 따라서 다음처럼 프로파일 ID만 입력하면 자동으로 `--run`이 선택되고 `ez2dj\EZ2DJ.EXE`가 실행된다.
+
+```powershell
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd
+```
+
+`--hdd <directory>`는 shortcut 경로를 덮어쓴다. 3rd의 기본 정책은 확인된 DirectSound ordinal `#1`, 파일 I/O VFS와 detached 실행이며, 3rd IAT에 없는 1st 전용 command-line/Windows-directory/DirectDraw/display·DemoVolume·legacy-I/O hook은 자동으로 주입하지 않는다. 3rd의 `EZ2DJ.INI`가 `FullScreen=1`을 관리하므로 3rd 실행은 해당 원본 설정을 따른다.
+
+제품 facade는 선택된 프로파일의 기본 policy를 사용하고, 지원되는 명령행 값으로 이를 덮어쓴다. 1st SE는 command line, Windows directory, VFS, DirectDraw/Direct3D 3, DirectSound, legacy I/O port, LPTDI target state와 detached 실행을 사용한다. 3rd는 확인된 VFS·DirectSound·detached 경계만 기본 활성화한다. 초기 복원과 IAT 검증 뒤 debugger를 분리하므로 실제 화면·오디오·입력과 성능 확인에 사용한다. 창을 닫으면 loader도 종료된다.
+
+*The 3rd profile uses `roms\\ez2dj3rd` relative to the repository root. Entering only the profile ID selects `--run` automatically and runs `ez2dj\\EZ2DJ.EXE`.*
+
+*`--hdd <directory>` overrides the shortcut path. The 3rd baseline uses confirmed DirectSound ordinal `#1`, file-I/O VFS, and detached execution; it does not inject the 1st-only command-line/Windows-directory, DirectDraw/display, DemoVolume, or legacy-I/O hooks that are absent from the 3rd IAT. The 3rd run follows `FullScreen=1` from its original `EZ2DJ.INI`.*
+
+*The product facade consumes the selected profile's baseline policy and lets supported command-line values override it. 1st SE uses command-line, Windows-directory, VFS, DirectDraw/Direct3D 3, DirectSound, legacy-I/O, LPTDI target-state, and detached execution. 3rd enables only its confirmed VFS, DirectSound, and detached boundaries by default. It restores and verifies the process before detaching the debugger, so it can be used for visual, audio, input, and performance checks. Close the game window to finish the loader.*
 
 기본 실행은 version, build date, SDL3 OpenGL renderer와 FPS를 제목에 표시하는 resize 가능한 1280×960 client-area 창이다. 원본의 640×480 논리 표시는 기본 가로·세로 2배로 확대된다. monitor 크기의 borderless fullscreen을 선택하려면 원본 INI를 수정하지 않고 다음처럼 외부 옵션을 추가한다.
 
@@ -60,7 +78,9 @@ debugger mode는 I/O마다 exception 왕복이 발생하므로 성능 기준으�
 
 # Windows x86 Original Runtime Guide
 
-Run the product-loader command above from the repository root in PowerShell, replacing `--hdd` with a legally owned 1st SE HDD directory. The facade selects the current canonical command-line, Windows-directory, VFS, graphics, audio, legacy-I/O, LPTDI, and detached-runtime policy. It restores and verifies the process, detaches the debugger, and lets the injected runtime handle confirmed boundaries. Close the game window to finish the loader.
+Run the product-loader command above from the repository root in PowerShell, replacing `--hdd` with a legally owned 1st SE HDD directory. The facade selects the selected profile's baseline policy and lets supported command-line values override it. 1st SE uses the command-line, Windows-directory, VFS, graphics, audio, legacy-I/O, LPTDI, and detached-runtime policy; 3rd enables only its confirmed VFS, DirectSound, and detached boundaries by default. It restores and verifies the process, detaches the debugger, and lets the injected runtime handle confirmed boundaries. Close the game window to finish the loader.
+
+The 3rd profile uses `roms\ez2dj3rd` relative to the repository root, so `re2dj ez2dj3rd` is sufficient to select `ez2dj\EZ2DJ.EXE` and run it. `--hdd <directory>` overrides that path. Its `EZ2DJ.INI` contains `FullScreen=1`; the current 3rd baseline follows the original configuration because the executable imports `DirectDrawCreateEx`, while the launcher’s DirectDraw/display hooks target different imports. The 3rd guest drive and Win32 directory remain unresolved because no `System.ini` is present.
 
 The default run uses a resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. It initially scales the original 640x480 logical display by 2x in each dimension. Add `--fullscreen` to the same command for monitor-sized borderless fullscreen without editing the original INI. After clicking or moving the window, confirm that frames continue and Task Manager still reports it as responsive. The desktop resolution must remain unchanged after fullscreen exits.
 

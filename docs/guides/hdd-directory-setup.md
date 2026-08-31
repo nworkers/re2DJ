@@ -88,6 +88,15 @@ re2dj --hdd /path/to/ez2dj_hdd
 
 *In the list, `built-in` marks a recognised dump and `detected` marks an executable found only by scanning. An entry flagged `bring-up only` must not be treated as evidence of original behavior.*
 
+프로파일에 기본 HDD 경로가 있으면 저장소 root에서 profile ID만으로 실행할 수 있다. 3rd 덤프를 `roms/ez2dj3rd`에 둔 경우 Windows에서는 다음 명령이 `ez2dj/EZ2DJ.EXE`를 선택하고 실행한다. 다른 위치의 HDD는 `--hdd`로 shortcut 경로를 덮어쓴다.
+
+*When a profile has a default HDD path, the profile ID alone can launch it from the repository root. With the 3rd dump under `roms/ez2dj3rd`, the following Windows command selects and runs `ez2dj/EZ2DJ.EXE`; use `--hdd` to override the shortcut path for another location.*
+
+```powershell
+re2dj ez2dj3rd
+re2dj ez2dj3rd --hdd D:\EZ2DJ\3rd
+```
+
 `entry section` 줄이 `.text`가 아니면 보호 계층일 가능성이 높습니다. 관찰일 뿐 증명은 아닙니다.
 
 *An `entry section` other than `.text` suggests a protection stub. It is an observation, not proof.*

@@ -7,8 +7,13 @@ namespace re2dj::platform::windows
 namespace
 {
 
-constexpr const char* kSupportedTarget = "ez2dj1stse";
-constexpr const char* kLptdiTargetState = "0900000000000000";
+bool HasExecutionPolicy(const re2dj::target::TargetRunDefaults& defaults)
+{
+    return defaults.hle_command_line || defaults.hle_windows_directory || defaults.hle_vfs ||
+           defaults.hle_d3d3 || defaults.hle_directsound ||
+           defaults.lptdi.legacy_io_ports || defaults.lptdi.device_mock_enabled ||
+           defaults.run_detached;
+}
 
 }  // namespace
 
@@ -17,7 +22,8 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
                                    std::string* error)
 {
     if (arguments == nullptr || error == nullptr || options.hdd_directory.empty() ||
-        options.target_id.empty())
+        options.target_id.empty() || options.hle_profile_id.empty() ||
+        !HasExecutionPolicy(options.profile_defaults))
     {
         if (error != nullptr)
         {
@@ -25,48 +31,107 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         }
         return false;
     }
-    if (options.target_id != kSupportedTarget)
+    if (options.profile_defaults.lptdi.legacy_io_ports &&
+        !options.profile_defaults.lptdi.device_mock_enabled)
     {
-        *error = "Windows product execution currently supports only target 'ez2dj1stse'";
+        *error = "profile enables legacy I/O without an LPTDI device policy";
         return false;
     }
-    if (!std::isfinite(options.audio_gain_db) || options.audio_gain_db < -24.0f ||
-        options.audio_gain_db > 18.0f)
+    if (options.profile_defaults.lptdi.device_mock_enabled &&
+        options.profile_defaults.lptdi.device_mock_path_prefix.empty())
+    {
+        *error = "profile enables LPTDI device mock without a device path prefix";
+        return false;
+    }
+    if (options.profile_defaults.lptdi.device_mock_enabled &&
+        options.profile_defaults.lptdi.device_mock_target_state_hex.empty())
+    {
+        *error = "profile enables LPTDI device mock without a target-state policy";
+        return false;
+    }
+    if (!options.profile_defaults.lptdi.device_mock_enabled &&
+        !options.profile_defaults.lptdi.device_mock_path_prefix.empty())
+    {
+        *error = "profile has an LPTDI device path without device mock enablement";
+        return false;
+    }
+    if (!options.profile_defaults.lptdi.device_mock_enabled &&
+        !options.profile_defaults.lptdi.device_mock_target_state_hex.empty())
+    {
+        *error = "profile has an LPTDI target-state policy without device mock enablement";
+        return false;
+    }
+    if (options.profile_defaults.audio_gain_db.has_value() &&
+        (!std::isfinite(*options.profile_defaults.audio_gain_db) ||
+         *options.profile_defaults.audio_gain_db < -24.0f ||
+         *options.profile_defaults.audio_gain_db > 18.0f))
     {
         *error = "Windows audio master gain must be between -24 and +18 dB";
         return false;
     }
-    if (options.demo_volume > 3)
+    if (options.profile_defaults.demo_volume.has_value() &&
+        *options.profile_defaults.demo_volume > 3)
     {
         *error = "Windows demo volume must be between 0 and 3";
         return false;
     }
 
-    *arguments = {
-        "re2dj",
-        "--hdd",
-        options.hdd_directory.string(),
-        "--target",
-        options.target_id,
-        "--hle-command-line",
-        "--hle-windows-directory",
-        "--hle-vfs",
-        "--hle-d3d3",
-        "--hle-directsound",
-        "--audio-gain-db",
-        std::to_string(options.audio_gain_db),
-        "--demo-volume",
-        std::to_string(options.demo_volume),
-        "--hle-io-ports",
-        "--run-detached",
-        "--device-mock-lptdi-target-state",
-        kLptdiTargetState,
-    };
+    *arguments = {"re2dj", "--hdd", options.hdd_directory.string(), "--target", options.target_id};
+    const re2dj::target::TargetRunDefaults& defaults = options.profile_defaults;
+    if (defaults.hle_command_line)
+    {
+        arguments->push_back("--hle-command-line");
+    }
+    if (defaults.hle_windows_directory)
+    {
+        arguments->push_back("--hle-windows-directory");
+    }
+    if (defaults.hle_vfs)
+    {
+        arguments->push_back("--hle-vfs");
+    }
+    if (defaults.hle_d3d3)
+    {
+        arguments->push_back("--hle-d3d3");
+    }
+    if (defaults.hle_directsound)
+    {
+        arguments->push_back("--hle-directsound");
+    }
+    if (defaults.audio_gain_db.has_value())
+    {
+        arguments->push_back("--audio-gain-db");
+        arguments->push_back(std::to_string(*defaults.audio_gain_db));
+    }
+    if (defaults.demo_volume.has_value())
+    {
+        arguments->push_back("--demo-volume");
+        arguments->push_back(std::to_string(*defaults.demo_volume));
+    }
+    if (defaults.lptdi.legacy_io_ports)
+    {
+        arguments->push_back("--hle-io-ports");
+    }
+    if (defaults.run_detached)
+    {
+        arguments->push_back("--run-detached");
+    }
+    if (defaults.lptdi.device_mock_enabled)
+    {
+        arguments->push_back("--device-mock-lptdi");
+        arguments->push_back("--device-mock-lptdi-path-prefix");
+        arguments->push_back(defaults.lptdi.device_mock_path_prefix);
+    }
+    if (!defaults.lptdi.device_mock_target_state_hex.empty())
+    {
+        arguments->push_back("--device-mock-lptdi-target-state");
+        arguments->push_back(defaults.lptdi.device_mock_target_state_hex);
+    }
     if (options.audio_volume_trace)
     {
         arguments->push_back("--audio-volume-trace");
     }
-    if (options.fullscreen)
+    if (defaults.fullscreen)
     {
         arguments->push_back("--fullscreen");
     }
