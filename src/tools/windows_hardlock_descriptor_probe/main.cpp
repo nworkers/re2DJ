@@ -11,6 +11,7 @@
 
 extern "C" __declspec(dllimport) char g_re2dj_vfs_trace_path[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_device_mock_path_prefix[MAX_PATH];
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_vfs_dynamic_resolver;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_mock;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_ioctl_mode;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_wts_console_session_mock;
@@ -18,6 +19,11 @@ extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_response_450_en
 extern "C" __declspec(dllimport) unsigned char g_re2dj_hardlock_response_450[6];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_44c_tail_enabled;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_44c_tail_word;
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_secret_enabled;
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_module_address;
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_seed1;
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_seed2;
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_hardlock_seed3;
 extern "C" __declspec(dllimport) FARPROC WINAPI Re2djHleGetProcAddress(
     HMODULE module, LPCSTR name);
 extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsCreateFileA(
@@ -59,6 +65,7 @@ int main()
     }
 
     g_re2dj_device_mock = 1;
+    g_re2dj_vfs_dynamic_resolver = 1;
     g_re2dj_device_ioctl_mode = 1;
     HMODULE kernel32 = GetModuleHandleA("KERNEL32.dll");
     const FARPROC expected_get_tick_count = GetProcAddress(kernel32, "GetTickCount");
@@ -208,9 +215,28 @@ int main()
                                              nullptr) != FALSE,
                    "Hardlock descriptor IOCTL failed") &&
              Check(bytes_returned == 0,
-                   "descriptor diagnostic changed returned bytes") &&
+                   "descriptor diagnostic changed returned bytes");
+
+    g_re2dj_hardlock_module_address = 0x1357;
+    g_re2dj_hardlock_seed1 = 0x2468;
+    g_re2dj_hardlock_seed2 = 0x369a;
+    g_re2dj_hardlock_seed3 = 0x48ac;
+    g_re2dj_hardlock_secret_enabled = 1;
+    descriptor[0x08] = 0xcd;
+    descriptor[0x09] = 0xab;
+    passed = passed &&
+             Check(Re2djDeviceIoControlMock(handle,
+                                             0x9c402458,
+                                             descriptor,
+                                             sizeof(descriptor),
+                                             descriptor,
+                                             sizeof(descriptor),
+                                             &bytes_returned,
+                                             nullptr) != FALSE,
+                   "redacted Hardlock descriptor IOCTL failed") &&
              Check(Re2djVfsCloseHandle(handle) != FALSE,
                    "cannot close synthetic Hardlock device");
+    g_re2dj_hardlock_secret_enabled = 0;
 
     std::ifstream trace(trace_path, std::ios::binary);
     const std::string contents((std::istreambuf_iterator<char>(trace)),
@@ -229,6 +255,12 @@ int main()
                        "tail_word=0x1234") !=
                        std::string::npos,
                    "trace has incorrect Hardlock key material") &&
+             Check(contents.find(
+                       "hardlock-descriptor:code=0x9c402458:function=0x000e:status=7:secret_fields=redacted") !=
+                       std::string::npos,
+                   "trace is missing the redacted Hardlock descriptor marker") &&
+             Check(contents.find("module_address=0xabcd") == std::string::npos,
+                   "redacted trace exposed a configured descriptor field") &&
              Check(contents.find("hardlock-descriptor:code=0x9c406410") ==
                        std::string::npos,
                    "trace contains an unrelated LPTDI descriptor marker") &&

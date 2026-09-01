@@ -35,6 +35,8 @@ struct TargetLptdiPolicy
     bool device_mock_enabled = false;
     // Profile-specific response state for the synthetic device.
     std::string device_mock_target_state_hex;
+    // Requires profile-specific Hardlock material from an external file.
+    bool hardlock_secret_config_required = false;
 };
 
 // Baseline settings for the supported product execution path. An empty or

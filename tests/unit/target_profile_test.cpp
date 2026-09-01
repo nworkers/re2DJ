@@ -121,6 +121,17 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::string_view("EZ2DJ.EXE"));
             RE2DJ_CHECK(context, !fourth->fingerprint.required_siblings.empty());
             RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_vfs);
+            RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_dynamic_vfs);
+            RE2DJ_CHECK(context, fourth->profile.run_defaults.lptdi.device_mock_enabled);
+            RE2DJ_CHECK_EQ(context,
+                           fourth->profile.run_defaults.lptdi.device_mock_path_prefix,
+                           std::string("\\\\.\\FEnteDev"));
+            RE2DJ_CHECK(context,
+                        fourth->profile.run_defaults.lptdi
+                            .hardlock_secret_config_required);
+            RE2DJ_CHECK(context,
+                        fourth->profile.run_defaults.lptdi
+                            .device_mock_target_state_hex.empty());
         }
     }
 

@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -155,15 +156,22 @@ int main()
         fourth_profile->profile.run_defaults.hle_dynamic_vfs &&
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments.size() == 10 && arguments[1] == "--hdd" &&
+        arguments.size() == 15 && arguments[1] == "--hdd" &&
         arguments[2] == "staged-chd" && arguments[3] == "--target" &&
         arguments[4] == "ez2dj4th" && arguments[5] == "--chd" &&
         arguments[6] == "4thTrax.chd" && arguments[7] == "--target-executable" &&
-        arguments[8] == "EZ2DJ/EZ2DJ.EXE" && arguments[9] == "--hle-vfs";
+        arguments[8] == "EZ2DJ/EZ2DJ.EXE" && arguments[9] == "--hle-vfs" &&
+        arguments[10] == "--device-mock-lptdi" &&
+        arguments[11] == "--device-mock-lptdi-path-prefix" &&
+        arguments[12] == "\\\\.\\FEnteDev" &&
+        arguments[13] == "--hardlock-config" &&
+        std::filesystem::path(arguments[14]).filename() == "hardlock.ini" &&
+        std::filesystem::path(arguments[14]).parent_path().filename() == "cfg";
 
     options.target_id = "ez2dj1stse_unpacked";
     options.hle_profile_id = "ez2dj1stse_unpacked";
     options.profile_defaults = {};
+    options.hardlock_config.clear();
     options.chd_image.clear();
     options.executable_relative_path.clear();
     const bool rejected =

@@ -10,6 +10,17 @@
 
 ## 현재 진행 / In progress
 
+- [ ] 작업 127 — ez2dj4th Hardlock Function `0x0e` 변환 독립 복원
+  - [x] Git-ignore `cfg/hardlock.ini` 기본 경로와 profile별 memory-only 적재
+  - [x] 실제 `0x468`/active-console `0x450` 및 synthetic 분기의 matching `0x44c/0x458` 재확인
+  - [x] 플랫폼 중립 IOCTL sequence/shape/descriptor 검증 oracle 구현
+  - [x] 작업 128 — 서명된 vendor driver로 네 IOCTL framing과 device-transport 경계 독립 확인
+  - [ ] 원본 실행 또는 허용 라이선스 자료로 bit-level transform 근거 확보
+  - [ ] 외부 설정의 memory-only seed를 사용하는 플랫폼 중립 transform 구현
+  - [ ] 알려진 입출력 vector와 원본 다음 경계로 응답 검증
+
+  *Task 127 — Git-ignored default configuration, memory-only profile loading, real `0x468`/active-console `0x450` reacquisition, and a platform-neutral sequence/shape/descriptor oracle are complete. Task 128 independently confirms the four IOCTL framing contracts in a signed vendor driver and establishes that Function `0x0e` crosses into device transport rather than a host-side three-seed transform. Independently reconstruct Function `0x0e`, implement it only after a policy-compatible bit-level basis is established, and verify it against a known input/output vector and the original execution's next boundary.*
+
 - [x] 작업 114 — ez2dj4th FAT32 CHD 파일시스템 및 실행 연결
   - [x] 실제 `4thTrax.chd`의 MBR/BPB/FAT/LFN과 `EZ2DJ/EZ2DJ.EXE` 확인
   - [x] `Fat32Volume` read-only file-range API 및 PE32 검증 연결
