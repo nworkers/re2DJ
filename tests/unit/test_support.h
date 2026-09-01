@@ -68,6 +68,8 @@ void RunLptdiChallengeResponseTests(re2dj::test::Context& context);
 void RunLptdiResponseProfileTests(re2dj::test::Context& context);
 void RunHardlock450ResponseTests(re2dj::test::Context& context);
 void RunHardlockApiDescriptorTests(re2dj::test::Context& context);
+void RunHardlockProtocolTests(re2dj::test::Context& context);
+void RunHardlockSecretConfigTests(re2dj::test::Context& context);
 void RunLegacyIoPortBusTests(re2dj::test::Context& context);
 void RunEz2DjIoBoardTests(re2dj::test::Context& context);
 void RunLegacyDrawCommandTests(re2dj::test::Context& context);

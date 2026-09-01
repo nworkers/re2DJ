@@ -61,6 +61,14 @@ flowchart LR
 
 *The table above maps each layer to its directory, responsibility, and current status.*
 
+설정 계층의 Hardlock 비밀 설정 경계는 **[구현됨]** 상태입니다. `HardlockSecretMaterial`은 선택 프로파일의 module address와 세 seed를 프로세스 memory 안에서만 보유합니다. ez2dj4th는 명시적 옵션이 없으면 Git-ignore된 `cfg/hardlock.ini`의 해당 profile section을 읽으며, 저장소 내부 경로는 `cfg/` 아래만 허용합니다. 명시적인 저장소 외부 경로도 지원합니다. launcher는 값을 명령행이나 로그에 넣지 않고 Windows x86 injected runtime export에 직접 쓰며, 다른 프로파일은 이 설정을 거부합니다.
+
+*The Hardlock secret-configuration boundary in the configuration layer is **[Implemented]**. `HardlockSecretMaterial` retains the selected profile's module address and three seeds only in process memory. Without an explicit option, ez2dj4th reads its profile section from Git-ignored `cfg/hardlock.ini`; repository-internal paths are allowed only below `cfg/`, while explicit external paths remain supported. The launcher writes values directly to Windows x86 injected-runtime exports without placing them on the command line or in logs, and other profiles reject this configuration.*
+
+플랫폼 중립 `HardlockProtocolTracker`도 **[구현됨]** 상태입니다. 확인된 `0x468 → 0x450 → 0x44c → 0x458` 순서와 exact buffer shape를 추적하고 descriptor의 Function, block count 및 configured module-address 일치 여부를 값 비노출 boolean으로 판정합니다. 이 경계는 응답을 합성하지 않습니다. Function `0x0e` bit-level transform과 유효한 `0x450` driver response는 허용 가능한 독립 근거가 없어 아직 **[계획]** 상태입니다.
+
+*The platform-neutral `HardlockProtocolTracker` is also **[Implemented]**. It tracks the confirmed `0x468 → 0x450 → 0x44c → 0x458` order and exact buffer shapes, then validates descriptor function, block count, and configured module-address matching using value-free Booleans. It does not synthesize responses. The Function `0x0e` bit-level transform and a valid `0x450` driver response remain **[Planned]** because no policy-compatible independent basis is available yet.*
+
 ---
 
 ## 3. HDD 디렉터리 입력 / HDD directory input **[구현됨]**
@@ -330,6 +338,10 @@ flowchart TD
 Task 107의 오프라인 SMT 분석은 두 ID 사이의 유일한 5-byte 중간 control 값을 확인했지만, 세 16-bit seed 제약에는 최소 11개의 서로 다른 검증 해가 존재했습니다. 따라서 runtime profile에는 seed 후보를 넣지 않으며, 두 번째 독립 challenge/response 또는 원본 Function `0x0e` 판별 oracle이 확보될 때까지 synthetic response policy를 실제 Hardlock emulation으로 승격하지 않습니다.
 
 *Task 107's offline SMT analysis confirmed a unique five-byte intermediate control value between the two IDs, but the three 16-bit seed constraints admit at least eleven distinct verified models. No seed candidate is therefore added to the runtime profile, and the synthetic response policy is not promoted to physical Hardlock emulation until a second independent challenge/response or an original Function `0x0e` distinguishing oracle is available.*
+
+ez2dj4th는 `\\.\FEnteDev` 장치 경계와 저장소 밖 프로파일 section을 사용합니다. 설정값은 target table, 명령행, 진단 JSONL 및 descriptor trace에 기록하지 않습니다. 외부 설정 mode의 descriptor 진단은 module address와 ID field를 redaction합니다. 현재 구현은 안전한 설정 수명주기와 runtime 주입까지이며, 미문서화 E-Y-E Function `0x0e` 변환은 허용 가능한 근거가 확보될 때까지 미구현입니다.
+
+*ez2dj4th uses the `\\.\FEnteDev` device boundary and an out-of-repository profile section. Configuration values are never written to the target table, command line, diagnostic JSONL, or descriptor trace. Descriptor diagnostics redact the module address and ID fields while external configuration is active. The current implementation completes the secure configuration lifecycle and runtime injection; the undocumented E-Y-E Function `0x0e` transform remains unimplemented until a policy-compatible basis is available.*
 
 3rd 보호 초기화는 동적으로 resolve한 `WTSQuerySessionInformationA`로 현재 session의 `WTSConnectState`를 검사합니다. Windows injected runtime은 기본적으로 원래 결과를 그대로 전달하고 bounded scalar 진단만 기록합니다. 명시적 `--device-mock-wts-console-session` 분석 옵션에서만 `WTS_CURRENT_SESSION`, class 4, 성공한 정확히 4바이트 결과를 active 상태 `0`으로 바꾸며 다른 query와 실패 결과는 보존합니다. 이 HLE로 `0x9c402468` 뒤 `0x9c402450`까지 진행함을 확인했지만, 6바이트 `0x450` 응답과 이후 `0x44c/0x458`은 아직 별도 미확정 Hardlock 경계입니다.
 
