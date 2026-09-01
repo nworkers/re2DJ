@@ -28,11 +28,11 @@ re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, EZ2DJ의 원�
 * **원본 로직 보존:** 게임플레이를 C++로 재작성하지 않고 원본 x86 코드를 주 실행 경로로 유지합니다.
 * **선별적 HLE:** 경계는 Win32 import thunk입니다. 게임이 실제로 호출하는 API만 좁은 범위로 구현합니다.
 * **처음부터 멀티플랫폼:** 공용 코어는 호스트 OS 헤더를 포함하지 않으며, Windows/Linux/Web 세부 구현은 플랫폼 계층에 분리합니다.
-* **HDD 디렉터리 입력:** 원본 자산은 디스크 이미지가 아니라 사용자가 지정한 디렉터리 경로로 받습니다. 저장소는 그 내용을 절대 포함하지 않습니다.
+* **HDD·CHD 입력 경계:** 추출 HDD는 사용자가 지정한 디렉터리로 받고, MAME CHD는 `libchdr` 기반 FAT32 read-only 계층으로 읽습니다. 원본 자산은 저장소에 포함하지 않습니다.
 * **원본 무변경 보장:** 게스트의 파일 쓰기는 overlay 디렉터리로 향하므로 원본 덤프는 그대로 유지됩니다.
 * **재현 가능한 진척 기록:** 설계, 작업 지시, 분석과 기술 지식을 저장소 문서로 누적합니다.
 
-*The project preserves original x86 game logic, applies narrowly scoped HLE at the Win32 import boundary, keeps the shared core free of host OS headers, takes original assets as a directory path rather than a disk image, routes guest writes to an overlay so the dump stays untouched, and keeps reproducible design and analysis records.*
+*The project preserves original x86 game logic, applies narrowly scoped HLE at the Win32 import boundary, keeps the shared core free of host OS headers, accepts extracted HDD contents as a directory and reads MAME CHDs through a libchdr-backed read-only FAT32 layer, routes guest writes to an overlay so the dump stays untouched, and keeps reproducible design and analysis records.*
 
 ---
 
@@ -203,6 +203,7 @@ re2dj <profile-id> [options]
 re2dj --hdd <directory> [options]
 
   --hdd <directory>   추출한 원본 HDD 내용. 프로파일 shortcut 경로보다 우선.
+                      CHD 프로파일에서는 .chd 하나가 있는 디렉터리도 허용.
   --target <id>       사용할 타깃 프로파일. 기본값은 첫 번째 후보.
   --list-targets      후보 타깃 프로파일을 나열하고 종료.
   --resolve <path>    게스트 경로 하나를 해석하고 종료.
@@ -219,17 +220,40 @@ re2dj --hdd <directory> [options]
   --help              도움말 출력.
 ```
 
+CHD 자체의 header, metadata와 논리 sector를 확인하려면 다음 비실행 도구를 사용합니다.
+
+```bash
+re2dj_chd_probe /path/to/ez2dj4th.chd
+```
+
+*Use the following tool to inspect a CHD's header, metadata, logical sectors, FAT32 layout, and the 4th PE32 header. On Windows x86 the same FAT32 boundary is used by `re2dj ez2dj4th --run`.*
+
+```bash
+re2dj_chd_probe /path/to/ez2dj4th.chd
+```
+
 Windows 제품 실행 예:
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe --hdd D:\EZ2DJ\1stSE --target ez2dj1stse --run
 .\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd
 .\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd --hdd D:\EZ2DJ\3rd --audio-gain-db 3
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th --run
 ```
 
 `ez2dj3rd` shortcut은 저장소 root 기준 `roms/ez2dj3rd`를 HDD 기본 경로로 사용하고, 첫 번째 positional profile ID만으로 실행을 선택한다. `--hdd`가 있으면 shortcut 경로를 덮어쓰며, 프로파일이 지원하는 오디오·fullscreen·I/O 관련 명령행 값은 프로파일 기본값보다 우선한다. 3rd의 `EZ2DJ.INI`에는 `FullScreen=1`이 있지만, 이 빌드는 `DirectDrawCreateEx`를 import하므로 현재 3rd 기본값은 확인된 VFS·DirectSound hook만 활성화한다.
 
 *The `ez2dj3rd` shortcut uses `roms/ez2dj3rd` relative to the repository root and selects execution from the first positional profile ID. `--hdd` overrides that convenience path, and supported command-line audio, fullscreen, and I/O values take precedence over profile defaults. The 3rd `EZ2DJ.INI` contains `FullScreen=1`, but this build imports `DirectDrawCreateEx`, so the current 3rd baseline enables only the confirmed VFS and DirectSound hooks.*
+
+The `ez2dj4th` target uses a MAME CHD HDD shortcut at `roms/ez2dj4th`.
+`re2dj_chd_probe <path-to-chd>` now reads the real CHD through libchdr, validates
+its FAT32 layout, and reports the `EZ2DJ/EZ2DJ.EXE` PE32 header. On Windows x86,
+`re2dj ez2dj4th --run` stages the executable and profile siblings into a
+temporary directory while the injected runtime serves guest `D:\ez2dj` reads
+directly from the CHD; writes remain in the overlay. The first protected 4th
+HLE/Hardlock boundary remains a runtime observation item.
+
+*The `ez2dj4th` target uses the `roms/ez2dj4th` MAME CHD shortcut. `re2dj_chd_probe <path-to-chd>` reads the real image through libchdr, validates FAT32, and reports the `EZ2DJ/EZ2DJ.EXE` PE32 header. On Windows x86, `re2dj ez2dj4th --run` stages the executable and profile siblings while injected-runtime pseudo handles serve guest `D:\ez2dj` reads directly from CHD; writes stay in the overlay. The first protected 4th HLE/Hardlock boundary remains an observation item.*
 
 실제 `re2dj ez2dj3rd` 최신 실행(`20260831-000859-972.jsonl`)은 프로파일별 `\\.\\FEnteDev` mock 경로와 별도 zero target-state probe를 전달한 뒤 원본 프로세스의 runtime 주입·detached 실행까지 확인했다. VFS trace에는 `GetProcAddress` resolver 슬롯 2개와 `\\.\\NTICE`, `\\.\\FEnteDev` 장치 open이 기록되었다. 이후 256바이트 Hardlock descriptor와 Function `0x0e` 요청까지는 별도 계측으로 확인했지만 유효한 암호 응답과 게임 화면 도달은 아직 확인되지 않았다. zero state도 실제 동글 seed로 확정하지 않는다.
 
@@ -261,7 +285,7 @@ Windows 제품 실행 예:
 
 | 경로 | 내용 |
 | --- | --- |
-| `include/re2dj/`, `src/` | C++20 공용 코어: HDD 입력, 게스트 경로, PE 판독, 타깃 프로파일 |
+| `include/re2dj/`, `src/` | C++20 공용 코어: HDD·CHD 입력, 게스트 경로, PE 판독, 타깃 프로파일 |
 | `src/platform/{windows,linux,web}/` | 플랫폼별 backend (예정) |
 | `src/host/cli/` | 명령행 진입점 |
 | `src/tools/` | 비실행 분석 도구 |

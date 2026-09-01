@@ -460,3 +460,213 @@ entry RVA `0x00001e6e`(`.text`), SizeOfImage `0x0001b000`, 섹션 네 개(`.text
 * [보호 stub API 관찰 trace 작업 로그](../work-logs/20260823-042-protected-api-observation-trace.md)
 * [PE32 실행 형식](../kb/pe32-executable-format.md)
 * [원본 실행 파일 분석 (누적)](../EXE_DESIGN.ko.md)
+
+## 4th Trax 실행 분석 — 2026-09-01
+
+### 확인됨
+
+실제 `re2dj ez2dj4th --run` 실행에서 Debug injected runtime 링크 문제를 수정한 뒤 launcher가 CHD staging executable을 직접 전달받는 경로를 사용했습니다. 진단 로그 `logs/windows_x86_launcher_probe/ez2dj4th/20260901-030400-180.jsonl`은 `EZ2DJ/EZ2DJ.EXE`의 PE32/i386 검증, CHD VFS mount 준비, injected runtime 준비, `USER32.dll!LoadImageA` image-loader 준비를 기록합니다.
+
+### 미확정
+
+첫 `CreateFileA` runtime handoff debug message는 제한 시간 안에 관찰되지 않았으며 launcher는 `runtime handoff was not observed before timeout`으로 child를 정리했습니다. 따라서 4th 보호 코드가 요청하는 첫 파일/API, Hardlock 단계, 화면 진입은 이 실행으로 확정하지 않습니다.
+
+### Confirmed
+
+In the real `re2dj ez2dj4th --run` execution, after fixing the Debug injected-runtime link and adding explicit CHD staging executable handoff, the launcher used the staged CHD executable path. Diagnostic log `logs/windows_x86_launcher_probe/ez2dj4th/20260901-030400-180.jsonl` records successful PE32/i386 validation, CHD VFS mount preparation, injected-runtime preparation, and `USER32.dll!LoadImageA` image-loader preparation.
+
+### Unresolved
+
+The first `CreateFileA` runtime handoff debug message was not observed before the bounded timeout, and the launcher cleaned up the child with `runtime handoff was not observed before timeout`. The first protected 4th file/API request, Hardlock stage, and screen entry therefore remain unconfirmed.
+
+### 추가 bounded API trace — 확인됨 / Additional bounded API trace — Confirmed
+
+작업 118에서 <code>ExitProcess</code> 정적 import가 없는 protected target도 API
+breakpoint를 제한적으로 처리하도록 launcher 분석 경계를 확장했습니다. 실제 4th
+staging 실행은 <code>GetProcAddress(kernel32, "GetVersion")</code>와
+<code>GetProcAddress(kernel32, "CreateFileA")</code>를 순서대로 기록했고, 이후
+child <code>0xc0000005</code> execute fault와
+<code>api_trace_boundary(reason=child_exit)</code>를 남겼습니다. 이는 4th 보호
+stub가 최소한 이 두 Win32 API를 동적으로 해석한다는 **확인됨** 사실입니다.
+기존 정적 <code>CreateFileA</code> IAT patch만으로는 이 호출을 HLE wrapper에
+연결하지 않는다는 점은 소스 구조와 trace를 함께 비교한 **추정**이며, 동적
+resolver HLE를 적용한 뒤 정상 반환과 다음 경계를 다시 확인해야 합니다.
+
+*Task 118 extended the launcher diagnostic boundary so a protected target with no
+static <code>ExitProcess</code> import can process API breakpoints within a bound.
+The real 4th staging run recorded <code>GetProcAddress(kernel32,
+"GetVersion")</code> followed by <code>GetProcAddress(kernel32,
+"CreateFileA")</code>, then a child <code>0xc0000005</code> execute fault and
+<code>api_trace_boundary(reason=child_exit)</code>. This confirms that the 4th
+protection stub dynamically resolves at least these two Win32 APIs. The inference
+that the current static <code>CreateFileA</code> IAT patch does not cover this call
+follows from comparing the source path with the trace; a dynamic-resolver HLE must
+be tested before normal return and the next boundary can be confirmed.*
+
+### 추가 동적 VFS resolver — 확인됨 / Additional dynamic VFS resolver — Confirmed
+
+작업 119에서 <code>ez2dj4th</code>의 profile capability
+<code>hle_dynamic_vfs</code>를 runtime export flag로 전달하고 원본
+<code>GetProcAddress</code> IAT 2개를 injected thunk로 patch했습니다. 실제 CHD
+trace의 VFS log는 <code>GetVersion:route=win32</code>와
+<code>CreateFileA:route=hle</code>를 기록했습니다. 이는 동적 파일 API 결과가
+기존 VFS wrapper로 들어가는 경계를 **확인됨**으로 올립니다.
+
+다만 wrapper를 통한 asset-open 또는 보호 코드의 정상 후속 분기는 관찰되지
+않았고 child는 <code>0xc0000005</code>로 종료했습니다. 따라서 보호 응답과
+정상 게임 실행은 여전히 **미확정**입니다.
+
+*Task 119 passed the <code>ez2dj4th</code> profile capability
+<code>hle_dynamic_vfs</code> through a runtime export flag and patched two
+original <code>GetProcAddress</code> IAT slots to the injected thunk. The real
+CHD trace's VFS log recorded <code>GetVersion:route=win32</code> and
+<code>CreateFileA:route=hle</code>, confirming that the dynamic file-API result
+reaches the existing VFS wrapper boundary.*
+
+*No asset-open or normal protected-code continuation was observed, and the
+child exited with <code>0xc0000005</code>. The protection response and normal
+game execution therefore remain unresolved.*
+
+### 추가 caller instruction window — 확인됨 / Additional caller instruction window — Confirmed
+
+작업 122에서 resolver caller 주변의 실행 중 memory를 읽었습니다.
+<code>CreateFileA</code> caller는 <code>0x00af09f6</code>이고 window는
+<code>0x00af09ee</code>부터 readable하게 읽혔습니다. caller 직후
+<code>89 45 dc</code>는 반환 EAX를 <code>[EBP-0x24]</code>에 저장합니다.
+이는 HLE wrapper 호출 자체가 아니라 반환값 저장 경계의 **확인됨** 증거입니다.
+저장값을 소비하는 후속 code와 indirect call은 **미확정**입니다.
+
+*Task 122 read the live memory around the resolver caller. The
+<code>CreateFileA</code> caller is <code>0x00af09f6</code>, and the readable
+window starts at <code>0x00af09ee</code>. The immediate bytes
+<code>89 45 dc</code> store the returned EAX at <code>[EBP-0x24]</code>. This
+confirms a return-value storage boundary, not an actual HLE-wrapper call. The
+later consumer and any indirect call remain unresolved.*
+
+### 추가 resolver 반환 주소 — 확인됨 / Additional resolver return addresses — Confirmed
+
+작업 121에서 <code>GetVersion</code>과 <code>CreateFileA</code>의 resolver
+반환 주소 및 원본 caller를 기록했습니다. <code>CreateFileA</code> 반환값
+<code>0x62f5350d</code>는 runtime base <code>0x62f50000</code> 안에 있고,
+<code>GetVersion</code> 반환값 <code>0x77451c10</code>은 kernel32 base
+<code>0x77430000</code> 안에 있습니다. 반환 포인터의 module 범위는
+**확인됨**이지만 wrapper request event가 없으므로 실제 호출과 ABI 호환은
+**미확정**입니다.
+
+*Task 121 recorded resolver return addresses and original callers for
+<code>GetVersion</code> and <code>CreateFileA</code>. The
+<code>CreateFileA</code> result <code>0x62f5350d</code> lies within runtime
+base <code>0x62f50000</code>, and the <code>GetVersion</code> result
+<code>0x77451c10</code> lies within kernel32 base
+<code>0x77430000</code>. The module ranges are **confirmed**, but actual
+invocation and ABI compatibility remain **unresolved** because no wrapper
+request event was observed.*
+
+### 추가 VFS open trace — 확인됨 / Additional VFS open trace — Confirmed
+
+작업 120에서 <code>Re2djVfsCreateFileA</code> 진입 request와 주요 결과 stage를
+bounded trace로 추가했지만, 실제 4th CHD 실행의 VFS log에는
+<code>create-file:stage=request</code>가 없었습니다. 기존
+<code>CreateFileA:route=hle</code>는 resolver 내부 event이므로 실제 wrapper
+호출의 증거가 아닙니다. 따라서 protected stub의 반환 포인터 호출 여부와 첫
+파일 open 결과는 **미확정**으로 유지합니다.
+
+*Task 120 added bounded request and major-result stages for
+<code>Re2djVfsCreateFileA</code>, but the real 4th CHD run produced no
+<code>create-file:stage=request</code> event in the VFS log. The existing
+<code>CreateFileA:route=hle</code> event is internal to the resolver and is not
+evidence of an actual wrapper call. Whether the protected stub calls the
+returned pointer and what the first file-open result is therefore remain
+**unresolved**.*
+
+### 추가 EIP=0 fault 호출 대상 귀속 — 확인됨 / Additional EIP=0 fault call attribution — Confirmed
+
+작업 123에서 first-chance execute fault의 stack return address 직전
+runtime bytes를 제한적으로 해석했습니다. 실제 CHD trace의 첫 stack return
+address는 <code>0x00aef7fe</code>이고, 그 직전 bytes는
+<code>FF 15 F4 0C AF 00 83 C4</code>였습니다. 따라서 fault 직전 호출은
+<code>CALL DWORD PTR [0x00AF0CF4]</code>로 **확인됨**입니다.
+
+해당 pointer slot은 child memory에서 readable했지만 현재 값은
+<code>0x00000000</code>이었습니다. 진단 event는 target을 실행 가능한
+module이나 section으로 귀속하지 않았고, child는 이어서
+<code>EIP=0x00000000</code>, <code>0xc0000005</code> execute fault로
+종료했습니다. 이는 zero-pointer indirect call 경계를 확정하지만,
+slot이 0으로 남은 원인, 이전 continuation, HLE ABI 문제인지 보호 코드의
+별도 초기화 문제인지는 **미확정**입니다.
+
+*Task 123 conservatively decoded the runtime bytes immediately before the
+first fault-stack return address. The real CHD trace returned to
+<code>0x00aef7fe</code>, with preceding bytes
+<code>FF 15 F4 0C AF 00 83 C4</code>, confirming a
+<code>CALL DWORD PTR [0x00AF0CF4]</code> immediately before that return.
+
+The pointer slot was readable in child memory and contained
+<code>0x00000000</code>. The diagnostic did not attribute a runnable module or
+section to the target, and the child then exited with an execute fault at
+<code>EIP=0x00000000</code> and code <code>0xc0000005</code>. This confirms a
+zero-pointer indirect-call boundary, but the reason the slot stayed zero, the
+earlier continuation, and whether this is an HLE ABI issue or separate
+protected-code initialization problem remain **unresolved**.*
+
+### 추가 zero slot 참조 추적 — 확인됨 / Additional zero-slot reference trace — Confirmed
+
+작업 124에서 live main image 전체를 bounded scan한 결과
+<code>0x00AF0CF4</code> 주소 immediate가 12곳에서 확인됐습니다. 정식 PE
+import table은 <code>0x00B16A60</code>, <code>0x00AE0F90</code>,
+<code>0x00B193D0</code> 등의 별도 범위에 있으므로 이 slot은 정식 IAT가
+아닙니다. HLE와 CHD VFS가 없는 native baseline에서도 slot은 0이었고 같은
+<code>EIP=0</code> fault가 발생했으므로 현재 HLE가 zero slot을 직접 만든
+것은 아닙니다.
+
+runtime window에는 <code>0x00AEF5F0</code>, <code>0x00AEFE62</code>,
+<code>0x00AF061A</code>에서 <code>A3 F4 0C AF 00</code>, 즉
+<code>MOV [0x00AF0CF4], EAX</code> 기록 명령이 **확인**됩니다. 또한 여섯
+indirect-call site와 세 zero 비교 site가 확인됩니다. 다만 fault 시점의
+정적 window만 관찰했으므로 어느 기록 명령이 실제로 실행됐는지와 당시 EAX
+값은 **미확정**입니다.
+
+*Task 124 found 12 occurrences of the <code>0x00AF0CF4</code> address immediate
+in a bounded scan of the live main image. Formal PE import tables occupy
+separate ranges such as <code>0x00B16A60</code>, <code>0x00AE0F90</code>, and
+<code>0x00B193D0</code>, so this slot is not a formal IAT entry. A native
+baseline without HLE or CHD VFS retained the zero slot and produced the same
+<code>EIP=0</code> fault, showing that the current HLE did not directly create
+the zero value.
+
+The runtime windows **confirm** <code>A3 F4 0C AF 00</code>, or
+<code>MOV [0x00AF0CF4], EAX</code>, at <code>0x00AEF5F0</code>,
+<code>0x00AEFE62</code>, and <code>0x00AF061A</code>. Six indirect-call sites
+and three zero-comparison sites are also confirmed. Because this observation
+only scans windows at fault time, which writer executed and the EAX value at
+that moment remain **unresolved**.*
+
+### 추가 slot writer 실행 결과 — 확인됨 / Additional slot-writer execution result — Confirmed
+
+작업 125의 hardware execution breakpoint는 broad API software watch를 끈
+CHD/VFS 실행과 native baseline 모두에서 <code>0x00AEFE62</code> writer를
+포착했습니다. 두 실행 모두 instruction 실행 직전 EAX는
+<code>0x00B17B00</code>, slot 값은 <code>0x00000000</code>이었고,
+instruction bytes는 <code>a3f40caf00</code>이었습니다. CHD/VFS 실행의 idle
+boundary에서 slot 현재 값은 <code>0x00B17B00</code>으로 확인됐습니다.
+
+같은 CHD/VFS 실행에 40개 broad API software watch를 함께 적용하면 writer
+hit은 0회였고 slot이 0인 채 기존 <code>EIP=0</code> fault가 재현됐습니다.
+따라서 이전 zero-slot fault는 현재 HLE 자체의 일반 실행 결과가 아니라 broad
+API breakpoint 진단이 보호 continuation을 바꾸는 **관찰 교란 조건**으로
+확인합니다. 어느 개별 API watch 또는 breakpoint 처리 세부가 분기를 바꾸는지는
+**미확정**입니다.
+
+*Task 125's hardware execution breakpoints caught writer
+<code>0x00AEFE62</code> in both CHD/VFS and native-baseline runs with broad API
+software watches disabled. Immediately before the instruction, both runs had
+EAX <code>0x00B17B00</code>, slot value <code>0x00000000</code>, and instruction
+bytes <code>a3f40caf00</code>. At the CHD/VFS idle boundary, the current slot
+value was <code>0x00B17B00</code>.
+
+Enabling the 40 broad API software watches in the same CHD/VFS run produced no
+writer hit and reproduced the earlier <code>EIP=0</code> fault with a zero slot.
+The earlier zero-slot fault is therefore confirmed as an **observation
+perturbation condition** from broad API-breakpoint tracing rather than the
+normal result of the current HLE path. Which individual watch or breakpoint
+handling detail changes the branch remains **unresolved**.*

@@ -1,15 +1,20 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <intrin.h>
+#include <limits>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "re2dj/device/hardlock_api_descriptor.h"
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/input/legacy_io_port_bus.h"
+#include "re2dj/storage/fat32_chd.h"
 #include "ez2dj_keyboard_input.h"
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
@@ -17,7 +22,11 @@ extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_hle_windows_directory[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_hdd_root[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_overlay_root[MAX_PATH] = {};
+extern "C" __declspec(dllexport) char g_re2dj_vfs_chd_path[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_trace_path[MAX_PATH] = {};
+// Dynamic file APIs are routed to the VFS only for profiles with confirmed
+// dynamic resolver evidence.
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_vfs_dynamic_resolver = 0;
 extern "C" __declspec(dllexport) char g_re2dj_device_mock_path_prefix[MAX_PATH] = {};
 // Device-emulation policy: 0 keeps the natural open failure, 1 lets the
 // emulated \\.\ devices open successfully.
@@ -58,7 +67,9 @@ volatile LONG g_keyboard_input_state = 0;
 volatile LONG g_vfs_image_trace_count = 0;
 volatile LONG g_vfs_script_trace_count = 0;
 volatile LONG g_vfs_device_trace_count = 0;
+volatile LONG g_vfs_open_trace_count = 0;
 volatile LONG g_dynamic_resolver_trace_count = 0;
+volatile LONG g_dynamic_resolver_caller_trace_count = 0;
 volatile LONG g_wts_query_trace_count = 0;
 volatile LONG g_hardlock_450_trace_count = 0;
 
@@ -135,11 +146,24 @@ bool ClaimVfsDeviceTraceBudget()
     return InterlockedIncrement(&g_vfs_device_trace_count) <= kMaximumDeviceDiagnostics;
 }
 
+bool ClaimVfsOpenTraceBudget()
+{
+    constexpr LONG kMaximumOpenDiagnostics = 128;
+    return InterlockedIncrement(&g_vfs_open_trace_count) <= kMaximumOpenDiagnostics;
+}
+
 bool ClaimDynamicResolverTraceBudget()
 {
     constexpr LONG kMaximumResolverDiagnostics = 128;
     return InterlockedIncrement(&g_dynamic_resolver_trace_count) <=
            kMaximumResolverDiagnostics;
+}
+
+bool ClaimDynamicResolverCallerTraceBudget()
+{
+    constexpr LONG kMaximumCallerDiagnostics = 32;
+    return InterlockedIncrement(&g_dynamic_resolver_caller_trace_count) <=
+           kMaximumCallerDiagnostics;
 }
 
 bool ClaimWtsQueryTraceBudget()
@@ -175,19 +199,60 @@ void AppendVfsTraceMessage(const char* message)
     CloseHandle(trace);
 }
 
-void ReportDynamicResolverName(const char* name, const char* route)
+void ReportDynamicResolverCallerWindow(std::uintptr_t caller)
+{
+    constexpr std::size_t kBytesBeforeCaller = 8;
+    constexpr std::size_t kBytesAfterCaller = 16;
+    if (g_re2dj_vfs_trace_path[0] == '\0' || caller < kBytesBeforeCaller ||
+        !ClaimDynamicResolverCallerTraceBudget())
+    {
+        return;
+    }
+    const std::uintptr_t base = caller - kBytesBeforeCaller;
+    unsigned char bytes[kBytesBeforeCaller + kBytesAfterCaller] = {};
+    SIZE_T copied = 0;
+    const BOOL readable =
+        ReadProcessMemory(GetCurrentProcess(),
+                          reinterpret_cast<const void*>(base),
+                          bytes,
+                          sizeof(bytes),
+                          &copied) != FALSE &&
+        copied == sizeof(bytes);
+    char hex[sizeof(bytes) * 2 + 1] = {};
+    for (SIZE_T index = 0; index < copied; ++index)
+    {
+        std::snprintf(hex + index * 2, 3, "%02x", bytes[index]);
+    }
+    char message[256] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:dynamic-resolver-caller:base=0x%08x:caller=0x%08x:readable=%u:bytes=%s\r\n",
+                  static_cast<unsigned>(base),
+                  static_cast<unsigned>(caller),
+                  readable ? 1U : 0U,
+                  hex);
+    AppendVfsTraceMessage(message);
+}
+
+void ReportDynamicResolverName(const char* name,
+                               const char* route,
+                               std::uintptr_t address,
+                               std::uintptr_t caller)
 {
     if (name == nullptr || route == nullptr || !ClaimDynamicResolverTraceBudget())
     {
         return;
     }
-    char message[256] = {};
+    char message[320] = {};
     std::snprintf(message,
                   sizeof(message),
-                  "re2dj:vfs:dynamic-resolver:name=%.127s:route=%s\r\n",
+                  "re2dj:vfs:dynamic-resolver:name=%.95s:route=%.31s:address=0x%08x:caller=0x%08x\r\n",
                   name,
-                  route);
+                  route,
+                  static_cast<unsigned>(address),
+                  static_cast<unsigned>(caller));
     AppendVfsTraceMessage(message);
+    ReportDynamicResolverCallerWindow(caller);
 }
 
 void ReportWtsQuery(DWORD session_id,
@@ -259,6 +324,50 @@ void ReportVfsDeviceOpen(const char* api,
                   "re2dj:vfs:device-open:api=%s:request=%s:success=%u:error=%lu\r\n",
                   api,
                   requested,
+                  result != INVALID_HANDLE_VALUE ? 1U : 0U,
+                  static_cast<unsigned long>(error));
+    AppendVfsTraceMessage(message);
+}
+
+void ReportVfsCreateFileRequest(LPCSTR requested,
+                                DWORD access,
+                                DWORD disposition,
+                                DWORD flags)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || requested == nullptr ||
+        !ClaimVfsOpenTraceBudget())
+    {
+        return;
+    }
+    char message[900] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:create-file:stage=request:request=%.511s:access=0x%08x:disposition=0x%08x:flags=0x%08x\r\n",
+                  requested,
+                  static_cast<unsigned>(access),
+                  static_cast<unsigned>(disposition),
+                  static_cast<unsigned>(flags));
+    AppendVfsTraceMessage(message);
+}
+
+void ReportVfsCreateFileResult(const char* stage,
+                               const char* requested,
+                               const char* mapped,
+                               HANDLE result,
+                               DWORD error)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || stage == nullptr ||
+        requested == nullptr || !ClaimVfsOpenTraceBudget())
+    {
+        return;
+    }
+    char message[900] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:create-file:stage=%.63s:request=%.383s:mapped=%.383s:success=%u:error=%lu\r\n",
+                  stage,
+                  requested,
+                  mapped == nullptr ? "" : mapped,
                   result != INVALID_HANDLE_VALUE ? 1U : 0U,
                   static_cast<unsigned long>(error));
     AppendVfsTraceMessage(message);
@@ -529,6 +638,132 @@ bool IsRegularFile(const char* path)
 // file wrappers can recognize them without consulting the host handle table.
 constexpr std::uintptr_t kDeviceMockHandleBase = 0xFEED0000;
 
+// CHD-backed read handles are process-local tokens, not Windows kernel
+// handles. They are intentionally disjoint from the device mock range.
+constexpr std::uintptr_t kChdFileHandleBase = 0xFCCD0000;
+constexpr std::size_t kMaximumChdFileHandles = 256;
+
+struct ChdFileHandle
+{
+    bool used = false;
+    std::uint64_t position = 0;
+    std::uint32_t size = 0;
+    std::string relative_path;
+};
+
+std::unique_ptr<re2dj::storage::Fat32Volume> g_chd_volume;
+std::string g_chd_mount_error;
+ChdFileHandle g_chd_file_handles[kMaximumChdFileHandles];
+
+bool IsChdFileHandle(HANDLE handle)
+{
+    const std::uintptr_t value = reinterpret_cast<std::uintptr_t>(handle);
+    return value > kChdFileHandleBase &&
+           value <= kChdFileHandleBase + kMaximumChdFileHandles;
+}
+
+ChdFileHandle* LookupChdFileHandle(HANDLE handle)
+{
+    if (!IsChdFileHandle(handle))
+    {
+        return nullptr;
+    }
+    const std::size_t index = static_cast<std::size_t>(
+        reinterpret_cast<std::uintptr_t>(handle) - kChdFileHandleBase - 1);
+    return index < kMaximumChdFileHandles && g_chd_file_handles[index].used
+               ? &g_chd_file_handles[index]
+               : nullptr;
+}
+
+bool IsChdConfigured()
+{
+    return g_re2dj_vfs_chd_path[0] != '\0';
+}
+
+bool EnsureChdMounted()
+{
+    if (g_chd_volume != nullptr)
+    {
+        return true;
+    }
+    if (!IsChdConfigured())
+    {
+        g_chd_mount_error = "CHD path was not configured";
+        return false;
+    }
+    if (!re2dj::storage::Fat32Volume::Open(g_re2dj_vfs_chd_path,
+                                           &g_chd_volume,
+                                           &g_chd_mount_error))
+    {
+        return false;
+    }
+    return true;
+}
+
+bool GuestHddSuffix(const char* name, const char** suffix)
+{
+    if (name == nullptr || suffix == nullptr)
+    {
+        return false;
+    }
+    if (HasPrefixIgnoreCase(name, "D:\\ez2dj"))
+    {
+        *suffix = name + 8;
+        return true;
+    }
+    if (name[0] != '\\' && name[0] != '/')
+    {
+        *suffix = name;
+        return true;
+    }
+    return false;
+}
+
+bool ChdRelativePath(const char* name, std::string* relative)
+{
+    const char* suffix = nullptr;
+    if (!GuestHddSuffix(name, &suffix) || relative == nullptr)
+    {
+        return false;
+    }
+    while (*suffix == '\\' || *suffix == '/')
+    {
+        ++suffix;
+    }
+    if (*suffix == '\0')
+    {
+        return false;
+    }
+    relative->assign("EZ2DJ/");
+    relative->append(suffix);
+    for (char& value : *relative)
+    {
+        if (value == '\\')
+        {
+            value = '/';
+        }
+    }
+    return true;
+}
+
+HANDLE AllocateChdFileHandle(const std::string& relative_path, std::uint32_t size)
+{
+    for (std::size_t index = 0; index < kMaximumChdFileHandles; ++index)
+    {
+        ChdFileHandle& handle = g_chd_file_handles[index];
+        if (handle.used)
+        {
+            continue;
+        }
+        handle.used = true;
+        handle.position = 0;
+        handle.size = size;
+        handle.relative_path = relative_path;
+        return reinterpret_cast<HANDLE>(kChdFileHandleBase + index + 1);
+    }
+    return INVALID_HANDLE_VALUE;
+}
+
 bool IsDeviceMockHandle(HANDLE handle)
 {
     const std::uintptr_t value = reinterpret_cast<std::uintptr_t>(handle);
@@ -621,6 +856,49 @@ bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[M
     return true;
 }
 
+HANDLE OpenChdReadFile(const char* name, DWORD disposition)
+{
+    if (!IsChdConfigured() || disposition == CREATE_NEW || disposition == CREATE_ALWAYS ||
+        disposition == TRUNCATE_EXISTING)
+    {
+        return INVALID_HANDLE_VALUE;
+    }
+    std::string relative;
+    if (!ChdRelativePath(name, &relative) || !EnsureChdMounted())
+    {
+        return INVALID_HANDLE_VALUE;
+    }
+    re2dj::storage::Fat32Entry entry;
+    if (!g_chd_volume->Find(relative, &entry, &g_chd_mount_error) || entry.directory)
+    {
+        return INVALID_HANDLE_VALUE;
+    }
+    const HANDLE handle = AllocateChdFileHandle(relative, entry.size);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_HANDLE_VALUE;
+    }
+    const std::string mapped = "chd://" + relative;
+    ReportVfsAssetOpen("CreateFileA", name, mapped.c_str(), handle, ERROR_SUCCESS);
+    SetLastError(ERROR_SUCCESS);
+    return handle;
+}
+
+bool MaterializeChdFile(const char* name, const char* output)
+{
+    if (!IsChdConfigured() || output == nullptr)
+    {
+        return false;
+    }
+    std::string relative;
+    if (!ChdRelativePath(name, &relative) || !EnsureChdMounted())
+    {
+        return false;
+    }
+    return g_chd_volume->MaterializeFile(relative, output, &g_chd_mount_error);
+}
+
 }  // namespace
 
 extern "C" __declspec(dllexport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
@@ -662,6 +940,11 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsLoadImageA(
     const char* load_name = name;
     if (MapVfsPath(name, false, path, nullptr))
     {
+        if (!IsRegularFile(path) && !MaterializeChdFile(name, path))
+        {
+            SetLastError(ERROR_FILE_NOT_FOUND);
+            return nullptr;
+        }
         load_name = path;
     }
     const HANDLE result =
@@ -686,6 +969,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     HANDLE template_handle)
 {
     OutputDebugStringA(kCreateFileMessage);
+    ReportVfsCreateFileRequest(name, access, disposition, flags);
     if (name == nullptr)
     {
         SetLastError(ERROR_INVALID_NAME);
@@ -693,51 +977,109 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     }
     if (HasDeviceMockPrefix(name))
     {
+        const HANDLE result = reinterpret_cast<HANDLE>(kDeviceMockHandleBase + 1);
+        ReportVfsCreateFileResult("device",
+                                  name,
+                                  nullptr,
+                                  result,
+                                  ERROR_SUCCESS);
         ReportVfsDeviceOpen("CreateFileA",
                             name,
-                            reinterpret_cast<HANDLE>(kDeviceMockHandleBase + 1),
+                            result,
                             ERROR_SUCCESS);
         SetLastError(ERROR_SUCCESS);
-        return reinterpret_cast<HANDLE>(kDeviceMockHandleBase + 1);
+        return result;
     }
     char path[MAX_PATH] = {};
     char source[MAX_PATH] = {};
     const bool write = (access & (GENERIC_WRITE | FILE_APPEND_DATA | DELETE)) != 0;
     if (!MapVfsPath(name, write, path, source))
     {
+        ReportVfsCreateFileResult("unmapped",
+                                  name,
+                                  nullptr,
+                                  INVALID_HANDLE_VALUE,
+                                  ERROR_INVALID_NAME);
         ReportVfsDeviceOpen("CreateFileA", name, INVALID_HANDLE_VALUE, ERROR_INVALID_NAME);
         ReportVfsAssetOpen("CreateFileA", name, "", INVALID_HANDLE_VALUE, ERROR_INVALID_NAME);
         SetLastError(ERROR_INVALID_NAME);
         return INVALID_HANDLE_VALUE;
     }
+    if (!write && !IsRegularFile(path))
+    {
+        const HANDLE chd_handle = OpenChdReadFile(name, disposition);
+        if (chd_handle != INVALID_HANDLE_VALUE)
+        {
+            ReportVfsCreateFileResult("chd",
+                                      name,
+                                      "chd://",
+                                      chd_handle,
+                                      ERROR_SUCCESS);
+            return chd_handle;
+        }
+    }
     if (write)
     {
-        const bool overlay_exists = IsRegularFile(path);
+        bool overlay_exists = IsRegularFile(path);
         const bool source_exists = IsRegularFile(source);
+        if (!overlay_exists && IsChdConfigured() && disposition != CREATE_NEW &&
+            (disposition == OPEN_EXISTING || disposition == OPEN_ALWAYS ||
+             disposition == TRUNCATE_EXISTING) &&
+            MaterializeChdFile(name, path))
+        {
+            overlay_exists = true;
+        }
         if (disposition == CREATE_NEW && (overlay_exists || source_exists))
         {
+            ReportVfsCreateFileResult("overlay-exists",
+                                      name,
+                                      path,
+                                      INVALID_HANDLE_VALUE,
+                                      ERROR_FILE_EXISTS);
             SetLastError(ERROR_FILE_EXISTS);
             return INVALID_HANDLE_VALUE;
         }
         if ((disposition == OPEN_EXISTING || disposition == TRUNCATE_EXISTING) &&
             !overlay_exists && !source_exists)
         {
+            ReportVfsCreateFileResult("overlay-missing",
+                                      name,
+                                      path,
+                                      INVALID_HANDLE_VALUE,
+                                      ERROR_FILE_NOT_FOUND);
             SetLastError(ERROR_FILE_NOT_FOUND);
             return INVALID_HANDLE_VALUE;
         }
         if (!overlay_exists && source_exists && disposition != CREATE_ALWAYS &&
             !EnsureParentDirectories(path))
         {
+            ReportVfsCreateFileResult("overlay-parent",
+                                      name,
+                                      path,
+                                      INVALID_HANDLE_VALUE,
+                                      ERROR_PATH_NOT_FOUND);
             SetLastError(ERROR_PATH_NOT_FOUND);
             return INVALID_HANDLE_VALUE;
         }
         if (!overlay_exists && source_exists && disposition != CREATE_ALWAYS &&
             CopyFileA(source, path, TRUE) == FALSE)
         {
+            const DWORD error = GetLastError();
+            ReportVfsCreateFileResult("overlay-copy",
+                                      name,
+                                      path,
+                                      INVALID_HANDLE_VALUE,
+                                      error);
+            SetLastError(error);
             return INVALID_HANDLE_VALUE;
         }
         if (!EnsureParentDirectories(path))
         {
+            ReportVfsCreateFileResult("overlay-parent",
+                                      name,
+                                      path,
+                                      INVALID_HANDLE_VALUE,
+                                      ERROR_PATH_NOT_FOUND);
             SetLastError(ERROR_PATH_NOT_FOUND);
             return INVALID_HANDLE_VALUE;
         }
@@ -755,6 +1097,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
                                       flags & ~static_cast<DWORD>(FILE_FLAG_NO_BUFFERING),
                                       template_handle);
     const DWORD error = result == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    ReportVfsCreateFileResult("native", name, path, result, error);
     ReportVfsAssetOpen("CreateFileA", name, path, result, error);
     SetLastError(error);
     return result;
@@ -769,6 +1112,42 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
         if (transferred != nullptr)
         {
             *transferred = 0;
+        }
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+    if (ChdFileHandle* chd_handle = LookupChdFileHandle(handle); chd_handle != nullptr)
+    {
+        if (overlapped != nullptr || (buffer == nullptr && size != 0))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        const std::size_t request = size;
+        const std::size_t available =
+            chd_handle->position >= chd_handle->size
+                ? 0
+                : static_cast<std::size_t>(chd_handle->size - chd_handle->position);
+        const std::size_t count = std::min(request, available);
+        std::string error;
+        if (count != 0 && !EnsureChdMounted())
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+        if (count != 0 && !g_chd_volume->ReadFileRange(chd_handle->relative_path,
+                                                        chd_handle->position,
+                                                        buffer,
+                                                        count,
+                                                        &error))
+        {
+            SetLastError(ERROR_READ_FAULT);
+            return FALSE;
+        }
+        chd_handle->position += count;
+        if (transferred != nullptr)
+        {
+            *transferred = static_cast<DWORD>(count);
         }
         SetLastError(ERROR_SUCCESS);
         return TRUE;
@@ -789,6 +1168,15 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsWriteFile(
         SetLastError(ERROR_ACCESS_DENIED);
         return FALSE;
     }
+    if (LookupChdFileHandle(handle) != nullptr)
+    {
+        if (transferred != nullptr)
+        {
+            *transferred = 0;
+        }
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
     return WriteFile(handle, buffer, size, transferred, overlapped);
 }
 
@@ -800,6 +1188,63 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsSetFilePointer(
     {
         SetLastError(ERROR_INVALID_FUNCTION);
         return INVALID_SET_FILE_POINTER;
+    }
+    if (ChdFileHandle* chd_handle = LookupChdFileHandle(handle); chd_handle != nullptr)
+    {
+        const std::uint64_t distance_bits =
+            static_cast<std::uint32_t>(distance) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                 distance_high == nullptr ? 0 : *distance_high))
+             << 32);
+        const std::int64_t signed_distance = distance_high == nullptr
+                                                  ? static_cast<std::int64_t>(distance)
+                                                  : static_cast<std::int64_t>(distance_bits);
+        const std::int64_t base = method == FILE_BEGIN
+                                      ? 0
+                                      : (method == FILE_CURRENT
+                                             ? static_cast<std::int64_t>(chd_handle->position)
+                                             : (method == FILE_END
+                                                    ? static_cast<std::int64_t>(chd_handle->size)
+                                                    : -1));
+        if (base < 0)
+        {
+            SetLastError(ERROR_NEGATIVE_SEEK);
+            return INVALID_SET_FILE_POINTER;
+        }
+        std::uint64_t next = 0;
+        if (signed_distance < 0)
+        {
+            const std::uint64_t magnitude = static_cast<std::uint64_t>(-(signed_distance + 1)) + 1;
+            if (magnitude > static_cast<std::uint64_t>(base))
+            {
+                SetLastError(ERROR_NEGATIVE_SEEK);
+                return INVALID_SET_FILE_POINTER;
+            }
+            next = static_cast<std::uint64_t>(base) - magnitude;
+        }
+        else
+        {
+            if (static_cast<std::uint64_t>(base) >
+                static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) -
+                    static_cast<std::uint64_t>(signed_distance))
+            {
+                SetLastError(ERROR_SEEK);
+                return INVALID_SET_FILE_POINTER;
+            }
+            next = static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(signed_distance);
+        }
+        if (next > chd_handle->size)
+        {
+            SetLastError(ERROR_SEEK);
+            return INVALID_SET_FILE_POINTER;
+        }
+        chd_handle->position = next;
+        if (distance_high != nullptr)
+        {
+            *distance_high = static_cast<LONG>(next >> 32);
+        }
+        SetLastError(ERROR_SUCCESS);
+        return static_cast<DWORD>(next);
     }
     return SetFilePointer(handle, distance, distance_high, method);
 }
@@ -813,6 +1258,15 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileSize(
         SetLastError(ERROR_INVALID_FUNCTION);
         return INVALID_FILE_SIZE;
     }
+    if (ChdFileHandle* chd_handle = LookupChdFileHandle(handle); chd_handle != nullptr)
+    {
+        if (high != nullptr)
+        {
+            *high = 0;
+        }
+        SetLastError(ERROR_SUCCESS);
+        return chd_handle->size;
+    }
     return GetFileSize(handle, high);
 }
 
@@ -821,6 +1275,15 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle)
     OutputDebugStringA(kFileApiMessage);
     if (IsDeviceMockHandle(handle))
     {
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+    if (ChdFileHandle* chd_handle = LookupChdFileHandle(handle); chd_handle != nullptr)
+    {
+        chd_handle->used = false;
+        chd_handle->position = 0;
+        chd_handle->size = 0;
+        chd_handle->relative_path.clear();
         SetLastError(ERROR_SUCCESS);
         return TRUE;
     }
@@ -834,6 +1297,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileType(HANDLE handle)
     {
         SetLastError(ERROR_SUCCESS);
         return FILE_TYPE_CHAR;
+    }
+    if (LookupChdFileHandle(handle) != nullptr)
+    {
+        SetLastError(ERROR_SUCCESS);
+        return FILE_TYPE_DISK;
     }
     return GetFileType(handle);
 }
@@ -1084,61 +1552,104 @@ BOOL WINAPI Re2djObserveWtsQuerySessionInformationA(
 extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
     HMODULE module, LPCSTR name)
 {
-    if (g_re2dj_device_mock != 0 && name != nullptr &&
-        reinterpret_cast<std::uintptr_t>(name) > 0xffffu)
+    const std::uintptr_t caller =
+        reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    if (name != nullptr && reinterpret_cast<std::uintptr_t>(name) > 0xffffu)
     {
-        if (_stricmp(name, "CreateFileA") == 0)
+        if (g_re2dj_vfs_dynamic_resolver != 0)
         {
-            ReportDynamicResolverName(name, "hle");
-            return reinterpret_cast<FARPROC>(&Re2djVfsCreateFileA);
-        }
-        if (_stricmp(name, "ReadFile") == 0)
-        {
-            return reinterpret_cast<FARPROC>(&Re2djVfsReadFile);
-        }
-        if (_stricmp(name, "WriteFile") == 0)
-        {
-            return reinterpret_cast<FARPROC>(&Re2djVfsWriteFile);
-        }
-        if (_stricmp(name, "SetFilePointer") == 0)
-        {
-            return reinterpret_cast<FARPROC>(&Re2djVfsSetFilePointer);
-        }
-        if (_stricmp(name, "GetFileSize") == 0)
-        {
-            return reinterpret_cast<FARPROC>(&Re2djVfsGetFileSize);
-        }
-        if (_stricmp(name, "CloseHandle") == 0)
-        {
-            return reinterpret_cast<FARPROC>(&Re2djVfsCloseHandle);
-        }
-        if (_stricmp(name, "GetFileType") == 0)
-        {
-            return reinterpret_cast<FARPROC>(&Re2djVfsGetFileType);
-        }
-        if (_stricmp(name, "DeviceIoControl") == 0)
-        {
-            ReportDynamicResolverName(name, "hle");
-            return reinterpret_cast<FARPROC>(&Re2djDeviceIoControlMock);
-        }
-        if (_stricmp(name, "WTSQuerySessionInformationA") == 0)
-        {
-            const FARPROC original = GetProcAddress(module, name);
-            if (original != nullptr)
+            if (_stricmp(name, "CreateFileA") == 0)
             {
-                g_original_wts_query_session_information_a =
-                    reinterpret_cast<WtsQuerySessionInformationAProc>(original);
-                ReportDynamicResolverName(name, "observe");
-                return reinterpret_cast<FARPROC>(
-                    &Re2djObserveWtsQuerySessionInformationA);
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsCreateFileA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "ReadFile") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsReadFile);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "WriteFile") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsWriteFile);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "SetFilePointer") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsSetFilePointer);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetFileSize") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetFileSize);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "CloseHandle") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsCloseHandle);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetFileType") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetFileType);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+        }
+        if (g_re2dj_device_mock != 0)
+        {
+            if (_stricmp(name, "DeviceIoControl") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djDeviceIoControlMock);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "WTSQuerySessionInformationA") == 0)
+            {
+                const FARPROC original = GetProcAddress(module, name);
+                if (original != nullptr)
+                {
+                    g_original_wts_query_session_information_a =
+                        reinterpret_cast<WtsQuerySessionInformationAProc>(original);
+                    const FARPROC result =
+                        reinterpret_cast<FARPROC>(&Re2djObserveWtsQuerySessionInformationA);
+                    ReportDynamicResolverName(name,
+                                              "observe",
+                                              reinterpret_cast<std::uintptr_t>(result),
+                                              caller);
+                    return result;
+                }
             }
         }
     }
+    const FARPROC result = GetProcAddress(module, name);
     if (name != nullptr && reinterpret_cast<std::uintptr_t>(name) > 0xffffu)
     {
-        ReportDynamicResolverName(name, "win32");
+        ReportDynamicResolverName(
+            name, "win32", reinterpret_cast<std::uintptr_t>(result), caller);
     }
-    return GetProcAddress(module, name);
+    return result;
 }
 
 extern "C" __declspec(dllexport) __declspec(noinline) void WINAPI Re2djProbeExitProcess(UINT code)

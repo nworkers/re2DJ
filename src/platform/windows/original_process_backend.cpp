@@ -31,6 +31,11 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         }
         return false;
     }
+    if (!options.executable_relative_path.empty() && options.chd_image.empty())
+    {
+        *error = "explicit executable path requires a CHD image";
+        return false;
+    }
     if (options.profile_defaults.lptdi.legacy_io_ports &&
         !options.profile_defaults.lptdi.device_mock_enabled)
     {
@@ -77,6 +82,16 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     }
 
     *arguments = {"re2dj", "--hdd", options.hdd_directory.string(), "--target", options.target_id};
+    if (!options.chd_image.empty())
+    {
+        arguments->push_back("--chd");
+        arguments->push_back(options.chd_image.string());
+        if (!options.executable_relative_path.empty())
+        {
+            arguments->push_back("--target-executable");
+            arguments->push_back(options.executable_relative_path);
+        }
+    }
     const re2dj::target::TargetRunDefaults& defaults = options.profile_defaults;
     if (defaults.hle_command_line)
     {

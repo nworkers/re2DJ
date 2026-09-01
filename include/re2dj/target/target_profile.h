@@ -17,6 +17,12 @@ enum class ExecutableFormatHint
     kWin32Pe32,
 };
 
+enum class HddInputKind
+{
+    kDirectory,
+    kMameChd,
+};
+
 // LPTDI and legacy I/O policy for one executable profile. An empty or false
 // setting means that the profile does not claim that capability.
 struct TargetLptdiPolicy
@@ -37,6 +43,9 @@ struct TargetRunDefaults
 {
     // Repository-relative convenience path used by the profile shortcut.
     std::string default_hdd_directory_relative_path;
+    // Repository-relative directory containing the CHD selected by a profile.
+    std::string default_hdd_image_relative_path;
+    HddInputKind hdd_input_kind = HddInputKind::kDirectory;
     // Optional values are omitted when the original build has no corresponding
     // configuration import that the runtime can override safely.
     std::optional<float> audio_gain_db;
@@ -45,6 +54,8 @@ struct TargetRunDefaults
     bool hle_command_line = false;
     bool hle_windows_directory = false;
     bool hle_vfs = false;
+    // Allows confirmed dynamic file API resolution through the VFS wrapper.
+    bool hle_dynamic_vfs = false;
     bool hle_d3d3 = false;
     bool hle_directsound = false;
     TargetLptdiPolicy lptdi;

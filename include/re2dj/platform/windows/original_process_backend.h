@@ -13,8 +13,15 @@ namespace re2dj::platform::windows
 struct OriginalProcessOptions
 {
     std::filesystem::path hdd_directory;
+    // Optional source CHD. The HDD directory then contains only the staged
+    // executable and cache; injected VFS reads the original files from this
+    // image.
+    std::filesystem::path chd_image;
     std::filesystem::path io_config;
     std::string target_id;
+    // Relative executable path within the staged CHD root. Empty for normal
+    // directory-backed launches, which rediscover the target by scanning.
+    std::string executable_relative_path;
     std::string hle_profile_id;
     re2dj::target::TargetRunDefaults profile_defaults;
     bool audio_volume_trace = false;

@@ -10,6 +10,115 @@
 
 ## 현재 진행 / In progress
 
+- [x] 작업 114 — ez2dj4th FAT32 CHD 파일시스템 및 실행 연결
+  - [x] 실제 `4thTrax.chd`의 MBR/BPB/FAT/LFN과 `EZ2DJ/EZ2DJ.EXE` 확인
+  - [x] `Fat32Volume` read-only file-range API 및 PE32 검증 연결
+  - [x] Windows x86 executable staging과 CHD-backed runtime pseudo handle 경계 추가
+  - [x] 실제 Windows 장비에서 첫 HLE 장치 open 경계(<code>\\.\NTICE</code>, <code>\\.\FEnteDev</code>) 확인
+
+  *Task 114 — Add a read-only FAT32 view over the real CHD, locate and stage
+  `EZ2DJ/EZ2DJ.EXE`, and connect guest reads to CHD-backed runtime handles.
+  The first protected 4th runtime device-open boundary is now confirmed as
+  <code>\\.\NTICE</code>, followed by <code>\\.\FEnteDev</code>.*
+
+- [x] 작업 118 — ez2dj4th 보호 stub bounded API trace
+  - [x] <code>ExitProcess</code> 정적 import가 없는 target의 API trace 준비 경계 추가
+  - [x] 4th의 첫 동적 <code>GetProcAddress</code> 대상(<code>GetVersion</code>, <code>CreateFileA</code>) 확인
+  - [x] 동적 <code>GetProcAddress</code> 결과를 4th CHD VFS wrapper로 연결
+
+  *Task 118 — Add a bounded API-trace boundary for targets without a static
+  <code>ExitProcess</code> import and confirm 4th's first dynamic
+  <code>GetProcAddress</code> targets. Connecting those dynamic results to the
+  4th CHD VFS wrapper is now confirmed; the protected continuation remains
+  unresolved.*
+
+- [x] 작업 119 — ez2dj4th 동적 VFS resolver
+  - [x] 4th profile의 <code>hle_dynamic_vfs</code> capability와 runtime export 추가
+  - [x] 원본 <code>GetProcAddress</code> IAT 2개를 injected resolver thunk로 연결
+  - [x] 실제 CHD VFS log에서 <code>CreateFileA:route=hle</code> 확인
+  - [ ] asset-open 이후 보호 응답과 정상 게임 실행 경계 확인
+
+  *Task 119 — Add the 4th-only dynamic VFS resolver capability, patch the
+  original <code>GetProcAddress</code> IAT to the injected thunk, and confirm
+  <code>CreateFileA:route=hle</code> in the real CHD VFS log. Asset opening,
+  protection response, and normal game execution remain unresolved.*
+
+- [x] 작업 120 — ez2dj4th bounded VFS open trace
+  - [x] <code>Re2djVfsCreateFileA</code> request/result bounded trace 추가
+  - [x] 실제 CHD trace에서 resolver route와 wrapper request event 분리 확인
+  - [x] API software watch 없는 trace에서 반환 함수 포인터의 실제 wrapper 호출 확인
+
+  *Task 120 — Add bounded request/result diagnostics for
+  <code>Re2djVfsCreateFileA</code> and distinguish resolver routing from an
+  actual wrapper request in the real CHD trace. Task 125 confirms wrapper entry
+  for <code>\\.\NTICE</code> and <code>\\.\FEnteDev</code> when broad API
+  software watches are disabled.*
+
+- [x] 작업 121 — ez2dj4th 동적 resolver 반환 ABI trace
+  - [x] HLE/native 반환 주소와 원본 resolver caller 기록
+  - [x] 반환 주소가 runtime·kernel32 module 범위에 있는지 확인
+  - [ ] 반환 포인터 실제 호출과 <code>eip=0</code> fault 원인 확인
+
+  *Task 121 — Record HLE/native return addresses and original resolver callers,
+  and confirm their expected runtime/system-module ranges. The actual returned
+  pointer call and the cause of the <code>eip=0</code> fault remain unresolved.*
+
+- [x] 작업 122 — ez2dj4th resolver caller instruction window
+  - [x] runtime memory에서 <code>CreateFileA</code> caller window readable 확인
+  - [x] 반환 EAX의 <code>[EBP-0x24]</code> 저장 instruction 확인
+  - [ ] 저장된 pointer consumer와 후속 indirect call 경계 확인
+
+  *Task 122 — Read the live runtime memory around the
+  <code>CreateFileA</code> resolver caller and confirm the returned EAX store at
+  <code>[EBP-0x24]</code>. The stored-pointer consumer and later indirect-call
+  boundary remain unresolved.*
+
+- [x] 작업 123 — ez2dj4th EIP=0 fault 호출 대상 귀속
+  - [x] fault stack return address 직전 x86 indirect call encoding 관찰
+  - [x] <code>FF 15 [0x00AF0CF4]</code> pointer slot과 현재 target 값 기록
+  - [x] zero target indirect call과 정상 HLE/보호 응답을 구분
+  - [ ] slot이 0이 된 보호 코드 원인과 그 이전 continuation 확인
+
+  *Task 123 — Attribute the <code>EIP=0</code> fault to the x86 indirect-call
+  encoding immediately before a fault-stack return address, record the
+  <code>FF 15 [0x00AF0CF4]</code> pointer slot and current target, and keep a
+  zero target separate from HLE or protection success. The code path that left
+  the slot zero and the earlier continuation remain unresolved.*
+
+- [x] 작업 124 — ez2dj4th zero pointer-slot 참조 추적
+  - [x] <code>0x00AF0CF4</code>가 정식 PE IAT가 아님을 확인
+  - [x] HLE 없는 native baseline에서도 동일한 zero slot과 fault 확인
+  - [x] live main image의 참조 12개와 명확한 EAX 기록 명령 3개 확인
+  - [ ] 어느 기록 명령이 실행되는지와 실행 시 EAX 값 추적
+
+  *Task 124 — Distinguish <code>0x00AF0CF4</code> from the formal PE IAT,
+  reproduce the same zero slot and fault without HLE, and locate 12 live-image
+  references including three unambiguous EAX stores. Which writer executes and
+  the EAX value at that point remain unresolved.*
+
+- [x] 작업 125 — ez2dj4th pointer-slot writer 실행 추적
+  - [x] 세 writer RVA에 원본 memory를 수정하지 않는 hardware breakpoint 적용
+  - [x] <code>0x00AEFE62</code>에서 EAX <code>0x00B17B00</code> 저장 확인
+  - [x] broad API software watch가 writer를 우회하고 zero-slot fault를 재현함을 확인
+  - [x] 정상 trace에서 <code>\\.\NTICE</code>와 <code>\\.\FEnteDev</code> VFS wrapper request 확인
+  - [ ] 두 장치 경로의 보호 driver protocol과 응답 정책 분석
+
+  *Task 125 — Use hardware execution breakpoints to confirm that writer
+  <code>0x00AEFE62</code> stores EAX <code>0x00B17B00</code>. Broad API software
+  watches bypass that writer and reproduce the zero-slot fault. Without those
+  watches, the protected path reaches VFS requests for <code>\\.\NTICE</code>
+  and <code>\\.\FEnteDev</code>; their driver protocols remain unresolved.*
+
+- [x] 작업 113 — ez2dj4th MAME CHD HDD 입력 및 libchdr adapter
+  - [x] `ez2dj4th` built-in profile과 shortcut 경로 `roms/ez2dj4th` 선언
+  - [x] libchdr vendoring 및 공용 CHD header/metadata/hunk/sector adapter 구현
+  - [x] 실제 CHD의 geometry metadata와 LBA 0 sector 판독 검증
+  - [x] CHD 내부 FAT/VFS mount, executable fingerprint와 `re2dj --run ez2dj4th` 연결
+
+  *Task 113 — Add the `ez2dj4th` MAME CHD HDD input and libchdr adapter. The
+  profile shortcut is `roms/ez2dj4th`; the follow-up FAT32 and runtime boundary
+  is recorded in Task 114.*
+
 - [ ] 작업 077 — Linux 원본 실행 경로
   - [x] Linux x86-64 host/i386 helper synthetic PE32 mapping·relocation·TLS·import gate IPC 검증
   - [x] X11·Wayland SDL3/OpenGL 공용 backend build 검증
@@ -74,6 +183,7 @@
 
 ## 다음 작업 / Next work
 
+- [ ] 작업 119 — Windows x86 4th dynamic <code>GetProcAddress</code> VFS HLE
 - [ ] Windows x86 INI API HLE (`GetPrivateProfile*`, `WritePrivateProfileStringA`)
 - [ ] Windows x86 directory enumeration (`FindFirstFileA`, `FindNextFileA`, `FindClose`)
 - [ ] Web(Emscripten) build verification

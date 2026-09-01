@@ -47,6 +47,8 @@ flowchart LR
 | 계층 / Layer | 경로 / Path | 책임 / Responsibility | 상태 |
 | --- | --- | --- | --- |
 | HDD 입력 | `include/re2dj/hdd/`, `src/hdd/` | 사용자가 준 디렉터리 검증, 대소문자 무시 경로 해석, 실행 파일 스캔 | **[구현됨]** |
+| MAME CHD 입력 | `include/re2dj/storage/mame_chd.h`, `src/storage/mame_chd.cpp` | libchdr 기반 CHD header·metadata·hunk·sector read-only adapter | **[구현됨]** |
+| FAT32 CHD 파일시스템 | `include/re2dj/storage/fat32_chd.h`, `src/storage/fat32_chd.cpp` | MBR/BPB/FAT chain/LFN/file-range read-only view와 실행 파일 staging | **[구현됨]** |
 | 게스트 경로 | `include/re2dj/storage/`, `src/storage/` | Win32 경로 파싱·정규화, 드라이브 문자 매핑, overlay 정책과 파일 테이블 | **[구현됨]** |
 | 실행 파일 분석 | `include/re2dj/exe/`, `src/exe/` | PE32 헤더·섹션·디렉터리 판독 | **[구현됨]** (헤더·섹션), **[계획]** (import/reloc) |
 | 타깃 프로파일 | `include/re2dj/target/`, `src/target/` | 버전별 실행 파일 경로, 작업 디렉터리, HLE 프로파일 ID | **[구현됨]** (자료구조·감지), **[계획]** (버전별 항목) |
@@ -55,7 +57,7 @@ flowchart LR
 | 설정 | `include/re2dj/config/`, `src/config/` | INI 파싱, 키 바인딩, 실행 옵션 | **[계획]** |
 | 플랫폼 | `src/platform/{windows,linux,web}/` | 창·렌더·오디오·입력·시간의 호스트 구현 | **[계획]** |
 | 호스트 | `src/host/cli/` | 명령행 진입점 | **[구현됨]** |
-| 도구 | `src/tools/{hdd_probe,pe_analyzer}/` | 비실행 분석 도구 | **[구현됨]** |
+| 도구 | `src/tools/{hdd_probe,chd_probe,pe_analyzer}/` | 비실행 HDD·CHD·PE 분석 도구 | **[구현됨]** |
 
 *The table above maps each layer to its directory, responsibility, and current status.*
 
@@ -66,6 +68,10 @@ flowchart LR
 원본 HDD 내용은 **디렉터리 경로**로 입력받는다. 이미지 파일(`.img`, `.vhd`)을 직접 마운트하지 않는다. 사용자가 이미지를 풀어 놓은 디렉터리를 그대로 가리키면 된다.
 
 *Original HDD contents arrive as a **directory path**. Image files are not mounted directly; the user points at a directory into which the image was already extracted.*
+
+CHD-backed target은 이 디렉터리 경계와 병렬인 `MameChdImage` read-only block boundary를 사용한다. `Fat32Volume`은 CHD logical sector에서 MBR/BPB/FAT/LFN을 읽고 `EZ2DJ/EZ2DJ.EXE`를 확인한다. Windows x86 launcher는 PE와 profile sibling만 staging하고 CHD 경로를 injected runtime에 전달해 guest read를 pseudo handle로 서비스한다. CHD 실행에서는 부모 CLI가 확인한 staging 기준 executable 상대 경로도 `--target-executable`로 전달하여 launcher의 directory scan이 CHD 전용 프로파일을 잃지 않게 한다.
+
+*CHD-backed targets use a read-only `MameChdImage` block boundary parallel to the directory boundary above. `Fat32Volume` reads MBR/BPB/FAT/LFN data directly from CHD sectors and confirms `EZ2DJ/EZ2DJ.EXE`. The Windows x86 launcher stages the PE and profile siblings, passes the CHD path to the injected runtime, and serves guest reads through pseudo handles. For CHD launches, the parent CLI also forwards the staging-relative executable path as `--target-executable`, so a launcher directory scan cannot lose a CHD-only profile.*
 
 ```
 re2dj --hdd /path/to/ez2dj_hdd
@@ -245,6 +251,10 @@ HDD 스캔은 이 판독기를 사용해 각 실행 파일을 분류한다. `mac
 
 *`run_defaults` owns the shortcut HDD path and the Windows HLE/detached execution policy confirmed for that original build. Detection-only profiles keep it empty, so they cannot inherit an unverified execution policy. CLI `--hdd`, `--target`, `--fullscreen`/`--windowed`, audio values, and I/O settings override the profile defaults.*
 
+`run_defaults.hdd_input_kind`는 추출 디렉터리와 MAME CHD를 구분하고, CHD profile은 `default_hdd_image_relative_path`에 `roms/ez2dj4th`를 저장한다. 실제 4th CHD의 FAT32 경로와 PE32를 `re2dj_chd_probe`와 `Fat32Volume`으로 확인하며, `re2dj ez2dj4th --run`은 Windows x86에서 executable staging과 CHD-backed VFS 경계를 사용한다.
+
+*`run_defaults.hdd_input_kind` distinguishes extracted directories from MAME CHDs, and the CHD profile stores `roms/ez2dj4th` in `default_hdd_image_relative_path`. The real 4th CHD FAT32 path and PE32 are confirmed by `re2dj_chd_probe` and `Fat32Volume`; `re2dj ez2dj4th --run` uses executable staging and the CHD-backed VFS boundary on Windows x86.*
+
 ### 지문으로 덤프를 식별한다 / Dumps are identified by fingerprint
 
 내장 프로파일은 **실행 파일 이름 + 그 옆에 반드시 있어야 하는 항목 목록**으로 덤프를 식별한다. 파일 크기나 해시는 리비전마다 달라져 정상 덤프를 거부하므로 쓰지 않는다.
@@ -256,6 +266,7 @@ HDD 스캔은 이 판독기를 사용해 각 실행 파일을 분류한다. `mac
 | `ez2dj1stse` | `ez2dj.exe` | `ez2dj1.exe`, `ez2dj.ini`, `System.ini`, `Songs`, `System` |
 | `ez2dj1stse_unpacked` | `ez2dj1.exe` | `ez2dj.exe`, `ez2dj.ini`, `Songs`, `System` |
 | `ez2dj3rd` | `EZ2DJ.EXE` | `EZ2DJ.INI`, `FONTKR.DAT`, `BG`, `Sound`, `system` |
+| `ez2dj4th` | `EZ2DJ/EZ2DJ.EXE` inside FAT32 CHD | `EZ2DJ.INI`, `FONTKR.DAT`, `FONTEN.DAT`, `BG`, `SOUND`, `SYSTEM` |
 
 형제 항목이 필요한 이유는 경로 해석이 대소문자를 무시하기 때문이다. 3rd의 `EZ2DJ.EXE`라는 이름만으로는 1st SE의 `ez2dj.exe`와 구별되지 않는다. 두 지문은 서로소라서 오인이 일어나지 않는다.
 
@@ -409,7 +420,7 @@ Win32 제품의 `src/platform/windows/ini_profile_hle.*`는 원본 main image의
 | 실행 방식 | 32비트 Win32 호스트에서 네이티브 실행 + VEH 트랩 | 교체 가능한 backend: 데스크톱 native helper 우선, Web 실행 엔진 별도 |
 | 호스트 | Win32 x86 전용 | Windows x64 / Linux x64 / Web |
 | 그래픽 경계 | Glide (`glide2x`) | DirectDraw / Direct3D |
-| 자산 입력 | MAME ROM ZIP + CHD | HDD 디렉터리 경로 |
+| 자산 입력 | MAME ROM ZIP + CHD | HDD 디렉터리 경로 + MAME CHD |
 | 플랫폼 디렉터리 | `src/platform/win32/` | `src/platform/{windows,linux,web}/` |
 
 공통으로 유지하는 것: 설계 우선 워크플로, 한국어 우선 이중 언어 문서, 영어 전용 소스 주석, `VERSION` 기반 버전 관리, BSD 3-Clause 라이선스 정책, 원본 자산 비포함 원칙.
@@ -425,11 +436,14 @@ Win32 제품의 `src/platform/windows/ini_profile_hle.*`는 원본 main image의
 | 타깃 | 내용 |
 | --- | --- |
 | `re2dj_legacy_graphics` | draw command, texture와 vertex-buffer 공용 정적 라이브러리 |
+| `re2dj_storage_common` | Win32 게스트 경로 파싱·정규화·ASCII 대소문자 절첩을 공유하는 정적 라이브러리 |
+| `re2dj_chd_storage` | libchdr 기반 MAME CHD와 FAT32 read-only 저장소 계층 |
 | `re2dj_core` | 공용 코어 정적 라이브러리 |
 | `re2dj_windows_original_process_backend` | Win32 제품 CLI와 진단 launcher가 공유하는 원본-process 실행 engine |
 | `re2dj_sdl3_opengl_backend` | Win32·Linux·Web 공용 SDL3/OpenGL 렌더 backend |
 | `re2dj` | 명령행 호스트 |
 | `re2dj_hdd_probe` | HDD 디렉터리 스캔 도구 |
+| `re2dj_chd_probe` | MAME CHD header·metadata·sector와 FAT32/PE 판독 도구 |
 | `re2dj_pe_analyzer` | PE32 헤더 분석 도구 |
 | `re2dj_pe_loader` | PE32 매핑·재배치·import gate 보고 도구 |
 | `re2dj_unit_tests` | CTest에 등록된 단위 테스트 |
@@ -442,4 +456,139 @@ Win32 제품의 `src/platform/windows/ini_profile_hle.*`는 원본 main image의
 
 외부 의존성은 graphics build에서 FetchContent로 고정하는 zlib 라이선스 SDL 3.4.14와 Windows x86 audio build의 SDL_mixer 3.2.4다. SDL3 video/OpenGL은 Win32·Linux·Web 공용 backend를 제공한다. 추가 mixer codec dependency는 활성화하지 않는다.
 
-*The graphics build fetches pinned zlib-licensed SDL 3.4.14 for the shared Win32/Linux/Web video and OpenGL backend. The Windows x86 audio build additionally fetches SDL_mixer 3.2.4. No optional mixer codec dependencies are enabled. Windows product builds target Win32 and run on 64-bit Windows through WOW64; separate Windows x64 presets and CI targets are removed. Linux uses separate x86-64 product/host-probe and i386 helper build presets.*
+*The graphics build fetches pinned zlib-licensed SDL 3.4.14 for the shared Win32/Linux/Web video and OpenGL backend. The Windows x86 audio build additionally fetches SDL_mixer 3.2.4. No optional mixer codec dependencies are enabled. The shared core also links the vendored BSD-3-Clause libchdr reader and its permissively licensed codec dependencies; `re2dj_chd_probe` validates a user-supplied image without storing it. Windows product builds target Win32 and run on 64-bit Windows through WOW64; separate Windows x64 presets and CI targets are removed. Linux uses separate x86-64 product/host-probe and i386 helper build presets.*
+
+`re2dj_storage_common`은 게스트 경로 의미를 한 번만 컴파일하며 `re2dj_chd_storage`를 통해 제품 core와 Win32 injected runtime 양쪽에 제공됩니다. 따라서 FAT32 directory lookup이 사용하는 ASCII 대소문자 절첩 심볼이 original-process DLL 링크에서 빠지지 않습니다.
+
+*`re2dj_storage_common` compiles guest-path semantics once and reaches both the product core and the Win32 injected runtime through `re2dj_chd_storage`. This keeps the ASCII case-folding symbol used by FAT32 directory lookup available when the original-process DLL is linked.*
+
+4th Trax 분석 경계에서는 <code>--api-trace</code>가 static <code>ExitProcess</code>
+import가 없는 protected target을 bounded event pump으로 관찰할 수 있다. 실제 4th
+trace에서 확인된 첫 동적 resolver 대상은 <code>GetVersion</code>과
+<code>CreateFileA</code>이며, 이를 4th 전용 CHD VFS wrapper로 연결하는 것은 별도
+검증 작업이다. 진단 boundary는 API 순서와 fault를 기록할 뿐 보호 성공을 판정하지
+않는다.
+
+*The 4th Trax diagnostic boundary lets <code>--api-trace</code> observe a protected
+target without a static <code>ExitProcess</code> import through a bounded event
+pump. The first dynamic resolver targets confirmed in the real 4th trace are
+<code>GetVersion</code> and <code>CreateFileA</code>; routing them through a 4th-specific
+CHD VFS wrapper is a separate verification task. The diagnostic boundary records
+API order and faults but does not adjudicate protection success.*
+
+4th profile의 <code>hle_dynamic_vfs</code> capability는 원본
+<code>GetProcAddress</code> IAT를 injected runtime thunk로 연결한다. 실제 CHD
+trace에서 <code>GetVersion</code>은 native <code>win32</code>,
+<code>CreateFileA</code>는 기존 VFS wrapper의 <code>hle</code> 경로로
+확인됐다. asset-open과 보호 응답은 아직 미확정이며, bounded diagnostic의
+성공 상태를 게임 실행 성공으로 해석하지 않는다.
+
+*The 4th profile's <code>hle_dynamic_vfs</code> capability routes the original
+<code>GetProcAddress</code> IAT through the injected runtime thunk. In the real
+CHD trace, <code>GetVersion</code> was confirmed on the native
+<code>win32</code> route while <code>CreateFileA</code> reached the existing VFS
+wrapper's <code>hle</code> route. Asset opening and the protection response remain
+unresolved, and a bounded diagnostic success status is not game-execution
+success.*
+
+121번 resolver trace는 동적 결과의 주소와 원본 caller를 함께 기록한다. 실제
+4th run에서 <code>CreateFileA</code> 반환 주소는 runtime module 범위에 있고
+caller는 <code>0x00af09f6</code>였지만, VFS wrapper request는 발생하지
+않았다. 따라서 주소 선택은 확인됐고 pointer 호출·ABI 호환·보호 후속 분기는
+미확정으로 남는다.
+
+*Task 121's resolver trace records both the dynamic result address and the
+original caller. In the real 4th run, the <code>CreateFileA</code> result lay
+within the runtime module and its caller was <code>0x00af09f6</code>, but no VFS
+wrapper request occurred. Address selection is confirmed; pointer invocation,
+ABI compatibility, and protected continuation remain unresolved.*
+
+120번 bounded VFS open trace는 resolver 내부의
+<code>CreateFileA:route=hle</code>와 실제
+<code>Re2djVfsCreateFileA</code> 진입을 분리한다. 실제 4th CHD trace에는
+<code>create-file:stage=request</code>가 없었으므로 현재 HLE 경계는 반환
+주소 선택까지 확인됐고 wrapper 호출·파일 open은 미확정이다.
+
+*Task 120's bounded VFS-open trace separates the resolver-internal
+<code>CreateFileA:route=hle</code> record from entry into
+<code>Re2djVfsCreateFileA</code>. The real 4th CHD trace had no
+<code>create-file:stage=request</code> event, so the current HLE boundary is
+confirmed only through returned-address selection; wrapper invocation and file
+opening remain unresolved.*
+
+122번은 resolver caller의 실행 중 memory window를 읽어
+<code>CreateFileA</code> 반환 직후 <code>89 45 dc</code>가 EAX를
+<code>[EBP-0x24]</code>에 저장하는 것을 확인했다. 이는 반환값 저장 경계이며,
+저장된 pointer의 후속 consumer와 indirect call은 아직 미확정이다.
+
+*Task 122 reads the live resolver-caller memory window and confirms that
+<code>89 45 dc</code> immediately after the <code>CreateFileA</code> resolver
+return stores EAX at <code>[EBP-0x24]</code>. This is a return-value storage
+boundary; the stored-pointer consumer and any indirect call remain unresolved.*
+
+작업 123은 bounded first-chance AV diagnostic에서 fault stack return address
+직전의 x86 call encoding과 absolute memory-indirect call의 pointer slot을
+읽는다. 실제 4th trace에서 <code>0x00aef7fe</code> 직전
+<code>FF 15 F4 0C AF 00</code>와 slot <code>0x00AF0CF4</code>를 확인했고,
+slot 값은 <code>0x00000000</code>였다. 이 계층은 zero-pointer indirect call과
+<code>EIP=0</code> fault를 귀속할 뿐이며, 값을 채우거나 반환 ABI를 보정하지
+않는다. slot의 생성 원인과 그 이전 protected continuation은 아직
+미확정이다.
+
+*Task 123 extends the bounded first-chance AV diagnostic to read the x86 call
+encoding immediately before a fault-stack return address and the pointer slot
+used by an absolute memory-indirect call. The real 4th trace confirmed
+<code>FF 15 F4 0C AF 00</code> before <code>0x00aef7fe</code> and a current slot
+value of <code>0x00000000</code> at <code>0x00AF0CF4</code>. This layer only
+attributes the zero-pointer indirect call and the <code>EIP=0</code> fault; it
+does not fill the slot or repair the returned-function ABI. The slot's origin
+and the earlier protected continuation remain unresolved.*
+
+작업 124는 fault attribution이 찾은 absolute pointer slot을 main image의
+committed readable memory에서만 제한적으로 검색한다. 64 KiB block 경계에는
+3-byte overlap을 두며, 최대 64개의 일치 위치에 section과 24-byte runtime
+window를 기록한다. child context와 memory는 변경하지 않는다. 실제 4th
+trace에서는 <code>0x00AF0CF4</code> 참조 12개와
+<code>MOV [0x00AF0CF4], EAX</code> writer 3개를 확인했다. native
+baseline에도 동일한 zero slot과 fault가 있으므로 현재 HLE가 직접 만든
+결과는 아니다. writer의 실제 실행 여부와 EAX 값은 후속 trace 범위다.
+
+*Task 124 performs a bounded search for an absolute pointer slot identified by
+fault attribution, limited to committed readable memory in the main image. It
+uses a three-byte overlap across 64 KiB blocks and records the section and a
+24-byte runtime window for at most 64 matches. Child context and memory remain
+unchanged. The real 4th trace found 12 references to
+<code>0x00AF0CF4</code>, including three
+<code>MOV [0x00AF0CF4], EAX</code> writers. The same zero slot and fault occur
+in the native baseline, so the current HLE did not directly create them.
+Writer execution and EAX values are follow-up trace scope.*
+
+작업 125의 <code>--slot-writer-trace</code>는 4th 전용 writer RVA 세 곳을
+x86 DR0–DR2 local execution breakpoint로 관찰한다. primary thread와 debug
+event로 생성된 새 thread에 breakpoint를 적용하며, hit에서 실행 직전 EAX,
+slot 이전 값, instruction bytes와 DR6를 기록한다. hit 처리 시 DR6를 지우고
+resume flag만 설정하므로 원본 code, general register, slot data는 변경하지
+않는다.
+
+실제 trace는 <code>0x00AEFE62</code> writer가 EAX
+<code>0x00B17B00</code>을 zero slot에 기록하고, 이후 VFS wrapper가
+<code>\\.\NTICE</code>와 <code>\\.\FEnteDev</code> open을 받는 것을
+확인했다. broad API software watch 40개를 함께 설치하면 writer가 실행되지
+않고 기존 zero-slot fault가 재현되므로, broad API trace는 4th protected
+continuation의 투명한 판정 근거로 사용하지 않는다. 다음 HLE 경계는 두 device
+path를 VFS file로 처리하는 것이 아니라 별도 device backend로 분리하는 것이다.
+
+*Task 125 adds <code>--slot-writer-trace</code>, using x86 DR0–DR2 local
+execution breakpoints for the three 4th-specific writer RVAs. It arms the
+primary thread and threads reported by debug events, recording pre-instruction
+EAX, the previous slot value, instruction bytes, and DR6. Hit handling clears
+DR6 and sets only the resume flag, leaving original code, general registers,
+and slot data unchanged.
+
+The real trace confirms that writer <code>0x00AEFE62</code> stores EAX
+<code>0x00B17B00</code> into the zero slot, after which the VFS wrapper receives
+opens for <code>\\.\NTICE</code> and <code>\\.\FEnteDev</code>. Installing all
+40 broad API software watches prevents the writer from running and reproduces
+the zero-slot fault, so broad API tracing is not used as transparent evidence
+for the 4th protected continuation. The next HLE boundary is a separate device
+backend for these paths rather than treating them as VFS files.*

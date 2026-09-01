@@ -5,6 +5,8 @@
 // point does is orchestration: it validates the directory, scans it, resolves a
 // target profile, and enters an available platform execution backend.
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -12,12 +14,14 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
 #include "re2dj/storage/guest_path.h"
+#include "re2dj/storage/fat32_chd.h"
 #include "re2dj/target/target_profile.h"
 #include "re2dj/version.h"
 
@@ -59,6 +63,147 @@ struct Options
     bool show_version = false;
 };
 
+bool FindChdImage(const std::filesystem::path& input,
+                  std::filesystem::path* image,
+                  std::string* error)
+{
+    if (image == nullptr || error == nullptr || input.empty())
+    {
+        if (error != nullptr)
+        {
+            *error = "CHD path is empty";
+        }
+        return false;
+    }
+    std::error_code code;
+    if (std::filesystem::is_regular_file(input, code))
+    {
+        if (re2dj::storage::EqualsIgnoreAsciiCase(input.extension().string(), ".chd"))
+        {
+            *image = std::filesystem::weakly_canonical(input, code);
+            if (code)
+            {
+                *image = input;
+            }
+            return true;
+        }
+        *error = "CHD input is a regular file but does not have a .chd extension";
+        return false;
+    }
+    if (code || !std::filesystem::is_directory(input, code))
+    {
+        *error = "CHD input directory does not exist: " + input.string();
+        return false;
+    }
+    std::vector<std::filesystem::path> candidates;
+    for (std::filesystem::directory_iterator iterator(input, code), end;
+         !code && iterator != end;
+         iterator.increment(code))
+    {
+        if (!iterator->is_regular_file(code) || code)
+        {
+            continue;
+        }
+        const std::string extension = iterator->path().extension().string();
+        if (re2dj::storage::EqualsIgnoreAsciiCase(extension, ".chd"))
+        {
+            candidates.push_back(iterator->path());
+        }
+    }
+    if (code || candidates.empty())
+    {
+        *error = "no .chd image was found under " + input.string();
+        return false;
+    }
+    std::sort(candidates.begin(), candidates.end());
+    if (candidates.size() > 1)
+    {
+        *error = "more than one .chd image was found under " + input.string();
+        return false;
+    }
+    *image = std::filesystem::weakly_canonical(candidates.front(), code);
+    if (code)
+    {
+        *image = candidates.front();
+    }
+    return true;
+}
+
+bool PrepareChdStaging(const re2dj::storage::Fat32Volume& volume,
+                       const std::string& executable_relative_path,
+                       std::filesystem::path* staging_root,
+                       std::string* error)
+{
+    if (staging_root == nullptr || error == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "invalid CHD staging output";
+        }
+        return false;
+    }
+    std::error_code code;
+    const auto base = std::filesystem::temp_directory_path(code);
+    if (code)
+    {
+        *error = "cannot determine temporary directory for CHD staging";
+        return false;
+    }
+    const std::filesystem::path root = base / "re2dj" / "chd" / "ez2dj4th";
+    std::filesystem::create_directories(root / "EZ2DJ" / "BG", code);
+    std::filesystem::create_directories(root / "EZ2DJ" / "SOUND", code);
+    std::filesystem::create_directories(root / "EZ2DJ" / "SYSTEM", code);
+    if (code)
+    {
+        *error = "cannot create CHD staging directory: " + code.message();
+        return false;
+    }
+    const std::vector<std::pair<std::string, std::filesystem::path>> files = {
+        {executable_relative_path, root / "EZ2DJ" / "EZ2DJ.EXE"},
+        {"EZ2DJ/EZ2DJ.INI", root / "EZ2DJ" / "EZ2DJ.INI"},
+        {"EZ2DJ/FONTKR.DAT", root / "EZ2DJ" / "FONTKR.DAT"},
+        {"EZ2DJ/FONTEN.DAT", root / "EZ2DJ" / "FONTEN.DAT"},
+    };
+    for (const auto& [source, destination] : files)
+    {
+        if (!volume.MaterializeFile(source, destination, error))
+        {
+            return false;
+        }
+    }
+    *staging_root = root;
+    return true;
+}
+
+int ResolveOneChdPath(const re2dj::storage::Fat32Volume& volume,
+                      const std::string& text)
+{
+    re2dj::storage::GuestPath parsed;
+    if (!re2dj::storage::ParseGuestPath(text, &parsed) ||
+        !re2dj::storage::NormalizeGuestPath(&parsed))
+    {
+        std::fprintf(stderr, "error: cannot parse guest path '%s'\n", text.c_str());
+        return kExitUsage;
+    }
+    if (parsed.drive_letter != 'D' || parsed.components.empty() ||
+        !re2dj::storage::EqualsIgnoreAsciiCase(parsed.components.front(), "ez2dj"))
+    {
+        std::fprintf(stderr, "error: CHD guest path must be under D:\\ez2dj\n");
+        return kExitUsage;
+    }
+    const std::string guest_path = re2dj::storage::GuestPathToString(parsed);
+    parsed.components.erase(parsed.components.begin());
+    const std::string relative = "EZ2DJ/" +
+                                  re2dj::storage::GuestPathToRelativeString(parsed);
+    re2dj::storage::Fat32Entry entry;
+    std::string error;
+    const bool found = volume.Find(relative, &entry, &error);
+    std::printf("guest path : %s\n", guest_path.c_str());
+    std::printf("relative   : %s\n", relative.c_str());
+    std::printf("chd path   : %s\n", found ? relative.c_str() : "<not found>");
+    return found ? kExitOk : kExitHddError;
+}
+
 void PrintUsage()
 {
     std::printf(
@@ -69,8 +214,8 @@ void PrintUsage()
         "  re2dj --hdd <directory> [options]\n"
         "\n"
         "Options:\n"
-        "  --hdd <directory>   Extracted original HDD contents. Overrides a\n"
-        "                      profile shortcut path.\n"
+        "  --hdd <directory>   Extracted original HDD contents. For a CHD profile,\n"
+        "                      this may instead be a directory containing one .chd.\n"
         "  --target <id>       Target profile to select. Defaults to the first\n"
         "                      detected candidate.\n"
         "  --list-targets      List target profiles found in the directory.\n"
@@ -299,6 +444,147 @@ int ResolveOnePath(const re2dj::hdd::HddRoot& root, const std::string& text)
     return kExitOk;
 }
 
+int RunChdTarget(const Options& options,
+                 const std::filesystem::path& chd_path,
+                 const re2dj::target::BuiltInTargetProfile& built_in)
+{
+    std::unique_ptr<re2dj::storage::Fat32Volume> volume;
+    std::string error;
+    if (!re2dj::storage::Fat32Volume::Open(chd_path, &volume, &error))
+    {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        return kExitHddError;
+    }
+    constexpr std::string_view kExecutablePath = "EZ2DJ/EZ2DJ.EXE";
+    re2dj::storage::Fat32Entry executable_entry;
+    if (!volume->Find(kExecutablePath, &executable_entry, &error) || executable_entry.directory)
+    {
+        std::fprintf(stderr, "error: CHD does not contain %.*s: %s\n",
+                     static_cast<int>(kExecutablePath.size()),
+                     kExecutablePath.data(),
+                     error.c_str());
+        return kExitHddError;
+    }
+    std::vector<std::uint8_t> executable_bytes;
+    if (!volume->ReadFile(kExecutablePath, &executable_bytes, &error))
+    {
+        std::fprintf(stderr, "error: cannot read %.*s from CHD: %s\n",
+                     static_cast<int>(kExecutablePath.size()),
+                     kExecutablePath.data(),
+                     error.c_str());
+        return kExitHddError;
+    }
+    re2dj::exe::PeImageInfo executable_info;
+    if (!re2dj::exe::ReadPeImageInfo(executable_bytes.data(),
+                                     executable_bytes.size(),
+                                     &executable_info,
+                                     &error) ||
+        !re2dj::exe::IsGuestExecutable(executable_info))
+    {
+        std::fprintf(stderr, "error: CHD executable is not a PE32 guest image: %s\n",
+                     error.empty() ? "unexpected executable format" : error.c_str());
+        return kExitHddError;
+    }
+
+    re2dj::target::TargetProfile profile = built_in.profile;
+    profile.executable_relative_path = std::string(kExecutablePath);
+    profile.working_directory_relative_path = "EZ2DJ";
+    profile.detected = false;
+
+    std::printf("chd image   : %s\n", chd_path.string().c_str());
+    std::printf("filesystem  : FAT32 label=%s data_lba=%llu clusters=%u\n",
+                volume->info().volume_label.c_str(),
+                static_cast<unsigned long long>(volume->info().data_lba),
+                volume->info().cluster_count);
+    std::printf("scanned     : CHD-backed FAT32 lookup (directory materialization deferred)\n");
+    std::printf("executables : 1 selected profile executable\n");
+    if (!options.resolve_path.empty())
+    {
+        return ResolveOneChdPath(*volume, options.resolve_path);
+    }
+
+    std::printf("\ntargets:\n");
+    PrintProfile(profile, true);
+    if (options.list_targets)
+    {
+        return kExitOk;
+    }
+    std::printf("\nselected target : %s\n", profile.id.c_str());
+    std::printf("display name    : %s\n", profile.display_name.c_str());
+    std::printf("executable      : %s\n", profile.executable_relative_path.c_str());
+    std::printf("working dir     : %s\n", profile.working_directory_relative_path.c_str());
+    std::printf("guest path      : <not known for this dump>\n");
+    std::printf("format hint     : %s\n",
+                std::string(re2dj::target::ExecutableFormatHintName(profile.format_hint)).c_str());
+    std::printf("machine         : %s\n",
+                std::string(re2dj::exe::MachineName(executable_info.machine)).c_str());
+    std::printf("magic           : %s\n",
+                std::string(re2dj::exe::MagicName(executable_info.magic)).c_str());
+    std::printf("subsystem       : %s\n",
+                std::string(re2dj::exe::SubsystemName(executable_info.subsystem)).c_str());
+    std::printf("image base      : 0x%08llx\n",
+                static_cast<unsigned long long>(executable_info.image_base));
+    std::printf("entry point rva : 0x%08x\n", executable_info.entry_point_rva);
+    const std::string entry_section(re2dj::exe::EntryPointSectionName(executable_info));
+    std::printf("entry section   : %s%s\n",
+                entry_section.empty() ? "<outside every section>" : entry_section.c_str(),
+                re2dj::exe::HasEntryPointOutsideTextSection(executable_info)
+                    ? "  (outside .text - likely a protection stub)"
+                    : "");
+    std::printf("sections        : %u\n",
+                static_cast<unsigned>(executable_info.sections.size()));
+    if (!profile.note.empty())
+    {
+        std::printf("\nnote: %s\n", profile.note.c_str());
+    }
+    if (!options.run)
+    {
+        std::printf("\nNothing was executed. Pass --run to stage the PE and enter the available execution backend.\n");
+        return kExitOk;
+    }
+
+#if defined(_WIN32)
+    std::filesystem::path staging_root;
+    if (!PrepareChdStaging(*volume, profile.executable_relative_path, &staging_root, &error))
+    {
+        std::fprintf(stderr, "error: cannot stage CHD executable: %s\n", error.c_str());
+        return kExitHddError;
+    }
+    re2dj::platform::windows::OriginalProcessOptions run_options;
+    run_options.hdd_directory = staging_root;
+    run_options.chd_image = chd_path;
+    run_options.target_id = profile.id;
+    run_options.executable_relative_path = profile.executable_relative_path;
+    run_options.hle_profile_id = profile.hle_profile_id;
+    run_options.profile_defaults = profile.run_defaults;
+    if (options.audio_gain_explicit)
+    {
+        run_options.profile_defaults.audio_gain_db = options.audio_gain_db;
+    }
+    if (options.demo_volume_explicit)
+    {
+        run_options.profile_defaults.demo_volume = options.demo_volume;
+    }
+    if (options.fullscreen_explicit)
+    {
+        run_options.profile_defaults.fullscreen = options.fullscreen;
+    }
+    run_options.audio_volume_trace = options.audio_volume_trace;
+    run_options.io_config = options.io_config;
+    const int result = re2dj::platform::windows::RunOriginalProcess(run_options, &error);
+    if (result < 0)
+    {
+        std::fprintf(stderr, "error: Windows execution failed: %s\n", error.c_str());
+        return kExitNotImplemented;
+    }
+    return result;
+#else
+    std::fprintf(stderr,
+                 "error: CHD-backed original-process execution is currently connected only to the Windows x86 launcher\n");
+    return kExitNotImplemented;
+#endif
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -327,12 +613,34 @@ int main(int argc, char** argv)
         return kExitNotImplemented;
     }
 #endif
+    const re2dj::target::BuiltInTargetProfile* shortcut =
+        options.target_id.empty()
+            ? nullptr
+            : re2dj::target::FindBuiltInTargetProfileById(options.target_id);
+    if (shortcut != nullptr &&
+        shortcut->profile.run_defaults.hdd_input_kind ==
+            re2dj::target::HddInputKind::kMameChd)
+    {
+        const std::filesystem::path input =
+            options.hdd_directory.empty()
+                ? std::filesystem::current_path() /
+                      shortcut->profile.run_defaults.default_hdd_image_relative_path
+                : options.hdd_directory;
+        std::filesystem::path chd_path;
+        std::string chd_error;
+        if (!FindChdImage(input, &chd_path, &chd_error))
+        {
+            std::fprintf(stderr, "error: %s\n", chd_error.c_str());
+            return kExitHddError;
+        }
+        return RunChdTarget(options, chd_path, *shortcut);
+    }
     if (options.hdd_directory.empty() && !options.target_id.empty())
     {
-        const re2dj::target::BuiltInTargetProfile* shortcut =
+        const re2dj::target::BuiltInTargetProfile* directory_shortcut =
             re2dj::target::FindBuiltInTargetProfileById(options.target_id);
-        if (shortcut == nullptr ||
-            shortcut->profile.run_defaults.default_hdd_directory_relative_path.empty())
+        if (directory_shortcut == nullptr ||
+            directory_shortcut->profile.run_defaults.default_hdd_directory_relative_path.empty())
         {
             std::fprintf(stderr,
                          "error: profile '%s' has no default HDD directory; pass --hdd <directory>\n",
@@ -340,7 +648,7 @@ int main(int argc, char** argv)
             return kExitUsage;
         }
         options.hdd_directory = std::filesystem::current_path() /
-                                shortcut->profile.run_defaults
+                                directory_shortcut->profile.run_defaults
                                     .default_hdd_directory_relative_path;
     }
     if (options.hdd_directory.empty())

@@ -164,6 +164,26 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             table.push_back(std::move(entry));
         }
 
+        {
+            BuiltInTargetProfile entry;
+            entry.profile.id = "ez2dj4th";
+            entry.profile.display_name = "EZ2DJ 4th (MAME CHD HDD)";
+            entry.profile.hle_profile_id = "ez2dj4th";
+            entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
+            entry.profile.run_defaults.hle_vfs = true;
+            entry.profile.run_defaults.hle_dynamic_vfs = true;
+            entry.profile.run_defaults.default_hdd_image_relative_path =
+                "roms/ez2dj4th";
+            entry.profile.note =
+                "The real 4thTrax CHD contains a FAT32-LBA volume. The confirmed "
+                "game executable is EZ2DJ/EZ2DJ.EXE; CHD-backed reads stay "
+                "read-only and are served through the runtime VFS.";
+            entry.fingerprint.executable_name = "EZ2DJ.EXE";
+            entry.fingerprint.required_siblings = {
+                "EZ2DJ.INI", "FONTKR.DAT", "FONTEN.DAT", "BG", "SOUND", "SYSTEM"};
+            table.push_back(std::move(entry));
+        }
+
         return table;
     }();
     return profiles;
@@ -220,6 +240,12 @@ std::vector<TargetProfile> MatchBuiltInTargetProfiles(const hdd::HddRoot& root,
 
     for (const BuiltInTargetProfile& candidate : GetBuiltInTargetProfiles())
     {
+        if (candidate.profile.run_defaults.hdd_input_kind != HddInputKind::kDirectory)
+        {
+            // Image-backed profiles are selected through their image shortcut,
+            // not by scanning an extracted directory tree.
+            continue;
+        }
         for (const hdd::ExecutableEntry& entry : scan.executables)
         {
             if (!entry.pe_readable || !exe::IsGuestExecutable(entry.pe_info))

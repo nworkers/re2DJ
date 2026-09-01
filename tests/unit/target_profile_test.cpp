@@ -90,10 +90,38 @@ void RunTargetProfileTests(re2dj::test::Context& context)
     {
         RE2DJ_CHECK(context, !entry.profile.id.empty());
         RE2DJ_CHECK(context, !entry.profile.display_name.empty());
-        RE2DJ_CHECK(context, !entry.fingerprint.executable_name.empty());
-        RE2DJ_CHECK(context, !entry.fingerprint.required_siblings.empty());
+        if (entry.profile.run_defaults.hdd_input_kind ==
+            re2dj::target::HddInputKind::kDirectory)
+        {
+            RE2DJ_CHECK(context, !entry.fingerprint.executable_name.empty());
+            RE2DJ_CHECK(context, !entry.fingerprint.required_siblings.empty());
+        }
         // A built-in profile never ships a path; it is filled in from the match.
         RE2DJ_CHECK(context, entry.profile.executable_relative_path.empty());
+    }
+
+    // ---- 4th Trax CHD shortcut ----
+    {
+        const re2dj::target::BuiltInTargetProfile* fourth =
+            re2dj::target::FindBuiltInTargetProfileById("EZ2DJ4TH");
+        RE2DJ_CHECK(context, fourth != nullptr);
+        if (fourth != nullptr)
+        {
+            RE2DJ_CHECK_EQ(context, fourth->profile.display_name,
+                           std::string("EZ2DJ 4th (MAME CHD HDD)"));
+            RE2DJ_CHECK(context,
+                        fourth->profile.run_defaults.hdd_input_kind ==
+                            re2dj::target::HddInputKind::kMameChd);
+            RE2DJ_CHECK_EQ(context,
+                           fourth->profile.run_defaults.default_hdd_image_relative_path,
+                           std::string("roms/ez2dj4th"));
+            RE2DJ_CHECK(context,
+                        fourth->profile.run_defaults.default_hdd_directory_relative_path.empty());
+            RE2DJ_CHECK_EQ(context, fourth->fingerprint.executable_name,
+                           std::string_view("EZ2DJ.EXE"));
+            RE2DJ_CHECK(context, !fourth->fingerprint.required_siblings.empty());
+            RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_vfs);
+        }
     }
 
     // ---- The 1st Tracks Special Edition ----

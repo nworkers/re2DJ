@@ -10,6 +10,8 @@ int main()
         re2dj::target::FindBuiltInTargetProfileById("ez2dj1stse");
     const re2dj::target::BuiltInTargetProfile* third_profile =
         re2dj::target::FindBuiltInTargetProfileById("ez2dj3rd");
+    const re2dj::target::BuiltInTargetProfile* fourth_profile =
+        re2dj::target::FindBuiltInTargetProfileById("ez2dj4th");
     re2dj::platform::windows::OriginalProcessOptions options;
     options.hdd_directory = "asset-free-hdd";
     options.target_id = "ez2dj1stse";
@@ -138,16 +140,39 @@ int main()
                    "0000000000000000";
     }();
 
+    options.hdd_directory = "staged-chd";
+    options.chd_image = "4thTrax.chd";
+    options.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
+    options.target_id = "ez2dj4th";
+    options.hle_profile_id = fourth_profile == nullptr
+                                 ? ""
+                                 : fourth_profile->profile.hle_profile_id;
+    options.profile_defaults = fourth_profile == nullptr
+                                   ? re2dj::target::TargetRunDefaults{}
+                                   : fourth_profile->profile.run_defaults;
+    const bool chd_handoff =
+        fourth_profile != nullptr &&
+        fourth_profile->profile.run_defaults.hle_dynamic_vfs &&
+        re2dj::platform::windows::BuildOriginalProcessArguments(
+            options, &arguments, &error) &&
+        arguments.size() == 10 && arguments[1] == "--hdd" &&
+        arguments[2] == "staged-chd" && arguments[3] == "--target" &&
+        arguments[4] == "ez2dj4th" && arguments[5] == "--chd" &&
+        arguments[6] == "4thTrax.chd" && arguments[7] == "--target-executable" &&
+        arguments[8] == "EZ2DJ/EZ2DJ.EXE" && arguments[9] == "--hle-vfs";
+
     options.target_id = "ez2dj1stse_unpacked";
     options.hle_profile_id = "ez2dj1stse_unpacked";
     options.profile_defaults = {};
+    options.chd_image.clear();
+    options.executable_relative_path.clear();
     const bool rejected =
         !re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
         error.find("invalid Windows original-process options") != std::string::npos;
     if (!canonical || !custom_gain || !custom_demo_volume || !audio_trace || !fullscreen ||
         !invalid_gain || !invalid_demo_volume || !io_config || !invalid_lptdi_policy ||
-        !third_defaults || !rejected)
+        !third_defaults || !chd_handoff || !rejected)
     {
         std::fprintf(stderr, "windows-product-loader-probe: %s\n", error.c_str());
         return 1;

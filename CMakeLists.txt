@@ -116,6 +116,84 @@ else()
     endif()
 endif()
 
+# libchdr is the CHD implementation boundary. It carries MAME's BSD-3-Clause
+# CHD reader and its permissively licensed codec dependencies, so the core does
+# not duplicate the format or codec implementations.
+add_library(re2dj_chdr_lzma STATIC
+    third_party/libchdr/deps/lzma-26.02/src/LzmaDec.c
+)
+target_include_directories(re2dj_chdr_lzma PRIVATE
+    third_party/libchdr/deps/lzma-26.02/include
+)
+
+add_library(re2dj_chdr_miniz STATIC
+    third_party/libchdr/deps/miniz-3.1.2/miniz.c
+)
+target_include_directories(re2dj_chdr_miniz PRIVATE
+    third_party/libchdr/deps/miniz-3.1.2
+)
+target_compile_definitions(re2dj_chdr_miniz PUBLIC
+    MINIZ_NO_ARCHIVE_APIS
+    MINIZ_NO_DEFLATE_APIS
+    MINIZ_NO_STDIO
+    MINIZ_NO_TIME
+)
+
+add_library(re2dj_chdr_zstd STATIC
+    third_party/libchdr/deps/zstd-1.5.7/zstddeclib.c
+)
+target_include_directories(re2dj_chdr_zstd PRIVATE
+    third_party/libchdr/deps/zstd-1.5.7
+)
+
+add_library(re2dj_chdr STATIC
+    third_party/libchdr/src/libchdr_bitstream.c
+    third_party/libchdr/src/libchdr_cdrom.c
+    third_party/libchdr/src/libchdr_chd.c
+    third_party/libchdr/src/libchdr_codec_avhuff.c
+    third_party/libchdr/src/libchdr_codec_cdfl.c
+    third_party/libchdr/src/libchdr_codec_cdlz.c
+    third_party/libchdr/src/libchdr_codec_cdzl.c
+    third_party/libchdr/src/libchdr_codec_cdzs.c
+    third_party/libchdr/src/libchdr_codec_flac.c
+    third_party/libchdr/src/libchdr_codec_huff.c
+    third_party/libchdr/src/libchdr_codec_lzma.c
+    third_party/libchdr/src/libchdr_codec_zlib.c
+    third_party/libchdr/src/libchdr_codec_zstd.c
+    third_party/libchdr/src/libchdr_flac.c
+    third_party/libchdr/src/libchdr_huffman.c
+)
+target_include_directories(re2dj_chdr PUBLIC third_party/libchdr/include)
+target_link_libraries(re2dj_chdr
+    PRIVATE re2dj_chdr_lzma re2dj_chdr_miniz re2dj_chdr_zstd
+)
+target_compile_definitions(re2dj_chdr PRIVATE
+    WANT_RAW_DATA_SECTOR=1
+    WANT_SUBCODE=1
+    VERIFY_BLOCK_CRC=1
+    LOWRAM_TARGET=0
+    _CRT_SECURE_NO_WARNINGS
+)
+
+add_library(re2dj_storage_common STATIC
+    src/storage/guest_path.cpp
+)
+target_include_directories(re2dj_storage_common PUBLIC include)
+target_link_libraries(re2dj_storage_common PRIVATE re2dj_warnings)
+
+add_library(re2dj_chd_storage STATIC
+    src/storage/fat32_chd.cpp
+    src/storage/mame_chd.cpp
+)
+target_include_directories(re2dj_chd_storage
+    PUBLIC include
+    PRIVATE third_party/libchdr/include
+)
+target_link_libraries(re2dj_chd_storage
+    PUBLIC re2dj_chdr re2dj_storage_common
+    PRIVATE re2dj_warnings
+)
+
 add_library(re2dj_legacy_graphics STATIC
     src/graphics/legacy_draw_command.cpp
     src/graphics/legacy_texture.cpp
@@ -151,7 +229,6 @@ add_library(re2dj_core STATIC
     src/hdd/hdd_scan.cpp
     src/runtime/address_space.cpp
     src/runtime/pe_loader.cpp
-    src/storage/guest_path.cpp
     src/storage/vfs_roots.cpp
     src/storage/vfs_file_table.cpp
     src/target/target_profile.cpp
@@ -161,6 +238,8 @@ add_library(re2dj_core STATIC
 target_include_directories(re2dj_core
     PUBLIC
         include
+    PRIVATE
+        third_party/libchdr/include
 )
 
 target_compile_definitions(re2dj_core
@@ -169,7 +248,7 @@ target_compile_definitions(re2dj_core
 )
 
 target_link_libraries(re2dj_core
-    PUBLIC re2dj_legacy_graphics
+    PUBLIC re2dj_legacy_graphics re2dj_chd_storage
     PRIVATE re2dj_warnings
 )
 
@@ -242,7 +321,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         RE2DJ_VERSION="${RE2DJ_VERSION}"
     )
     target_link_libraries(re2dj_windows_injected_runtime
-        PRIVATE re2dj_sdl3_opengl_backend re2dj_warnings dwmapi dxguid winmm
+        PRIVATE re2dj_sdl3_opengl_backend re2dj_chd_storage re2dj_warnings dwmapi dxguid winmm
     )
     if(RE2DJ_ENABLE_SDL3_AUDIO)
         target_sources(re2dj_windows_injected_runtime PRIVATE
@@ -328,6 +407,11 @@ add_executable(re2dj_hdd_probe
 )
 target_link_libraries(re2dj_hdd_probe PRIVATE re2dj_core re2dj_warnings)
 
+add_executable(re2dj_chd_probe
+    src/tools/chd_probe/main.cpp
+)
+target_link_libraries(re2dj_chd_probe PRIVATE re2dj_core re2dj_warnings)
+
 add_executable(re2dj_pe_analyzer
     src/tools/pe_analyzer/main.cpp
 )
@@ -357,6 +441,8 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/legacy_transform_test.cpp
         tests/unit/legacy_vertex_buffer_test.cpp
         tests/unit/legacy_audio_buffer_test.cpp
+        tests/unit/mame_chd_test.cpp
+        tests/unit/fat32_chd_test.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp

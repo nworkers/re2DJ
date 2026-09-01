@@ -4,9 +4,9 @@
 #include <cstdio>
 #include <string>
 
-// A deliberately small harness. The project has no third-party dependency yet,
-// and adding a test framework is a license and build-time decision that belongs
-// in its own design note rather than in the initial scaffolding.
+// A deliberately small harness. Adding a test framework is a license and
+// build-time decision that belongs in its own design note rather than in this
+// scaffolding.
 namespace re2dj::test
 {
 
@@ -75,5 +75,7 @@ void RunLegacyTextureTests(re2dj::test::Context& context);
 void RunLegacyTransformTests(re2dj::test::Context& context);
 void RunLegacyVertexBufferTests(re2dj::test::Context& context);
 void RunLegacyAudioBufferTests(re2dj::test::Context& context);
+void RunMameChdTests(re2dj::test::Context& context);
+void RunFat32ChdTests(re2dj::test::Context& context);
 
 #endif  // RE2DJ_TESTS_UNIT_TEST_SUPPORT_H_
