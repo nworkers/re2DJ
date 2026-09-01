@@ -172,6 +172,10 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
             entry.profile.run_defaults.hle_vfs = true;
             entry.profile.run_defaults.hle_dynamic_vfs = true;
+            entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix =
+                "\\\\.\\FEnteDev";
+            entry.profile.run_defaults.lptdi.hardlock_secret_config_required = true;
             entry.profile.run_defaults.default_hdd_image_relative_path =
                 "roms/ez2dj4th";
             entry.profile.note =

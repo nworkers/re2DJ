@@ -13,5 +13,6 @@
 | 문서 | 내용 |
 | --- | --- |
 | [hdd-directory-setup.md](hdd-directory-setup.md) | 원본 HDD 덤프를 디렉터리로 준비하고 확인하는 절차 |
+| [ez2dj4th-hardlock-config.md](ez2dj4th-hardlock-config.md) | ez2dj4th Hardlock 비밀값을 저장소 밖 설정으로 전달하는 절차 |
 | [linux-sdl3-build.md](linux-sdl3-build.md) | Ubuntu/WSL의 SDL3 X11·Wayland·OpenGL 개발 패키지와 빌드 절차 |
 | [windows-x86-runtime.md](windows-x86-runtime.md) | Windows x86 원본의 detached 실제 실행과 debugger 진단 command |

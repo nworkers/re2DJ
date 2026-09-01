@@ -18,6 +18,8 @@ int main()
     RunLptdiResponseProfileTests(context);
     RunHardlock450ResponseTests(context);
     RunHardlockApiDescriptorTests(context);
+    RunHardlockProtocolTests(context);
+    RunHardlockSecretConfigTests(context);
     RunEz2DjIoBoardTests(context);
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);

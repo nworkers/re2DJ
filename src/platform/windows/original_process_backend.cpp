@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "re2dj/config/hardlock_secret_config.h"
+
 namespace re2dj::platform::windows
 {
 namespace
@@ -49,6 +51,7 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         return false;
     }
     if (options.profile_defaults.lptdi.device_mock_enabled &&
+        !options.profile_defaults.lptdi.hardlock_secret_config_required &&
         options.profile_defaults.lptdi.device_mock_target_state_hex.empty())
     {
         *error = "profile enables LPTDI device mock without a target-state policy";
@@ -64,6 +67,18 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         !options.profile_defaults.lptdi.device_mock_target_state_hex.empty())
     {
         *error = "profile has an LPTDI target-state policy without device mock enablement";
+        return false;
+    }
+    if (options.profile_defaults.lptdi.hardlock_secret_config_required &&
+        !options.profile_defaults.lptdi.device_mock_enabled)
+    {
+        *error = "profile requires an external Hardlock configuration";
+        return false;
+    }
+    if (!options.profile_defaults.lptdi.hardlock_secret_config_required &&
+        !options.hardlock_config.empty())
+    {
+        *error = "profile does not support a Hardlock configuration";
         return false;
     }
     if (options.profile_defaults.audio_gain_db.has_value() &&
@@ -154,6 +169,15 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     {
         arguments->push_back("--io-config");
         arguments->push_back(options.io_config.string());
+    }
+    const std::filesystem::path hardlock_config =
+        defaults.lptdi.hardlock_secret_config_required && options.hardlock_config.empty()
+            ? re2dj::config::DefaultHardlockSecretConfigPath()
+            : options.hardlock_config;
+    if (!hardlock_config.empty())
+    {
+        arguments->push_back("--hardlock-config");
+        arguments->push_back(hardlock_config.string());
     }
     error->clear();
     return true;

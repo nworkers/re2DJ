@@ -218,8 +218,10 @@ endif()
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
     src/audio/legacy_audio_buffer.cpp
+    src/config/hardlock_secret_config.cpp
     src/device/hardlock_450_response.cpp
     src/device/hardlock_api_descriptor.cpp
+    src/device/hardlock_protocol.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/ez2dj_io_board.cpp
@@ -304,6 +306,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
 
     add_library(re2dj_windows_injected_runtime SHARED
         src/device/hardlock_api_descriptor.cpp
+        src/device/hardlock_protocol.cpp
         src/device/lptdi_challenge_response.cpp
         src/input/ez2dj_io_board.cpp
         src/input/legacy_io_port_bus.cpp
@@ -429,8 +432,10 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/execution_backend_test.cpp
         tests/unit/ez2dj_io_board_test.cpp
         tests/unit/guest_path_test.cpp
+        tests/unit/hardlock_secret_config_test.cpp
         tests/unit/hardlock_450_response_test.cpp
         tests/unit/hardlock_api_descriptor_test.cpp
+        tests/unit/hardlock_protocol_test.cpp
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp
         tests/unit/lptdi_challenge_response_test.cpp
