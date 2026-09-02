@@ -56,6 +56,7 @@ struct Context
         }                                                                        \
     } while (false)
 
+void RunCodeRegionScoreTests(re2dj::test::Context& context);
 void RunGuestPathTests(re2dj::test::Context& context);
 void RunAddressSpaceTests(re2dj::test::Context& context);
 void RunExecutionBackendTests(re2dj::test::Context& context);
@@ -66,10 +67,12 @@ void RunTargetProfileTests(re2dj::test::Context& context);
 void RunVfsFileTableTests(re2dj::test::Context& context);
 void RunLptdiChallengeResponseTests(re2dj::test::Context& context);
 void RunLptdiResponseProfileTests(re2dj::test::Context& context);
-void RunHardlock450ResponseTests(re2dj::test::Context& context);
+void RunHardlockHandshakeResponseTests(re2dj::test::Context& context);
 void RunHardlockApiDescriptorTests(re2dj::test::Context& context);
 void RunHardlockProtocolTests(re2dj::test::Context& context);
-void RunHardlockSecretConfigTests(re2dj::test::Context& context);
+void RunHardlockDeviceTests(re2dj::test::Context& context);
+void RunHardlockTransformResponsesTests(re2dj::test::Context& context);
+void RunHardlockMaterialConfigTests(re2dj::test::Context& context);
 void RunLegacyIoPortBusTests(re2dj::test::Context& context);
 void RunEz2DjIoBoardTests(re2dj::test::Context& context);
 void RunLegacyDrawCommandTests(re2dj::test::Context& context);

@@ -2,7 +2,6 @@
 
 #include <cmath>
 
-#include "re2dj/config/hardlock_secret_config.h"
 
 namespace re2dj::platform::windows
 {
@@ -13,6 +12,7 @@ bool HasExecutionPolicy(const re2dj::target::TargetRunDefaults& defaults)
 {
     return defaults.hle_command_line || defaults.hle_windows_directory || defaults.hle_vfs ||
            defaults.hle_d3d3 || defaults.hle_directsound ||
+           defaults.hle_wts_active_console ||
            defaults.lptdi.legacy_io_ports || defaults.lptdi.device_mock_enabled ||
            defaults.run_detached;
 }
@@ -51,7 +51,7 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         return false;
     }
     if (options.profile_defaults.lptdi.device_mock_enabled &&
-        !options.profile_defaults.lptdi.hardlock_secret_config_required &&
+        !options.profile_defaults.lptdi.hardlock_cfg_material_default &&
         options.profile_defaults.lptdi.device_mock_target_state_hex.empty())
     {
         *error = "profile enables LPTDI device mock without a target-state policy";
@@ -69,16 +69,21 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         *error = "profile has an LPTDI target-state policy without device mock enablement";
         return false;
     }
-    if (options.profile_defaults.lptdi.hardlock_secret_config_required &&
+    // Hardlock material is applied at the device boundary, so a profile cannot
+    // ask for it without enabling that boundary.
+    if (options.profile_defaults.lptdi.hardlock_cfg_material_default &&
         !options.profile_defaults.lptdi.device_mock_enabled)
     {
-        *error = "profile requires an external Hardlock configuration";
+        *error = "profile expects Hardlock material without a device policy";
         return false;
     }
-    if (!options.profile_defaults.lptdi.hardlock_secret_config_required &&
-        !options.hardlock_config.empty())
+    // The launcher option that reports an active console also turns on the
+    // synthetic device boundary, so a profile cannot request one without the
+    // other.
+    if (options.profile_defaults.hle_wts_active_console &&
+        !options.profile_defaults.lptdi.device_mock_enabled)
     {
-        *error = "profile does not support a Hardlock configuration";
+        *error = "profile reports an active console without a device policy";
         return false;
     }
     if (options.profile_defaults.audio_gain_db.has_value() &&
@@ -152,6 +157,10 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         arguments->push_back("--device-mock-lptdi-path-prefix");
         arguments->push_back(defaults.lptdi.device_mock_path_prefix);
     }
+    if (defaults.hle_wts_active_console)
+    {
+        arguments->push_back("--device-mock-wts-console-session");
+    }
     if (!defaults.lptdi.device_mock_target_state_hex.empty())
     {
         arguments->push_back("--device-mock-lptdi-target-state");
@@ -169,15 +178,6 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     {
         arguments->push_back("--io-config");
         arguments->push_back(options.io_config.string());
-    }
-    const std::filesystem::path hardlock_config =
-        defaults.lptdi.hardlock_secret_config_required && options.hardlock_config.empty()
-            ? re2dj::config::DefaultHardlockSecretConfigPath()
-            : options.hardlock_config;
-    if (!hardlock_config.empty())
-    {
-        arguments->push_back("--hardlock-config");
-        arguments->push_back(hardlock_config.string());
     }
     error->clear();
     return true;

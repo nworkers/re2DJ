@@ -18,7 +18,6 @@ struct OriginalProcessOptions
     // image.
     std::filesystem::path chd_image;
     std::filesystem::path io_config;
-    std::filesystem::path hardlock_config;
     std::string target_id;
     // Relative executable path within the staged CHD root. Empty for normal
     // directory-backed launches, which rediscover the target by scanning.

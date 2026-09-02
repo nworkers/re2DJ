@@ -71,6 +71,10 @@ This document records the Hardlock boundary observed by bounded execution of the
 | 16 | `0x081000` | `0x00481000` | `5a6f58a9b2ebac1c` |
 | 17 | `0x089000` | `0x00489000` | `5dd33c7c8a27addb` |
 
+> **정정 — 2026-09-02.** 위 18개는 **잘린 관찰의 하한**입니다. 실제 요청은 32개이며 아래 "32개 challenge 확정"을 보십시오. 위 표는 그 32개의 앞 18개와 값·순서가 정확히 일치합니다.
+>
+> *Correction — 2026-09-02: the 18 above are the lower bound of a truncated observation. The real request count is 32; see "The 32-challenge list is confirmed" below. The table above matches the first 18 of those 32 exactly in value and order.*
+
 **확인됨:** 18회 요청에는 17개의 고유 입력이 있으며 `2cba42cbe47776f3`가 두 번 사용됩니다. 호출 wrapper는 `DeviceIoControl`의 성공 여부를 검사하지만, 반환된 8바이트를 고정 상수와 직접 비교하지 않습니다. 264바이트 packet은 입력과 출력이 같은 주소인 in-place 계약입니다.
 
 **추정:** 32KiB 간격과 `.text` chunk 시작의 일치는 Hardlock 반환값이 각 chunk를 해제하는 암호 재료로 사용됨을 강하게 시사합니다. 디스크의 `.protect`는 보호된 바이트라 정적 역어셈블만으로 반환값을 복원할 수 없습니다.
@@ -82,6 +86,52 @@ This document records the Hardlock boundary observed by bounded execution of the
 *Inferred: the 32 KiB spacing and exact match at each `.text` chunk start strongly suggest that the Hardlock return value supplies cryptographic material used to unlock each chunk. Static disassembly cannot recover that return value from the protected on-disk `.protect` bytes.*
 
 *Unresolved: the analyzed call path does not compare valid dongle outputs with plaintext fixed constants, and the current synthetic no-op trace leaves output equal to input. The table is therefore an exact input list, not a set of valid input/output pairs. Confirming the eight-byte outputs requires at least one observation from the real 3rd Hardlock or recovery of its seeds.*
+
+## 32개 challenge 확정 / The 32-challenge list is confirmed
+
+**확인됨 — 2026-09-02.** `--hardlock-transform-inputs`로 3rd를 실제 실행해 Function `0x0e` challenge를 기록했습니다. 관찰 결과는 **32개 요청, 고유 28개**입니다. 두 독립 실행 `20260902-124624-398`, `20260902-124741-332`가 값과 순서까지 동일한 목록을 기록했고, 두 실행 모두 transform loop 이후 `0xc0000005`로 종료했습니다.
+
+`.text`만 도는 규칙이 아니라 **4th와 같은 전 section 규칙**입니다. 각 section의 raw 시작에서 `0x8000` 간격으로 걷고 각 지점의 8바이트를 취하며, 다음 지점이 section raw 범위를 벗어나면 그 section을 끝내고, `.idata`와 `.protect`를 제외합니다.
+
+| section | raw 시작 | raw 크기 | 청크 |
+| --- | --- | --- | --- |
+| `.text` | `0x001000` | `0x0c1000` | 25 |
+| `.rdata` | `0x0c2000` | `0x00b000` | 2 |
+| `.data` | `0x0cd000` | `0x015000` | 3 |
+| `.reloc` | `0x0e4000` | `0x00b000` | 2 |
+| 합계 | | | **32** (고유 28) |
+
+원본 실행 파일에 이 규칙을 적용해 만든 32개는 관찰 목록과 **값과 순서까지 정확히 일치**했습니다. 따라서 생성기는 re2DJ를 실행하지 않고 3rd 목록도 원본 실행 파일만으로 만들 수 있습니다.
+
+기존 18개 기록이 하한이었던 이유는 관찰이 `.text` 도중에 끊겼기 때문입니다. `.text` 25개 중 앞 18개까지가 옛 trace에 남아 있었고, 그것이 `.text` 전용 규칙처럼 보였습니다. 새 목록의 앞 18개는 옛 표와 정확히 같습니다.
+
+중복은 `2cba42cbe47776f3` 4회(`.text` `0x011000`, `0x071000`, `0x0b9000`, `0x0c1000`)와 `1811bc0300613f52` 2회(`.data` `0x0cd000`, `0x0dd000`)입니다. 매핑 파일은 중복을 접어 28줄이어야 합니다.
+
+*Confirmed — 2026-09-02. Running 3rd for real with `--hardlock-transform-inputs` recorded **32 requests with 28 unique values**. Two independent runs, `20260902-124624-398` and `20260902-124741-332`, recorded the same list in value and order, both ending at `0xc0000005` after the transform loop. The rule is not `.text`-only but **the same all-section rule as 4th**: walk each section from its raw start at `0x8000` intervals, take eight bytes at each point, stop when the next point leaves the section's raw range, and skip `.idata` and `.protect` — giving 25 chunks in `.text`, 2 in `.rdata`, 3 in `.data`, and 2 in `.reloc`. Applying that rule to the original executable produced 32 challenges matching the observed list **exactly in value and order**, so the generator can build 3rd's list from the original executable alone without running re2DJ. The earlier 18 was a lower bound because the observation stopped partway through `.text`: the old trace held the first 18 of its 25 chunks, which looked like a `.text`-only rule, and the first 18 entries of the new list are identical to the old table. Duplicates are `2cba42cbe47776f3` four times (`.text` `0x011000`, `0x071000`, `0x0b9000`, `0x0c1000`) and `1811bc0300613f52` twice (`.data` `0x0cd000`, `0x0dd000`), so a map file folds them into 28 lines.*
+
+### 보호를 통과하는 응답 집합 / A response set that passes the protection
+
+**확인됨 — 2026-09-02.** [Task 139](../work-logs/20260902-139-hardlock-candidate-judgement.md)에서 외부 생성기의 후보 105개를 모두 주입했습니다. 정확히 하나(`candidate-83`)만 다른 실행 형태를 보였습니다.
+
+| 관찰 | 나머지 104개 | `candidate-83` |
+| --- | --- | --- |
+| 종료 | fault (`0xc0000005` 74, `0xc0000096` 21, `0xc000001d` 6, 기타 3) | `0x00000000` |
+| vfs trace | 365줄 | 377줄 |
+| `0x450` handshake | 4회 | 8회 |
+| 장치 재오픈 | 없음 | `\\.\FEnteDev` 다시 열림 |
+| `EZ2DJ.ini` | 없음 | 열림 |
+
+transform loop 이후 게스트가 장치를 다시 열고 자신의 설정 파일을 읽습니다. 보호 stub이 아니라 복호화된 게임 코드의 동작입니다. 세 번 재실행에서 동일하게 재현됐고, 105회 주입은 모두 `mapped=32:unmapped=0`으로 완전했습니다. fault 주소는 판별에 쓰지 않았습니다.
+
+**추정.** 그 후보가 물리 dongle의 seed라는 것은 추정입니다. 확인된 것은 원본이 그 응답을 받아들인다는 사실입니다. seed 값과 응답 바이트는 이 저장소에 기록하지 않습니다.
+
+*Confirmed — 2026-09-02. Injecting all 105 external-generator candidates in Task 139 left exactly one, `candidate-83`, with a different run shape: the other 104 fault while it exits `0x00000000`, grows the trace from 365 to 377 lines, doubles the `0x450` handshakes, reopens `\\.\FEnteDev`, and opens `EZ2DJ.ini` — the guest reopening the device and reading its own configuration after the transform loop, which is decrypted game-code behavior rather than protection-stub behavior. It reproduced identically across three runs, all 105 runs injected completely at `mapped=32:unmapped=0`, and the fault address was not used for judgement. **Inferred**: that the candidate holds the physical dongle's seeds; what is confirmed is that the original accepts its responses. Seed values and response bytes are not recorded in this repository.*
+
+### 관찰 조건 / Observation conditions
+
+3rd는 보호 장치를 `GetProcAddress`로 해석한 `CreateFileA`로 엽니다. 이 해석이 HLE wrapper로 가지 않으면 device mock이 open을 보지 못하고, 보호는 `Hardlock` 대화상자를 띄운 뒤 종료 코드 `0x00000009`로 끝납니다. 현재 dynamic resolver는 `hle_dynamic_vfs` profile 기본값으로만 켜지며 그 기본값은 ez2dj4th에만 있으므로, 3rd 관찰에는 launcher 진단 flag `--hle-dynamic-vfs`가 필요합니다.
+
+*3rd opens the protection device through a `CreateFileA` resolved by `GetProcAddress`. If that resolution does not reach the HLE wrapper, the device mock never sees the open and the protection ends with a `Hardlock` dialog and exit code `0x00000009`. The dynamic resolver is enabled only by the `hle_dynamic_vfs` profile default, which only ez2dj4th carries, so observing 3rd requires the launcher diagnostic flag `--hle-dynamic-vfs`.*
 
 ## 검증 근거 / Verification evidence
 

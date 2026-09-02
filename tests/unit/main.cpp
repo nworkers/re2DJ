@@ -7,6 +7,7 @@ int main()
     re2dj::test::Context context;
 
     RunAddressSpaceTests(context);
+    RunCodeRegionScoreTests(context);
     RunExecutionBackendTests(context);
     RunGuestPathTests(context);
     RunPeImageTests(context);
@@ -16,10 +17,12 @@ int main()
     RunVfsFileTableTests(context);
     RunLptdiChallengeResponseTests(context);
     RunLptdiResponseProfileTests(context);
-    RunHardlock450ResponseTests(context);
+    RunHardlockHandshakeResponseTests(context);
     RunHardlockApiDescriptorTests(context);
     RunHardlockProtocolTests(context);
-    RunHardlockSecretConfigTests(context);
+    RunHardlockDeviceTests(context);
+    RunHardlockTransformResponsesTests(context);
+    RunHardlockMaterialConfigTests(context);
     RunEz2DjIoBoardTests(context);
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);

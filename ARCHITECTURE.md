@@ -54,10 +54,12 @@ flowchart LR
 | 타깃 프로파일 | `include/re2dj/target/`, `src/target/` | 버전별 실행 파일 경로, 작업 디렉터리, HLE 프로파일 ID | **[구현됨]** (자료구조·감지), **[계획]** (버전별 항목) |
 | 런타임 | `include/re2dj/runtime/`, `src/runtime/` | 게스트 주소 공간, 레지스터 컨텍스트, 실행 backend 인터페이스 | **[계획]** |
 | HLE | `include/re2dj/hle/`, `src/hle/` | kernel32/user32/gdi32/ddraw/dsound/dinput 모듈 테이블과 구현 | **[계획]** |
+| HLE — Hardlock | `include/re2dj/hle/hardlock/`, `src/hle/hardlock/` | Hardlock 장치 경계. 네 IOCTL 응답, descriptor 판독, 응답 매핑 적용 | **[구현됨]** |
 | 설정 | `include/re2dj/config/`, `src/config/` | INI 파싱, 키 바인딩, 실행 옵션 | **[계획]** |
 | 플랫폼 | `src/platform/{windows,linux,web}/` | 창·렌더·오디오·입력·시간의 호스트 구현 | **[계획]** |
 | 호스트 | `src/host/cli/` | 명령행 진입점 | **[구현됨]** |
-| 도구 | `src/tools/{hdd_probe,chd_probe,pe_analyzer}/` | 비실행 HDD·CHD·PE 분석 도구 | **[구현됨]** |
+| 분석 | `include/re2dj/analysis/`, `src/analysis/` | 바이트 열 통계 판정. 파일도 프로세스도 모르는 순수 측정 | **[구현됨]** |
+| 도구 | `src/tools/{hdd_probe,chd_probe,pe_analyzer,code_score}/` | 비실행 HDD·CHD·PE·바이트 통계 분석 도구 | **[구현됨]** |
 
 *The table above maps each layer to its directory, responsibility, and current status.*
 
@@ -68,6 +70,66 @@ flowchart LR
 플랫폼 중립 `HardlockProtocolTracker`도 **[구현됨]** 상태입니다. 확인된 `0x468 → 0x450 → 0x44c → 0x458` 순서와 exact buffer shape를 추적하고 descriptor의 Function, block count 및 configured module-address 일치 여부를 값 비노출 boolean으로 판정합니다. 이 경계는 응답을 합성하지 않습니다. Function `0x0e` bit-level transform과 유효한 `0x450` driver response는 허용 가능한 독립 근거가 없어 아직 **[계획]** 상태입니다.
 
 *The platform-neutral `HardlockProtocolTracker` is also **[Implemented]**. It tracks the confirmed `0x468 → 0x450 → 0x44c → 0x458` order and exact buffer shapes, then validates descriptor function, block count, and configured module-address matching using value-free Booleans. It does not synthesize responses. The Function `0x0e` bit-level transform and a valid `0x450` driver response remain **[Planned]** because no policy-compatible independent basis is available yet.*
+
+Task 130 조사 결과, 2EZConfig-V2는 `API_CRYPT`/Function `0x0e`의 high-level packet 계약을 대조하는 데는 유용하지만 GPL-3.0-or-later 소스이므로 구현 기반으로 사용할 수 없습니다. 현재 유효한 호환 경로 후보는 원본 실행 파일을 변경하지 않고 동적 `CreateFileA`/`DeviceIoControl` 장치 경계 뒤에 profile-selected `HardlockDeviceBackend`를 두는 방식입니다. `FEnteDev` open과 네 IOCTL의 shape/sequence는 확인되었지만, `0x450`의 실제 6바이트 응답과 Function `0x0e`의 8바이트 transform은 아직 미확정이므로 backend가 추측 응답을 생성하지 않는 정책을 유지합니다.
+
+*Task 130 concludes that 2EZConfig-V2 is useful for comparing the high-level `API_CRYPT`/Function `0x0e` packet contract but cannot be used as an implementation basis because its source is GPL-3.0-or-later. The current valid compatibility-path candidate is a profile-selected `HardlockDeviceBackend` behind the dynamic `CreateFileA`/`DeviceIoControl` device boundary, without modifying the original executable. `FEnteDev` opening and the four IOCTL shape/sequence contracts are confirmed, but the real six-byte `0x450` response and eight-byte Function `0x0e` transform remain unresolved; the backend therefore preserves the policy of generating no guessed response.*
+
+Hardlock HLE가 보류된 동안 장치 경계를 관찰하기 위해 플랫폼 중립 `HardlockStubDevice`가 **[구현됨]** 상태로 있습니다. 이 스텁은 동글 에뮬레이션도 우회도 아니며, 선택한 응답에 원본이 어떻게 반응하는지 보는 진단 하네스입니다. Task 134에서 제품 CLI의 합성 응답 옵션을 제거했고, launcher 전용 `--hardlock-stub`으로만 켭니다. 확인된 vendor framing에 맞는 요청만 받아 `0x468`은 성공만, `0x450`은 설정된 replay 또는 요청 보존, `0x44c`/`0x458`은 요청 보존과 status word `0` 정리로 응답합니다. Function `0x0e` payload는 알고리즘 근거가 없으므로 항등으로 통과시키고, 계약을 벗어난 요청은 성공시키지 않습니다. 기본값은 비활성이며 launcher의 명시적 `--hardlock-stub`으로만 켜집니다. 활성 실행은 runtime trace의 `hardlock-stub` 줄과 launcher JSONL `hardlock_stub` 이벤트로 식별되므로, 그 실행에서 관찰한 동작은 원본 동작으로 인용하지 않습니다. 게스트 보호 분기 결과를 강제하는 2단계 우회는 막히는 분기를 계측으로 특정한 뒤 별도로 다룰 **[계획]** 항목입니다.
+
+*While the Hardlock HLE stays deferred, the platform-neutral `HardlockStubDevice` is **[Implemented]** for observing the device boundary. It is neither a dongle emulation nor a bypass but a diagnostic harness for seeing how the original reacts to a chosen response; Task 134 removed the synthetic-response option from the product CLI, leaving only the launcher-only `--hardlock-stub`: it accepts only requests matching the confirmed vendor framing, answering `0x468` with success alone, `0x450` with a configured replay or the preserved request, and `0x44c`/`0x458` with the preserved request plus a cleared status word. The Function `0x0e` payload passes through unchanged because no algorithmic basis exists, and out-of-contract requests are not forced to succeed. It defaults to off and is enabled only by the launcher's explicit `--hardlock-stub` option, never by a profile default. Active runs are identifiable from the runtime trace's `hardlock-stub` line and the launcher's `hardlock_stub` JSONL event, so behavior observed in them is never cited as original behavior. Stage-2 forcing of the guest protection branch stays **[Planned]** until instrumentation identifies the blocking branch.*
+
+실제 CHD bounded 실행으로 스텁이 네 IOCTL을 모두 처리하고 기존 분기 실험의 요청 횟수를 그대로 재현함을 확인했습니다. 다만 제품 CLI 경로는 `ez2dj4th` profile에 `run_detached`가 없어 launcher가 첫 `CreateFileA` handoff에서 원본을 종료하므로 우회를 무장만 하고 실행하지 못합니다. profile의 `run_detached`와 active-console 정책은 별도 결정 사항으로 남아 있습니다.
+
+*A bounded real-CHD run confirms the stub handles all four IOCTLs and reproduces the request counts of the earlier branch experiments. The product CLI path, however, only arms the bypass: `ez2dj4th` carries no `run_detached`, so the launcher terminates the original at the first `CreateFileA` handoff. The profile's `run_detached` and active-console policies remain separate decisions.*
+
+인과 실험 결과 2단계 우회는 취소되었습니다. 4th의 `.text`는 파일에서 암호화되어 있고 실행 중 다시 쓰이며, Function `0x0e` 출력 8바이트만 바꾸면 downstream 실행 경로가 달라집니다. 따라서 뒤집을 보호 분기 하나가 막고 있는 구조가 아니고, 분기 강제로는 올바른 transform을 대체할 수 없습니다. 스텁은 장치 경계 계약 검증과 이후 경로 관찰 수단으로 남습니다.
+
+Task 132는 제품 실행 경로 정책을 정리했습니다. `ez2dj4th` profile은 `run_detached`와 새 `hle_wts_active_console`을 갖습니다. 앞의 것이 없으면 launcher가 첫 VFS 파일 open을 handoff로 보고 원본을 종료하고, 뒤의 것이 없으면 보호 코드가 첫 장치 요청 뒤로 진행하지 않습니다. 두 정책 모두 운영체제 경계에 해당하므로 profile 기본값이며, 장치 경계 스텁은 launcher 전용 진단으로만 켜집니다.
+
+*The causality experiment cancelled stage 2. 4th's `.text` is encrypted on disk and rewritten at runtime, and changing only the eight Function `0x0e` output bytes changes the downstream execution path, so the blocker is not one protection branch to flip and branch forcing cannot substitute for a correct transform. The stub remains as a device-boundary contract check and a way to observe later paths.*
+
+*Task 132 settles the product run policy: the `ez2dj4th` profile now carries `run_detached` and the new `hle_wts_active_console`. Without the first, the launcher treats the first VFS file open as the handoff and terminates the original; without the second, the protection does not advance past its first device request. Both are operating-system boundaries and therefore profile defaults, while the device-boundary stub is enabled only as a launcher-only diagnostic.*
+
+Task 133은 사용자 질문 "Hardlock을 건너뛰고 진입점으로 직행할 수 있는가"에 답했습니다. 불가능합니다. `.text` 901,120바이트는 전 구간 엔트로피 `7.997`의 암호문이고 평문 구간이 없으며, 보호 코드가 실행 중 이를 다시 씁니다. 또한 `0x450` 응답은 byte 2·3의 16비트 정확 일치만 검사하므로 통과값은 이미 알고 있고, 남은 blocker는 Function `0x0e` 하나입니다. Hardlock은 게임 앞의 검문소가 아니라 게임을 복호화하는 열쇠 공급원입니다.
+
+*Task 133 answers whether the Hardlock boundary can be skipped to reach the entry point directly: it cannot. `.text`'s 901,120 bytes are ciphertext at entropy `7.997` throughout with no plaintext region, and the protection rewrites them at runtime. The `0x450` response is checked only as a 16-bit exact match on bytes 2 and 3, so a passing value is already known and the remaining blocker is Function `0x0e` alone. Hardlock is the key source that decrypts the game, not a checkpoint in front of it.*
+
+Task 134는 이에 맞춰 이름을 바로잡았습니다. 제품 CLI의 `--hardlock-bypass`를 제거하고, 이 구성요소를 launcher 전용 `--hardlock-stub` 진단 하네스로 재정의했습니다. 같은 작업에서 `--hardlock-descriptor-ids` 진단으로 4th의 module address `0x4c53`과 두 descriptor ID를 두 실행에서 동일하게 확보했습니다. 이 값들은 seed 복구 제약식의 입력입니다.
+
+*Task 134 corrects the naming accordingly: `--hardlock-bypass` is removed from the product CLI and the component is rescoped as the launcher-only `--hardlock-stub` diagnostic harness. The same task used the `--hardlock-descriptor-ids` diagnostic to capture 4th's module address `0x4c53` and both descriptor IDs identically across two runs, as inputs to seed-recovery constraints.*
+
+Task 135는 응답 주입 경계를 추가했습니다. 플랫폼 중립 `hardlock_transform_responses`가 challenge→response 매핑 파일을 읽고, 스텁이 `0x458`의 각 block을 조회해 맞으면 출력에 씁니다. 응답은 이 저장소 밖에서 계산하며 re2DJ는 링크도 실행 중 통신도 하지 않고 데이터 파일만 읽습니다. 같은 작업에서 4th의 36개 challenge가 이미지의 32 KiB 청크 시작 8바이트임을 확정했습니다. `.text` 28개, `.rdata` 2개, `.data` 4개, `.reloc` 2개이며 `.idata`와 `.protect`는 제외됩니다. 따라서 보호 대상은 `.text` 하나가 아니라 이미지 전체입니다.
+
+*Task 135 adds the response injection boundary: the platform-neutral `hardlock_transform_responses` reads a challenge-to-response map file and the stub looks up each `0x458` block, writing the mapped output when found. Responses are computed outside this repository; re2DJ neither links nor communicates with that program at run time and reads only a data file. The same task established that 4th's 36 challenges are the first eight bytes of each 32 KiB chunk of the image — 28 in `.text`, 2 in `.rdata`, 4 in `.data`, and 2 in `.reloc`, excluding `.idata` and `.protect` — so the protected region is the whole image rather than `.text` alone.*
+
+Task 136은 그 경계를 문서화된 계약으로 고정했습니다. [reSoftlock 인터페이스 계약](docs/design/20260902-136-resoftlock-interface-contract.md)이 응답 매핑 파일 형식, challenge 목록과 seed 후보 목록 형식, 요구 실행 모드, 비밀값 취급과 결정성 요구사항을 정의합니다. challenge 유도 규칙이 원본 실행 파일만으로 관찰 목록을 값과 순서까지 재현함을 확인했으므로, 두 프로그램의 접촉면은 응답 매핑 파일 하나로 줄어듭니다.
+
+*Task 136 pins that boundary as a documented contract. The [reSoftlock interface contract](docs/design/20260902-136-resoftlock-interface-contract.md) defines the response map format, the challenge list and seed candidate list formats, the required modes, and the secret-handling and determinism requirements. Because the challenge derivation rule reproduces the observed list from the original executable alone in both value and order, the contact surface between the two programs narrows to a single response map file.*
+
+### Hardlock HLE의 성격 / What the Hardlock HLE is
+
+이 계층은 **원본이 dongle에게 묻는 네 요청에 규격대로 답하는 장치 경계**입니다. 암호 연산은 하지 않습니다.
+
+| 나눔 | 담당 |
+| --- | --- |
+| 프로토콜, packet framing, descriptor 판독, 형태 검증 | **re2DJ (이 계층)** |
+| 응답 값 계산 | 저장소 밖 별도 프로그램 |
+| 값 보관 | 사용자의 `cfg/` (Git 제외) |
+
+제공하는 것은 네 IOCTL에 대한 응답과 장치의 존재입니다. `0x468`은 빈 입출력이면 성공, `0x450`은 6바이트 응답, `0x44c`는 status word를 0으로 두고 Function 0에 한해 tail word를 기록, `0x458`은 8바이트 block마다 challenge로 조회한 응답을 씁니다. 게스트가 profile이 지정한 장치 경로를 열면 합성 handle을 돌려주고 그 handle의 파일 API를 가로챕니다.
+
+**dongle 에뮬레이터가 아닙니다.** Function `0x0e` 변환도, seed에서 응답을 유도하는 경로도 이 저장소에 없습니다. 이 방식이 성립하는 이유는 challenge 집합이 실행 파일에서 결정되는 고정값이기 때문입니다. 3rd 32개, 4th 36개이므로 오프라인에서 한 번 계산한 표로 충분합니다. 따라서 한계도 그대로 따라옵니다. 표에 없는 challenge는 추측하지 않고 입력을 그대로 통과시키며(`unmapped` 수로 드러남), 실행 파일이 바뀌면 challenge가 바뀌므로 표를 다시 만들어야 하고, 임의의 challenge를 던지는 프로그램은 지원하지 못합니다.
+
+*The Hardlock HLE is a **device boundary that answers, to specification, the four requests the original asks its dongle**; it performs no cryptography. re2DJ owns the protocol, packet framing, descriptor reading, and shape validation, while a separate program outside this repository computes the response values and the user keeps them under Git-ignored `cfg/`. What it provides is those four answers plus the device's existence: `0x468` succeeds on empty buffers, `0x450` writes a six-byte response, `0x44c` clears the status word and writes the tail word for Function 0 only, and `0x458` replaces each eight-byte block with the response looked up by challenge; opening the profile's device path returns a synthetic handle whose file APIs are intercepted. **It is not a dongle emulator**: neither the Function `0x0e` transform nor any seed-to-response derivation exists here. The approach works only because the challenge set is fixed by the executable — 32 for 3rd and 36 for 4th — so one offline table suffices, and the limits follow directly: a challenge outside the table is passed through unchanged rather than guessed (visible as the `unmapped` count), a different executable needs a new table, and a program issuing arbitrary challenges cannot be served.*
+
+Task 140은 판별된 재료를 제품 실행 경로로 승격했습니다. `ez2dj3rd`와 `ez2dj4th` profile이 `hardlock_cfg_material_default`를 켜면, launcher 진입점이 `cfg/hardlock-<profile-id>.map`과 `cfg/hardlock.ini`의 선택 키 `response450`·`tail44c`을 읽습니다. 제품 CLI가 같은 진입점을 호출하므로 두 경로가 한 규칙을 공유합니다. 세 재료는 전부 함께 적용되거나 전혀 적용되지 않습니다. 매핑 없이 replay만 적용하면 보호가 모달 대화상자에서 멈추기 때문입니다. 합성 `0x450`/`0x44c` 값은 코드 상수로 올리지 않았고, 저장소에는 경로 규칙과 읽는 코드만 있습니다. 같은 작업에서 3rd profile의 `hle_dynamic_vfs`와 `hle_wts_active_console`을 켰습니다. 둘이 없으면 3rd 제품 경로가 보호 장치에 도달하지 못합니다.
+
+*Task 140 promotes the identified material to the product execution path. With `hardlock_cfg_material_default` on for the `ez2dj3rd` and `ez2dj4th` profiles, the launcher entry point reads `cfg/hardlock-<profile-id>.map` and the optional `response450` and `tail44c` keys from `cfg/hardlock.ini`; the product CLI calls that same entry point, so both paths share one rule. The three materials are applied all together or not at all, because applying the replay without a map leaves the protection at a modal dialog. No synthetic `0x450` or `0x44c` value was promoted to a code constant — the repository carries only the path convention and the reading code. The same task enabled `hle_dynamic_vfs` and `hle_wts_active_console` on the 3rd profile, without which 3rd's product path cannot reach the protection device.*
+
+Task 137은 그 후보를 기계적으로 판정하는 측정기를 추가했습니다. 플랫폼 중립 `re2dj::analysis::ScoreCodeRegion`이 바이트 span 하나에서 Shannon 엔트로피, `55 8b ec` prologue 수, `cc` padding run 수, zero byte 비율을 계산하고 `ciphertext-like` / `code-like` / `indeterminate` 3상태로 보고합니다. 임계값은 확인된 측정치 사이에 둔 휴리스틱임을 코드와 문서에 표기합니다. `re2dj_code_score`가 파일·HDD·CHD 입력을 섹션 또는 청크 단위로 이 함수에 넣습니다. 이 함수는 파일도 프로세스도 모르므로 이후 게스트 memory dump를 같은 경로로 판정할 수 있습니다.
+
+*Task 137 adds the measurement that judges those candidates mechanically. The platform-neutral `re2dj::analysis::ScoreCodeRegion` computes Shannon entropy, `55 8b ec` prologue count, `cc` padding run count, and zero-byte share from a single byte span and reports one of three states — `ciphertext-like`, `code-like`, or `indeterminate` — with the thresholds marked in code and documents as a heuristic placed between confirmed measurements. `re2dj_code_score` feeds file, HDD, and CHD inputs into that function by section or by chunk. Because the function knows nothing of files or processes, a guest memory dump can later be judged through the same path.*
 
 ---
 
@@ -354,6 +416,10 @@ ez2dj4th는 `\\.\FEnteDev` 장치 경계와 저장소 밖 프로파일 section�
 `hardlock_api_descriptor`는 정확히 256바이트 descriptor의 마지막 word도 bounded scalar로 읽습니다. runtime marker는 전체 reserved 영역 대신 이 `tail_word`만 기존 고정 field 뒤에 기록합니다. launcher의 기본 비활성 `--device-mock-hardlock-44c-tail` 분석 옵션은 user-supplied 16-bit 값을 synthetic device의 exact-size Function 0 `0x9c40244c` output offset `0xfe`에만 쓰고 나머지 254바이트를 보존합니다. synthetic `tail=0x0001`로 원본의 handle-retention 분기를 선택하자 Function 6 `0x44c`와 Function `0x0e` `0x458`에 도달했지만, 이 값은 실제 driver 응답이나 제품 기본값이 아니며 Function `0x0e`의 암호 출력은 여전히 별도 경계입니다.
 
 *`hardlock_api_descriptor` also reads the final word of an exact 256-byte descriptor as a bounded scalar. The runtime marker records only this `tail_word` after the existing fixed fields, not the complete reserved region. The launcher's default-off `--device-mock-hardlock-44c-tail` analysis option writes a user-supplied 16-bit value only at output offset `0xfe` for an exact-size Function-0 `0x9c40244c` on the synthetic device, preserving the other 254 bytes. Synthetic `tail=0x0001` selects the original's handle-retention branch and reaches Function-6 `0x44c` and Function-`0x0e` `0x458`; the value is neither a physical-driver response nor a product default, and the Function-`0x0e` cryptographic output remains a separate boundary.*
+
+`--hardlock-stub`을 켜면 위 두 실험 옵션이 각각의 분기가 아니라 `HardlockStubDevice`의 입력이 됩니다. `0x450` replay는 handshake 응답으로, `0x44c` tail은 Function 0 descriptor tail로 그대로 전달되므로 기존 분기 실험 결과는 유지되고, 나머지 IOCTL은 스텁의 단일 계약을 따릅니다. 스텁을 끄면 injected runtime은 기존 경로를 그대로 사용합니다.
+
+*With `--hardlock-stub` set, those two experiment options become inputs to `HardlockStubDevice` instead of separate branches: the `0x450` replay is forwarded as the handshake response and the `0x44c` tail as the Function-0 descriptor tail, so earlier branch-experiment results still hold while the remaining IOCTLs follow the stub's single contract. With the stub off, the injected runtime keeps its existing paths unchanged.*
 * `re2dj_windows_x86_launcher_probe`는 기본 Win32 host에서 원본 `ez2dj1.exe`를 `DEBUG_ONLY_THIS_PROCESS`로 만들고 entry `0x0043a640` 직전에 멈춘다. 이 입력에서는 DR0 hardware stop이 전달되지 않아 child memory의 entry 첫 바이트를 일시적으로 `INT3`로 바꾸고 즉시 원복하는 diagnostic fallback으로 정지했다. 이때 Windows loader가 main image를 `0x00400000`에 배치하고 7 DLL·144 IAT slot을 해석했음을 실제 HDD로 확인했다. 정지 상태에서 primary thread를 suspend하고 minimal x86 runtime DLL을 remote `LoadLibraryW` thread로 적재해 module base도 확인했다. `--probe-handoff`는 PE table에서 `GetCommandLineA` IAT slot을 찾아 runtime log-and-forward thunk로 교체하고, `--hle-command-line`은 runtime의 process-lifetime buffer에 original basename을 기록해 실제 HLE thunk가 반환하도록 한다. 두 경로 모두 entry 재개 후 debugger output event로 확인했다. x64 `re2dj_windows_original_process_probe`는 보류된 비교 근거로 남긴다.
 * `re2dj_windows_x86_launcher_probe`는 target과 원본 EXE를 해석한 뒤 실행별 JSONL 진단 로그를 `logs/windows_x86_launcher_probe/<target-id>/`에 만든다. debug event와 예외 관찰은 `--trace` 여부와 관계없이 즉시 flush되며, `--trace`는 stderr 실시간 표시만 제어한다. 최종 성공 또는 실패 JSON은 생성된 로그 경로를 포함한다. 이 생성 디렉터리는 HDD 및 guest overlay 밖이고 Git ignore 대상이다.
 * `re2dj_windows_x86_launcher_probe`의 `--instruction-trace <max-steps>`는 software entry stop에서 EIP와 TF를 설정하고 primary-thread debugger event 뒤 TF를 다시 설정한다. 최대 32개 instruction address와 바이트를 ring buffer에 유지한 뒤 illegal instruction 또는 step limit에서만 JSONL에 기록한다. 이는 protected post-entry control flow의 관찰 도구이며, branch operand나 보호 실패 원인을 자체적으로 해석하지 않는다.
@@ -457,6 +523,7 @@ Win32 제품의 `src/platform/windows/ini_profile_hle.*`는 원본 main image의
 | `re2dj_hdd_probe` | HDD 디렉터리 스캔 도구 |
 | `re2dj_chd_probe` | MAME CHD header·metadata·sector와 FAT32/PE 판독 도구 |
 | `re2dj_pe_analyzer` | PE32 헤더 분석 도구 |
+| `re2dj_code_score` | 바이트 구간이 x86 코드인지 암호문인지 판정하는 도구 |
 | `re2dj_pe_loader` | PE32 매핑·재배치·import gate 보고 도구 |
 | `re2dj_unit_tests` | CTest에 등록된 단위 테스트 |
 | `re2dj_native_helper_probe` | Win32 x86 / WOW64 네이티브 gate 호출 probe, 선택 target |
@@ -502,6 +569,23 @@ CHD trace, <code>GetVersion</code> was confirmed on the native
 wrapper's <code>hle</code> route. Asset opening and the protection response remain
 unresolved, and a bounded diagnostic success status is not game-execution
 success.*
+
+이 resolver는 profile의 <code>hle_dynamic_vfs</code> 기본값으로만 켜지고 그
+기본값은 4th에만 있다. 3rd도 보호 장치를 <code>GetProcAddress</code>로 해석한
+<code>CreateFileA</code>로 열기 때문에, resolver가 꺼져 있으면 device mock이
+그 open을 보지 못하고 보호가 <code>Hardlock</code> 대화상자 뒤 종료 코드
+<code>0x00000009</code>로 끝난다. 138번은 제품 기본값을 바꾸지 않고 관찰만
+가능하도록 launcher 진단 flag <code>--hle-dynamic-vfs</code>를 추가했다. 3rd
+profile 기본값을 바꿀지는 별도 판단으로 남긴다.
+
+*The resolver is enabled only by the profile's <code>hle_dynamic_vfs</code>
+default, which only 4th carries. 3rd also opens its protection device through a
+<code>CreateFileA</code> resolved by <code>GetProcAddress</code>, so with the
+resolver off the device mock never sees that open and the protection ends with a
+<code>Hardlock</code> dialog and exit code <code>0x00000009</code>. Task 138 adds
+the launcher diagnostic flag <code>--hle-dynamic-vfs</code> so this can be
+observed without changing a product default; whether to change the 3rd profile
+default is left as a separate judgement.*
 
 121번 resolver trace는 동적 결과의 주소와 원본 caller를 함께 기록한다. 실제
 4th run에서 <code>CreateFileA</code> 반환 주소는 runtime module 범위에 있고

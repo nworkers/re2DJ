@@ -151,6 +151,15 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // confirmed physical Hardlock seed.
             entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
                 "0000000000000000";
+            // The protection opens its device through a GetProcAddress-resolved
+            // CreateFileA, so without dynamic resolution the device boundary
+            // never sees that open and the protection stops at its own dialog.
+            entry.profile.run_defaults.hle_dynamic_vfs = true;
+            entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
+            // Same boundary as 4th: the protection initialization reads the
+            // session's connect state, and the cabinet ran this executable as
+            // the console's shell.
+            entry.profile.run_defaults.hle_wts_active_console = true;
             entry.profile.run_defaults.run_detached = true;
             // This dump carries no System.ini, so the drive letter and guest
             // directory stay empty rather than being copied from 1st SE.
@@ -175,7 +184,15 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix =
                 "\\\\.\\FEnteDev";
-            entry.profile.run_defaults.lptdi.hardlock_secret_config_required = true;
+            entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
+            // The protection stops after its first device request unless the
+            // session reports as an active console, and the cabinet ran this
+            // executable as that console's shell.
+            entry.profile.run_defaults.hle_wts_active_console = true;
+            // Without this the launcher treats the first VFS file open as the
+            // handoff and terminates the original, which is diagnostic rather
+            // than product behavior.
+            entry.profile.run_defaults.run_detached = true;
             entry.profile.run_defaults.default_hdd_image_relative_path =
                 "roms/ez2dj4th";
             entry.profile.note =

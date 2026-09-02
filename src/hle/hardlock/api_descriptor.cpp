@@ -1,8 +1,8 @@
-#include "re2dj/device/hardlock_api_descriptor.h"
+#include "re2dj/hle/hardlock/api_descriptor.h"
 
 #include <algorithm>
 
-namespace re2dj::device
+namespace re2dj::hle::hardlock
 {
 namespace
 {
@@ -111,4 +111,4 @@ bool ParseHardlockApiTailWordHex(const std::string& hex,
     return true;
 }
 
-}  // namespace re2dj::device
+}  // namespace re2dj::hle::hardlock

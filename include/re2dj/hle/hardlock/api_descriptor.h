@@ -1,5 +1,5 @@
-#ifndef RE2DJ_DEVICE_HARDLOCK_API_DESCRIPTOR_H_
-#define RE2DJ_DEVICE_HARDLOCK_API_DESCRIPTOR_H_
+#ifndef RE2DJ_HLE_HARDLOCK_API_DESCRIPTOR_H_
+#define RE2DJ_HLE_HARDLOCK_API_DESCRIPTOR_H_
 
 #include <array>
 #include <cstddef>
@@ -7,7 +7,7 @@
 #include <span>
 #include <string>
 
-namespace re2dj::device
+namespace re2dj::hle::hardlock
 {
 
 constexpr std::size_t kHardlockApiDescriptorSize = 256;
@@ -45,6 +45,6 @@ bool ParseHardlockApiTailWordHex(const std::string& hex,
                                  std::uint16_t* tail_word,
                                  std::string* error);
 
-}  // namespace re2dj::device
+}  // namespace re2dj::hle::hardlock
 
-#endif  // RE2DJ_DEVICE_HARDLOCK_API_DESCRIPTOR_H_
+#endif  // RE2DJ_HLE_HARDLOCK_API_DESCRIPTOR_H_

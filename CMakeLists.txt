@@ -217,11 +217,14 @@ endif()
 # Platform-neutral core. Nothing here may include a host OS header; see the
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
+    src/analysis/code_region_score.cpp
     src/audio/legacy_audio_buffer.cpp
     src/config/hardlock_secret_config.cpp
-    src/device/hardlock_450_response.cpp
-    src/device/hardlock_api_descriptor.cpp
-    src/device/hardlock_protocol.cpp
+    src/hle/hardlock/handshake_response.cpp
+    src/hle/hardlock/api_descriptor.cpp
+    src/hle/hardlock/protocol.cpp
+    src/hle/hardlock/device.cpp
+    src/hle/hardlock/transform_responses.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/ez2dj_io_board.cpp
@@ -305,8 +308,10 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     endif()
 
     add_library(re2dj_windows_injected_runtime SHARED
-        src/device/hardlock_api_descriptor.cpp
-        src/device/hardlock_protocol.cpp
+        src/hle/hardlock/api_descriptor.cpp
+        src/hle/hardlock/protocol.cpp
+        src/hle/hardlock/device.cpp
+        src/hle/hardlock/transform_responses.cpp
         src/device/lptdi_challenge_response.cpp
         src/input/ez2dj_io_board.cpp
         src/input/legacy_io_port_bus.cpp
@@ -350,14 +355,6 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         set_tests_properties(re2dj_windows_vfs_runtime_probe PROPERTIES
             ENVIRONMENT "SDL_AUDIODRIVER=dummy"
         )
-        add_executable(re2dj_windows_hardlock_descriptor_probe
-            src/tools/windows_hardlock_descriptor_probe/main.cpp
-        )
-        target_link_libraries(re2dj_windows_hardlock_descriptor_probe
-            PRIVATE re2dj_windows_injected_runtime re2dj_warnings
-        )
-        add_test(NAME re2dj_windows_hardlock_descriptor_probe
-                 COMMAND re2dj_windows_hardlock_descriptor_probe)
     endif()
     add_library(re2dj_windows_original_process_backend STATIC
         src/tools/windows_original_process_probe/iat_verifier.cpp
@@ -420,6 +417,11 @@ add_executable(re2dj_pe_analyzer
 )
 target_link_libraries(re2dj_pe_analyzer PRIVATE re2dj_core re2dj_warnings)
 
+add_executable(re2dj_code_score
+    src/tools/code_score/main.cpp
+)
+target_link_libraries(re2dj_code_score PRIVATE re2dj_core re2dj_warnings)
+
 add_executable(re2dj_pe_loader
     src/tools/pe_loader/main.cpp
 )
@@ -429,13 +431,16 @@ if(RE2DJ_BUILD_TESTS)
     enable_testing()
     add_executable(re2dj_unit_tests
         tests/unit/address_space_test.cpp
+        tests/unit/code_region_score_test.cpp
         tests/unit/execution_backend_test.cpp
         tests/unit/ez2dj_io_board_test.cpp
         tests/unit/guest_path_test.cpp
-        tests/unit/hardlock_secret_config_test.cpp
-        tests/unit/hardlock_450_response_test.cpp
-        tests/unit/hardlock_api_descriptor_test.cpp
+        tests/unit/hardlock_material_config_test.cpp
+        tests/unit/hardlock_handshake_response_test.cpp
         tests/unit/hardlock_protocol_test.cpp
+        tests/unit/hardlock_api_descriptor_test.cpp
+        tests/unit/hardlock_device_test.cpp
+        tests/unit/hardlock_transform_responses_test.cpp
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp
         tests/unit/lptdi_challenge_response_test.cpp

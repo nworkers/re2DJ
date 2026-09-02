@@ -1,10 +1,7 @@
 #include "re2dj/config/hardlock_secret_config.h"
 
-#include <array>
-#include <cctype>
 #include <fstream>
-#include <limits>
-#include <optional>
+#include <istream>
 #include <system_error>
 
 namespace re2dj::config
@@ -14,76 +11,17 @@ namespace
 
 std::string_view Trim(std::string_view value)
 {
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0)
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t' ||
+                              value.front() == '\r' || value.front() == '\n'))
     {
         value.remove_prefix(1);
     }
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0)
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t' ||
+                              value.back() == '\r' || value.back() == '\n'))
     {
         value.remove_suffix(1);
     }
     return value;
-}
-
-std::optional<std::size_t> KeyIndex(std::string_view key)
-{
-    constexpr std::array<std::string_view, 4> kKeys = {
-        "modad", "seed1", "seed2", "seed3"};
-    for (std::size_t index = 0; index < kKeys.size(); ++index)
-    {
-        if (key == kKeys[index])
-        {
-            return index;
-        }
-    }
-    return std::nullopt;
-}
-
-bool ParseWord(std::string_view text, std::uint16_t* value)
-{
-    if (value == nullptr || text.empty())
-    {
-        return false;
-    }
-    unsigned base = 10;
-    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
-    {
-        base = 16;
-        text.remove_prefix(2);
-    }
-    if (text.empty())
-    {
-        return false;
-    }
-    std::uint32_t parsed = 0;
-    for (const char character : text)
-    {
-        unsigned digit = 0;
-        if (character >= '0' && character <= '9')
-        {
-            digit = static_cast<unsigned>(character - '0');
-        }
-        else if (base == 16 && character >= 'a' && character <= 'f')
-        {
-            digit = static_cast<unsigned>(character - 'a') + 10;
-        }
-        else if (base == 16 && character >= 'A' && character <= 'F')
-        {
-            digit = static_cast<unsigned>(character - 'A') + 10;
-        }
-        else
-        {
-            return false;
-        }
-        if (digit >= base || parsed >
-                                 (std::numeric_limits<std::uint16_t>::max() - digit) / base)
-        {
-            return false;
-        }
-        parsed = parsed * base + digit;
-    }
-    *value = static_cast<std::uint16_t>(parsed);
-    return true;
 }
 
 }  // namespace
@@ -94,6 +32,18 @@ std::filesystem::path DefaultHardlockSecretConfigPath()
     const std::filesystem::path root = std::filesystem::current_path(code);
     return code ? std::filesystem::path("cfg") / "hardlock.ini"
                 : root / "cfg" / "hardlock.ini";
+}
+
+std::filesystem::path DefaultHardlockTransformMapPath(std::string_view profile_id)
+{
+    if (profile_id.empty())
+    {
+        return {};
+    }
+    const std::string name = "hardlock-" + std::string(profile_id) + ".map";
+    std::error_code code;
+    const std::filesystem::path root = std::filesystem::current_path(code);
+    return code ? std::filesystem::path("cfg") / name : root / "cfg" / name;
 }
 
 bool IsHardlockSecretPathAllowed(const std::filesystem::path& path)
@@ -114,6 +64,9 @@ bool IsHardlockSecretPathAllowed(const std::filesystem::path& path)
     {
         current = current.parent_path();
     }
+    // Inside a Git work tree the material may only live under the ignored cfg
+    // directory, so a completed file cannot be committed by accident. Outside
+    // one the user chooses the location.
     std::filesystem::path candidate = current;
     while (!candidate.empty())
     {
@@ -133,18 +86,27 @@ bool IsHardlockSecretPathAllowed(const std::filesystem::path& path)
     return true;
 }
 
-bool LoadHardlockSecretConfig(const std::filesystem::path& path,
-                              std::string_view profile_id,
-                              HardlockSecretMaterial* material,
-                              std::string* error)
+bool LoadHardlockProfileMaterial(const std::filesystem::path& path,
+                                 std::string_view profile_id,
+                                 HardlockSecretMaterial* material,
+                                 bool* found,
+                                 std::string* error)
 {
-    if (material == nullptr || error == nullptr || path.empty() || profile_id.empty())
+    if (material == nullptr || found == nullptr || error == nullptr || path.empty() ||
+        profile_id.empty())
     {
         if (error != nullptr)
         {
             *error = "invalid Hardlock configuration request";
         }
         return false;
+    }
+    *found = false;
+    std::error_code code;
+    if (!std::filesystem::exists(path, code) || code)
+    {
+        error->clear();
+        return true;
     }
     if (!IsHardlockSecretPathAllowed(path))
     {
@@ -158,14 +120,12 @@ bool LoadHardlockSecretConfig(const std::filesystem::path& path,
         return false;
     }
 
-    std::array<std::uint16_t, 4> values = {};
-    std::array<bool, 4> present = {};
     bool selected_section_seen = false;
     bool selected_section = false;
     std::string line;
     while (std::getline(stream, line))
     {
-        std::string_view text = Trim(line);
+        const std::string_view text = Trim(line);
         if (text.empty() || text.front() == '#' || text.front() == ';')
         {
             continue;
@@ -189,45 +149,34 @@ bool LoadHardlockSecretConfig(const std::filesystem::path& path,
         }
         const std::string_view key = Trim(text.substr(0, separator));
         const std::string_view raw_value = Trim(text.substr(separator + 1));
-        const std::optional<std::size_t> index = KeyIndex(key);
-        if (!index.has_value())
+        if (key != "response450" && key != "tail44c")
         {
             *error = "unknown Hardlock configuration key";
             return false;
         }
-        if (present[*index])
+        std::string& target = key == "response450" ? material->handshake_response_hex
+                                                   : material->descriptor_tail_hex;
+        if (!target.empty())
         {
             *error = "duplicate Hardlock configuration key";
             return false;
         }
-        if (!ParseWord(raw_value, &values[*index]))
+        if (raw_value.empty())
         {
-            *error = "Hardlock configuration value is not a 16-bit integer";
+            *error = "Hardlock configuration value is empty";
             return false;
         }
-        present[*index] = true;
+        // The value keeps its file spelling; the launcher option parser is the
+        // single place that validates the hex width.
+        target.assign(raw_value);
     }
     if (!stream.eof())
     {
         *error = "cannot read Hardlock configuration";
         return false;
     }
-    if (!selected_section_seen)
-    {
-        *error = "Hardlock configuration does not contain the selected profile";
-        return false;
-    }
-    for (const bool field_present : present)
-    {
-        if (!field_present)
-        {
-            *error = "Hardlock configuration is missing a required key";
-            return false;
-        }
-    }
 
-    material->module_address = values[0];
-    material->seeds = {values[1], values[2], values[3]};
+    *found = selected_section_seen;
     error->clear();
     return true;
 }

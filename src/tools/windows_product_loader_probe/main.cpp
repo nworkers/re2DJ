@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -125,13 +126,14 @@ int main()
             has_lptdi_state = has_lptdi_state ||
                               argument == "--device-mock-lptdi-target-state";
         }
-        return arguments.size() == 15 && arguments[5] == "--hle-vfs" &&
+        return arguments.size() == 16 && arguments[5] == "--hle-vfs" &&
                arguments[6] == "--hle-directsound" && arguments[9] == "--run-detached" &&
                arguments[10] == "--device-mock-lptdi" &&
                arguments[11] == "--device-mock-lptdi-path-prefix" &&
                arguments[12] == "\\\\.\\FEnteDev" &&
-               arguments[13] == "--device-mock-lptdi-target-state" &&
-               arguments[14] == "0000000000000000" &&
+               arguments[13] == "--device-mock-wts-console-session" &&
+               arguments[14] == "--device-mock-lptdi-target-state" &&
+               arguments[15] == "0000000000000000" &&
                !has_demo_volume && !has_io_ports && has_lptdi_path && has_lptdi_state &&
                !third_profile->profile.run_defaults.lptdi.legacy_io_ports &&
                third_profile->profile.run_defaults.lptdi.device_mock_enabled &&
@@ -161,17 +163,67 @@ int main()
         arguments[4] == "ez2dj4th" && arguments[5] == "--chd" &&
         arguments[6] == "4thTrax.chd" && arguments[7] == "--target-executable" &&
         arguments[8] == "EZ2DJ/EZ2DJ.EXE" && arguments[9] == "--hle-vfs" &&
-        arguments[10] == "--device-mock-lptdi" &&
-        arguments[11] == "--device-mock-lptdi-path-prefix" &&
-        arguments[12] == "\\\\.\\FEnteDev" &&
-        arguments[13] == "--hardlock-config" &&
-        std::filesystem::path(arguments[14]).filename() == "hardlock.ini" &&
-        std::filesystem::path(arguments[14]).parent_path().filename() == "cfg";
+        arguments[10] == "--run-detached" &&
+        arguments[11] == "--device-mock-lptdi" &&
+        arguments[12] == "--device-mock-lptdi-path-prefix" &&
+        arguments[13] == "\\\\.\\FEnteDev" &&
+        arguments[14] == "--device-mock-wts-console-session";
+
+    // Hardlock material is resolved inside the launcher from cfg, so no
+    // Hardlock option may appear on the product command line.
+    const bool no_diagnostic_options = [&]() {
+        std::vector<std::string> product;
+        if (!re2dj::platform::windows::BuildOriginalProcessArguments(
+                options, &product, &error))
+        {
+            return false;
+        }
+        for (const std::string& argument : product)
+        {
+            if (argument.find("--hardlock-device") != std::string::npos ||
+                argument.find("--hardlock-config") != std::string::npos ||
+                argument.find("--hardlock-transform") != std::string::npos ||
+                argument.find("--device-mock-hardlock") != std::string::npos)
+            {
+                return false;
+            }
+        }
+        return true;
+    }();
+
+    // An active-console policy without a device policy is rejected rather than
+    // silently forwarded, because the launcher option turns on both.
+    const bool invalid_console_policy = [&]() {
+        re2dj::platform::windows::OriginalProcessOptions console_options = options;
+        console_options.profile_defaults.lptdi.device_mock_enabled = false;
+        console_options.profile_defaults.lptdi.device_mock_path_prefix.clear();
+        // Cleared so this isolates the console policy: Hardlock material also
+        // requires the device boundary and would report its own rejection.
+        console_options.profile_defaults.lptdi.hardlock_cfg_material_default = false;
+        console_options.profile_defaults.hle_wts_active_console = true;
+        std::vector<std::string> rejected_arguments;
+        return !re2dj::platform::windows::BuildOriginalProcessArguments(
+                   console_options, &rejected_arguments, &error) &&
+               error.find("active console without a device policy") != std::string::npos;
+    }();
+
+    // Hardlock material is applied at the device boundary, so a profile that
+    // expects it without that boundary is rejected rather than run without it.
+    const bool invalid_material_policy = [&]() {
+        re2dj::platform::windows::OriginalProcessOptions material_options = options;
+        material_options.profile_defaults.lptdi.device_mock_enabled = false;
+        material_options.profile_defaults.lptdi.device_mock_path_prefix.clear();
+        material_options.profile_defaults.hle_wts_active_console = false;
+        material_options.profile_defaults.lptdi.hardlock_cfg_material_default = true;
+        std::vector<std::string> rejected_arguments;
+        return !re2dj::platform::windows::BuildOriginalProcessArguments(
+                   material_options, &rejected_arguments, &error) &&
+               error.find("Hardlock material without a device policy") != std::string::npos;
+    }();
 
     options.target_id = "ez2dj1stse_unpacked";
     options.hle_profile_id = "ez2dj1stse_unpacked";
     options.profile_defaults = {};
-    options.hardlock_config.clear();
     options.chd_image.clear();
     options.executable_relative_path.clear();
     const bool rejected =
@@ -180,9 +232,29 @@ int main()
         error.find("invalid Windows original-process options") != std::string::npos;
     if (!canonical || !custom_gain || !custom_demo_volume || !audio_trace || !fullscreen ||
         !invalid_gain || !invalid_demo_volume || !io_config || !invalid_lptdi_policy ||
-        !third_defaults || !chd_handoff || !rejected)
+        !third_defaults || !chd_handoff || !no_diagnostic_options ||
+        !invalid_console_policy || !invalid_material_policy || !rejected)
     {
-        std::fprintf(stderr, "windows-product-loader-probe: %s\n", error.c_str());
+        // Naming the failed checks keeps a policy change from producing an
+        // error message that describes only the last call made.
+        std::fprintf(stderr,
+                     "windows-product-loader-probe: failed%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s (last error: %s)\n",
+                     canonical ? "" : " canonical",
+                     custom_gain ? "" : " custom-gain",
+                     custom_demo_volume ? "" : " custom-demo-volume",
+                     audio_trace ? "" : " audio-trace",
+                     fullscreen ? "" : " fullscreen",
+                     invalid_gain ? "" : " invalid-gain",
+                     invalid_demo_volume ? "" : " invalid-demo-volume",
+                     io_config ? "" : " io-config",
+                     invalid_lptdi_policy ? "" : " invalid-lptdi-policy",
+                     third_defaults ? "" : " third-defaults",
+                     chd_handoff ? "" : " chd-handoff",
+                     no_diagnostic_options ? "" : " no-diagnostic-options",
+                     invalid_console_policy ? "" : " invalid-console-policy",
+                     invalid_material_policy ? "" : " invalid-material-policy",
+                     rejected ? "" : " rejected",
+                     error.c_str());
         return 1;
     }
     std::printf("windows-product-loader-probe: profile-defaults=ok unsupported-target=ok\n");

@@ -1,6 +1,6 @@
-#include "re2dj/device/hardlock_450_response.h"
+#include "re2dj/hle/hardlock/handshake_response.h"
 
-namespace re2dj::device
+namespace re2dj::hle::hardlock
 {
 
 namespace
@@ -25,8 +25,8 @@ int HexDigit(char value)
 
 }  // namespace
 
-bool ParseHardlock450Response(const std::string& hex,
-                              Hardlock450Response* response,
+bool ParseHardlockHandshakeResponse(const std::string& hex,
+                              HardlockHandshakeResponse* response,
                               std::string* error)
 {
     if (response == nullptr || error == nullptr)
@@ -38,7 +38,7 @@ bool ParseHardlock450Response(const std::string& hex,
         *error = "Hardlock 0x450 response must contain exactly 12 hex digits";
         return false;
     }
-    Hardlock450Response parsed = {};
+    HardlockHandshakeResponse parsed = {};
     for (std::size_t index = 0; index < parsed.size(); ++index)
     {
         const int high = HexDigit(hex[index * 2]);
@@ -54,4 +54,4 @@ bool ParseHardlock450Response(const std::string& hex,
     return true;
 }
 
-}  // namespace re2dj::device
+}  // namespace re2dj::hle::hardlock

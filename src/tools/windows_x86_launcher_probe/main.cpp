@@ -20,8 +20,9 @@
 #include <vector>
 
 #include "re2dj/config/hardlock_secret_config.h"
-#include "re2dj/device/hardlock_450_response.h"
-#include "re2dj/device/hardlock_api_descriptor.h"
+#include "re2dj/hle/hardlock/handshake_response.h"
+#include "re2dj/hle/hardlock/api_descriptor.h"
+#include "re2dj/hle/hardlock/transform_responses.h"
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/device/lptdi_response_profile.h"
 #include "re2dj/exe/pe_image.h"
@@ -122,7 +123,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--hardlock-config <path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--api-trace] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--api-trace] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -4045,6 +4046,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool hle_command_line = false;
     bool hle_windows_directory = false;
     bool hle_vfs = false;
+    bool force_dynamic_vfs_resolver = false;
     bool hle_display_mode = false;
     bool hle_d3d3 = false;
     bool fullscreen = false;
@@ -4056,7 +4058,6 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool audio_volume_trace = false;
     bool hle_io_ports = false;
     std::filesystem::path io_config_path;
-    std::filesystem::path hardlock_config_path;
     bool run_detached = false;
     bool d3d_init_trace = false;
     bool ksnd_load_trace = false;
@@ -4066,6 +4067,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool device_mock_wts_console_session = false;
     std::string device_mock_hardlock_450_response_hex;
     std::string device_mock_hardlock_44c_tail_hex;
+    bool hardlock_device = false;
+    std::string hardlock_transform_map_path;
     std::string device_mock_lptdi_path_prefix;
     std::filesystem::path device_mock_lptdi_response_profile_path;
     std::string device_mock_lptdi_target_state_hex;
@@ -4160,6 +4163,17 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             inject_runtime = true;
             software_breakpoint = true;
         }
+        // Diagnostic override for a target whose profile does not enable the
+        // dynamic resolver. Without it a guest that resolves CreateFileA
+        // through GetProcAddress reaches the real Win32 entry, so the device
+        // mock never sees the protection's device open.
+        else if (option == "--hle-dynamic-vfs")
+        {
+            force_dynamic_vfs_resolver = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
         else if (option == "--hle-display-mode")
         {
             hle_display_mode = true;
@@ -4246,14 +4260,6 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             break_exit_process = true;
             software_breakpoint = true;
         }
-        else if (option == "--hardlock-config" && index + 1 < argc)
-        {
-            hardlock_config_path = argv[++index];
-            device_mock_lptdi = true;
-            hle_vfs = true;
-            inject_runtime = true;
-            software_breakpoint = true;
-        }
         else if (option == "--run-detached")
         {
             run_detached = true;
@@ -4322,6 +4328,23 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                  index + 1 < argc)
         {
             device_mock_hardlock_44c_tail_hex = argv[++index];
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--hardlock-transform-map" && index + 1 < argc)
+        {
+            hardlock_transform_map_path = argv[++index];
+            hardlock_device = true;
+            device_mock_lptdi = true;
+            hle_vfs = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--hardlock-device")
+        {
+            hardlock_device = true;
             device_mock_lptdi = true;
             hle_vfs = true;
             inject_runtime = true;
@@ -4497,26 +4520,50 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
 
     std::string error;
     re2dj::device::LptdiTargetState device_target_state = {};
-    re2dj::device::Hardlock450Response hardlock_450_response = {};
+    re2dj::hle::hardlock::HardlockHandshakeResponse hardlock_450_response = {};
     std::uint16_t hardlock_44c_tail_word = 0;
-    if (!device_mock_hardlock_44c_tail_hex.empty() &&
-        !re2dj::device::ParseHardlockApiTailWordHex(
-            device_mock_hardlock_44c_tail_hex,
-            &hardlock_44c_tail_word,
-            &error))
-    {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
-        return 1;
-    }
-    if (!device_mock_hardlock_450_response_hex.empty() &&
-        !re2dj::device::ParseHardlock450Response(
-            device_mock_hardlock_450_response_hex,
-            &hardlock_450_response,
-            &error))
-    {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
-        return 1;
-    }
+    std::vector<re2dj::hle::hardlock::HardlockTransformResponseEntry> hardlock_transform_map;
+    // Deferred until the target is known, because a profile default may fill
+    // these in from cfg after the command line has been read.
+    const auto parse_hardlock_material = [&]() -> bool {
+        if (!device_mock_hardlock_44c_tail_hex.empty() &&
+            !re2dj::hle::hardlock::ParseHardlockApiTailWordHex(
+                device_mock_hardlock_44c_tail_hex,
+                &hardlock_44c_tail_word,
+                &error))
+        {
+            std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
+            return false;
+        }
+        if (!device_mock_hardlock_450_response_hex.empty() &&
+            !re2dj::hle::hardlock::ParseHardlockHandshakeResponse(
+                device_mock_hardlock_450_response_hex,
+                &hardlock_450_response,
+                &error))
+        {
+            std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
+            return false;
+        }
+        if (!hardlock_transform_map_path.empty())
+        {
+            std::ifstream map_stream(hardlock_transform_map_path, std::ios::binary);
+            if (!map_stream)
+            {
+                std::fprintf(stderr,
+                             "{\"error\":\"cannot open Hardlock transform map\"}\n");
+                return false;
+            }
+            const std::string map_text((std::istreambuf_iterator<char>(map_stream)),
+                                       std::istreambuf_iterator<char>());
+            if (!re2dj::hle::hardlock::ParseHardlockTransformResponseTable(
+                    map_text, &hardlock_transform_map, &error))
+            {
+                std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
+                return false;
+            }
+        }
+        return true;
+    };
     if (!device_mock_lptdi_target_state_hex.empty() &&
         !re2dj::device::ParseLptdiTargetState(
             device_mock_lptdi_target_state_hex, &device_target_state, &error))
@@ -4632,24 +4679,64 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::fprintf(stderr, "{\"error\":\"LPTDI device mock is not configured for this target\"}\\n");
         return 2;
     }
-    if (target->run_defaults.lptdi.hardlock_secret_config_required &&
-        hardlock_config_path.empty())
+    bool hardlock_cfg_replay = false;
+    bool hardlock_cfg_tail = false;
+    bool hardlock_cfg_map = false;
+    // Profile default: take Hardlock material from the conventional cfg paths
+    // when the user has put it there. Nothing in this repository produces those
+    // values, an explicit option outranks the file, and absence is not an error
+    // because the run is still a valid observation without them.
+    if (target->run_defaults.lptdi.hardlock_cfg_material_default)
     {
-        hardlock_config_path = re2dj::config::DefaultHardlockSecretConfigPath();
+        re2dj::config::HardlockSecretMaterial cfg_material;
+        bool cfg_section_found = false;
+        if (!re2dj::config::LoadHardlockProfileMaterial(
+                re2dj::config::DefaultHardlockSecretConfigPath(),
+                target->id,
+                &cfg_material,
+                &cfg_section_found,
+                &error))
+        {
+            std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+            return 2;
+        }
+        if (hardlock_transform_map_path.empty())
+        {
+            const std::filesystem::path default_map =
+                re2dj::config::DefaultHardlockTransformMapPath(target->id);
+            std::error_code map_code;
+            if (!default_map.empty() && std::filesystem::exists(default_map, map_code) &&
+                !map_code)
+            {
+                hardlock_transform_map_path = default_map.string();
+                // The map is only consumed by the stub, so selecting one here
+                // has to enable the same boundary the explicit option does.
+                hardlock_device = true;
+                hardlock_cfg_map = true;
+            }
+        }
+        // The device replay values are applied only alongside a map, because
+        // the three materials only make sense together: with the replay but no
+        // map the protection reaches its own modal dialog and waits there,
+        // which is worse than stopping at the earlier boundary.
+        if (cfg_section_found && !hardlock_transform_map_path.empty())
+        {
+            if (device_mock_hardlock_450_response_hex.empty() &&
+                !cfg_material.handshake_response_hex.empty())
+            {
+                device_mock_hardlock_450_response_hex = cfg_material.handshake_response_hex;
+                hardlock_cfg_replay = true;
+            }
+            if (device_mock_hardlock_44c_tail_hex.empty() &&
+                !cfg_material.descriptor_tail_hex.empty())
+            {
+                device_mock_hardlock_44c_tail_hex = cfg_material.descriptor_tail_hex;
+                hardlock_cfg_tail = true;
+            }
+        }
     }
-    if (target->run_defaults.lptdi.hardlock_secret_config_required !=
-        !hardlock_config_path.empty())
+    if (!parse_hardlock_material())
     {
-        std::fprintf(stderr,
-                     "{\"error\":\"Hardlock configuration does not match target policy\"}\\n");
-        return 2;
-    }
-    re2dj::config::HardlockSecretMaterial hardlock_secret;
-    if (!hardlock_config_path.empty() &&
-        !re2dj::config::LoadHardlockSecretConfig(
-            hardlock_config_path, target->id, &hardlock_secret, &error))
-    {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
         return 2;
     }
     const std::string profile_device_mock_path_prefix =
@@ -4707,6 +4794,14 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      device_mock_lptdi_target_state_hex.empty() ? "false" : "true",
                      lptdi_post_ioctl_trace_steps,
                      lptdi_post_ioctl_trace_code);
+    if (hardlock_cfg_replay || hardlock_cfg_tail || hardlock_cfg_map)
+    {
+        // Records which material a profile default applied, never its values.
+        RecordDiagnostic("{\"event\":\"hardlock_cfg_material\",\"response450\":%s,\"tail44c\":%s,\"map\":%s}",
+                         hardlock_cfg_replay ? "true" : "false",
+                         hardlock_cfg_tail ? "true" : "false",
+                         hardlock_cfg_map ? "true" : "false");
+    }
     std::string hle_value = executable.filename().string();
     if (hle_windows_directory)
     {
@@ -5119,7 +5214,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             RecordDiagnostic("{\"event\":\"vfs_trace\",\"path\":\"%s\"}",
                              vfs_trace_path.generic_string().c_str());
         }
-        const bool dynamic_vfs_resolver = target->run_defaults.hle_dynamic_vfs;
+        const bool dynamic_vfs_resolver =
+            target->run_defaults.hle_dynamic_vfs || force_dynamic_vfs_resolver;
         if (vfs_prepared && (device_mock_lptdi || dynamic_vfs_resolver))
         {
             vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
@@ -5222,54 +5318,6 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                            profile_device_mock_path_prefix,
                                            &error);
         }
-        if (vfs_prepared && !hardlock_config_path.empty())
-        {
-            std::uint32_t enabled_rva = 0;
-            std::uint32_t module_address_rva = 0;
-            std::array<std::uint32_t, 3> seed_rvas = {};
-            constexpr std::array<const char*, 3> kSeedExports = {
-                "g_re2dj_hardlock_seed1",
-                "g_re2dj_hardlock_seed2",
-                "g_re2dj_hardlock_seed3"};
-            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
-                               runtime_path,
-                               "g_re2dj_hardlock_secret_enabled",
-                               &enabled_rva,
-                               &error) &&
-                           re2dj::platform::windows::FindPe32ExportRva(
-                               runtime_path,
-                               "g_re2dj_hardlock_module_address",
-                               &module_address_rva,
-                               &error) &&
-                           WriteRemoteU32(child.hProcess,
-                                          runtime_base + module_address_rva,
-                                          hardlock_secret.module_address,
-                                          &error);
-            for (std::size_t index = 0; index < seed_rvas.size() && vfs_prepared; ++index)
-            {
-                vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
-                                   runtime_path,
-                                   kSeedExports[index],
-                                   &seed_rvas[index],
-                                   &error) &&
-                               WriteRemoteU32(child.hProcess,
-                                              runtime_base + seed_rvas[index],
-                                              hardlock_secret.seeds[index],
-                                              &error);
-            }
-            if (vfs_prepared)
-            {
-                vfs_prepared = WriteRemoteU32(child.hProcess,
-                                              runtime_base + enabled_rva,
-                                              1,
-                                              &error);
-            }
-            if (vfs_prepared)
-            {
-                RecordDiagnostic(
-                    "{\"event\":\"hardlock_secret_config\",\"loaded\":true}");
-            }
-        }
         if (vfs_prepared &&
             device_ioctl_policy_count != 0)
         {
@@ -5364,6 +5412,68 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 RecordDiagnostic(
                     "{\"event\":\"hardlock_44c_tail_patch\",\"value\":%u}",
                     static_cast<unsigned>(hardlock_44c_tail_word));
+            }
+        }
+        if (vfs_prepared && hardlock_device)
+        {
+            std::uint32_t enabled_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_hardlock_device_enabled",
+                               &enabled_rva,
+                               &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + enabled_rva,
+                                          1,
+                                          &error);
+            if (vfs_prepared)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"hardlock_device\",\"enabled\":true}");
+            }
+        }
+        if (vfs_prepared && !hardlock_transform_map.empty())
+        {
+            constexpr std::size_t kEntryStride =
+                re2dj::hle::hardlock::kHardlockTransformBlockSize * 2;
+            std::vector<unsigned char> packed;
+            packed.reserve(hardlock_transform_map.size() * kEntryStride);
+            for (const re2dj::hle::hardlock::HardlockTransformResponseEntry& map_entry :
+                 hardlock_transform_map)
+            {
+                packed.insert(packed.end(), map_entry.input.begin(), map_entry.input.end());
+                packed.insert(
+                    packed.end(), map_entry.output.begin(), map_entry.output.end());
+            }
+            std::uint32_t map_rva = 0;
+            std::uint32_t count_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_hardlock_transform_responses",
+                               &map_rva,
+                               &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path,
+                               "g_re2dj_hardlock_transform_response_count",
+                               &count_rva,
+                               &error) &&
+                           WriteRemoteBytes(child.hProcess,
+                                            runtime_base + map_rva,
+                                            packed.data(),
+                                            packed.size(),
+                                            &error) &&
+                           WriteRemoteU32(
+                               child.hProcess,
+                               runtime_base + count_rva,
+                               static_cast<std::uint32_t>(hardlock_transform_map.size()),
+                               &error);
+            if (vfs_prepared)
+            {
+                // Only the entry count is recorded; the blocks themselves stay
+                // out of the diagnostic log.
+                RecordDiagnostic(
+                    "{\"event\":\"hardlock_transform_map\",\"entries\":%u}",
+                    static_cast<unsigned>(hardlock_transform_map.size()));
             }
         }
         for (const re2dj::device::LptdiResponseEntry& profile_entry :

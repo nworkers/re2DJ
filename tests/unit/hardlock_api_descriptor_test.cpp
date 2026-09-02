@@ -1,4 +1,4 @@
-#include "re2dj/device/hardlock_api_descriptor.h"
+#include "re2dj/hle/hardlock/api_descriptor.h"
 
 #include <array>
 #include <cstdint>
@@ -8,7 +8,7 @@
 
 void RunHardlockApiDescriptorTests(re2dj::test::Context& context)
 {
-    std::array<std::uint8_t, re2dj::device::kHardlockApiDescriptorSize> bytes = {};
+    std::array<std::uint8_t, re2dj::hle::hardlock::kHardlockApiDescriptorSize> bytes = {};
     bytes[0x00] = 0x03;
     bytes[0x01] = 0x47;
     bytes[0x06] = 0x34;
@@ -35,9 +35,9 @@ void RunHardlockApiDescriptorTests(re2dj::test::Context& context)
     bytes[0xfe] = 0x34;
     bytes[0xff] = 0x12;
 
-    re2dj::device::HardlockApiDescriptorHeader header;
+    re2dj::hle::hardlock::HardlockApiDescriptorHeader header;
     RE2DJ_CHECK(context,
-                re2dj::device::ParseHardlockApiDescriptorHeader(bytes, &header));
+                re2dj::hle::hardlock::ParseHardlockApiDescriptorHeader(bytes, &header));
     RE2DJ_CHECK_EQ(context, header.api_version,
                    (std::array<std::uint8_t, 2>{0x03, 0x47}));
     RE2DJ_CHECK_EQ(context, header.module_id, std::uint16_t{0x1234});
@@ -58,31 +58,31 @@ void RunHardlockApiDescriptorTests(re2dj::test::Context& context)
                                                 0xa4, 0xa5, 0xa6, 0xa7}));
     std::uint16_t tail_word = 0;
     RE2DJ_CHECK(context,
-                re2dj::device::ParseHardlockApiDescriptorTailWord(
+                re2dj::hle::hardlock::ParseHardlockApiDescriptorTailWord(
                     bytes, &tail_word));
     RE2DJ_CHECK_EQ(context, tail_word, std::uint16_t{0x1234});
 
     const std::span<const std::uint8_t> short_bytes(
-        bytes.data(), re2dj::device::kHardlockApiFixedHeaderSize - 1);
+        bytes.data(), re2dj::hle::hardlock::kHardlockApiFixedHeaderSize - 1);
     RE2DJ_CHECK(context,
-                !re2dj::device::ParseHardlockApiDescriptorHeader(short_bytes, &header));
+                !re2dj::hle::hardlock::ParseHardlockApiDescriptorHeader(short_bytes, &header));
     RE2DJ_CHECK(context,
-                !re2dj::device::ParseHardlockApiDescriptorHeader(bytes, nullptr));
+                !re2dj::hle::hardlock::ParseHardlockApiDescriptorHeader(bytes, nullptr));
     RE2DJ_CHECK(context,
-                !re2dj::device::ParseHardlockApiDescriptorTailWord(
+                !re2dj::hle::hardlock::ParseHardlockApiDescriptorTailWord(
                     short_bytes, &tail_word));
     RE2DJ_CHECK(context,
-                !re2dj::device::ParseHardlockApiDescriptorTailWord(
+                !re2dj::hle::hardlock::ParseHardlockApiDescriptorTailWord(
                     bytes, nullptr));
     std::string error;
     RE2DJ_CHECK(context,
-                re2dj::device::ParseHardlockApiTailWordHex(
+                re2dj::hle::hardlock::ParseHardlockApiTailWordHex(
                     "00fA", &tail_word, &error));
     RE2DJ_CHECK_EQ(context, tail_word, std::uint16_t{0x00fa});
     RE2DJ_CHECK(context,
-                !re2dj::device::ParseHardlockApiTailWordHex(
+                !re2dj::hle::hardlock::ParseHardlockApiTailWordHex(
                     "001", &tail_word, &error));
     RE2DJ_CHECK(context,
-                !re2dj::device::ParseHardlockApiTailWordHex(
+                !re2dj::hle::hardlock::ParseHardlockApiTailWordHex(
                     "00xz", &tail_word, &error));
 }

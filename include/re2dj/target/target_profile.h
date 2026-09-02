@@ -35,8 +35,11 @@ struct TargetLptdiPolicy
     bool device_mock_enabled = false;
     // Profile-specific response state for the synthetic device.
     std::string device_mock_target_state_hex;
-    // Requires profile-specific Hardlock material from an external file.
-    bool hardlock_secret_config_required = false;
+    // Reads Hardlock material from the conventional cfg paths when it is there:
+    // the profile's response map and the optional device replay values. Nothing
+    // in this repository produces those values, and their absence is not an
+    // error, so this only decides whether the files are consulted.
+    bool hardlock_cfg_material_default = false;
 };
 
 // Baseline settings for the supported product execution path. An empty or
@@ -60,6 +63,11 @@ struct TargetRunDefaults
     bool hle_dynamic_vfs = false;
     bool hle_d3d3 = false;
     bool hle_directsound = false;
+    // Reports the current session as an active console. The cabinet's original
+    // ran as the console shell, so this is an operating-system boundary rather
+    // than a diagnostic. Only a successful WTS_CURRENT_SESSION class-4 result
+    // is rewritten; other queries and failures are preserved.
+    bool hle_wts_active_console = false;
     TargetLptdiPolicy lptdi;
     bool run_detached = false;
 };

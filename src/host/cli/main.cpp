@@ -46,7 +46,6 @@ struct Options
     std::filesystem::path hdd_directory;
     std::filesystem::path linux_helper;
     std::filesystem::path io_config;
-    std::filesystem::path hardlock_config;
     std::string target_id;
     std::string resolve_path;
     float audio_gain_db = 0.0f;
@@ -234,8 +233,6 @@ void PrintUsage()
         "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
         "  --windowed          Override a profile's fullscreen default on Windows.\n"
         "  --io-config <path>  Windows EZ2DJ keyboard I/O mapping INI.\n"
-        "  --hardlock-config <path>\n"
-        "                      External per-profile Hardlock secret INI.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
         "\n"
@@ -366,15 +363,6 @@ bool ParseOptions(int argc, char** argv, Options* options)
                 return false;
             }
             options->io_config = std::filesystem::path(value);
-        }
-        else if (argument == "--hardlock-config")
-        {
-            std::string value;
-            if (!TakeValue(argc, argv, &index, argument, &value))
-            {
-                return false;
-            }
-            options->hardlock_config = std::filesystem::path(value);
         }
         else if (argument == "--target")
         {
@@ -583,7 +571,6 @@ int RunChdTarget(const Options& options,
     }
     run_options.audio_volume_trace = options.audio_volume_trace;
     run_options.io_config = options.io_config;
-    run_options.hardlock_config = options.hardlock_config;
     const int result = re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (result < 0)
     {
@@ -620,7 +607,7 @@ int main(int argc, char** argv)
 #if !defined(_WIN32)
     if (options.audio_gain_explicit || options.demo_volume_explicit ||
         options.audio_volume_trace || options.fullscreen_explicit ||
-        !options.io_config.empty() || !options.hardlock_config.empty())
+        !options.io_config.empty())
     {
         std::fprintf(stderr, "error: selected execution options are currently supported only on Windows\n");
         return kExitNotImplemented;
@@ -893,14 +880,6 @@ int main(int argc, char** argv)
                      selected->id.c_str());
         return kExitNotImplemented;
     }
-    if (!options.hardlock_config.empty() &&
-        !selected->run_defaults.lptdi.hardlock_secret_config_required)
-    {
-        std::fprintf(stderr,
-                     "\nerror: --hardlock-config is not supported by profile '%s'.\n",
-                     selected->id.c_str());
-        return kExitNotImplemented;
-    }
     re2dj::platform::windows::OriginalProcessOptions run_options;
     run_options.hdd_directory = root.root();
     run_options.target_id = selected->id;
@@ -920,7 +899,6 @@ int main(int argc, char** argv)
     }
     run_options.audio_volume_trace = options.audio_volume_trace;
     run_options.io_config = options.io_config;
-    run_options.hardlock_config = options.hardlock_config;
     const int run_result =
         re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (run_result < 0)
