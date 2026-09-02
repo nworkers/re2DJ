@@ -119,3 +119,194 @@
 *Inferred — backend design fit. The contract aligns with the original's observed `0x458`, descriptor block count at `0x16`, and payload boundary at `0x100`, so it is useful for shaping a separate `HardlockDeviceBackend` request interface. The contract alone cannot determine the seed algorithm or a valid response.*
 
 *Unresolved — authenticating response. No independent automated test vector or physical-dongle output was found. Rewriting the GPL bit-level primitive or promoting the existing synthetic replay/tail to a product default would violate the current project license and evidence policy.*
+
+## 2026-09-03 VFS 절대 경로 수정 후 실행 결과
+
+- **확인됨 — Hardlock 이후 VFS 경계 진행.** `cfg/hardlock.ini`의 4th 응답 재료와 36개 transform map이 계속 적용되었고, 최신 실행은 transform 36회를 모두 `mapped=1:unmapped=0`으로 처리했습니다.
+- **확인됨 — host absolute path 재해석.** staging 아래의 `C:\...\EZ2DJ\EZ2DJ.ini` 요청이 더 이상 `C:\...\EZ2DJ\C:\...`로 이중 결합되지 않았습니다. VFS trace에서 요청과 매핑 결과가 동일한 staging 파일로 기록되며 `success=1:error=0`입니다.
+- **확인됨 — CHD와 overlay 경로 보존.** 설정된 HDD root 및 HLE Windows root 아래의 host absolute path를 기존 상대 suffix 경로로 되돌리고, read/overlay 우선순위와 copy-on-write 정책을 유지하도록 runtime probe 회귀 검증을 추가했습니다.
+- **미확정 — 다음 실행 경계.** `EZ2DJ.ini`를 성공적으로 연 뒤 child가 `0xc0000096`으로 종료했습니다. 이 실행 기록에는 fault instruction address가 없으므로 privileged instruction 또는 raw port I/O라고 단정하지 않으며, 다음 작업에서 예외 지점 계측으로 확인해야 합니다.
+
+*Confirmed — Hardlock-to-VFS progression. The 4th response material from `cfg/hardlock.ini` and the 36-entry transform map remained active, and the latest run completed all 36 transforms as `mapped=1:unmapped=0`.*
+
+*Confirmed — host-absolute path remapping. The staging path `C:\...\EZ2DJ\EZ2DJ.ini` is no longer double-joined as `C:\...\EZ2DJ\C:\...`. The VFS trace records the request and mapped result as the same staging file with `success=1:error=0`.*
+
+*Confirmed — CHD and overlay policy preserved. Host-absolute paths under the configured HDD and HLE Windows roots are converted back to the existing relative suffix paths, while read/overlay precedence and copy-on-write behavior remain covered by runtime-probe regression checks.*
+
+*Unresolved — next execution boundary. After successfully opening `EZ2DJ.ini`, the child exits with `0xc0000096`. The run record contains no faulting instruction address, so this is not yet attributed to a privileged instruction or raw port I/O; the next task must capture the exception point.*
+
+## 2026-09-03 privileged instruction 계측 결과
+
+- **확인됨 — 4th raw I/O fault 위치.** 실제 CHD staging root에 attached debugger를 유지한 `--slot-writer-trace` 실행을 추가 계측한 결과, `0xc0000096`의 first chance와 second chance가 모두 원본 image의 `0x004c3817`에서 발생했습니다.
+- **확인됨 — 명령어와 port.** fault 지점의 bytes는 `ec c3...`이며 `0xec`는 `IN AL,DX`, `0xc3`는 `RET`입니다. 계측된 EDX는 `0x00ac0103`이고 low word port는 `0x0103`입니다.
+- **확인됨 — 기존 경계 이후 발생.** 같은 실행에서 `response450=true`, `tail44c=true`, `map=true`, transform 36회 `mapped=1:unmapped=0`, `EZ2DJ.ini` `success=1:error=0`가 먼저 기록되었습니다. 이후 예외가 처리되지 않고 child가 `0xc0000096`으로 종료했습니다.
+- **미확정 — 반환값과 HLE 정책.** 계측된 EAX low byte `0x00`은 실제 `IN` 수행 전 context 값이며 장치가 반환해야 할 값이 아닙니다. port `0x0103`의 의미와 반환 byte는 아직 확인되지 않았으므로 4th raw-I/O HLE를 기본 활성화하지 않습니다.
+
+*Confirmed — 4th raw-I/O fault location. An attached-debugger `--slot-writer-trace`
+run against the real CHD staging root, with the added instrumentation, observed both
+the first- and second-chance `0xc0000096` at original image address `0x004c3817`.*
+
+*Confirmed — instruction and port. The fault bytes begin `ec c3...`; `0xec` is
+`IN AL,DX` and `0xc3` is `RET`. The captured EDX is `0x00ac0103`, making the low-word
+port `0x0103`.*
+
+*Confirmed — after the existing boundary. The same run first records
+`response450=true`, `tail44c=true`, `map=true`, all 36 transforms as
+`mapped=1:unmapped=0`, and `EZ2DJ.ini` with `success=1:error=0`. The unhandled
+exception then causes child exit `0xc0000096`.*
+
+*Unresolved — return value and HLE policy. The captured EAX low byte `0x00` is the
+pre-`IN` context value, not the byte the device would return. The meaning and return
+value for port `0x0103` remain unconfirmed, so 4th raw-I/O HLE is not enabled by default.*
+
+## 2026-09-03 shared raw-I/O diagnostic
+
+- **확인됨 — 4th read를 공용 bus가 처리함.** `20260903-004511-065.jsonl`에서 기존 Hardlock material과 36개 transform 및 `EZ2DJ.ini` read가 먼저 성공한 뒤, `0x004c3817`의 `0xc0000096` privileged event가 기록되었습니다. 프로파일별 RVA 연결 후 같은 주소에 대한 `io_port_read`가 `0x0103 -> 0x80`, `0x0104 -> 0x80`, `0x0105 -> 0x00`으로 기록되었고, 이후 child는 `0x00434137`의 `0xc0000005` AV까지 진행했습니다.
+- **확인됨 — 4th의 현재 주소 범위.** 4th profile은 main-image byte-read RVA `0x000c3817`만 보유합니다. byte-write RVA는 0으로 남겨 두었으며 확인되지 않은 `OUT` trap은 추가하지 않았습니다.
+- **확인됨 — injected runtime 경로.** 명시적 `--hle-io-ports --run-detached` 실행 `20260903-004600-318.jsonl`은 runtime policy를 `in_rva=0x000c3817`, `out_rva=0x00000000`으로 준비했고 child exit code는 `0xc0000005`였습니다. 이는 runtime handler가 이전 `0xc0000096` 경계를 넘긴다는 실행 증거입니다.
+- **추정/미확정 — 응답 의미.** `0x0103`과 `0x0104`의 `0x80`은 `Ez2DjIoBoard`의 초기 turntable center 값이며, `0x0105`의 `0x00`은 초기 coin counter입니다. 이 값들이 4th 물리 보드의 정답 응답인 것은 확인되지 않았습니다. 따라서 4th raw I/O는 제품 기본값으로 승격하지 않았습니다.
+
+* **Confirmed — the shared bus handles the 4th read.** In `20260903-004511-065.jsonl`, the existing Hardlock material, all 36 transforms, and the `EZ2DJ.ini` read succeed before the `0xc0000096` privileged event at `0x004c3817`. After the profile-specific RVA connection, `io_port_read` records `0x0103 -> 0x80`, `0x0104 -> 0x80`, and `0x0105 -> 0x00` at the same helper, and the child advances to an `0xc0000005` access violation at `0x00434137`.
+* **Confirmed — the current 4th address range.** The 4th profile owns only main-image byte-read RVA `0x000c3817`. Its byte-write RVA remains zero, and no unconfirmed `OUT` trap was added.
+* **Confirmed — injected runtime path.** The explicit `--hle-io-ports --run-detached` run `20260903-004600-318.jsonl` prepares the runtime policy as `in_rva=0x000c3817`, `out_rva=0x00000000`, and the child exits with `0xc0000005`. This is execution evidence that the runtime handler passes the previous `0xc0000096` boundary.
+* **Inferred/unresolved — response meaning.** `0x80` at ports `0x0103` and `0x0104` is the `Ez2DjIoBoard` initial turntable-center value, while `0x00` at `0x0105` is the initial coin counter. These values are not confirmed as the physical 4th board response, so 4th raw I/O is not promoted to a product default.
+
+관련 설계와 실행 절차는 [Task 144 설계](../design/20260903-144-ez2dj4th-profile-io-reuse.md), [Task 144 작업 지시서](../work-orders/20260903-144-ez2dj4th-profile-io-reuse.md), [Task 144 작업 로그](../work-logs/20260903-144-ez2dj4th-profile-io-reuse.md)에 둡니다.
+
+The related design, work order, and execution record are [Task 144 design](../design/20260903-144-ez2dj4th-profile-io-reuse.md), [Task 144 work order](../work-orders/20260903-144-ez2dj4th-profile-io-reuse.md), and [Task 144 work log](../work-logs/20260903-144-ez2dj4th-profile-io-reuse.md).
+
+## 2026-09-03 AV null receiver attribution
+
+- **확인됨 — faulting instruction과 receiver.** `20260903-012922-258.jsonl`에서 thread `18688`이 `0x00434137`의 read AV(`0x00000014`)를 재현했습니다. runtime bytes는 `8b 48 14`(`mov ecx, [eax+0x14]`)이며 AV register는 `EAX=0`, `ECX=0`입니다.
+- **확인됨 — runtime target chain.** stack direct-call candidate `0x00402275`의 runtime bytes는 `e9 9c 1e 03 00`으로 `0x00434116`으로 jump합니다. `0x00434116`은 `ECX`를 local에 저장한 뒤 `[EAX+0x14]`를 읽는 member-like routine이므로, 직접적인 fault 원인은 null object receiver입니다.
+- **확인됨 — immediate caller가 null을 전달함.** runtime callsite `0x00417da4`는 `mov [EBP-8], ECX` 후 `mov ECX, [EBP-8]`을 수행하고 `call 0x00402275`를 실행합니다. `av_caller_frame`은 이 caller local을 `0x00000000`으로 기록했습니다. callee return address는 `0x00417dc7`, caller return address는 `0x0041a6a4`입니다.
+- **확인됨 — 한 단계 위의 field가 zero임.** `0x0041a684` 부근 runtime window는 `mov ECX, [EBP-0x118]`, `mov ECX, [ECX+0x11c]`, `call 0x00402298` 순서입니다. `av_outer_frame`은 `[outer EBP-0x118] = 0x00acd708` 및 `[(0x00acd708)+0x11c] = 0x00000000`을 기록했습니다. 이 값은 `0x00417da4`에 전달되는 null의 가장 가까운 확인 지점입니다.
+- **확인됨 — Hardlock 성공 경계와 직접 AV를 분리함.** 별도 run `20260903-010325-894.jsonl`에서 `0x450`은 `0100fafa0010` 응답과 `EAX=1`을 기록했고, `20260903-010211-910.jsonl`에서 마지막 `0x44c`는 256-byte output과 `EAX=1`을 기록했습니다. 따라서 현재 증거는 `DeviceIoControl`의 null/실패 반환을 직접적인 AV 원인으로 지지하지 않습니다.
+- **확인됨 — raw-I/O 반환과 저장 위치.** `20260903-010808-683.jsonl`에서 `0x0103 -> 0x80`, `0x0104 -> 0x80`, `0x0105 -> 0x00`이 기록됐고, 각 반환-site는 값을 원본 객체의 `+0xb3c`, `+0xb40`, `+0xb44`에 저장합니다.
+- **미확정 — 상위 field writer와 간접 연관성.** `0x00acd708+0x11c`를 쓰는 초기화 루틴과 raw-I/O 값이 해당 field를 간접적으로 결정하는지는 아직 확인되지 않았습니다. 그러므로 이번 결과는 “Hardlock 직접 실패”가 아니라 “상위 객체 초기화/전달 경로의 null receiver”로 분류하며, 4th 물리 I/O 응답 의미를 새로 확정하지 않습니다.
+
+* **Confirmed — faulting instruction and receiver.** `20260903-012922-258.jsonl` reproduces a read AV at `0x00434137` on thread `18688`, reading `0x00000014`. The runtime bytes are `8b 48 14` (`mov ecx, [eax+0x14]`), and the AV registers are `EAX=0`, `ECX=0`.
+* **Confirmed — runtime target chain.** The stack direct-call candidate `0x00402275` contains runtime bytes `e9 9c 1e 03 00`, which jumps to `0x00434116`. `0x00434116` stores `ECX` in a local and then reads `[EAX+0x14]`; the immediate fault cause is therefore a null object receiver.
+* **Confirmed — the immediate caller passes null.** Runtime callsite `0x00417da4` executes `mov [EBP-8], ECX`, then `mov ECX, [EBP-8]`, and calls `0x00402275`. `av_caller_frame` records this caller local as `0x00000000`. The callee return address is `0x00417dc7`, and the caller return address is `0x0041a6a4`.
+* **Confirmed — the field one level above is zero.** The runtime window near `0x0041a684` contains `mov ECX, [EBP-0x118]`, `mov ECX, [ECX+0x11c]`, and `call 0x00402298`. `av_outer_frame` records `[outer EBP-0x118] = 0x00acd708` and `[(0x00acd708)+0x11c] = 0x00000000`. This is the nearest confirmed source of the null passed to `0x00417da4`.
+* **Confirmed — Hardlock success boundary is separate from the direct AV.** Separate run `20260903-010325-894.jsonl` records the `0x450` response `0100fafa0010` with `EAX=1`, and `20260903-010211-910.jsonl` records the final `0x44c` with a 256-byte output and `EAX=1`. Current evidence therefore does not support a null or failed `DeviceIoControl` return as the direct AV cause.
+* **Confirmed — raw-I/O return values and storage.** `20260903-010808-683.jsonl` records `0x0103 -> 0x80`, `0x0104 -> 0x80`, and `0x0105 -> 0x00`; each return site stores the value into original-object offsets `+0xb3c`, `+0xb40`, and `+0xb44`.
+* **Unresolved — upper-field writer and indirect relation.** The initializer that writes `0x00acd708+0x11c`, and whether raw-I/O state indirectly determines that field, remain unconfirmed. The result is therefore classified as an upstream object-initialization/null-receiver path, not a direct Hardlock failure, and does not confirm a physical 4th I/O-board response.
+
+관련 진단 설계와 작업 지시서는 [Task 145 설계](../design/20260903-145-ez2dj4th-av-null-context.md)와 [Task 145 작업 지시서](../work-orders/20260903-145-ez2dj4th-av-null-context.md)에 둡니다.
+
+The related diagnostic design and work order are [Task 145 design](../design/20260903-145-ez2dj4th-av-null-context.md) and [Task 145 work order](../work-orders/20260903-145-ez2dj4th-av-null-context.md).
+
+## 2026-09-03 null field writer trace
+
+- **확인됨 — write watch 준비와 초기값.** `20260903-014526-938.jsonl` 및 `20260903-014716-040.jsonl`에서 `image_base + 0x006cd824 = 0x00acd824`에 대한 x86 `DR3` 4-byte write watch가 `prepared=true`로 설정됐고, ready 시점 field 값은 `0x00000000`이었습니다.
+- **확인됨 — AV 전 writer hit 없음.** 두 실행 모두 `null_context_field_writer_hit`가 0회였고, 동일한 `0x00434137 / 0xc0000005` AV가 발생했습니다. child-exit boundary에서도 field current 값은 0이었습니다. 이는 watch 설치 후 해당 4-byte 범위에 쓰기가 관찰되지 않았다는 뜻입니다.
+- **확인됨 — 고정 absolute reference 없음.** `20260903-014716-040.jsonl`의 읽기 전용 image scan은 field `0x00acd824`에 대해 `matches=0`을 기록했습니다. 고정 주소를 직접 피연산자로 갖는 runtime image reference는 이 scan에서 발견되지 않았습니다.
+- **확인됨 — 기존 breakpoint와 공존.** `20260903-014819-394.jsonl`은 `--slot-writer-trace`와 새 `DR3` watch를 동시에 사용했으며, 기존 slot writer `0x00aefe62` hit(`EAX=0x00b17b00`)를 정상 기록했습니다. 두 breakpoint 설정의 충돌은 관찰되지 않았습니다.
+- **미확정 — writer 시점과 접근 경로.** field가 watch 설치 전에 이미 0이었거나, 간접 객체 경로로 접근될 가능성이 있습니다. 이는 writer가 존재하지 않는다는 증명이 아닙니다. 동일 field의 read/access watch로 최초 사용 지점과 상위 객체 공급 경로를 확인해야 합니다.
+
+* **Confirmed — write-watch setup and initial value.** `20260903-014526-938.jsonl` and `20260903-014716-040.jsonl` set an x86 `DR3` four-byte write watch at `image_base + 0x006cd824 = 0x00acd824` with `prepared=true`; the field was `0x00000000` when the watch was armed.
+* **Confirmed — no writer hit before the AV.** Both runs recorded zero `null_context_field_writer_hit` events and produced the same `0x00434137 / 0xc0000005` AV. The field current value was also zero at the child-exit boundary. This means no write to the watched four-byte range was observed after arming.
+* **Confirmed — no fixed absolute reference.** The read-only image scan in `20260903-014716-040.jsonl` reported `matches=0` for field `0x00acd824`. No runtime-image reference with that fixed address as an immediate operand was found by this scan.
+* **Confirmed — coexistence with existing breakpoints.** `20260903-014819-394.jsonl` used `--slot-writer-trace` together with the new `DR3` watch and recorded the existing slot writer hit at `0x00aefe62` with `EAX=0x00b17b00`. No collision between the breakpoint configurations was observed.
+* **Unresolved — writer timing and access path.** The field may already have been zero before the watch was armed, or may be accessed through an indirect object path. This does not prove that no writer exists. A read/access watch on the same field is required to identify the first use and upper-object supply path.
+
+관련 설계와 작업 지시서는 [Task 146 설계](../design/20260903-146-ez2dj4th-null-field-writer-trace.md)와 [Task 146 작업 지시서](../work-orders/20260903-146-ez2dj4th-null-field-writer-trace.md)에 둡니다.
+
+The related design and work order are [Task 146 design](../design/20260903-146-ez2dj4th-null-field-writer-trace.md) and [Task 146 work order](../work-orders/20260903-146-ez2dj4th-null-field-writer-trace.md).
+
+## 2026-09-03 null field access trace
+
+- **확인됨 — access watch와 최초 접근.** `20260903-015902-887.jsonl`에서 `image_base + 0x006cd824 = 0x00acd824`에 대한 `DR3` read/write access watch가 `prepared=true`로 설정되었습니다. 첫 hit는 thread `4772`에서 발생했으며 field 값은 before/after 모두 `0x00000000`이었습니다.
+- **확인됨 — field read site.** 첫 hit의 post-access EIP는 `0x0041a69f`이고 runtime code window는 `0x0041a699`의 `mov ECX, [ECX+0x11c]`와 이어지는 `call 0x00402298`를 포함합니다. 이 명령이 `0x00acd824` field를 읽은 지점으로 확인됩니다.
+- **확인됨 — read 직후 null 전달.** 같은 access hit에서 `ECX=0`이었고, 같은 thread가 곧바로 `0x00434137`에서 `0x00000014` read AV를 발생시켰습니다. `av_outer_frame`은 outer object `0x00acd708`의 `+0x11c` field가 여전히 0임을 기록했습니다.
+- **확인됨 — slot writer와 공존.** `20260903-020004-160.jsonl`은 기존 slot-writer `DR0–DR2`와 field access `DR3`를 함께 arm했고, 같은 thread에서 slot-writer hit와 field access hit를 모두 정상 기록했습니다.
+- **판정 — read site와 null 전달 순서 확인.** field는 0으로 읽힌 뒤 `ECX=0`인 상태로 다음 호출에 전달되고, 동일 thread에서 null receiver AV가 발생합니다. 이는 Hardlock 반환 경로가 이 field를 직접 채우지 못했다는 실행 증거이지만, field가 왜 0인지와 어떤 HLE 경계가 상위 객체를 초기화해야 하는지는 미확정입니다. 따라서 field 값을 직접 주입하거나 Hardlock 응답값을 추측하는 수정은 보류합니다.
+
+* **Confirmed — access watch and first access.** `20260903-015902-887.jsonl` prepared a `DR3` read/write access watch for `image_base + 0x006cd824 = 0x00acd824` with `prepared=true`. The first hit occurred on thread `4772`, and the field value was `0x00000000` both before and after the access.
+* **Confirmed — field read site.** The first hit's post-access EIP was `0x0041a69f`, and the runtime code window includes `mov ECX, [ECX+0x11c]` at `0x0041a699` followed by `call 0x00402298`. This identifies the instruction that read the field at `0x00acd824`.
+* **Confirmed — null propagation immediately after the read.** The same access hit had `ECX=0`, and the same thread then raised the `0x00000014` read AV at `0x00434137`. `av_outer_frame` records that the `+0x11c` field of outer object `0x00acd708` was still zero.
+* **Confirmed — coexistence with the slot writer.** `20260903-020004-160.jsonl` armed the existing slot-writer `DR0`–`DR2` watches together with field access `DR3`, and recorded both the slot-writer hit and field-access hit on the same thread.
+* **Classification — read site and null-propagation order confirmed.** The field is read as zero, passed onward with `ECX=0`, and the same thread reaches the null-receiver AV. This is execution evidence that the Hardlock return path does not directly populate this field, but why the field is zero and which HLE boundary should initialize the upper object remain unresolved. Direct field injection and guessed Hardlock responses are therefore deferred.
+
+관련 설계와 작업 지시서 및 실행 결과는 [Task 147 설계](../design/20260903-147-ez2dj4th-null-field-access-trace.md), [Task 147 작업 지시서](../work-orders/20260903-147-ez2dj4th-null-field-access-trace.md), [Task 147 작업 로그](../work-logs/20260903-147-ez2dj4th-null-field-access-trace.md)에 둡니다.
+
+The related design, work order, and execution record are [Task 147 design](../design/20260903-147-ez2dj4th-null-field-access-trace.md), [Task 147 work order](../work-orders/20260903-147-ez2dj4th-null-field-access-trace.md), and [Task 147 work log](../work-logs/20260903-147-ez2dj4th-null-field-access-trace.md).
+
+## 2026-09-03 upper-object allocation trace
+
+- **확인됨 — 객체 context.** `20260903-023341-871.jsonl`의 첫 field access hit는 `[EBP-0x118] = 0x00acd708`, 객체 field 주소 `0x00acd824`, field 값 `0`을 기록했습니다. 객체 주소는 관찰 image base 기준 `image_base + 0x006cd708`인 image-resident 주소입니다.
+- **확인됨 — 관찰된 allocator와 불일치.** 같은 실행에서 `LocalAlloc`·`VirtualAlloc` return hit 34,537건을 관찰했지만 `0x00acd708`과 일치하는 `EAX`는 없었고, field event의 `allocation_return_match`도 `false`였습니다. 상세 return event는 256건으로 제한했지만 비교용 주소 집합은 계속 갱신했습니다.
+- **미확정 — HeapAlloc 범위.** `HeapAlloc` export는 forwarded 상태여서 watch가 설치되지 않았습니다. 따라서 `HeapAlloc`이 객체를 반환했는지는 이 실행으로 판정할 수 없습니다.
+- **판정 — pre-existing/other origin 범위.** `0x00acd708`은 관찰된 두 Win32 allocator의 반환값이 아니며, 관찰 경계에서 이미 존재하는 정적 객체이거나 다른 공급 경로에서 온 것으로 분류합니다. 이는 `[EBP-0x118]`에 값을 쓴 instruction을 식별한 결과가 아니므로, 다음에는 해당 stack-local assignment 또는 caller를 추적해야 합니다.
+
+관련 설계, 작업 지시서 및 작업 로그는 [Task 148 설계](../design/20260903-148-ez2dj4th-object-allocation-trace.md), [Task 148 작업 지시서](../work-orders/20260903-148-ez2dj4th-object-allocation-trace.md), [Task 148 작업 로그](../work-logs/20260903-148-ez2dj4th-object-allocation-trace.md)에 둡니다.
+
+* **Confirmed — object context.** The first field-access hit in `20260903-023341-871.jsonl` recorded `[EBP-0x118] = 0x00acd708`, object-field address `0x00acd824`, and field value zero. The object address is image-resident at `image_base + 0x006cd708` for the observed image base.
+* **Confirmed — mismatch with observed allocators.** The same run observed 34,537 `LocalAlloc` and `VirtualAlloc` return hits, but no `EAX` matched `0x00acd708`; the field event also reported `allocation_return_match=false`. Detailed return events were bounded at 256 while the comparison address set continued to update.
+* **Unresolved — HeapAlloc scope.** The `HeapAlloc` export was forwarded, so no watch was installed. This run cannot determine whether `HeapAlloc` returned the object.
+* **Classification — pre-existing/other origin within scope.** `0x00acd708` was not returned by the two observed Win32 allocators and is classified as a pre-existing static object or a value from another supply path at this observation boundary. This does not identify the instruction that populated `[EBP-0x118]`; the next step is to trace that stack-local assignment or its caller.
+
+The related Task 148 design, work order, and work log are [Task 148 design](../design/20260903-148-ez2dj4th-object-allocation-trace.md), [Task 148 work order](../work-orders/20260903-148-ez2dj4th-object-allocation-trace.md), and [Task 148 work log](../work-logs/20260903-148-ez2dj4th-object-allocation-trace.md).
+
+## 2026-09-03 object source stack-slot trace
+
+- **확인됨 — 고정 stack-slot watch 설치.** `20260903-025152-528.jsonl`에서 `DR2` 4-byte write watch가 configured slot `0x001afcf0`에 `prepared=true`로 설치되었습니다. source hit 61건이 기록되었습니다.
+- **확인됨 — 고정 주소와 target frame 불일치.** 준비 시점 configured slot 값은 `0x001afd24`였고, 61건 모두 `stack_slot_matches_target=false`, `frame_slot_matches_target=false`였습니다. `target_matches=0`으로 target object `0x00acd708`과 일치한 공급 write는 관찰되지 않았습니다.
+- **확인됨 — 고정 주소의 재사용.** hit context 중 다수는 `0x001afcf0`이 다른 OS/runtime frame의 stack 또는 `ESP`로 사용되는 쓰기였습니다. 따라서 이전 실행에서의 absolute stack address를 다음 실행의 object source 주소로 재사용할 수 없습니다.
+- **확인됨 — baseline frame은 기존과 동일.** source watch를 끈 `20260903-025218-345.jsonl`에서는 field access 1건이 `EBP=0x001afe08`, `[EBP-0x118]=0x001afcf0`, object `0x00acd708`, field `0x00000000`을 기록한 뒤 `0x00434137` AV로 진행했습니다.
+- **미확정 — object 공급 instruction.** 고정 stack-slot watch는 source mechanism과 주소 drift를 확인했지만, target object를 `[EBP-0x118]`에 공급하는 instruction은 확인하지 못했습니다. 다음 진단은 runtime field-access 함수의 진입 경계에서 현재 `EBP`를 계산해 동적으로 watch를 설치해야 합니다.
+
+* **Confirmed — fixed stack-slot watch setup.** `20260903-025152-528.jsonl` prepared a `DR2` four-byte write watch at configured slot `0x001afcf0` with `prepared=true` and recorded 61 source hits.
+* **Confirmed — fixed address does not match the target frame.** The configured slot contained `0x001afd24` when armed, and all 61 hits reported `stack_slot_matches_target=false` and `frame_slot_matches_target=false`. `target_matches=0`, so no write supplying target object `0x00acd708` was observed.
+* **Confirmed — fixed-address reuse.** Many hit contexts used `0x001afcf0` as another OS/runtime frame's stack or as `ESP`. An absolute stack address from one run cannot be reused as the object-source address in the next run.
+* **Confirmed — baseline frame remains unchanged.** Without the source watch, `20260903-025218-345.jsonl` recorded one field access with `EBP=0x001afe08`, `[EBP-0x118]=0x001afcf0`, object `0x00acd708`, and field `0x00000000`, followed by the `0x00434137` AV.
+* **Unresolved — object-supply instruction.** The fixed stack-slot watch validated the source mechanism and address drift but did not identify the instruction that supplies the target object to `[EBP-0x118]`. The next diagnostic should derive the current `EBP` at the runtime field-access function boundary and install the watch dynamically.
+
+The related Task 149 design, work order, and work log are [Task 149 design](../design/20260903-149-ez2dj4th-object-source-trace.md), [Task 149 work order](../work-orders/20260903-149-ez2dj4th-object-source-trace.md), and [Task 149 work log](../work-logs/20260903-149-ez2dj4th-object-source-trace.md).
+
+## 2026-09-03 dynamic object source boundary trace
+
+- **확인됨 — runtime boundary.** baseline field-access run `20260903-030307-249.jsonl`의 runtime scan은 field-read anchor `0x0041a699` 앞에서 prologue `0x0041a649`와 prologue 직후 boundary `0x0041a64c`를 확인했습니다. entry 준비 시점에는 보호 stub가 runtime code를 아직 복호화하지 않아 같은 scan이 실패했으므로, 확인된 boundary RVA `0x001a64c`를 다음 run의 `DR0` anchor로 사용했습니다.
+- **확인됨 — dynamic frame slot.** `20260903-030421-317.jsonl`에서 `DR0` boundary hit는 `EBP=0x001afe08`을 기록했고, 현재 frame slot `EBP-0x118=0x001afcf0`에 `DR2` write watch를 동적으로 설치했습니다.
+- **확인됨 — upper-object supply instruction.** 같은 run의 두 번째 source hit는 slot 값 `0x00acd708`, `frame_slot_matches_target=true`를 기록했습니다. runtime window는 `0x0041a668` 시작의 `mov [EBP-0x118], ECX`와 post-EIP `0x0041a66e`를 나타내며, 대입 시 `ECX=0x00acd708`이었습니다.
+- **확인됨 — field zero와 fault 순서.** source hit 뒤 같은 thread에서 `0x00acd824` field access가 발생했고 field 값은 `0x00000000`이었습니다. 이후 `0x00434137`에서 `0x00000014` read AV가 재현되었습니다.
+- **미확정 — field initializer.** 상위 객체 pointer 공급 instruction은 확인했지만 `0x00acd708+0x11c`를 0이 아닌 값으로 초기화하는 instruction과 그 HLE 경계는 확인하지 못했습니다. 직접 field 주입과 Hardlock 응답 변경은 여전히 보류합니다.
+
+* **Confirmed — runtime boundary.** The baseline field-access run `20260903-030307-249.jsonl` scanned runtime bytes before field-read anchor `0x0041a699` and confirmed prologue `0x0041a649` and the post-prologue boundary `0x0041a64c`. The same scan failed during entry preparation because the protection stub had not decrypted runtime code yet, so the confirmed boundary RVA `0x001a64c` was used as the `DR0` anchor for the next run.
+* **Confirmed — dynamic frame slot.** In `20260903-030421-317.jsonl`, the `DR0` boundary hit recorded `EBP=0x001afe08` and dynamically installed a `DR2` write watch at the current frame slot `EBP-0x118=0x001afcf0`.
+* **Confirmed — upper-object supply instruction.** The second source hit in the same run recorded slot value `0x00acd708` with `frame_slot_matches_target=true`. Its runtime window identifies `mov [EBP-0x118], ECX` starting at `0x0041a668`, post-EIP `0x0041a66e`, with `ECX=0x00acd708` at assignment.
+* **Confirmed — field-zero and fault order.** The same thread accessed field `0x00acd824` after the source hit while the field value was `0x00000000`, then reproduced the `0x00000014` read AV at `0x00434137`.
+* **Unresolved — field initializer.** The upper-object pointer supply instruction is confirmed, but the instruction initializing `0x00acd708+0x11c` to a nonzero value and the appropriate HLE boundary remain unknown. Direct field injection and Hardlock-response changes remain deferred.
+
+The related Task 150 design, work order, and work log are [Task 150 design](../design/20260903-150-ez2dj4th-dynamic-object-source-trace.md), [Task 150 work order](../work-orders/20260903-150-ez2dj4th-dynamic-object-source-trace.md), and [Task 150 work log](../work-logs/20260903-150-ez2dj4th-dynamic-object-source-trace.md).
+
+## 2026-09-03 pre-entry field writer trace
+
+- **확인됨 — pre-entry watch 설치.** `20260903-031354-995.jsonl`에서 CREATE_PROCESS/CREATE_THREAD 단계의 `DR3` write watch가 field `0x00acd824`에 설치되었고 early thread arm event가 기록되었습니다.
+- **확인됨 — early writer 미관찰.** initial breakpoint 이전 구간에서 `null_context_field_writer_early_hit`는 0건이었습니다. 이 관찰 범위에서는 보호 stub 또는 pre-entry 초기화가 field에 write하지 않았습니다.
+- **확인됨 — 이후 source/access 순서 유지.** 같은 실행에서 object source boundary `0x0041a64c` 1건, dynamic source hit 2건과 target match 1건, field access 1건이 기록되었습니다. field 값은 `0x00000000`이고 이후 `0x00434137` read AV가 발생했습니다.
+- **미확정 — field 결정 경로.** early writer가 없다는 결과만으로 field가 항상 미초기화라고 확정할 수는 없습니다. 다른 주소의 write, 간접 계산, 또는 관찰 boundary 밖의 초기화 가능성은 남아 있습니다.
+
+* **Confirmed — pre-entry watch setup.** `20260903-031354-995.jsonl` installed the `DR3` write watch for field `0x00acd824` during CREATE_PROCESS/CREATE_THREAD handling and recorded early thread-arm events.
+* **Confirmed — no early writer observed.** `null_context_field_writer_early_hit` occurred zero times before the initial breakpoint. Within this observation scope, the protection stub and pre-entry initialization did not write the field.
+* **Confirmed — later source/access order preserved.** The same run recorded one object-source boundary hit at `0x0041a64c`, two dynamic source hits with one target match, and one field access. The field was `0x00000000`, followed by the `0x00434137` read AV.
+* **Unresolved — field determination path.** The absence of an early writer does not prove the field is always uninitialized. A write at another address, indirect calculation, or initialization outside the observed boundary remains possible.
+
+The related Task 151 design, work order, and work log are [Task 151 design](../design/20260903-151-ez2dj4th-pre-entry-field-writer-trace.md), [Task 151 work order](../work-orders/20260903-151-ez2dj4th-pre-entry-field-writer-trace.md), and [Task 151 work log](../work-logs/20260903-151-ez2dj4th-pre-entry-field-writer-trace.md).
+
+## 2026-09-03 runtime +0x11c direct-reference scan
+
+- **확인됨 — 복호화된 `.text` 스캔 성공.** `20260903-032038-359.jsonl`의 첫 field access 시점에 image base `0x00400000`의 runtime `.text` 범위 `0x00401000`–`0x004dc021` (`RVA 0x001000`, virtual size `0x000db022`)를 모두 읽었습니다. `readable=true`, `bytes_copied=897058`입니다.
+- **확인됨 — 직접 displacement 후보 존재.** displacement `0x0000011c`를 가진 syntactic 후보는 23개였고 read 분류 16개, write 분류 4개, 기타 분류 3개였습니다. write 후보는 runtime 주소 `0x0040fdbd` (`RVA 0x0000fdbd`, `89 81`), `0x0040fde1` (`RVA 0x0000fde1`, `c7 81`), `0x0041825f` (`RVA 0x0001825f`, `c7 80`), `0x0041dbd3` (`RVA 0x0001dbd3`, `89 8a`)입니다.
+- **확인됨 — 알려진 read site 포함.** 기존 field read instruction `0x0041a699` (`RVA 0x0001a699`, `8b 89`)가 16개 read 후보 중 하나로 다시 확인되었습니다. 실제 access hit는 여전히 field `0x00acd824`를 `0x00000000`으로 읽었고 `0x00434137` null receiver AV로 이어졌습니다.
+- **추정 — 후보 writer와 target object의 관계.** 네 write 후보는 `+0x11c`를 사용하는 명령이라는 점만 확인된 것이며, 각 명령이 실제 object `0x00acd708`를 receiver로 실행되었는지는 확인되지 않았습니다. 동일 offset을 사용하는 다른 object type일 가능성이 있습니다. 기타 후보에는 전체 instruction decoder 없이 수집된 arithmetic/branch 형태가 포함되므로 field access 증거로 사용하지 않습니다.
+- **미확정 — 실제 초기화 writer.** 첫 access 이전에 네 write 후보 중 하나가 `0x00acd708 + 0x11c`를 썼는지, 또는 field가 다른 간접 복사 경로로 정해지는지는 아직 미확정입니다. 다음 단계는 네 후보의 실행 여부와 receiver register/target address를 제한적으로 추적하는 것입니다.
+
+* **Confirmed — decrypted `.text` scan succeeded.** At the first field-access point in `20260903-032038-359.jsonl`, the complete runtime `.text` range at image base `0x00400000`, from `0x00401000` through `0x004dc021` (`RVA 0x001000`, virtual size `0x000db022`), was readable. The event reports `readable=true` and `bytes_copied=897058`.
+* **Confirmed — direct-displacement candidates exist.** There were 23 syntactic candidates using displacement `0x0000011c`: 16 classified as reads, four as writes, and three as other. The write candidates are runtime addresses `0x0040fdbd` (`RVA 0x0000fdbd`, `89 81`), `0x0040fde1` (`RVA 0x0000fde1`, `c7 81`), `0x0041825f` (`RVA 0x0001825f`, `c7 80`), and `0x0041dbd3` (`RVA 0x0001dbd3`, `89 8a`).
+* **Confirmed — known read site included.** The existing field-read instruction at `0x0041a699` (`RVA 0x0001a699`, `8b 89`) was rediscovered as one of the 16 read candidates. The runtime access hit still read field `0x00acd824` as `0x00000000` and then reached the `0x00434137` null-receiver AV.
+* **Inferred — relationship between writer candidates and target object.** The four write candidates are confirmed only as instructions using displacement `+0x11c`; it is not confirmed that any executed with object `0x00acd708` as the receiver. They may belong to other object types sharing the same offset. The other candidates include arithmetic/branch forms collected without a full instruction decoder and are not treated as field-access evidence.
+* **Unresolved — actual initialization writer.** It remains unresolved whether one of the four write candidates wrote `0x00acd708 + 0x11c` before the first access, or whether the field is established through another indirect copy path. The next step is a bounded trace of candidate execution and receiver/target addresses.
+
+The related Task 152 design, work order, and work log are [Task 152 design](../design/20260903-152-ez2dj4th-runtime-field-reference-scan.md), [Task 152 work order](../work-orders/20260903-152-ez2dj4th-runtime-field-reference-scan.md), and [Task 152 work log](../work-logs/20260903-152-ez2dj4th-runtime-field-reference-scan.md).

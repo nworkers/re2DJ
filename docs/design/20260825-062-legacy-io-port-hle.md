@@ -72,3 +72,9 @@ The first raw idle state is `ff ff 00 00 00 ff` for ports `0x101` through `0x106
 ## Verification
 
 Unit tests cover accepted ports, idle values, writes, and rejection of unknown accesses. Two canonical runs must eliminate the old privileged-instruction boundary, continue checking for `av_access`, and reproduce the same next boundary. Physical wiring and host input mapping remain later work.
+
+## 2026-09-03 profile-specific extension
+
+`LegacyIoPortBus`와 `Ez2DjIoBoard`는 프로파일과 무관한 공용 byte 계약으로 유지한다. 실행 파일별 privileged helper 주소만 `TargetLptdiPolicy`의 `legacy_io_in_byte_rva`/`legacy_io_out_byte_rva`로 분리한다. 1st는 기존 read/write RVA를 유지하고, 4th는 확인된 read RVA `0x000c3817`만 명시한다. 4th의 공용 bus 연결은 명시적 진단 opt-in이며, 제품 기본 활성화는 반환 계약 확인 뒤로 보류한다.
+
+`LegacyIoPortBus` and `Ez2DjIoBoard` remain the shared byte contract independent of the executable profile. Only the executable-specific privileged helper addresses move into `TargetLptdiPolicy` as `legacy_io_in_byte_rva` and `legacy_io_out_byte_rva`. 1st keeps its existing read/write RVAs, while 4th registers only the confirmed read RVA `0x000c3817`. The 4th shared-bus connection is explicit diagnostic opt-in; product-default activation remains deferred until the return contract is confirmed.

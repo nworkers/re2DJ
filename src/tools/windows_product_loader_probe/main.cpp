@@ -42,7 +42,11 @@ int main()
         arguments[17] == "--device-mock-lptdi-path-prefix" &&
         arguments[18] == "\\\\.\\LPTDI" &&
         arguments[19] == "--device-mock-lptdi-target-state" &&
-        arguments[20] == "0900000000000000";
+        arguments[20] == "0900000000000000" &&
+        first_profile->profile.run_defaults.lptdi.legacy_io_ports &&
+        first_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
+        first_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x00038987 &&
+        first_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0x000389ab;
 
     options.profile_defaults.audio_gain_db = 12.0f;
     const bool custom_gain =
@@ -167,7 +171,11 @@ int main()
         arguments[11] == "--device-mock-lptdi" &&
         arguments[12] == "--device-mock-lptdi-path-prefix" &&
         arguments[13] == "\\\\.\\FEnteDev" &&
-        arguments[14] == "--device-mock-wts-console-session";
+        arguments[14] == "--device-mock-wts-console-session" &&
+        fourth_profile->profile.run_defaults.lptdi.legacy_io_ports &&
+        !fourth_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
+        fourth_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x000c3817 &&
+        fourth_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0;
 
     // Hardlock material is resolved inside the launcher from cfg, so no
     // Hardlock option may appear on the product command line.
@@ -195,6 +203,10 @@ int main()
     // silently forwarded, because the launcher option turns on both.
     const bool invalid_console_policy = [&]() {
         re2dj::platform::windows::OriginalProcessOptions console_options = options;
+        console_options.profile_defaults.lptdi.legacy_io_ports = false;
+        console_options.profile_defaults.lptdi.legacy_io_ports_default = false;
+        console_options.profile_defaults.lptdi.legacy_io_in_byte_rva = 0;
+        console_options.profile_defaults.lptdi.legacy_io_out_byte_rva = 0;
         console_options.profile_defaults.lptdi.device_mock_enabled = false;
         console_options.profile_defaults.lptdi.device_mock_path_prefix.clear();
         // Cleared so this isolates the console policy: Hardlock material also
@@ -211,6 +223,10 @@ int main()
     // expects it without that boundary is rejected rather than run without it.
     const bool invalid_material_policy = [&]() {
         re2dj::platform::windows::OriginalProcessOptions material_options = options;
+        material_options.profile_defaults.lptdi.legacy_io_ports = false;
+        material_options.profile_defaults.lptdi.legacy_io_ports_default = false;
+        material_options.profile_defaults.lptdi.legacy_io_in_byte_rva = 0;
+        material_options.profile_defaults.lptdi.legacy_io_out_byte_rva = 0;
         material_options.profile_defaults.lptdi.device_mock_enabled = false;
         material_options.profile_defaults.lptdi.device_mock_path_prefix.clear();
         material_options.profile_defaults.hle_wts_active_console = false;

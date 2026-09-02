@@ -27,14 +27,21 @@
 ```cpp
 struct TargetLptdiPolicy {
     bool legacy_io_ports = false;
+    bool legacy_io_ports_default = false;
+    std::uint32_t legacy_io_in_byte_rva = 0;
+    std::uint32_t legacy_io_out_byte_rva = 0;
     bool device_mock_enabled = false;
     std::string device_mock_target_state_hex;
+    bool hardlock_cfg_material_default = false;
 };
 ```
 
-- `legacy_io_ports`: 확인된 1st SE raw `IN/OUT` HLE 허용 여부다. 현재 런타임의 RVA는 1st 전용이므로 3rd에서 켜지지 않는다.
+- `legacy_io_ports`: 해당 프로파일에서 확인된 raw `IN/OUT` HLE를 명시적으로 시험할 수 있는 capability다.
+- `legacy_io_ports_default`: 제품 facade가 기본 실행에 raw I/O HLE를 추가할지 결정한다.
+- `legacy_io_in_byte_rva`/`legacy_io_out_byte_rva`: main image 기준 helper RVA다. 0은 해당 방향이 확인되지 않았다는 뜻이다.
 - `device_mock_enabled`: 해당 프로파일이 synthetic LPTDI `CreateFileA`/`DeviceIoControl` 경계를 사용할 수 있다는 명시적 허용이다.
 - `device_mock_target_state_hex`: 프로파일이 검증한 응답 상태다. 1st SE만 `0900000000000000`을 가진다. 3rd는 비활성·빈 값으로 둔다.
+- `hardlock_cfg_material_default`: 프로파일의 별도 설정 경로에서 Hardlock material을 읽을지 결정한다.
 
 런처의 진단용 `--device-mock-lptdi*` 옵션은 `device_mock_enabled`가 허용된 프로파일에서만 진행하고, `--hle-io-ports`/`--io-config`는 `legacy_io_ports`가 허용된 프로파일에서만 진행한다. 제품 facade는 같은 중첩 정책을 명령행으로 변환하므로 3rd 실행에 1st target state나 raw I/O를 암묵적으로 전달하지 않는다.
 
@@ -43,14 +50,21 @@ struct TargetLptdiPolicy {
 ```cpp
 struct TargetLptdiPolicy {
     bool legacy_io_ports = false;
+    bool legacy_io_ports_default = false;
+    std::uint32_t legacy_io_in_byte_rva = 0;
+    std::uint32_t legacy_io_out_byte_rva = 0;
     bool device_mock_enabled = false;
     std::string device_mock_target_state_hex;
+    bool hardlock_cfg_material_default = false;
 };
 ```
 
-- `legacy_io_ports` permits the confirmed 1st SE raw `IN/OUT` HLE. The current runtime RVAs are 1st-specific, so 3rd never enables it.
+- `legacy_io_ports` permits explicit testing of the profile's confirmed raw `IN/OUT` HLE capability.
+- `legacy_io_ports_default` controls whether the product facade adds raw-I/O HLE to normal execution.
+- `legacy_io_in_byte_rva`/`legacy_io_out_byte_rva` are helper RVAs relative to the main image. Zero means that direction is unconfirmed.
 - `device_mock_enabled` explicitly authorizes the synthetic LPTDI `CreateFileA`/`DeviceIoControl` boundary for a profile.
 - `device_mock_target_state_hex` stores a response state verified for that profile. Only 1st SE has `0900000000000000`; 3rd remains disabled and empty.
+- `hardlock_cfg_material_default` controls whether Hardlock material is read from the profile's separate configuration paths.
 
 The launcher’s diagnostic `--device-mock-lptdi*` options proceed only for profiles with `device_mock_enabled`, while `--hle-io-ports`/`--io-config` proceed only for profiles with `legacy_io_ports`. The product facade converts the same nested policy to launcher arguments, so 3rd execution cannot inherit the 1st target state or raw I/O implicitly.
 
@@ -66,15 +80,21 @@ flowchart LR
 
 ## 검증 전략
 
-- target profile unit test에서 1st와 3rd의 세 LPTDI 필드를 서로 다르게 고정한다.
+- target profile unit test에서 1st와 3rd의 LPTDI capability, helper RVA와 device fields를 서로 다르게 고정한다.
 - Windows product-loader probe에서 1st argument에는 LPTDI state와 raw I/O가 유지되고, 3rd argument에는 둘 다 없음을 확인한다.
 - 3rd에 `--device-mock-lptdi-target-state`를 적용했을 때 실제 `DeviceIoControl` import 패치 전에 프로파일 거부 오류가 나는지 확인한다.
 - Windows x86 Debug build와 CTest를 실행하고, 3rd shortcut을 다시 실행해 기존 `runtime_detached` 경계를 회귀 확인한다.
 
-*Verification pins all three LPTDI fields differently for 1st and 3rd in the target-profile unit test; preserves the 1st LPTDI state/raw-I/O arguments while omitting both from 3rd in the product-loader probe; checks that 3rd rejects `--device-mock-lptdi-target-state` before attempting the missing `DeviceIoControl` patch; runs the Windows x86 Debug build and CTest; and reruns the 3rd shortcut through the existing `runtime_detached` boundary.*
+*Verification pins the LPTDI capability, helper RVAs, and device fields differently for 1st and 3rd in the target-profile unit test; preserves the 1st LPTDI state/raw-I/O arguments while omitting both from 3rd in the product-loader probe; checks that 3rd rejects `--device-mock-lptdi-target-state` before attempting the missing `DeviceIoControl` patch; runs the Windows x86 Debug build and CTest; and reruns the 3rd shortcut through the existing `runtime_detached` boundary.*
 
 ## 제외 범위
 
 3rd의 실제 보호 응답 프로토콜, 물리 동글 알고리즘, `UseIOCard`의 내부 소비 방식, DirectInput 경로를 추측하거나 구현하지 않는다. 원본 HDD와 실행 파일은 저장소에 추가하지 않는다.
 
 *The scope does not guess or implement 3rd’s actual protection-response protocol, physical dongle algorithm, internal consumption of `UseIOCard`, or DirectInput path. Original HDD contents and executables are not added to the repository.*
+
+## 2026-09-03 raw I/O policy refinement
+
+이 문서의 초기 분리는 1st 전용 raw I/O RVA를 다른 프로파일에 복사하지 않는다는 의미로 유지한다. 이후 `TargetLptdiPolicy`는 capability와 제품 기본 활성화를 분리하고, executable별 helper RVA를 보유한다. 그 결과 3rd는 계속 raw I/O capability가 없고, 4th는 확인된 `IN AL,DX` RVA `0x000c3817`에 한해 explicit diagnostic opt-in을 허용한다. 이는 4th의 물리 LPTDI 응답이나 제품 기본 정책을 확정한 것이 아니다.
+
+The original separation in this document still means that 1st-specific raw-I/O RVAs are not copied into another profile. The later refinement separates capability from product-default activation and stores executable-specific helper RVAs in `TargetLptdiPolicy`. 3rd therefore remains without raw-I/O capability, while 4th permits explicit diagnostic opt-in only for the confirmed `IN AL,DX` RVA `0x000c3817`. This does not establish a physical 4th LPTDI response or a product default.

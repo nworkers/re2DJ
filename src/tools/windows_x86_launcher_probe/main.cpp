@@ -123,7 +123,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--api-trace] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-allocation-trace|--api-trace] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -344,14 +344,125 @@ void NoteSystemModuleBase(const DEBUG_EVENT& event,
     }
 }
 
-bool WaitForInitialBreakpoint(DWORD* process_id,
+constexpr std::uint32_t kEz2dj4thEarlyFieldRva = 0x006cd824;
+constexpr DWORD kEarlyFieldBreakpointStatus = static_cast<DWORD>(1u << 3);
+constexpr DWORD kEarlyFieldBreakpointEnable = static_cast<DWORD>(1u << 6);
+constexpr DWORD kEarlyFieldWriteBreakpointControl =
+    static_cast<DWORD>((1u << 28) | (3u << 30));
+constexpr DWORD kEarlyFieldBreakpointMask =
+    static_cast<DWORD>((0x3u << 6) | (0xfu << 28));
+
+bool SetEarlyNullContextFieldWriterBreakpoint(HANDLE thread,
+                                              std::uintptr_t image_base,
+                                              std::string* error)
+{
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot read early null-context field debug registers";
+        return false;
+    }
+    context.Dr3 = static_cast<DWORD>(image_base + kEz2dj4thEarlyFieldRva);
+    context.Dr6 = 0;
+    context.Dr7 &= ~kEarlyFieldBreakpointMask;
+    context.Dr7 |= kEarlyFieldBreakpointEnable |
+                   kEarlyFieldWriteBreakpointControl;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot set early null-context field writer breakpoint";
+        return false;
+    }
+    CONTEXT verified = {};
+    verified.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &verified) == FALSE ||
+        verified.Dr3 != context.Dr3 ||
+        (verified.Dr7 & kEarlyFieldBreakpointMask) !=
+            (kEarlyFieldBreakpointEnable | kEarlyFieldWriteBreakpointControl))
+    {
+        *error = "early null-context field writer breakpoint was not retained";
+        return false;
+    }
+    return true;
+}
+
+bool HandleEarlyNullContextFieldWriterBreakpoint(
+    HANDLE process,
+    DWORD thread_id,
+    std::uintptr_t image_base,
+    std::uint32_t* hit_count,
+    bool* handled,
+    std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot capture early null-context field writer context";
+        return false;
+    }
+    if ((context.Dr6 & kEarlyFieldBreakpointStatus) == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++*hit_count;
+    const std::uintptr_t field_address = image_base + kEz2dj4thEarlyFieldRva;
+    std::uint32_t field_value = 0;
+    SIZE_T copied = 0;
+    const bool field_readable =
+        ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(field_address),
+                          &field_value,
+                          sizeof(field_value),
+                          &copied) != FALSE &&
+        copied == sizeof(field_value);
+    RecordDiagnostic(
+        "{\"event\":\"null_context_field_writer_early_hit\",\"sequence\":%u,\"thread\":%u,\"field\":\"0x%08x\",\"eip_after\":\"0x%08x\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"dr6\":\"0x%08x\",\"field_after\":\"0x%08x\",\"field_readable\":%s}",
+        *hit_count,
+        static_cast<unsigned>(thread_id),
+        static_cast<unsigned>(field_address),
+        static_cast<unsigned>(context.Eip),
+        static_cast<unsigned>(context.Eax),
+        static_cast<unsigned>(context.Ecx),
+        static_cast<unsigned>(context.Ebp),
+        static_cast<unsigned>(context.Esp),
+        static_cast<unsigned>(context.Dr6),
+        field_value,
+        field_readable ? "true" : "false");
+
+    context.Dr6 &= ~kEarlyFieldBreakpointStatus;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot clear early null-context field writer status";
+        return false;
+    }
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
+bool WaitForInitialBreakpoint(HANDLE process,
+                              DWORD* process_id,
                               DWORD* thread_id,
                               std::uintptr_t* main_image_base,
                               std::uintptr_t* kernel32_base,
                               std::uintptr_t* kernelbase_base,
                               std::uintptr_t* user32_base,
+                              bool early_field_writer_trace,
                               std::string* error)
 {
+    std::uint32_t early_field_writer_hit_count = 0;
     for (std::uint32_t event_count = 0; event_count < 128; ++event_count)
     {
         DEBUG_EVENT event = {};
@@ -364,6 +475,18 @@ bool WaitForInitialBreakpoint(DWORD* process_id,
         {
             *main_image_base = reinterpret_cast<std::uintptr_t>(
                 event.u.CreateProcessInfo.lpBaseOfImage);
+            if (early_field_writer_trace &&
+                !SetEarlyNullContextFieldWriterBreakpoint(
+                    event.u.CreateProcessInfo.hThread,
+                    *main_image_base,
+                    error))
+            {
+                if (event.u.CreateProcessInfo.hFile != nullptr)
+                {
+                    CloseHandle(event.u.CreateProcessInfo.hFile);
+                }
+                return false;
+            }
             if (event.u.CreateProcessInfo.hFile != nullptr)
             {
                 CloseHandle(event.u.CreateProcessInfo.hFile);
@@ -377,6 +500,49 @@ bool WaitForInitialBreakpoint(DWORD* process_id,
             if (event.u.LoadDll.hFile != nullptr)
             {
                 CloseHandle(event.u.LoadDll.hFile);
+            }
+        }
+        if (early_field_writer_trace &&
+            event.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT)
+        {
+            if (!SetEarlyNullContextFieldWriterBreakpoint(
+                    event.u.CreateThread.hThread,
+                    *main_image_base,
+                    error))
+            {
+                CloseHandle(event.u.CreateThread.hThread);
+                return false;
+            }
+            RecordDiagnostic(
+                "{\"event\":\"null_context_field_writer_early_thread_armed\",\"thread\":%u}",
+                static_cast<unsigned>(event.dwThreadId));
+            CloseHandle(event.u.CreateThread.hThread);
+        }
+        if (early_field_writer_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleEarlyNullContextFieldWriterBreakpoint(
+                    process,
+                    event.dwThreadId,
+                    *main_image_base,
+                    &early_field_writer_hit_count,
+                    &handled,
+                    error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue early null-context field writer hit";
+                    return false;
+                }
+                continue;
             }
         }
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
@@ -1021,6 +1187,51 @@ struct ApiWatchPoint
 
 using ApiWatchMap = std::map<std::uintptr_t, ApiWatchPoint>;
 
+bool IsAllocationApi(const ApiWatchPoint& watch)
+{
+    return watch.name == "LocalAlloc" || watch.name == "HeapAlloc" ||
+           watch.name == "VirtualAlloc";
+}
+
+struct PendingAllocationReturn
+{
+    std::uintptr_t api_address = 0;
+    std::uintptr_t return_address = 0;
+    std::uint8_t return_original_byte = 0;
+    ApiWatchPoint watch;
+    std::array<std::uint32_t, 4> args = {};
+};
+
+using PendingAllocationReturnMap = std::map<DWORD, std::vector<PendingAllocationReturn>>;
+
+struct AllocationReturnBreakpoint
+{
+    std::uint8_t original_byte = 0;
+    std::uint32_t pending_count = 0;
+};
+
+using AllocationReturnBreakpointMap =
+    std::map<std::uintptr_t, AllocationReturnBreakpoint>;
+
+std::size_t PendingAllocationReturnCount(const PendingAllocationReturnMap& pending)
+{
+    std::size_t count = 0;
+    for (const auto& entry : pending)
+    {
+        count += entry.second.size();
+    }
+    return count;
+}
+
+struct AllocationTraceState
+{
+    static constexpr std::uint32_t kHitLimit = 256;
+    std::uint32_t armed_count = 0;
+    std::uint32_t hit_count = 0;
+    std::uint32_t recorded_count = 0;
+    bool capped = false;
+};
+
 struct GuestReturnWatchPoint
 {
     enum class Kind
@@ -1409,6 +1620,37 @@ void RecordApiCall(DWORD thread_id,
     }
 }
 
+void RecordAllocationReturn(HANDLE process,
+                            DWORD thread_id,
+                            const PendingAllocationReturn& pending,
+                            const CONTEXT& context,
+                            AllocationTraceState* state)
+{
+    ++state->hit_count;
+    if (state->recorded_count >= AllocationTraceState::kHitLimit)
+    {
+        state->capped = true;
+        return;
+    }
+    const RemoteBufferSnapshot code =
+        ReadRemoteBufferSnapshot(process, context.Eip, 24);
+    RecordDiagnostic(
+        "{\"event\":\"null_context_allocation_return\",\"sequence\":%u,\"thread\":%u,\"api\":\"%s\",\"api_address\":\"0x%08x\",\"return_address\":\"0x%08x\",\"eax\":\"0x%08x\",\"args\":[\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\"],\"code_readable\":%s,\"code\":\"%s\"}",
+        state->hit_count,
+        static_cast<unsigned>(thread_id),
+        pending.watch.name.c_str(),
+        static_cast<unsigned>(pending.api_address),
+        static_cast<unsigned>(pending.return_address),
+        static_cast<unsigned>(context.Eax),
+        pending.args[0],
+        pending.args[1],
+        pending.args[2],
+        pending.args[3],
+        code.readable ? "true" : "false",
+        code.readable ? code.bytes.c_str() : "");
+    ++state->recorded_count;
+}
+
 bool RecordOriginalInitializerWindow(HANDLE process, std::uintptr_t image_base)
 {
     constexpr std::uintptr_t kInitializerRva = 0x0005c000;
@@ -1585,6 +1827,92 @@ std::uint32_t RecordAccessViolationCallAttribution(
             image_info,
             static_cast<std::uint32_t>(target_address - image_base));
     }
+    const RemoteBufferSnapshot target_code =
+        target_region_readable
+            ? ReadRemoteBufferSnapshot(process, target_address, 32)
+            : RemoteBufferSnapshot{};
+    // Follow a short chain of runtime relative jumps because protected image
+    // code commonly leaves a stable call target as a dispatch trampoline.
+    std::uintptr_t target_window_address = target_address;
+    for (unsigned hop = 0; hop < 4 && target_window_address != 0; ++hop)
+    {
+        std::uint8_t target_window[32] = {};
+        SIZE_T target_window_copied = 0;
+        const bool target_window_readable =
+            ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(target_window_address),
+                              target_window,
+                              sizeof(target_window),
+                              &target_window_copied) != FALSE &&
+            target_window_copied != 0;
+        char target_window_text[sizeof(target_window) * 2 + 1] = {};
+        for (SIZE_T index = 0; index < target_window_copied; ++index)
+        {
+            std::snprintf(target_window_text + index * 2,
+                          3,
+                          "%02x",
+                          target_window[index]);
+        }
+        RecordDiagnostic(
+            "{\"event\":\"av_call_target_window\",\"stack_index\":%u,\"hop\":%u,\"address\":\"0x%08x\",\"readable\":%s,\"bytes\":\"%s\"}",
+            static_cast<unsigned>(stack_index),
+            hop,
+            static_cast<unsigned>(target_window_address),
+            target_window_readable ? "true" : "false",
+            target_window_text);
+        if (!target_window_readable || target_window_copied < 5 ||
+            target_window[0] != 0xe9)
+        {
+            break;
+        }
+        const std::uint32_t relative_bits =
+            static_cast<std::uint32_t>(target_window[1]) |
+            (static_cast<std::uint32_t>(target_window[2]) << 8) |
+            (static_cast<std::uint32_t>(target_window[3]) << 16) |
+            (static_cast<std::uint32_t>(target_window[4]) << 24);
+        const std::uintptr_t next_target =
+            static_cast<std::uintptr_t>(static_cast<std::int64_t>(
+                target_window_address + 5) +
+                                        static_cast<std::int32_t>(relative_bits));
+        if (next_target == target_window_address)
+        {
+            break;
+        }
+        target_window_address = next_target;
+    }
+
+    constexpr std::size_t kCallsiteWindowSize = 96;
+    std::uint8_t callsite_window[kCallsiteWindowSize] = {};
+    const std::uintptr_t callsite_window_base =
+        call_address >= image_base + 48 ? call_address - 48 : image_base;
+    const SIZE_T callsite_window_requested = static_cast<SIZE_T>(
+        (std::min)(kCallsiteWindowSize,
+                   static_cast<std::size_t>(image_base + image_info.size_of_image -
+                                            callsite_window_base)));
+    SIZE_T callsite_window_copied = 0;
+    const bool callsite_window_readable =
+        callsite_window_requested != 0 &&
+        ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(callsite_window_base),
+                          callsite_window,
+                          callsite_window_requested,
+                          &callsite_window_copied) != FALSE &&
+        callsite_window_copied != 0;
+    char callsite_window_text[kCallsiteWindowSize * 2 + 1] = {};
+    for (SIZE_T index = 0; index < callsite_window_copied; ++index)
+    {
+        std::snprintf(callsite_window_text + index * 2,
+                      3,
+                      "%02x",
+                      callsite_window[index]);
+    }
+    RecordDiagnostic(
+        "{\"event\":\"av_callsite_window\",\"stack_index\":%u,\"call_address\":\"0x%08x\",\"base\":\"0x%08x\",\"readable\":%s,\"bytes\":\"%s\"}",
+        static_cast<unsigned>(stack_index),
+        call_address,
+        static_cast<unsigned>(callsite_window_base),
+        callsite_window_readable ? "true" : "false",
+        callsite_window_text);
 
     char byte_text[sizeof(bytes) * 2 + 1] = {};
     const std::size_t byte_count =
@@ -1594,7 +1922,7 @@ std::uint32_t RecordAccessViolationCallAttribution(
         std::snprintf(byte_text + index * 2, 3, "%02x", bytes[index]);
     }
     RecordDiagnostic(
-        "{\"event\":\"av_indirect_call\",\"stack_index\":%u,\"return_address\":\"0x%08x\",\"call_address\":\"0x%08x\",\"kind\":\"%s\",\"bytes\":\"%s\",\"register\":\"%s\",\"slot\":\"0x%08x\",\"slot_readable\":%s,\"target\":\"0x%08x\",\"target_region_readable\":%s,\"target_region\":\"0x%08x\",\"target_allocation\":\"0x%08x\",\"target_protect\":\"0x%08x\",\"target_state\":\"0x%08x\",\"target_type\":\"0x%08x\",\"target_section\":\"%s\",\"target_symbol\":\"%s\"}",
+        "{\"event\":\"av_indirect_call\",\"stack_index\":%u,\"return_address\":\"0x%08x\",\"call_address\":\"0x%08x\",\"kind\":\"%s\",\"bytes\":\"%s\",\"register\":\"%s\",\"slot\":\"0x%08x\",\"slot_readable\":%s,\"target\":\"0x%08x\",\"target_region_readable\":%s,\"target_region\":\"0x%08x\",\"target_allocation\":\"0x%08x\",\"target_protect\":\"0x%08x\",\"target_state\":\"0x%08x\",\"target_type\":\"0x%08x\",\"target_section\":\"%s\",\"target_symbol\":\"%s\",\"target_code_readable\":%s,\"target_code\":\"%s\"}",
         static_cast<unsigned>(stack_index),
         return_address,
         call_address,
@@ -1613,7 +1941,9 @@ std::uint32_t RecordAccessViolationCallAttribution(
         static_cast<unsigned>(target_region.State),
         static_cast<unsigned>(target_region.Type),
         target_section.c_str(),
-        target_symbol.c_str());
+        target_symbol.c_str(),
+        target_code.readable ? "true" : "false",
+        target_code.readable ? target_code.bytes.c_str() : "");
     return slot_address;
 }
 
@@ -1758,7 +2088,8 @@ void RecordAccessViolationContext(HANDLE process,
                               : access_code == 1 ? "write"
                               : access_code == 8 ? "execute"
                                                  : "unknown";
-    RecordDiagnostic("{\"event\":\"av_access\",\"kind\":\"%s\",\"code\":\"0x%08x\",\"address\":\"0x%08x\"}",
+    RecordDiagnostic("{\"event\":\"av_access\",\"thread\":%u,\"kind\":\"%s\",\"code\":\"0x%08x\",\"address\":\"0x%08x\"}",
+                     static_cast<unsigned>(thread_id),
                      access_kind,
                      static_cast<unsigned>(access_code),
                      static_cast<unsigned>(access_address));
@@ -1777,7 +2108,8 @@ void RecordAccessViolationContext(HANDLE process,
         return;
     }
 
-    RecordDiagnostic("{\"event\":\"av_registers\",\"eax\":\"0x%08x\",\"ebx\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"esi\":\"0x%08x\",\"edi\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"eip\":\"0x%08x\",\"flags\":\"0x%08x\"}",
+    RecordDiagnostic("{\"event\":\"av_registers\",\"thread\":%u,\"eax\":\"0x%08x\",\"ebx\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"esi\":\"0x%08x\",\"edi\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"eip\":\"0x%08x\",\"flags\":\"0x%08x\"}",
+                     static_cast<unsigned>(thread_id),
                      static_cast<unsigned>(context.Eax),
                      static_cast<unsigned>(context.Ebx),
                      static_cast<unsigned>(context.Ecx),
@@ -1788,6 +2120,75 @@ void RecordAccessViolationContext(HANDLE process,
                      static_cast<unsigned>(context.Esp),
                      static_cast<unsigned>(context.Eip),
                      static_cast<unsigned>(context.EFlags));
+
+    std::uint32_t caller_ebp = 0;
+    std::uint32_t callee_return_address = 0;
+    std::uint32_t caller_local_minus8 = 0;
+    std::uint32_t caller_local_minus4 = 0;
+    std::uint32_t caller_return_address = 0;
+    const bool caller_ebp_readable =
+        ReadRemoteU32(process, context.Ebp, &caller_ebp);
+    const bool callee_return_readable =
+        ReadRemoteU32(process, context.Ebp + 4, &callee_return_address);
+    const bool caller_local_minus8_readable =
+        caller_ebp_readable && caller_ebp >= 8 &&
+        ReadRemoteU32(process, caller_ebp - 8, &caller_local_minus8);
+    const bool caller_local_minus4_readable =
+        caller_ebp_readable && caller_ebp >= 4 &&
+        ReadRemoteU32(process, caller_ebp - 4, &caller_local_minus4);
+    const bool caller_return_readable =
+        caller_ebp_readable &&
+        ReadRemoteU32(process, caller_ebp + 4, &caller_return_address);
+    RecordDiagnostic(
+        "{\"event\":\"av_caller_frame\",\"thread\":%u,\"callee_ebp\":\"0x%08x\",\"callee_return_address\":\"0x%08x\",\"callee_return_readable\":%s,\"caller_ebp\":\"0x%08x\",\"caller_ebp_readable\":%s,\"caller_local_minus8\":\"0x%08x\",\"caller_local_minus8_readable\":%s,\"caller_local_minus4\":\"0x%08x\",\"caller_local_minus4_readable\":%s,\"caller_return_address\":\"0x%08x\",\"caller_return_readable\":%s}",
+        static_cast<unsigned>(thread_id),
+        static_cast<unsigned>(context.Ebp),
+        static_cast<unsigned>(callee_return_address),
+        callee_return_readable ? "true" : "false",
+        static_cast<unsigned>(caller_ebp),
+        caller_ebp_readable ? "true" : "false",
+        static_cast<unsigned>(caller_local_minus8),
+        caller_local_minus8_readable ? "true" : "false",
+        static_cast<unsigned>(caller_local_minus4),
+        caller_local_minus4_readable ? "true" : "false",
+        static_cast<unsigned>(caller_return_address),
+        caller_return_readable ? "true" : "false");
+
+    std::uint32_t outer_ebp = 0;
+    std::uint32_t outer_local_minus_0x118 = 0;
+    std::uint32_t outer_local_minus_0x11c = 0;
+    std::uint32_t outer_ecx_source = 0;
+    std::uint32_t outer_return_address = 0;
+    const bool outer_ebp_readable =
+        caller_ebp_readable && ReadRemoteU32(process, caller_ebp, &outer_ebp);
+    const bool outer_local_minus_0x118_readable =
+        outer_ebp_readable && outer_ebp >= 0x118 &&
+        ReadRemoteU32(process, outer_ebp - 0x118, &outer_local_minus_0x118);
+    const bool outer_local_minus_0x11c_readable =
+        outer_ebp_readable && outer_ebp >= 0x11c &&
+        ReadRemoteU32(process, outer_ebp - 0x11c, &outer_local_minus_0x11c);
+    const bool outer_ecx_source_readable =
+        outer_local_minus_0x118_readable &&
+        outer_local_minus_0x118 <= 0xffffffffu - 0x11c &&
+        ReadRemoteU32(process,
+                      outer_local_minus_0x118 + 0x11c,
+                      &outer_ecx_source);
+    const bool outer_return_readable =
+        outer_ebp_readable &&
+        ReadRemoteU32(process, outer_ebp + 4, &outer_return_address);
+    RecordDiagnostic(
+        "{\"event\":\"av_outer_frame\",\"thread\":%u,\"outer_ebp\":\"0x%08x\",\"outer_ebp_readable\":%s,\"outer_local_minus_0x118\":\"0x%08x\",\"outer_local_minus_0x118_readable\":%s,\"outer_local_minus_0x11c\":\"0x%08x\",\"outer_local_minus_0x11c_readable\":%s,\"outer_ecx_source\":\"0x%08x\",\"outer_ecx_source_readable\":%s,\"outer_return_address\":\"0x%08x\",\"outer_return_readable\":%s}",
+        static_cast<unsigned>(thread_id),
+        static_cast<unsigned>(outer_ebp),
+        outer_ebp_readable ? "true" : "false",
+        static_cast<unsigned>(outer_local_minus_0x118),
+        outer_local_minus_0x118_readable ? "true" : "false",
+        static_cast<unsigned>(outer_local_minus_0x11c),
+        outer_local_minus_0x11c_readable ? "true" : "false",
+        static_cast<unsigned>(outer_ecx_source),
+        outer_ecx_source_readable ? "true" : "false",
+        static_cast<unsigned>(outer_return_address),
+        outer_return_readable ? "true" : "false");
 
     constexpr std::size_t kStackWords = 8;
     std::uint32_t stack[kStackWords] = {};
@@ -1806,6 +2207,36 @@ void RecordAccessViolationContext(HANDLE process,
     }
     const std::uintptr_t image_end =
         image_base + static_cast<std::uintptr_t>(image_info->size_of_image);
+    if (caller_return_readable && caller_return_address >= image_base + 32 &&
+        caller_return_address < image_end)
+    {
+        constexpr std::size_t kCallerReturnWindowSize = 64;
+        const std::uintptr_t window_base = caller_return_address - 32;
+        std::uint8_t window[kCallerReturnWindowSize] = {};
+        SIZE_T window_copied = 0;
+        const bool window_readable =
+            ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(window_base),
+                              window,
+                              sizeof(window),
+                              &window_copied) != FALSE &&
+            window_copied != 0;
+        char window_text[kCallerReturnWindowSize * 2 + 1] = {};
+        for (SIZE_T index = 0; index < window_copied; ++index)
+        {
+            std::snprintf(window_text + index * 2,
+                          3,
+                          "%02x",
+                          window[index]);
+        }
+        RecordDiagnostic(
+            "{\"event\":\"av_caller_return_window\",\"thread\":%u,\"return_address\":\"0x%08x\",\"base\":\"0x%08x\",\"readable\":%s,\"bytes\":\"%s\"}",
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(caller_return_address),
+            static_cast<unsigned>(window_base),
+            window_readable ? "true" : "false",
+            window_text);
+    }
     struct NamedRegister
     {
         const char* name;
@@ -1914,6 +2345,74 @@ void RecordAccessViolationContext(HANDLE process,
                          FindSectionNameForRva(*image_info, rva),
                          text);
     }
+}
+
+void RecordPrivilegedInstructionContext(HANDLE process,
+                                        DWORD thread_id,
+                                        const EXCEPTION_RECORD& record,
+                                        bool first_chance)
+{
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT, FALSE, thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
+    const bool have_context = thread != nullptr && GetThreadContext(thread, &context) != FALSE;
+    if (thread != nullptr)
+    {
+        CloseHandle(thread);
+    }
+    if (!have_context)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"privileged_instruction_context_error\",\"code\":\"0x%08x\",\"first_chance\":%s,\"address\":\"0x%08x\"}",
+            static_cast<unsigned>(record.ExceptionCode),
+            first_chance ? "true" : "false",
+            static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(record.ExceptionAddress)));
+        return;
+    }
+
+    std::uint8_t bytes[16] = {};
+    SIZE_T copied = 0;
+    const bool have_bytes = ReadProcessMemory(
+                                process,
+                                record.ExceptionAddress,
+                                bytes,
+                                sizeof(bytes),
+                                &copied) != FALSE &&
+                            copied != 0;
+    char byte_text[sizeof(bytes) * 2 + 1] = {};
+    if (have_bytes)
+    {
+        for (SIZE_T index = 0; index < copied; ++index)
+        {
+            std::snprintf(byte_text + index * 2, 3, "%02x", bytes[index]);
+        }
+    }
+    const char* kind = !have_bytes ? "unknown"
+                       : bytes[0] == 0xec ? "in_al_dx"
+                       : bytes[0] == 0xee ? "out_dx_al"
+                                           : "unknown";
+    const std::uint32_t address = static_cast<std::uint32_t>(
+        reinterpret_cast<std::uintptr_t>(record.ExceptionAddress));
+    RecordDiagnostic(
+        "{\"event\":\"privileged_instruction\",\"code\":\"0x%08x\",\"first_chance\":%s,\"address\":\"0x%08x\",\"kind\":\"%s\",\"opcode\":\"%02x\",\"bytes\":\"%s\",\"eax\":\"0x%08x\",\"ebx\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"esi\":\"0x%08x\",\"edi\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"eip\":\"0x%08x\",\"flags\":\"0x%08x\",\"port\":\"0x%04x\",\"value\":\"0x%02x\"}",
+        static_cast<unsigned>(record.ExceptionCode),
+        first_chance ? "true" : "false",
+        address,
+        kind,
+        have_bytes ? static_cast<unsigned>(bytes[0]) : 0u,
+        byte_text,
+        static_cast<unsigned>(context.Eax),
+        static_cast<unsigned>(context.Ebx),
+        static_cast<unsigned>(context.Ecx),
+        static_cast<unsigned>(context.Edx),
+        static_cast<unsigned>(context.Esi),
+        static_cast<unsigned>(context.Edi),
+        static_cast<unsigned>(context.Ebp),
+        static_cast<unsigned>(context.Esp),
+        static_cast<unsigned>(context.Eip),
+        static_cast<unsigned>(context.EFlags),
+        static_cast<unsigned>(context.Edx & 0xffffu),
+        static_cast<unsigned>(context.Eax & 0xffu));
 }
 
 // Dumps registers, stack, fault page bytes, and the containing allocation's
@@ -2078,6 +2577,7 @@ bool InstallApiTraceBreakpoints(HANDLE process,
                                 std::uintptr_t kernelbase_base,
                                 std::uintptr_t user32_base,
                                 ApiWatchMap* watches,
+                                bool allocation_only,
                                 std::string* error)
 {
     struct WatchedModule
@@ -2097,6 +2597,8 @@ bool InstallApiTraceBreakpoints(HANDLE process,
         "LoadLibraryW",
         "GetProcAddress",
         "VirtualAlloc",
+        "HeapAlloc",
+        "LocalAlloc",
         "VirtualProtect",
         "VirtualFree",
         "GetVersion",
@@ -2122,10 +2624,16 @@ bool InstallApiTraceBreakpoints(HANDLE process,
     bool any_resolved = false;
     for (const char* api : kWatchedApis)
     {
+        if (allocation_only && std::strcmp(api, "VirtualAlloc") != 0 &&
+            std::strcmp(api, "HeapAlloc") != 0 &&
+            std::strcmp(api, "LocalAlloc") != 0)
+        {
+            continue;
+        }
         bool recorded = false;
         for (const WatchedModule& module : modules)
         {
-            if (module.base == 0)
+            if (module.base == 0 || (allocation_only && recorded))
             {
                 continue;
             }
@@ -2257,6 +2765,12 @@ bool InstallRuntimeApiTraceBreakpoint(HANDLE process,
     return true;
 }
 
+struct LegacyIoTrapPolicy
+{
+    std::uintptr_t in_byte_rva = 0;
+    std::uintptr_t out_byte_rva = 0;
+};
+
 enum class IoPortTrapResult
 {
     kNotHandled,
@@ -2269,6 +2783,7 @@ IoPortTrapResult HandleLegacyIoPortTrap(
     DWORD thread_id,
     const EXCEPTION_RECORD& exception,
     std::uintptr_t image_base,
+    const LegacyIoTrapPolicy& policy,
     re2dj::input::LegacyIoPortBus* bus,
     bool trace,
     std::string* error)
@@ -2278,12 +2793,12 @@ IoPortTrapResult HandleLegacyIoPortTrap(
         return IoPortTrapResult::kNotHandled;
     }
 
-    constexpr std::uintptr_t kInByteRva = 0x00038987;
-    constexpr std::uintptr_t kOutByteRva = 0x000389ab;
     const std::uintptr_t address =
         reinterpret_cast<std::uintptr_t>(exception.ExceptionAddress);
-    const bool is_read = address == image_base + kInByteRva;
-    const bool is_write = address == image_base + kOutByteRva;
+    const bool is_read = policy.in_byte_rva != 0 &&
+                         address == image_base + policy.in_byte_rva;
+    const bool is_write = policy.out_byte_rva != 0 &&
+                          address == image_base + policy.out_byte_rva;
     if (!is_read && !is_write)
     {
         return IoPortTrapResult::kNotHandled;
@@ -2319,6 +2834,15 @@ IoPortTrapResult HandleLegacyIoPortTrap(
     }
 
     const std::uint16_t port = static_cast<std::uint16_t>(context.Edx);
+    const std::uint32_t eax_before = context.Eax;
+    const std::uint32_t eip_before = context.Eip;
+    std::uint32_t return_address = 0;
+    const bool return_address_readable =
+        ReadRemoteU32(process, context.Esp, &return_address);
+    const RemoteBufferSnapshot return_code =
+        return_address_readable
+            ? ReadRemoteBufferSnapshot(process, return_address, 24)
+            : RemoteBufferSnapshot{};
     std::uint8_t value = static_cast<std::uint8_t>(context.Eax);
     const bool accepted = is_read ? bus->ReadByte(port, &value)
                                   : bus->WriteByte(port, value);
@@ -2343,12 +2867,18 @@ IoPortTrapResult HandleLegacyIoPortTrap(
 
     if (trace)
     {
-        RecordDiagnostic("{\"event\":\"io_port_%s\",\"thread\":%u,\"address\":\"0x%08x\",\"port\":\"0x%03x\",\"width\":1,\"value\":\"0x%02x\"}",
+        RecordDiagnostic("{\"event\":\"io_port_%s\",\"thread\":%u,\"address\":\"0x%08x\",\"port\":\"0x%03x\",\"width\":1,\"value\":\"0x%02x\",\"eax_before\":\"0x%08x\",\"eax_after\":\"0x%08x\",\"eip_after\":\"0x%08x\",\"return_address\":\"0x%08x\",\"return_readable\":%s,\"return_bytes\":\"%s\"}",
                          is_read ? "read" : "write",
                          static_cast<unsigned>(thread_id),
                          static_cast<unsigned>(address),
                          static_cast<unsigned>(port),
-                         static_cast<unsigned>(value));
+                         static_cast<unsigned>(value),
+                         static_cast<unsigned>(eax_before),
+                         static_cast<unsigned>(context.Eax),
+                         static_cast<unsigned>(eip_before + 1),
+                         static_cast<unsigned>(return_address),
+                         return_address_readable ? "true" : "false",
+                         return_code.readable ? return_code.bytes.c_str() : "");
     }
     return IoPortTrapResult::kHandled;
 }
@@ -2507,15 +3037,633 @@ bool HandleSlotWriterBreakpoint(HANDLE process,
     return true;
 }
 
+constexpr std::uint32_t kEz2dj4thNullContextFieldRva = 0x006cd824;
+constexpr std::uint32_t kEz2dj4thNullContextObjectRva = 0x006cd708;
+constexpr std::uint32_t kEz2dj4thNullContextFieldAccessRva = 0x001a699;
+constexpr std::uint32_t kEz2dj4thNullContextObjectSourcePrologueRva = 0x001a649;
+constexpr std::uint32_t kEz2dj4thNullContextObjectSourceBoundaryRva = 0x001a64c;
+constexpr std::uint32_t kEz2dj4thTextRva = 0x00001000;
+constexpr std::uint32_t kEz2dj4thTextVirtualSize = 0x000db022;
+constexpr std::uint32_t kNullContextFieldWriterHitLimit = 64;
+constexpr std::uint32_t kNullContextFieldReferenceLimit = 128;
+constexpr DWORD kNullContextFieldBreakpointStatus = static_cast<DWORD>(1u << 3);
+constexpr DWORD kNullContextFieldBreakpointEnable = static_cast<DWORD>(1u << 6);
+constexpr DWORD kNullContextFieldWriteBreakpointControl =
+    static_cast<DWORD>((1u << 28) | (3u << 30));
+constexpr DWORD kNullContextFieldAccessBreakpointControl =
+    static_cast<DWORD>((3u << 28) | (3u << 30));
+constexpr DWORD kNullContextFieldBreakpointMask =
+    static_cast<DWORD>((0x3u << 6) | (0xfu << 28));
+
+struct NullContextFieldWriterTraceState
+{
+    std::uint32_t hit_count = 0;
+    std::uint32_t recorded_count = 0;
+    bool capped = false;
+    std::uint32_t last_field_value = 0;
+    bool last_field_readable = false;
+};
+
+bool SetNullContextFieldAccessBreakpoint(HANDLE thread,
+                                         std::uintptr_t image_base,
+                                         DWORD breakpoint_control,
+                                         std::string* error)
+{
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot read null-context field debug registers";
+        return false;
+    }
+    context.Dr3 = image_base + kEz2dj4thNullContextFieldRva;
+    context.Dr6 = 0;
+    context.Dr7 &= ~kNullContextFieldBreakpointMask;
+    context.Dr7 |= kNullContextFieldBreakpointEnable | breakpoint_control;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot set null-context field access breakpoint";
+        return false;
+    }
+    CONTEXT verified = {};
+    verified.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &verified) == FALSE ||
+        verified.Dr3 != context.Dr3 ||
+        (verified.Dr7 & kNullContextFieldBreakpointMask) !=
+            (kNullContextFieldBreakpointEnable | breakpoint_control))
+    {
+        *error = "null-context field access breakpoint was not retained";
+        return false;
+    }
+    return true;
+}
+
+void ScanRuntimeNullContextFieldReferences(HANDLE process,
+                                           std::uintptr_t image_base)
+{
+    const std::uintptr_t text_base = image_base + kEz2dj4thTextRva;
+    const std::size_t text_size = kEz2dj4thTextVirtualSize;
+    std::vector<std::uint8_t> bytes(text_size);
+    SIZE_T copied = 0;
+    const bool readable =
+        ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(text_base),
+                          bytes.data(),
+                          bytes.size(),
+                          &copied) != FALSE &&
+        copied == bytes.size();
+    if (!readable)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"null_context_field_reference_scan\",\"readable\":false,\"text_base\":\"0x%08x\",\"text_rva\":\"0x%08x\",\"text_size\":\"0x%08x\",\"bytes_copied\":%u,\"candidates\":0,\"read_candidates\":0,\"write_candidates\":0,\"recorded\":0,\"capped\":false}",
+            static_cast<unsigned>(text_base),
+            kEz2dj4thTextRva,
+            kEz2dj4thTextVirtualSize,
+            static_cast<unsigned>(copied));
+        return;
+    }
+
+    std::uint32_t candidate_count = 0;
+    std::uint32_t read_candidate_count = 0;
+    std::uint32_t write_candidate_count = 0;
+    std::uint32_t recorded_count = 0;
+    bool capped = false;
+    for (std::size_t index = 0; index + 6 <= bytes.size(); ++index)
+    {
+        if ((bytes[index + 1] & 0xc0u) != 0x80u ||
+            bytes[index + 2] != 0x1c || bytes[index + 3] != 0x01 ||
+            bytes[index + 4] != 0x00 || bytes[index + 5] != 0x00)
+        {
+            continue;
+        }
+
+        const std::uint8_t opcode = bytes[index];
+        const char* access = "other";
+        if (opcode == 0x8b)
+        {
+            access = "read";
+            ++read_candidate_count;
+        }
+        else if (opcode == 0x89 || opcode == 0xc7)
+        {
+            access = "write";
+            ++write_candidate_count;
+        }
+        ++candidate_count;
+
+        if (recorded_count < kNullContextFieldReferenceLimit)
+        {
+            char byte_text[13] = {};
+            for (std::size_t byte_index = 0; byte_index < 6; ++byte_index)
+            {
+                std::snprintf(byte_text + byte_index * 2,
+                              3,
+                              "%02x",
+                              bytes[index + byte_index]);
+            }
+            const std::uintptr_t address = text_base + index;
+            RecordDiagnostic(
+                "{\"event\":\"null_context_field_reference\",\"address\":\"0x%08x\",\"rva\":\"0x%08x\",\"access\":\"%s\",\"opcode\":\"0x%02x\",\"modrm\":\"0x%02x\",\"displacement\":\"0x0000011c\",\"bytes\":\"%s\"}",
+                static_cast<unsigned>(address),
+                static_cast<unsigned>(kEz2dj4thTextRva + index),
+                access,
+                static_cast<unsigned>(opcode),
+                static_cast<unsigned>(bytes[index + 1]),
+                byte_text);
+            ++recorded_count;
+        }
+        else
+        {
+            capped = true;
+        }
+    }
+
+    RecordDiagnostic(
+        "{\"event\":\"null_context_field_reference_scan\",\"readable\":true,\"text_base\":\"0x%08x\",\"text_rva\":\"0x%08x\",\"text_size\":\"0x%08x\",\"bytes_copied\":%u,\"candidates\":%u,\"read_candidates\":%u,\"write_candidates\":%u,\"recorded\":%u,\"capped\":%s}",
+        static_cast<unsigned>(text_base),
+        kEz2dj4thTextRva,
+        kEz2dj4thTextVirtualSize,
+        static_cast<unsigned>(copied),
+        candidate_count,
+        read_candidate_count,
+        write_candidate_count,
+        recorded_count,
+        capped ? "true" : "false");
+}
+
+bool FindNullContextObjectSourceBoundary(HANDLE process,
+                                         std::uintptr_t image_base,
+                                         std::uintptr_t* prologue,
+                                         std::uintptr_t* boundary,
+                                         std::string* error);
+
+bool HandleNullContextFieldAccessBreakpoint(
+    HANDLE process,
+    DWORD thread_id,
+    std::uintptr_t image_base,
+    NullContextFieldWriterTraceState* state,
+    const char* event_name,
+    const std::set<std::uint32_t>* allocation_return_values,
+    bool* handled,
+    std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot capture null-context field access context";
+        return false;
+    }
+    if ((context.Dr6 & kNullContextFieldBreakpointStatus) == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++state->hit_count;
+    const std::uintptr_t field_address =
+        image_base + kEz2dj4thNullContextFieldRva;
+    std::uint32_t field_value = 0;
+    SIZE_T field_copied = 0;
+    const bool field_readable =
+        ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(field_address),
+                          &field_value,
+                          sizeof(field_value),
+                          &field_copied) != FALSE &&
+        field_copied == sizeof(field_value);
+    std::uint32_t object_address = 0;
+    const bool object_readable =
+        context.Ebp >= 0x118 &&
+        ReadRemoteU32(process, context.Ebp - 0x118, &object_address);
+    std::uint32_t object_field_address = 0;
+    std::uint32_t object_field_value = 0;
+    bool object_field_readable = false;
+    if (object_readable && object_address <= 0xffffffffu - 0x11c)
+    {
+        object_field_address = object_address + 0x11c;
+        object_field_readable =
+            ReadRemoteU32(process, object_field_address, &object_field_value);
+    }
+    std::uint32_t stack_return_address = 0;
+    const bool stack_return_readable =
+        ReadRemoteU32(process, context.Esp, &stack_return_address);
+    const bool allocation_return_match =
+        allocation_return_values != nullptr && object_readable && object_address != 0 &&
+        allocation_return_values->count(object_address) != 0;
+    const std::uintptr_t code_base =
+        context.Eip >= image_base + 8 ? context.Eip - 8 : image_base;
+    const RemoteBufferSnapshot code_window =
+        ReadRemoteBufferSnapshot(process, code_base, 24);
+    if (state->hit_count == 1)
+    {
+        std::uintptr_t runtime_prologue = 0;
+        std::uintptr_t runtime_boundary = 0;
+        std::string runtime_scan_error;
+        const bool runtime_boundary_found =
+            FindNullContextObjectSourceBoundary(process,
+                                                image_base,
+                                                &runtime_prologue,
+                                                &runtime_boundary,
+                                                &runtime_scan_error);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_source_runtime_scan\",\"found\":%s,\"field_access_anchor\":\"0x%08x\",\"prologue\":\"0x%08x\",\"boundary\":\"0x%08x\"}",
+            runtime_boundary_found ? "true" : "false",
+            static_cast<unsigned>(image_base + kEz2dj4thNullContextFieldAccessRva),
+            static_cast<unsigned>(runtime_prologue),
+            static_cast<unsigned>(runtime_boundary));
+        ScanRuntimeNullContextFieldReferences(process, image_base);
+    }
+    if (state->recorded_count < kNullContextFieldWriterHitLimit)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"%s\",\"sequence\":%u,\"thread\":%u,\"field\":\"0x%08x\",\"rva\":\"0x%08x\",\"eip_after\":\"0x%08x\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"dr6\":\"0x%08x\",\"field_before_observed\":\"0x%08x\",\"field_before_observed_readable\":%s,\"field_after\":\"0x%08x\",\"field_after_readable\":%s,\"object\":\"0x%08x\",\"object_readable\":%s,\"object_field_address\":\"0x%08x\",\"object_field\":\"0x%08x\",\"object_field_readable\":%s,\"allocation_return_match\":%s,\"stack_return_address\":\"0x%08x\",\"stack_return_readable\":%s,\"code_base\":\"0x%08x\",\"code_readable\":%s,\"code\":\"%s\"}",
+            event_name,
+            state->hit_count,
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(field_address),
+            kEz2dj4thNullContextFieldRva,
+            static_cast<unsigned>(context.Eip),
+            static_cast<unsigned>(context.Eax),
+            static_cast<unsigned>(context.Ecx),
+            static_cast<unsigned>(context.Ebp),
+            static_cast<unsigned>(context.Esp),
+            static_cast<unsigned>(context.Dr6),
+            static_cast<unsigned>(state->last_field_value),
+            state->last_field_readable ? "true" : "false",
+            static_cast<unsigned>(field_value),
+            field_readable ? "true" : "false",
+            object_address,
+            object_readable ? "true" : "false",
+            object_field_address,
+            object_field_value,
+            object_field_readable ? "true" : "false",
+            allocation_return_match ? "true" : "false",
+            stack_return_address,
+            stack_return_readable ? "true" : "false",
+            static_cast<unsigned>(code_base),
+            code_window.readable ? "true" : "false",
+            code_window.readable ? code_window.bytes.c_str() : "");
+        ++state->recorded_count;
+    }
+    else
+    {
+        state->capped = true;
+    }
+    state->last_field_value = field_value;
+    state->last_field_readable = field_readable;
+
+    context.Dr6 &= ~kNullContextFieldBreakpointStatus;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot clear null-context field access status";
+        return false;
+    }
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
+constexpr std::uint32_t kNullContextObjectSourceBoundaryHitLimit = 64;
+constexpr std::uint32_t kNullContextObjectSourceHitLimit = 256;
+constexpr DWORD kNullContextObjectSourceBoundaryStatus = static_cast<DWORD>(1u << 0);
+constexpr DWORD kNullContextObjectSourceBoundaryEnable = static_cast<DWORD>(1u << 0);
+constexpr DWORD kNullContextObjectSourceBoundaryMask =
+    static_cast<DWORD>((0x3u << 0) | (0xfu << 16));
+constexpr DWORD kNullContextObjectSourceBreakpointStatus = static_cast<DWORD>(1u << 2);
+constexpr DWORD kNullContextObjectSourceBreakpointEnable = static_cast<DWORD>(1u << 4);
+constexpr DWORD kNullContextObjectSourceBreakpointControl =
+    static_cast<DWORD>((1u << 24) | (3u << 26));
+constexpr DWORD kNullContextObjectSourceBreakpointMask =
+    static_cast<DWORD>((0x3u << 4) | (0xfu << 24));
+
+struct NullContextObjectSourceTraceState
+{
+    std::uint32_t boundary_hit_count = 0;
+    std::uint32_t boundary_recorded_count = 0;
+    bool boundary_capped = false;
+    std::uint32_t hit_count = 0;
+    std::uint32_t recorded_count = 0;
+    std::uint32_t target_match_count = 0;
+    bool capped = false;
+    std::map<DWORD, std::uintptr_t> dynamic_stack_slots;
+};
+
+bool FindNullContextObjectSourceBoundary(HANDLE process,
+                                         std::uintptr_t image_base,
+                                         std::uintptr_t* prologue,
+                                         std::uintptr_t* boundary,
+                                         std::string* error)
+{
+    constexpr std::size_t kScanBackBytes = 0x1000;
+    const std::uintptr_t field_access =
+        image_base + kEz2dj4thNullContextFieldAccessRva;
+    if (field_access < image_base + kScanBackBytes)
+    {
+        *error = "null-context field access anchor is outside image scan range";
+        return false;
+    }
+    std::vector<std::uint8_t> bytes(kScanBackBytes);
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(
+            process,
+            reinterpret_cast<const void*>(field_access - kScanBackBytes),
+            bytes.data(),
+            bytes.size(),
+            &copied) == FALSE ||
+        copied != bytes.size())
+    {
+        *error = "cannot read runtime bytes for null-context source boundary";
+        return false;
+    }
+    for (std::size_t index = kScanBackBytes - 3; index != 0; --index)
+    {
+        if (bytes[index] == 0x55 && bytes[index + 1] == 0x8b &&
+            bytes[index + 2] == 0xec)
+        {
+            *prologue = field_access - kScanBackBytes + index;
+            *boundary = *prologue + 3;
+            return true;
+        }
+    }
+    *error = "cannot find null-context source function prologue";
+    return false;
+}
+
+bool SetNullContextObjectSourceBoundaryBreakpoint(HANDLE thread,
+                                                  std::uintptr_t boundary,
+                                                  std::string* error)
+{
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot read null-context object source debug registers";
+        return false;
+    }
+    context.Dr0 = static_cast<DWORD>(boundary);
+    context.Dr6 = 0;
+    context.Dr7 &= ~kNullContextObjectSourceBoundaryMask;
+    context.Dr7 |= kNullContextObjectSourceBoundaryEnable;
+    context.Dr7 &= ~kNullContextObjectSourceBreakpointMask;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot set null-context object source boundary breakpoint";
+        return false;
+    }
+    CONTEXT verified = {};
+    verified.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &verified) == FALSE ||
+        verified.Dr0 != context.Dr0 ||
+        (verified.Dr7 & kNullContextObjectSourceBoundaryMask) !=
+            kNullContextObjectSourceBoundaryEnable ||
+        (verified.Dr7 & kNullContextObjectSourceBreakpointMask) != 0)
+    {
+        *error = "null-context object source boundary breakpoint was not retained";
+        return false;
+    }
+    return true;
+}
+
+bool HandleNullContextObjectSourceBoundaryBreakpoint(
+    HANDLE process,
+    DWORD thread_id,
+    std::uintptr_t image_base,
+    std::uintptr_t boundary,
+    NullContextObjectSourceTraceState* state,
+    bool* handled,
+    std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot capture null-context object source boundary context";
+        return false;
+    }
+    if ((context.Dr6 & kNullContextObjectSourceBoundaryStatus) == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++state->boundary_hit_count;
+    std::uint32_t frame_slot = 0;
+    std::uint32_t frame_slot_value = 0;
+    const bool frame_slot_valid = context.Ebp >= 0x118;
+    const bool frame_slot_readable =
+        frame_slot_valid &&
+        ReadRemoteU32(process,
+                      context.Ebp - 0x118,
+                      &frame_slot_value);
+    if (frame_slot_valid)
+    {
+        frame_slot = context.Ebp - 0x118;
+    }
+    const std::uint32_t target_object = static_cast<std::uint32_t>(
+        image_base + kEz2dj4thNullContextObjectRva);
+    const bool frame_slot_matches_target =
+        frame_slot_readable && frame_slot_value == target_object;
+    if (state->boundary_recorded_count < kNullContextObjectSourceBoundaryHitLimit)
+    {
+        const std::uintptr_t code_base =
+            context.Eip >= image_base + 8 ? context.Eip - 8 : image_base;
+        const RemoteBufferSnapshot code_window =
+            ReadRemoteBufferSnapshot(process, code_base, 24);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_source_boundary_hit\",\"sequence\":%u,\"thread\":%u,\"boundary\":\"0x%08x\",\"eip\":\"0x%08x\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"dr6\":\"0x%08x\",\"frame_slot\":\"0x%08x\",\"frame_slot_valid\":%s,\"frame_slot_readable\":%s,\"frame_slot_value\":\"0x%08x\",\"target_object\":\"0x%08x\",\"frame_slot_matches_target\":%s,\"code_base\":\"0x%08x\",\"code_readable\":%s,\"code\":\"%s\"}",
+            state->boundary_hit_count,
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(boundary),
+            static_cast<unsigned>(context.Eip),
+            static_cast<unsigned>(context.Eax),
+            static_cast<unsigned>(context.Ecx),
+            static_cast<unsigned>(context.Ebp),
+            static_cast<unsigned>(context.Esp),
+            static_cast<unsigned>(context.Dr6),
+            frame_slot,
+            frame_slot_valid ? "true" : "false",
+            frame_slot_readable ? "true" : "false",
+            frame_slot_value,
+            target_object,
+            frame_slot_matches_target ? "true" : "false",
+            static_cast<unsigned>(code_base),
+            code_window.readable ? "true" : "false",
+            code_window.readable ? code_window.bytes.c_str() : "");
+        ++state->boundary_recorded_count;
+    }
+    else
+    {
+        state->boundary_capped = true;
+    }
+
+    context.Dr7 &= ~kNullContextObjectSourceBoundaryMask;
+    context.Dr7 &= ~kNullContextObjectSourceBreakpointMask;
+    if (frame_slot_valid)
+    {
+        context.Dr2 = frame_slot;
+        context.Dr7 |= kNullContextObjectSourceBreakpointEnable |
+                       kNullContextObjectSourceBreakpointControl;
+        state->dynamic_stack_slots[thread_id] = frame_slot;
+    }
+    else
+    {
+        state->dynamic_stack_slots.erase(thread_id);
+    }
+    context.Dr6 &= ~(kNullContextObjectSourceBoundaryStatus |
+                     kNullContextObjectSourceBreakpointStatus);
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot arm null-context object source data breakpoint";
+        return false;
+    }
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
+bool HandleNullContextObjectSourceBreakpoint(
+    HANDLE process,
+    DWORD thread_id,
+    std::uintptr_t image_base,
+    std::uintptr_t stack_slot,
+    NullContextObjectSourceTraceState* state,
+    bool* handled,
+    std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot capture null-context object source context";
+        return false;
+    }
+    if ((context.Dr6 & kNullContextObjectSourceBreakpointStatus) == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++state->hit_count;
+    std::uint32_t stack_slot_value = 0;
+    const bool stack_slot_readable =
+        ReadRemoteU32(process,
+                      static_cast<std::uint32_t>(stack_slot),
+                      &stack_slot_value);
+    std::uint32_t frame_slot = 0;
+    std::uint32_t frame_slot_value = 0;
+    const bool frame_slot_valid = context.Ebp >= 0x118;
+    const bool frame_slot_readable =
+        frame_slot_valid &&
+        ReadRemoteU32(process,
+                      context.Ebp - 0x118,
+                      &frame_slot_value);
+    if (frame_slot_valid)
+    {
+        frame_slot = context.Ebp - 0x118;
+    }
+    const std::uint32_t target_object = static_cast<std::uint32_t>(
+        image_base + kEz2dj4thNullContextObjectRva);
+    const bool stack_slot_matches_target =
+        stack_slot_readable && stack_slot_value == target_object;
+    const bool frame_slot_matches_target =
+        frame_slot_readable && frame_slot_value == target_object;
+    if (stack_slot_matches_target || frame_slot_matches_target)
+    {
+        ++state->target_match_count;
+    }
+    const bool frame_slot_matches_configured =
+        frame_slot_valid && frame_slot == static_cast<std::uint32_t>(stack_slot);
+    const std::uintptr_t code_base =
+        context.Eip >= image_base + 8 ? context.Eip - 8 : image_base;
+    const RemoteBufferSnapshot code_window =
+        ReadRemoteBufferSnapshot(process, code_base, 24);
+    if (state->recorded_count < kNullContextObjectSourceHitLimit)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_source_hit\",\"sequence\":%u,\"thread\":%u,\"configured_stack_slot\":\"0x%08x\",\"configured_stack_slot_readable\":%s,\"configured_stack_slot_value\":\"0x%08x\",\"frame_slot\":\"0x%08x\",\"frame_slot_valid\":%s,\"frame_slot_matches_configured\":%s,\"frame_slot_readable\":%s,\"frame_slot_value\":\"0x%08x\",\"target_object\":\"0x%08x\",\"stack_slot_matches_target\":%s,\"frame_slot_matches_target\":%s,\"eip_after\":\"0x%08x\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"dr6\":\"0x%08x\",\"code_base\":\"0x%08x\",\"code_readable\":%s,\"code\":\"%s\"}",
+            state->hit_count,
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(stack_slot),
+            stack_slot_readable ? "true" : "false",
+            stack_slot_value,
+            frame_slot,
+            frame_slot_valid ? "true" : "false",
+            frame_slot_matches_configured ? "true" : "false",
+            frame_slot_readable ? "true" : "false",
+            frame_slot_value,
+            target_object,
+            stack_slot_matches_target ? "true" : "false",
+            frame_slot_matches_target ? "true" : "false",
+            static_cast<unsigned>(context.Eip),
+            static_cast<unsigned>(context.Eax),
+            static_cast<unsigned>(context.Ecx),
+            static_cast<unsigned>(context.Ebp),
+            static_cast<unsigned>(context.Esp),
+            static_cast<unsigned>(context.Dr6),
+            static_cast<unsigned>(code_base),
+            code_window.readable ? "true" : "false",
+            code_window.readable ? code_window.bytes.c_str() : "");
+        ++state->recorded_count;
+    }
+    else
+    {
+        state->capped = true;
+    }
+
+    context.Dr6 &= ~kNullContextObjectSourceBreakpointStatus;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot clear null-context object source status";
+        return false;
+    }
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
 bool WaitForExitProcessBreakpoint(HANDLE process,
                                   std::uint32_t exit_target,
                                   bool bounded_api_trace,
+                                  bool allocation_trace,
                                   bool slot_writer_trace,
+                                  bool null_context_object_source_trace,
+                                  bool null_context_field_access_trace,
+                                  bool null_context_field_writer_trace,
                                   bool scan_fault_references,
                                   bool trace,
                                   std::uint32_t lptdi_post_ioctl_trace_steps,
                                   std::uint32_t lptdi_post_ioctl_trace_code,
                                   std::uintptr_t image_base,
+                                  std::uintptr_t object_source_boundary,
+                                  const LegacyIoTrapPolicy& io_policy,
                                   const re2dj::exe::PeImageInfo* image_info,
                                   GuestReturnWatchMap* guest_return_watches,
                                   ApiWatchMap* api_watches,
@@ -2523,10 +3671,36 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                   std::string* error)
 {
     std::map<DWORD, std::uintptr_t> pending_api_steps;
+    PendingAllocationReturnMap pending_allocation_returns;
+    std::map<DWORD, std::uintptr_t> pending_allocation_return_steps;
+    AllocationReturnBreakpointMap allocation_return_breakpoints;
     std::map<DWORD, std::uintptr_t> pending_guest_return_steps;
     std::map<DWORD, PendingDeviceIoControl> pending_device_io_controls;
     std::map<DWORD, PostDeviceIoControlTrace> post_device_io_control_traces;
     SlotWriterTraceState slot_writer_state;
+    AllocationTraceState allocation_trace_state;
+    std::set<std::uint32_t> allocation_return_values;
+    NullContextObjectSourceTraceState null_context_object_source_state;
+    NullContextFieldWriterTraceState null_context_field_writer_state;
+    NullContextFieldWriterTraceState null_context_field_access_state;
+    if (null_context_field_access_trace || null_context_field_writer_trace)
+    {
+        const std::uintptr_t field_address =
+            image_base + kEz2dj4thNullContextFieldRva;
+        std::uint32_t field_value = 0;
+        SIZE_T field_copied = 0;
+        const bool field_readable =
+            ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(field_address),
+                              &field_value,
+                              sizeof(field_value),
+                              &field_copied) != FALSE &&
+            field_copied == sizeof(field_value);
+        null_context_field_writer_state.last_field_value = field_value;
+        null_context_field_writer_state.last_field_readable = field_readable;
+        null_context_field_access_state.last_field_value = field_value;
+        null_context_field_access_state.last_field_readable = field_readable;
+    }
     std::set<std::uintptr_t> dynamic_module_bases;
     bool original_initializer_recorded = false;
     bool unload_tail_collecting = false;
@@ -2600,7 +3774,10 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         }
     };
     constexpr std::uint64_t kBoundedTraceEventCap = 1024;
-    const std::uint64_t requested_event_cap = bounded_api_trace || slot_writer_trace
+    const std::uint64_t requested_event_cap = bounded_api_trace || allocation_trace || slot_writer_trace ||
+                                                      null_context_object_source_trace ||
+                                                      null_context_field_access_trace ||
+                                                      null_context_field_writer_trace
                                                   ? kBoundedTraceEventCap
                                                   : (io_port_bus == nullptr ? 128ull : 8192ull) +
                                                         static_cast<std::uint64_t>(lptdi_post_ioctl_trace_steps) * 16ull;
@@ -2615,27 +3792,103 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         if (WaitForDebugEvent(&event, 5000) == FALSE)
         {
             const DWORD wait_error = GetLastError();
-            if (slot_writer_trace && wait_error == ERROR_SEM_TIMEOUT)
+            if ((allocation_trace || slot_writer_trace || null_context_object_source_trace ||
+                 null_context_field_access_trace ||
+                 null_context_field_writer_trace) &&
+                wait_error == ERROR_SEM_TIMEOUT)
             {
-                const std::uintptr_t slot_address =
-                    image_base + kEz2dj4thPointerSlotRva;
-                std::uint32_t slot_value = 0;
-                SIZE_T copied = 0;
-                const bool slot_readable =
-                    ReadProcessMemory(process,
-                                      reinterpret_cast<const void*>(slot_address),
-                                      &slot_value,
-                                      sizeof(slot_value),
-                                      &copied) != FALSE &&
-                    copied == sizeof(slot_value);
-                RecordDiagnostic("{\"event\":\"slot_writer_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s,\"slot\":\"0x%08x\",\"slot_readable\":%s,\"slot_current\":\"0x%08x\"}",
-                                 event_count,
-                                 slot_writer_state.hit_count,
-                                 slot_writer_state.recorded_count,
-                                 slot_writer_state.capped ? "true" : "false",
-                                 static_cast<unsigned>(slot_address),
-                                 slot_readable ? "true" : "false",
-                                 slot_value);
+                if (allocation_trace)
+                {
+                    RecordDiagnostic("{\"event\":\"null_context_allocation_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"armed\":%u,\"hits\":%u,\"recorded\":%u,\"pending\":%u,\"capped\":%s}",
+                                     event_count,
+                                     allocation_trace_state.armed_count,
+                                     allocation_trace_state.hit_count,
+                                     allocation_trace_state.recorded_count,
+                                     static_cast<unsigned>(PendingAllocationReturnCount(
+                                         pending_allocation_returns)),
+                                     allocation_trace_state.capped ? "true" : "false");
+                }
+                if (slot_writer_trace)
+                {
+                    const std::uintptr_t slot_address =
+                        image_base + kEz2dj4thPointerSlotRva;
+                    std::uint32_t slot_value = 0;
+                    SIZE_T copied = 0;
+                    const bool slot_readable =
+                        ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(slot_address),
+                                          &slot_value,
+                                          sizeof(slot_value),
+                                          &copied) != FALSE &&
+                        copied == sizeof(slot_value);
+                    RecordDiagnostic("{\"event\":\"slot_writer_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s,\"slot\":\"0x%08x\",\"slot_readable\":%s,\"slot_current\":\"0x%08x\"}",
+                                     event_count,
+                                     slot_writer_state.hit_count,
+                                     slot_writer_state.recorded_count,
+                                     slot_writer_state.capped ? "true" : "false",
+                                     static_cast<unsigned>(slot_address),
+                                     slot_readable ? "true" : "false",
+                                     slot_value);
+                }
+                if (null_context_object_source_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_object_source_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"boundary_hits\":%u,\"boundary_recorded\":%u,\"boundary_capped\":%s,\"hits\":%u,\"recorded\":%u,\"target_matches\":%u,\"capped\":%s,\"boundary\":\"0x%08x\",\"dynamic_slots\":%u}",
+                        event_count,
+                        null_context_object_source_state.boundary_hit_count,
+                        null_context_object_source_state.boundary_recorded_count,
+                        null_context_object_source_state.boundary_capped ? "true" : "false",
+                        null_context_object_source_state.hit_count,
+                        null_context_object_source_state.recorded_count,
+                        null_context_object_source_state.target_match_count,
+                        null_context_object_source_state.capped ? "true" : "false",
+                        static_cast<unsigned>(object_source_boundary),
+                        static_cast<unsigned>(null_context_object_source_state.dynamic_stack_slots.size()));
+                }
+                if (null_context_field_access_trace)
+                {
+                    const std::uintptr_t field_address =
+                        image_base + kEz2dj4thNullContextFieldRva;
+                    std::uint32_t field_value = 0;
+                    SIZE_T copied = 0;
+                    const bool field_readable =
+                        ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(field_address),
+                                          &field_value,
+                                          sizeof(field_value),
+                                          &copied) != FALSE &&
+                        copied == sizeof(field_value);
+                    RecordDiagnostic("{\"event\":\"null_context_field_access_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s,\"field\":\"0x%08x\",\"field_readable\":%s,\"field_current\":\"0x%08x\"}",
+                                     event_count,
+                                     null_context_field_access_state.hit_count,
+                                     null_context_field_access_state.recorded_count,
+                                     null_context_field_access_state.capped ? "true" : "false",
+                                     static_cast<unsigned>(field_address),
+                                     field_readable ? "true" : "false",
+                                     field_value);
+                }
+                if (null_context_field_writer_trace)
+                {
+                    const std::uintptr_t field_address =
+                        image_base + kEz2dj4thNullContextFieldRva;
+                    std::uint32_t field_value = 0;
+                    SIZE_T copied = 0;
+                    const bool field_readable =
+                        ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(field_address),
+                                          &field_value,
+                                          sizeof(field_value),
+                                          &copied) != FALSE &&
+                        copied == sizeof(field_value);
+                    RecordDiagnostic("{\"event\":\"null_context_field_writer_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s,\"field\":\"0x%08x\",\"field_readable\":%s,\"field_current\":\"0x%08x\"}",
+                                     event_count,
+                                     null_context_field_writer_state.hit_count,
+                                     null_context_field_writer_state.recorded_count,
+                                     null_context_field_writer_state.capped ? "true" : "false",
+                                     static_cast<unsigned>(field_address),
+                                     field_readable ? "true" : "false",
+                                     field_value);
+                }
                 return true;
             }
             *error = "cannot wait for ExitProcess breakpoint";
@@ -2651,18 +3904,74 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         }
         std::string debug_message;
         RecordAnsiOutputDebugString(process, event, &debug_message);
-        if (slot_writer_trace && event.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT)
+        if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_PRIV_INSTRUCTION)
         {
-            const bool armed = SetSlotWriterBreakpoints(event.u.CreateThread.hThread,
-                                                        image_base,
-                                                        error);
+            RecordPrivilegedInstructionContext(
+                process,
+                event.dwThreadId,
+                event.u.Exception.ExceptionRecord,
+                event.u.Exception.dwFirstChance != 0);
+        }
+        if ((allocation_trace || slot_writer_trace || null_context_object_source_trace ||
+             null_context_field_access_trace ||
+             null_context_field_writer_trace) &&
+            event.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT)
+        {
+            bool armed = true;
+            if (slot_writer_trace)
+            {
+                armed = SetSlotWriterBreakpoints(event.u.CreateThread.hThread,
+                                                 image_base,
+                                                 error);
+            }
+            if (armed && null_context_object_source_trace)
+            {
+                armed = SetNullContextObjectSourceBoundaryBreakpoint(
+                    event.u.CreateThread.hThread,
+                    object_source_boundary,
+                    error);
+            }
+            if (armed && (null_context_field_access_trace ||
+                          null_context_field_writer_trace))
+            {
+                const DWORD breakpoint_control =
+                    null_context_field_access_trace
+                        ? kNullContextFieldAccessBreakpointControl
+                        : kNullContextFieldWriteBreakpointControl;
+                armed = SetNullContextFieldAccessBreakpoint(
+                    event.u.CreateThread.hThread,
+                    image_base,
+                    breakpoint_control,
+                    error);
+            }
             CloseHandle(event.u.CreateThread.hThread);
             if (!armed)
             {
                 return false;
             }
-            RecordDiagnostic("{\"event\":\"slot_writer_thread_armed\",\"thread\":%u}",
-                             static_cast<unsigned>(event.dwThreadId));
+            if (slot_writer_trace)
+            {
+                RecordDiagnostic("{\"event\":\"slot_writer_thread_armed\",\"thread\":%u}",
+                                 static_cast<unsigned>(event.dwThreadId));
+            }
+            if (null_context_object_source_trace)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_object_source_thread_armed\",\"thread\":%u,\"boundary\":\"0x%08x\"}",
+                    static_cast<unsigned>(event.dwThreadId),
+                    static_cast<unsigned>(object_source_boundary));
+            }
+            if (null_context_field_access_trace)
+            {
+                RecordDiagnostic("{\"event\":\"null_context_field_access_thread_armed\",\"thread\":%u}",
+                                 static_cast<unsigned>(event.dwThreadId));
+            }
+            if (null_context_field_writer_trace)
+            {
+                RecordDiagnostic("{\"event\":\"null_context_field_writer_thread_armed\",\"thread\":%u}",
+                                 static_cast<unsigned>(event.dwThreadId));
+            }
         }
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT)
         {
@@ -2671,6 +3980,7 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 event.dwThreadId,
                 event.u.Exception.ExceptionRecord,
                 image_base,
+                io_policy,
                 io_port_bus,
                 trace,
                 error);
@@ -2716,6 +4026,126 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 continue;
             }
         }
+        if (null_context_object_source_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleNullContextObjectSourceBoundaryBreakpoint(
+                    process,
+                    event.dwThreadId,
+                    image_base,
+                    object_source_boundary,
+                    &null_context_object_source_state,
+                    &handled,
+                    error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue null-context object source breakpoint hit";
+                    return false;
+                }
+                continue;
+            }
+        }
+        if (null_context_object_source_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            const auto dynamic_slot =
+                null_context_object_source_state.dynamic_stack_slots.find(
+                    event.dwThreadId);
+            if (dynamic_slot != null_context_object_source_state.dynamic_stack_slots.end())
+            {
+                bool handled = false;
+                if (!HandleNullContextObjectSourceBreakpoint(
+                        process,
+                        event.dwThreadId,
+                        image_base,
+                        dynamic_slot->second,
+                        &null_context_object_source_state,
+                        &handled,
+                        error))
+                {
+                    return false;
+                }
+                if (handled)
+                {
+                    if (ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        *error = "cannot continue null-context object source breakpoint hit";
+                        return false;
+                    }
+                    continue;
+                }
+            }
+        }
+        if (null_context_field_writer_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleNullContextFieldAccessBreakpoint(
+                    process,
+                    event.dwThreadId,
+                    image_base,
+                    &null_context_field_writer_state,
+                    "null_context_field_writer_hit",
+                    allocation_trace ? &allocation_return_values : nullptr,
+                    &handled,
+                    error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue null-context field breakpoint hit";
+                    return false;
+                }
+                continue;
+            }
+        }
+        if (null_context_field_access_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleNullContextFieldAccessBreakpoint(
+                    process,
+                    event.dwThreadId,
+                    image_base,
+                    &null_context_field_access_state,
+                    "null_context_field_access_hit",
+                    allocation_trace ? &allocation_return_values : nullptr,
+                    &handled,
+                    error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue null-context field access hit";
+                    return false;
+                }
+                continue;
+            }
+        }
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT && api_watches != nullptr)
         {
             last_activity_thread = event.dwThreadId;
@@ -2725,6 +4155,53 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                     event.u.Exception.ExceptionRecord.ExceptionAddress);
             if (exception_code == EXCEPTION_SINGLE_STEP)
             {
+                const auto pending_allocation_step =
+                    pending_allocation_return_steps.find(event.dwThreadId);
+                if (allocation_trace &&
+                    pending_allocation_step != pending_allocation_return_steps.end())
+                {
+                    bool rearmed = false;
+                    const auto return_breakpoint = allocation_return_breakpoints.find(
+                        pending_allocation_step->second);
+                    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                                               FALSE,
+                                               event.dwThreadId);
+                    CONTEXT context = {};
+                    context.ContextFlags = CONTEXT_CONTROL;
+                    if (thread != nullptr && GetThreadContext(thread, &context) != FALSE &&
+                        return_breakpoint != allocation_return_breakpoints.end())
+                    {
+                        const std::uint8_t breakpoint = 0xcc;
+                        SIZE_T written = 0;
+                        rearmed = WriteProcessMemory(
+                                      process,
+                                      reinterpret_cast<void*>(pending_allocation_step->second),
+                                      &breakpoint,
+                                      sizeof(breakpoint),
+                                      &written) != FALSE &&
+                                  written == sizeof(breakpoint) &&
+                                  FlushInstructionCache(
+                                      process,
+                                      reinterpret_cast<const void*>(pending_allocation_step->second),
+                                      sizeof(breakpoint)) != FALSE;
+                        context.EFlags &= ~0x100u;
+                        rearmed = rearmed && SetThreadContext(thread, &context) != FALSE;
+                    }
+                    if (thread != nullptr)
+                    {
+                        CloseHandle(thread);
+                    }
+                    pending_allocation_return_steps.erase(pending_allocation_step);
+                    if (!rearmed ||
+                        ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        *error = "cannot rearm allocator return breakpoint";
+                        return false;
+                    }
+                    continue;
+                }
                 const auto pending_guest = pending_guest_return_steps.find(event.dwThreadId);
                 if (pending_guest != pending_guest_return_steps.end())
                 {
@@ -3067,6 +4544,124 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             }
             else if (exception_code == EXCEPTION_BREAKPOINT)
             {
+                auto allocation_thread =
+                    pending_allocation_returns.find(event.dwThreadId);
+                auto allocation_return =
+                    allocation_thread == pending_allocation_returns.end()
+                        ? std::vector<PendingAllocationReturn>::iterator{}
+                        : allocation_thread->second.end();
+                if (allocation_thread != pending_allocation_returns.end())
+                {
+                    for (auto candidate = allocation_thread->second.begin();
+                         candidate != allocation_thread->second.end();
+                         ++candidate)
+                    {
+                        if (candidate->return_address == exception_address)
+                        {
+                            allocation_return = candidate;
+                            break;
+                        }
+                    }
+                }
+                if (allocation_trace && allocation_thread != pending_allocation_returns.end() &&
+                    allocation_return != allocation_thread->second.end())
+                {
+                    const PendingAllocationReturn pending = *allocation_return;
+                    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                                               FALSE,
+                                               event.dwThreadId);
+                    CONTEXT context = {};
+                    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                    bool captured = thread != nullptr &&
+                                    GetThreadContext(thread, &context) != FALSE;
+                    bool restored_return = false;
+                    bool rearmed_api = false;
+                    bool shared_return_breakpoint = false;
+                    if (captured)
+                    {
+                        const auto return_breakpoint = allocation_return_breakpoints.find(
+                            pending.return_address);
+                        if (return_breakpoint == allocation_return_breakpoints.end() ||
+                            return_breakpoint->second.pending_count == 0)
+                        {
+                            *error = "allocator return breakpoint state is missing";
+                        }
+                        else
+                        {
+                            shared_return_breakpoint =
+                                return_breakpoint->second.pending_count > 1;
+                            restored_return = RestoreSoftwareEntryBreakpoint(
+                                process,
+                                static_cast<std::uint32_t>(pending.return_address),
+                                return_breakpoint->second.original_byte,
+                                error);
+                            if (restored_return)
+                            {
+                                RecordAllocationReturn(process,
+                                                       event.dwThreadId,
+                                                       pending,
+                                                       context,
+                                                       &allocation_trace_state);
+                                if (context.Eax != 0)
+                                {
+                                    allocation_return_values.insert(context.Eax);
+                                }
+                                --return_breakpoint->second.pending_count;
+                                if (shared_return_breakpoint)
+                                {
+                                    pending_allocation_return_steps[event.dwThreadId] =
+                                        pending.return_address;
+                                }
+                                else
+                                {
+                                    allocation_return_breakpoints.erase(return_breakpoint);
+                                }
+                                std::uint8_t ignored_original_byte = 0;
+                                rearmed_api = SetSoftwareEntryBreakpoint(
+                                    process,
+                                    static_cast<std::uint32_t>(pending.api_address),
+                                    &ignored_original_byte,
+                                    error);
+                                context.Eip = static_cast<DWORD>(exception_address);
+                                if (shared_return_breakpoint)
+                                {
+                                    context.EFlags |= 0x100u;
+                                }
+                                else
+                                {
+                                    context.EFlags &= ~0x100u;
+                                }
+                                rearmed_api = rearmed_api &&
+                                              SetThreadContext(thread, &context) != FALSE;
+                            }
+                        }
+                    }
+                    if (thread != nullptr)
+                    {
+                        CloseHandle(thread);
+                    }
+                    allocation_thread->second.erase(allocation_return);
+                    if (allocation_thread->second.empty())
+                    {
+                        pending_allocation_returns.erase(allocation_thread);
+                    }
+                    if (!captured || !restored_return || !rearmed_api)
+                    {
+                        if (error->empty())
+                        {
+                            *error = "cannot complete allocator return breakpoint";
+                        }
+                        return false;
+                    }
+                    if (ContinueDebugEvent(event.dwProcessId,
+                                           event.dwThreadId,
+                                           DBG_CONTINUE) == FALSE)
+                    {
+                        *error = "cannot continue allocator return breakpoint";
+                        return false;
+                    }
+                    continue;
+                }
                 const auto guest_return = guest_return_watches->find(exception_address);
                 if (guest_return != guest_return_watches->end())
                 {
@@ -3664,31 +5259,139 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                 return false;
                             }
                         }
-                        // Restore the original byte, rewind EIP onto the API
-                        // entry, and trap-flag one instruction before
-                        // rearming on the following single step.
-                        SIZE_T written = 0;
-                        context.Eip = static_cast<DWORD>(exception_address);
-                        context.EFlags |= 0x100;
-                        const bool restored =
-                            WriteProcessMemory(
-                                process,
-                                reinterpret_cast<void*>(exception_address),
-                                &watch->second.original_byte,
-                                sizeof(watch->second.original_byte),
-                                &written) != FALSE &&
-                            written == sizeof(watch->second.original_byte) &&
-                            FlushInstructionCache(
-                                process,
-                                reinterpret_cast<const void*>(exception_address),
-                                sizeof(watch->second.original_byte)) != FALSE &&
-                            SetThreadContext(thread, &context) != FALSE;
-                        if (restored)
+                        if (allocation_trace && IsAllocationApi(watch->second))
                         {
-                            pending_api_steps[event.dwThreadId] = exception_address;
-                            swallowed = true;
+                            PendingAllocationReturn pending;
+                            pending.api_address = exception_address;
+                            pending.return_address = stack[0];
+                            pending.watch = watch->second;
+                            std::copy_n(stack + 1,
+                                        pending.args.size(),
+                                        pending.args.begin());
+                            if (pending.return_address == 0 ||
+                                     pending.return_address == exit_target ||
+                                     api_watches->count(pending.return_address) != 0 ||
+                                     guest_return_watches->count(pending.return_address) != 0)
+                            {
+                                *error = "allocator return breakpoint address collides with an existing watch";
+                            }
+                            else
+                            {
+                                auto return_breakpoint = allocation_return_breakpoints.find(
+                                    pending.return_address);
+                                bool new_return_breakpoint =
+                                    return_breakpoint == allocation_return_breakpoints.end();
+                                bool return_breakpoint_ready = !new_return_breakpoint;
+                                if (new_return_breakpoint)
+                                {
+                                    return_breakpoint_ready = SetSoftwareEntryBreakpoint(
+                                        process,
+                                        static_cast<std::uint32_t>(pending.return_address),
+                                        &pending.return_original_byte,
+                                        error);
+                                    if (return_breakpoint_ready &&
+                                        pending.return_original_byte == 0xcc)
+                                    {
+                                        RestoreSoftwareEntryBreakpoint(
+                                            process,
+                                            static_cast<std::uint32_t>(pending.return_address),
+                                            pending.return_original_byte,
+                                            error);
+                                        *error = "allocator return breakpoint landed on an existing software breakpoint";
+                                        return_breakpoint_ready = false;
+                                    }
+                                    if (return_breakpoint_ready)
+                                    {
+                                        AllocationReturnBreakpoint state;
+                                        state.original_byte = pending.return_original_byte;
+                                        return_breakpoint =
+                                            allocation_return_breakpoints.emplace(
+                                                pending.return_address,
+                                                state)
+                                                .first;
+                                    }
+                                }
+                                else
+                                {
+                                    pending.return_original_byte =
+                                        return_breakpoint->second.original_byte;
+                                }
+                                if (return_breakpoint_ready &&
+                                    RestoreSoftwareEntryBreakpoint(
+                                        process,
+                                        static_cast<std::uint32_t>(exception_address),
+                                        watch->second.original_byte,
+                                        error))
+                                {
+                                    context.Eip = static_cast<DWORD>(exception_address);
+                                    context.EFlags &= ~0x100u;
+                                    if (SetThreadContext(thread, &context) != FALSE)
+                                    {
+                                        ++return_breakpoint->second.pending_count;
+                                        pending_allocation_returns[event.dwThreadId].push_back(
+                                            std::move(pending));
+                                        ++allocation_trace_state.armed_count;
+                                        RecordDiagnostic(
+                                            "{\"event\":\"null_context_allocation_arm\",\"thread\":%u,\"api\":\"%s\",\"address\":\"0x%08x\",\"return\":\"0x%08x\",\"arg0\":\"0x%08x\",\"arg1\":\"0x%08x\",\"arg2\":\"0x%08x\",\"arg3\":\"0x%08x\"}",
+                                            static_cast<unsigned>(event.dwThreadId),
+                                            watch->second.name.c_str(),
+                                            static_cast<unsigned>(exception_address),
+                                            static_cast<unsigned>(stack[0]),
+                                            static_cast<unsigned>(stack[1]),
+                                            static_cast<unsigned>(stack[2]),
+                                            static_cast<unsigned>(stack[3]),
+                                            static_cast<unsigned>(stack[4]));
+                                        swallowed = true;
+                                    }
+                                    else
+                                    {
+                                        *error = "cannot set allocator entry context";
+                                    }
+                                }
+                                if (!swallowed && new_return_breakpoint &&
+                                    return_breakpoint_ready)
+                                {
+                                    RestoreSoftwareEntryBreakpoint(
+                                        process,
+                                        static_cast<std::uint32_t>(pending.return_address),
+                                        return_breakpoint->second.original_byte,
+                                        error);
+                                    allocation_return_breakpoints.erase(return_breakpoint);
+                                }
+                            }
                         }
                         else
+                        {
+                            // Restore the original byte, rewind EIP onto the API
+                            // entry, and trap-flag one instruction before
+                            // rearming on the following single step.
+                            SIZE_T written = 0;
+                            context.Eip = static_cast<DWORD>(exception_address);
+                            context.EFlags |= 0x100;
+                            const bool restored =
+                                WriteProcessMemory(
+                                    process,
+                                    reinterpret_cast<void*>(exception_address),
+                                    &watch->second.original_byte,
+                                    sizeof(watch->second.original_byte),
+                                    &written) != FALSE &&
+                                written == sizeof(watch->second.original_byte) &&
+                                FlushInstructionCache(
+                                    process,
+                                    reinterpret_cast<const void*>(exception_address),
+                                    sizeof(watch->second.original_byte)) != FALSE &&
+                                SetThreadContext(thread, &context) != FALSE;
+                            if (restored)
+                            {
+                                pending_api_steps[event.dwThreadId] = exception_address;
+                                swallowed = true;
+                            }
+                            else
+                            {
+                                *error = "cannot swallow watched API breakpoint hit";
+                            }
+                        }
+                        if (!swallowed && error->empty())
                         {
                             *error = "cannot swallow watched API breakpoint hit";
                         }
@@ -3913,12 +5616,26 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         }
         if (event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT)
         {
-            if (bounded_api_trace || slot_writer_trace)
+            if (bounded_api_trace || allocation_trace || slot_writer_trace ||
+                null_context_object_source_trace ||
+                null_context_field_access_trace || null_context_field_writer_trace)
             {
                 if (bounded_api_trace)
                 {
                     RecordDiagnostic("{\"event\":\"api_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"code\":\"0x%08x\"}",
                                      event_count,
+                                     static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
+                if (allocation_trace)
+                {
+                    RecordDiagnostic("{\"event\":\"null_context_allocation_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"armed\":%u,\"hits\":%u,\"recorded\":%u,\"pending\":%u,\"capped\":%s,\"code\":\"0x%08x\"}",
+                                     event_count,
+                                     allocation_trace_state.armed_count,
+                                     allocation_trace_state.hit_count,
+                                     allocation_trace_state.recorded_count,
+                                     static_cast<unsigned>(PendingAllocationReturnCount(
+                                         pending_allocation_returns)),
+                                     allocation_trace_state.capped ? "true" : "false",
                                      static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
                 }
                 if (slot_writer_trace)
@@ -3928,6 +5645,40 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                      slot_writer_state.hit_count,
                                      slot_writer_state.recorded_count,
                                      slot_writer_state.capped ? "true" : "false",
+                                     static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
+                if (null_context_object_source_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_object_source_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"boundary_hits\":%u,\"boundary_recorded\":%u,\"boundary_capped\":%s,\"hits\":%u,\"recorded\":%u,\"target_matches\":%u,\"capped\":%s,\"boundary\":\"0x%08x\",\"dynamic_slots\":%u,\"code\":\"0x%08x\"}",
+                        event_count,
+                        null_context_object_source_state.boundary_hit_count,
+                        null_context_object_source_state.boundary_recorded_count,
+                        null_context_object_source_state.boundary_capped ? "true" : "false",
+                        null_context_object_source_state.hit_count,
+                        null_context_object_source_state.recorded_count,
+                        null_context_object_source_state.target_match_count,
+                        null_context_object_source_state.capped ? "true" : "false",
+                        static_cast<unsigned>(object_source_boundary),
+                        static_cast<unsigned>(null_context_object_source_state.dynamic_stack_slots.size()),
+                        static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
+                if (null_context_field_writer_trace)
+                {
+                    RecordDiagnostic("{\"event\":\"null_context_field_writer_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s,\"code\":\"0x%08x\"}",
+                                     event_count,
+                                     null_context_field_writer_state.hit_count,
+                                     null_context_field_writer_state.recorded_count,
+                                     null_context_field_writer_state.capped ? "true" : "false",
+                                     static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
+                if (null_context_field_access_trace)
+                {
+                    RecordDiagnostic("{\"event\":\"null_context_field_access_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s,\"code\":\"0x%08x\"}",
+                                     event_count,
+                                     null_context_field_access_state.hit_count,
+                                     null_context_field_access_state.recorded_count,
+                                     null_context_field_access_state.capped ? "true" : "false",
                                      static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
                 }
                 return true;
@@ -3949,7 +5700,9 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             return false;
         }
     }
-    if (bounded_api_trace || slot_writer_trace)
+    if (bounded_api_trace || allocation_trace || slot_writer_trace ||
+        null_context_object_source_trace ||
+        null_context_field_access_trace || null_context_field_writer_trace)
     {
         if (bounded_api_trace)
         {
@@ -3963,6 +5716,48 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                              slot_writer_state.hit_count,
                              slot_writer_state.recorded_count,
                              slot_writer_state.capped ? "true" : "false");
+        }
+        if (null_context_object_source_trace)
+        {
+            RecordDiagnostic(
+                "{\"event\":\"null_context_object_source_trace_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"boundary_hits\":%u,\"boundary_recorded\":%u,\"boundary_capped\":%s,\"hits\":%u,\"recorded\":%u,\"target_matches\":%u,\"capped\":%s,\"boundary\":\"0x%08x\",\"dynamic_slots\":%u}",
+                event_count,
+                null_context_object_source_state.boundary_hit_count,
+                null_context_object_source_state.boundary_recorded_count,
+                null_context_object_source_state.boundary_capped ? "true" : "false",
+                null_context_object_source_state.hit_count,
+                null_context_object_source_state.recorded_count,
+                null_context_object_source_state.target_match_count,
+                null_context_object_source_state.capped ? "true" : "false",
+                static_cast<unsigned>(object_source_boundary),
+                static_cast<unsigned>(null_context_object_source_state.dynamic_stack_slots.size()));
+        }
+        if (allocation_trace)
+        {
+            RecordDiagnostic("{\"event\":\"null_context_allocation_trace_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"armed\":%u,\"hits\":%u,\"recorded\":%u,\"pending\":%u,\"capped\":%s}",
+                             event_count,
+                             allocation_trace_state.armed_count,
+                             allocation_trace_state.hit_count,
+                             allocation_trace_state.recorded_count,
+                             static_cast<unsigned>(PendingAllocationReturnCount(
+                                 pending_allocation_returns)),
+                             allocation_trace_state.capped ? "true" : "false");
+        }
+        if (null_context_field_writer_trace)
+        {
+            RecordDiagnostic("{\"event\":\"null_context_field_writer_trace_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s}",
+                             event_count,
+                             null_context_field_writer_state.hit_count,
+                             null_context_field_writer_state.recorded_count,
+                             null_context_field_writer_state.capped ? "true" : "false");
+        }
+        if (null_context_field_access_trace)
+        {
+            RecordDiagnostic("{\"event\":\"null_context_field_access_trace_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"capped\":%s}",
+                             event_count,
+                             null_context_field_access_state.hit_count,
+                             null_context_field_access_state.recorded_count,
+                             null_context_field_access_state.capped ? "true" : "false");
         }
         return true;
     }
@@ -4076,6 +5871,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool break_exit_process = false;
     bool scan_fault_references = false;
     bool slot_writer_trace = false;
+    bool null_context_object_source_trace = false;
+    bool null_context_field_writer_early_trace = false;
+    bool null_context_field_writer_trace = false;
+    bool null_context_field_access_trace = false;
+    bool null_context_allocation_trace = false;
     bool api_trace = false;
     bool system_api_trace = false;
     std::uint32_t lptdi_post_ioctl_trace_steps = 0;
@@ -4431,6 +6231,38 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             break_exit_process = true;
             software_breakpoint = true;
         }
+        else if (option == "--null-context-object-source-trace")
+        {
+            null_context_object_source_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--null-context-field-writer-trace")
+        {
+            null_context_field_writer_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--null-context-field-writer-early-trace")
+        {
+            null_context_field_writer_early_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--null-context-field-access-trace")
+        {
+            null_context_field_access_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--null-context-allocation-trace")
+        {
+            null_context_allocation_trace = true;
+            api_trace = true;
+            system_api_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
         else if (option == "--api-trace")
         {
             api_trace = true;
@@ -4481,6 +6313,21 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         PrintUsage();
         return 1;
     }
+    if (null_context_field_writer_early_trace && !null_context_field_access_trace)
+    {
+        null_context_field_writer_trace = true;
+    }
+    if (null_context_field_writer_trace && null_context_field_access_trace)
+    {
+        PrintUsage();
+        return 1;
+    }
+    if (null_context_object_source_trace && slot_writer_trace)
+    {
+        std::fprintf(stderr,
+                     "{\"error\":\"null-context object source trace conflicts with slot-writer trace\"}\n");
+        return 1;
+    }
     if ((audio_gain_set || audio_volume_trace) && !hle_directsound)
     {
         PrintUsage();
@@ -4498,7 +6345,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     }
     if (instruction_trace && (probe_handoff || hle_command_line || hle_windows_directory ||
                               hle_vfs || hle_display_mode || hle_d3d3 || hle_directsound || hle_io_ports || d3d_init_trace || ksnd_load_trace || probe_exit_process ||
-                              break_exit_process))
+                              break_exit_process || null_context_object_source_trace ||
+                              null_context_field_writer_early_trace ||
+                              null_context_allocation_trace))
     {
         PrintUsage();
         return 1;
@@ -4506,6 +6355,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     if (run_detached &&
         (trace || instruction_trace || d3d_init_trace || ksnd_load_trace ||
          api_trace || probe_exit_process || scan_fault_references || slot_writer_trace ||
+         null_context_field_writer_trace ||
+         null_context_field_access_trace ||
+         null_context_object_source_trace ||
+         null_context_field_writer_early_trace ||
+         null_context_allocation_trace ||
          lptdi_post_ioctl_trace_steps != 0))
     {
         PrintUsage();
@@ -4659,6 +6513,31 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::fprintf(stderr, "{\"error\":\"slot-writer trace requires ez2dj4th target\"}\n");
         return 2;
     }
+    if (null_context_object_source_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr, "{\"error\":\"null-context object source trace requires ez2dj4th target\"}\n");
+        return 2;
+    }
+    if (null_context_field_writer_early_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr, "{\"error\":\"early null-context field writer trace requires ez2dj4th target\"}\n");
+        return 2;
+    }
+    if (null_context_field_writer_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr, "{\"error\":\"null-context field writer trace requires ez2dj4th target\"}\n");
+        return 2;
+    }
+    if (null_context_field_access_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr, "{\"error\":\"null-context field access trace requires ez2dj4th target\"}\n");
+        return 2;
+    }
+    if (null_context_allocation_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr, "{\"error\":\"null-context allocation trace requires ez2dj4th target\"}\n");
+        return 2;
+    }
     if (hle_d3d3 && !target->run_defaults.hle_d3d3)
     {
         std::fprintf(stderr, "{\"error\":\"Direct3D3 HLE is not configured for this target\"}\\n");
@@ -4674,6 +6553,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::fprintf(stderr, "{\"error\":\"legacy I/O port HLE is not configured for this target\"}\\n");
         return 2;
     }
+    const LegacyIoTrapPolicy io_policy = {
+        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_in_byte_rva),
+        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_out_byte_rva)};
     if (device_mock_lptdi && !target->run_defaults.lptdi.device_mock_enabled)
     {
         std::fprintf(stderr, "{\"error\":\"LPTDI device mock is not configured for this target\"}\\n");
@@ -4769,7 +6651,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\"}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\"}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      chd_path.generic_string().c_str(),
@@ -4778,6 +6660,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      instruction_trace_max_steps,
                      api_trace ? "true" : "false",
                      slot_writer_trace ? "true" : "false",
+                     null_context_object_source_trace ? "true" : "false",
+                     null_context_field_writer_early_trace ? "true" : "false",
+                     null_context_field_writer_trace ? "true" : "false",
+                     null_context_field_access_trace ? "true" : "false",
+                     null_context_allocation_trace ? "true" : "false",
                      hle_display_mode ? "true" : "false",
                      hle_d3d3 ? "true" : "false",
                      fullscreen ? "true" : "false",
@@ -4845,12 +6732,14 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     const std::uint32_t expected_base = static_cast<std::uint32_t>(info.image_base);
     const std::uint32_t entry = expected_base + info.entry_point_rva;
     std::uint8_t original_entry_byte = 0;
-    const bool reached_initial = WaitForInitialBreakpoint(&breakpoint_process_id,
+    const bool reached_initial = WaitForInitialBreakpoint(child.hProcess,
+                                                          &breakpoint_process_id,
                                                           &breakpoint_thread_id,
                                                           &main_image_base,
                                                           &kernel32_base,
                                                           &kernelbase_base,
                                                           &user32_base,
+                                                          null_context_field_writer_early_trace,
                                                           &error);
     RecordDiagnostic("{\"event\":\"system_modules\",\"image_base\":\"0x%08x\",\"kernel32\":\"0x%08x\",\"kernelbase\":\"0x%08x\",\"user32\":\"0x%08x\"}",
                      static_cast<unsigned>(main_image_base),
@@ -5602,6 +7491,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     {
         std::uint32_t enable_rva = 0;
         std::uint32_t image_base_rva = 0;
+        std::uint32_t in_byte_rva = 0;
+        std::uint32_t out_byte_rva = 0;
         std::uint32_t config_path_rva = 0;
         io_runtime_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                   runtime_path,
@@ -5612,6 +7503,16 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                   runtime_path,
                                   "g_re2dj_io_image_base",
                                   &image_base_rva,
+                                  &error) &&
+                              re2dj::platform::windows::FindPe32ExportRva(
+                                  runtime_path,
+                                  "g_re2dj_io_in_byte_rva",
+                                  &in_byte_rva,
+                                  &error) &&
+                              re2dj::platform::windows::FindPe32ExportRva(
+                                  runtime_path,
+                                  "g_re2dj_io_out_byte_rva",
+                                  &out_byte_rva,
                                   &error) &&
                               (io_config_path.empty() ||
                                (re2dj::platform::windows::FindPe32ExportRva(
@@ -5628,13 +7529,23 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                              static_cast<std::uint32_t>(main_image_base),
                                              &error) &&
                               WriteRemoteU32(child.hProcess,
+                                             runtime_base + in_byte_rva,
+                                             static_cast<std::uint32_t>(io_policy.in_byte_rva),
+                                             &error) &&
+                              WriteRemoteU32(child.hProcess,
+                                             runtime_base + out_byte_rva,
+                                             static_cast<std::uint32_t>(io_policy.out_byte_rva),
+                                             &error) &&
+                              WriteRemoteU32(child.hProcess,
                                              runtime_base + enable_rva,
                                              1,
                                              &error);
         if (io_runtime_prepared)
         {
-            RecordDiagnostic("{\"event\":\"io_port_runtime\",\"image_base\":\"0x%08x\",\"status\":\"prepared\"}",
-                             static_cast<unsigned>(main_image_base));
+            RecordDiagnostic("{\"event\":\"io_port_runtime\",\"image_base\":\"0x%08x\",\"in_rva\":\"0x%08x\",\"out_rva\":\"0x%08x\",\"status\":\"prepared\"}",
+                             static_cast<unsigned>(main_image_base),
+                             static_cast<unsigned>(io_policy.in_byte_rva),
+                             static_cast<unsigned>(io_policy.out_byte_rva));
         }
     }
     std::uint32_t exit_thunk_rva = 0;
@@ -5674,14 +7585,19 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 &exit_break_slot_rva,
                 &error);
         if (!exit_import_present &&
-            (lptdi_post_ioctl_trace_steps != 0 || api_trace || slot_writer_trace) &&
+            (lptdi_post_ioctl_trace_steps != 0 || api_trace || slot_writer_trace ||
+             null_context_object_source_trace ||
+             null_context_field_writer_trace || null_context_field_access_trace) &&
             error == "requested import is not present")
         {
             error.clear();
             exit_break_prepared = true;
-            RecordDiagnostic("{\"event\":\"exit_breakpoint\",\"status\":\"bounded_trace_without_static_import\",\"api_trace\":%s,\"slot_writer_trace\":%s}",
+            RecordDiagnostic("{\"event\":\"exit_breakpoint\",\"status\":\"bounded_trace_without_static_import\",\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s}",
                              api_trace ? "true" : "false",
-                             slot_writer_trace ? "true" : "false");
+                             slot_writer_trace ? "true" : "false",
+                             null_context_object_source_trace ? "true" : "false",
+                             null_context_field_writer_trace ? "true" : "false",
+                             null_context_field_access_trace ? "true" : "false");
         }
         else
         {
@@ -5732,18 +7648,21 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         }
     }
     ApiWatchMap api_watches;
+    NullContextFieldWriterTraceState null_context_field_writer_state;
+    NullContextFieldWriterTraceState null_context_field_access_state;
     re2dj::input::LegacyIoPortBus io_port_bus;
     bool api_trace_prepared = !api_trace;
     if (api_trace)
     {
         const bool system_watches_installed =
             !system_api_trace ||
-            (reached && entry_restored && exit_break_prepared &&
+             (reached && entry_restored && exit_break_prepared &&
              InstallApiTraceBreakpoints(child.hProcess,
                                         kernel32_base,
                                         kernelbase_base,
                                         user32_base,
                                         &api_watches,
+                                        null_context_allocation_trace,
                                         &error));
         const bool runtime_watch_installed =
             lptdi_post_ioctl_trace_steps == 0 ||
@@ -5791,6 +7710,115 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             error = "cannot install slot-writer execution breakpoints";
         }
     }
+    std::uintptr_t null_context_object_source_prologue = 0;
+    std::uintptr_t null_context_object_source_boundary = 0;
+    bool null_context_object_source_trace_prepared =
+        !null_context_object_source_trace;
+    if (null_context_object_source_trace)
+    {
+        null_context_object_source_prologue =
+            main_image_base + kEz2dj4thNullContextObjectSourcePrologueRva;
+        null_context_object_source_boundary =
+            main_image_base + kEz2dj4thNullContextObjectSourceBoundaryRva;
+        null_context_object_source_trace_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetNullContextObjectSourceBoundaryBreakpoint(
+                child.hThread,
+                null_context_object_source_boundary,
+                &error);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_source_trace_ready\",\"prepared\":%s,\"field_access_anchor\":\"0x%08x\",\"prologue\":\"0x%08x\",\"boundary\":\"0x%08x\",\"boundary_source\":\"runtime_scan_confirmed\",\"target_object\":\"0x%08x\",\"target_object_rva\":\"0x%08x\"}",
+            null_context_object_source_trace_prepared ? "true" : "false",
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextFieldAccessRva),
+            static_cast<unsigned>(null_context_object_source_prologue),
+            static_cast<unsigned>(null_context_object_source_boundary),
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextObjectRva),
+            kEz2dj4thNullContextObjectRva);
+        if (!null_context_object_source_trace_prepared && error.empty())
+        {
+            error = "cannot install null-context object source boundary breakpoint";
+        }
+    }
+    bool null_context_field_writer_trace_prepared =
+        !null_context_field_writer_trace;
+    if (null_context_field_writer_trace)
+    {
+        null_context_field_writer_trace_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetNullContextFieldAccessBreakpoint(
+                child.hThread,
+                main_image_base,
+                kNullContextFieldWriteBreakpointControl,
+                &error);
+        const std::uintptr_t field_address =
+            main_image_base + kEz2dj4thNullContextFieldRva;
+        std::uint32_t field_value = 0;
+        SIZE_T field_copied = 0;
+        const bool field_readable =
+            null_context_field_writer_trace_prepared &&
+            ReadProcessMemory(child.hProcess,
+                              reinterpret_cast<const void*>(field_address),
+                              &field_value,
+                              sizeof(field_value),
+                              &field_copied) != FALSE &&
+            field_copied == sizeof(field_value);
+        null_context_field_writer_state.last_field_value = field_value;
+        null_context_field_writer_state.last_field_readable = field_readable;
+        RecordDiagnostic("{\"event\":\"null_context_field_writer_trace_ready\",\"prepared\":%s,\"field\":\"0x%08x\",\"rva\":\"0x%08x\",\"field_readable\":%s,\"field_current\":\"0x%08x\"}",
+                         null_context_field_writer_trace_prepared ? "true" : "false",
+                         static_cast<unsigned>(field_address),
+                         kEz2dj4thNullContextFieldRva,
+                         field_readable ? "true" : "false",
+                         static_cast<unsigned>(field_value));
+        if (!null_context_field_writer_trace_prepared && error.empty())
+        {
+            error = "cannot install null-context field data breakpoint";
+        }
+        if (null_context_field_writer_trace_prepared)
+        {
+            ScanAccessViolationSlotReferences(
+                child.hProcess,
+                static_cast<std::uint32_t>(field_address),
+                main_image_base,
+                info);
+        }
+    }
+    bool null_context_field_access_trace_prepared =
+        !null_context_field_access_trace;
+    if (null_context_field_access_trace)
+    {
+        null_context_field_access_trace_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetNullContextFieldAccessBreakpoint(
+                child.hThread,
+                main_image_base,
+                kNullContextFieldAccessBreakpointControl,
+                &error);
+        const std::uintptr_t field_address =
+            main_image_base + kEz2dj4thNullContextFieldRva;
+        std::uint32_t field_value = 0;
+        SIZE_T field_copied = 0;
+        const bool field_readable =
+            null_context_field_access_trace_prepared &&
+            ReadProcessMemory(child.hProcess,
+                              reinterpret_cast<const void*>(field_address),
+                              &field_value,
+                              sizeof(field_value),
+                              &field_copied) != FALSE &&
+            field_copied == sizeof(field_value);
+        null_context_field_access_state.last_field_value = field_value;
+        null_context_field_access_state.last_field_readable = field_readable;
+        RecordDiagnostic("{\"event\":\"null_context_field_access_trace_ready\",\"prepared\":%s,\"field\":\"0x%08x\",\"rva\":\"0x%08x\",\"field_readable\":%s,\"field_current\":\"0x%08x\"}",
+                         null_context_field_access_trace_prepared ? "true" : "false",
+                         static_cast<unsigned>(field_address),
+                         kEz2dj4thNullContextFieldRva,
+                         field_readable ? "true" : "false",
+                         static_cast<unsigned>(field_value));
+        if (!null_context_field_access_trace_prepared && error.empty())
+        {
+            error = "cannot install null-context field access breakpoint";
+        }
+    }
     re2dj::tools::windows_original_process_probe::IatVerificationResult iat;
     const bool iat_verified = reached && entry_restored && runtime_loaded && handoff_prepared &&
                               display_prepared && d3d3_prepared && directsound_prepared &&
@@ -5801,6 +7829,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                               ksnd_load_trace_prepared &&
                               api_trace_prepared &&
                               slot_writer_trace_prepared &&
+                              null_context_object_source_trace_prepared &&
+                              null_context_field_access_trace_prepared &&
+                              null_context_field_writer_trace_prepared &&
                               re2dj::tools::windows_original_process_probe::VerifySuspendedIat(
                                   child.hProcess,
                                   main_image_base,
@@ -5871,6 +7902,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                          exit_break_prepared && d3d_init_trace_prepared &&
                                          ksnd_load_trace_prepared && api_trace_prepared &&
                                          slot_writer_trace_prepared &&
+                                         null_context_object_source_trace_prepared &&
+                                         null_context_field_access_trace_prepared &&
+                                         null_context_field_writer_trace_prepared &&
                                          run_detached_runtime())
                                       : instruction_trace
                                       ? (entry_restored &&
@@ -5891,17 +7925,26 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                           ksnd_load_trace_prepared &&
                                           api_trace_prepared &&
                                           slot_writer_trace_prepared &&
+                                          null_context_object_source_trace_prepared &&
+                                          null_context_field_access_trace_prepared &&
+                                          null_context_field_writer_trace_prepared &&
                                           (break_exit_process
                                                ? (resume_debuggee() &&
                                                   WaitForExitProcessBreakpoint(child.hProcess,
                                                                                exit_break_target,
                                                                                api_trace && exit_break_target == 0,
+                                                                               null_context_allocation_trace,
                                                                                slot_writer_trace,
+                                                                               null_context_object_source_trace,
+                                                                               null_context_field_access_trace,
+                                                                               null_context_field_writer_trace,
                                                                                scan_fault_references,
                                                                                trace,
                                                                                lptdi_post_ioctl_trace_steps,
                                                                                lptdi_post_ioctl_trace_code,
                                                                                main_image_base,
+                                                                               null_context_object_source_boundary,
+                                                                               io_policy,
                                                                                &info,
                                                                                &guest_return_watches,
                                                                                &api_watches,
@@ -5945,6 +7988,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         !io_runtime_prepared || !exit_probe_prepared ||
         !exit_break_prepared || !d3d_init_trace_prepared || !ksnd_load_trace_prepared ||
         !slot_writer_trace_prepared ||
+        !null_context_object_source_trace_prepared ||
+        !null_context_field_access_trace_prepared ||
+        !null_context_field_writer_trace_prepared ||
         !handoff_observed ||
         !iat_verified)
     {

@@ -171,6 +171,10 @@ re2dj --hdd /path/to/ez2dj_hdd
 
 *Guest file writes never modify the original directory. Writes go to a separate overlay directory, and reads consult the overlay before falling through to the original. Overlay lookup preserves Win32 semantics by preferring an exact component match and otherwise using an ASCII case-insensitive fallback. `--hdd` denotes the complete dump root; the Windows x86 launcher safely resolves the selected target profile's `working_directory_relative_path` and injects it as the source mount for guest `D:\ez2dj` and relative paths. Only an empty working directory maps directly to the dump root. The runtime clones an existing original file to the overlay before an `OPEN_EXISTING` write, so the original stays unchanged.*
 
+Windows x86 injected VFS는 staging 이후 다시 들어오는 설정된 HDD root 또는 HLE Windows root 아래의 host absolute path도 해당 root 기준의 guest-relative suffix로 재해석한다. 이 경로는 일반 guest-relative 경로와 같은 overlay 우선 읽기와 copy-on-write 쓰기를 사용하며, HDD suffix는 CHD materialization/fallback에도 재사용한다. 설정된 root 밖의 absolute path는 임의 host 파일로 통과시키지 않는다.
+
+*The Windows x86 injected VFS also reinterprets a host-absolute path under the configured HDD or HLE Windows root as the guest-relative suffix beneath that root. It uses the same overlay-first read and copy-on-write write policy as ordinary guest-relative paths, and reuses the HDD suffix for CHD materialization/fallback. Absolute paths outside configured roots are not passed through as arbitrary host files.*
+
 ```mermaid
 flowchart TD
     R["Guest read: DATA\\SONG.EZ"] --> O{"overlay hit?"}
@@ -688,3 +692,9 @@ opens for <code>\\.\NTICE</code> and <code>\\.\FEnteDev</code>. Installing all
 the zero-slot fault, so broad API tracing is not used as transparent evidence
 for the 4th protected continuation. The next HLE boundary is a separate device
 backend for these paths rather than treating them as VFS files.*
+
+## 2026-09-03 raw I/O profile refinement
+
+`run_defaults.lptdi`의 raw I/O 정책을 capability, 제품 기본 활성화, executable별 helper RVA로 세분화했다. `LegacyIoPortBus`와 `Ez2DjIoBoard`는 공용으로 유지하며, 1st는 `0x00038987`/`0x000389ab`를 기본 활성화한다. 4th는 확인된 byte read `0x000c3817`만 explicit diagnostic opt-in으로 허용하고 write RVA와 제품 기본 활성화는 비워 둔다. 4th 진단은 이 read를 처리한 뒤 `0x00434137` access violation까지 진행했으며, 응답값은 아직 물리 보드 응답으로 확정하지 않았다.
+
+The raw-I/O policy in `run_defaults.lptdi` is split into capability, product-default activation, and executable-specific helper RVAs. `LegacyIoPortBus` and `Ez2DjIoBoard` remain shared; 1st defaults to `0x00038987`/`0x000389ab`. 4th permits explicit diagnostic opt-in only for confirmed byte-read RVA `0x000c3817`, with no write RVA and no product default. The 4th diagnostic handled this read and advanced to an access violation at `0x00434137`; the response is not yet identified as a physical board response.

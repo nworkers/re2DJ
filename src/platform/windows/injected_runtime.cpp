@@ -59,6 +59,8 @@ extern "C" __declspec(dllexport) unsigned char g_re2dj_hardlock_transform_respon
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_wts_console_session_mock = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_io_ports = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_image_base = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_in_byte_rva = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_out_byte_rva = 0;
 extern "C" __declspec(dllexport) char g_re2dj_io_config_path[MAX_PATH] = {};
 
 namespace
@@ -519,12 +521,12 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    constexpr DWORD kInByteRva = 0x00038987;
-    constexpr DWORD kOutByteRva = 0x000389ab;
     const DWORD address = static_cast<DWORD>(
         reinterpret_cast<std::uintptr_t>(exception->ExceptionRecord->ExceptionAddress));
-    const bool is_read = address == g_re2dj_io_image_base + kInByteRva;
-    const bool is_write = address == g_re2dj_io_image_base + kOutByteRva;
+    const bool is_read = g_re2dj_io_in_byte_rva != 0 &&
+                         address == g_re2dj_io_image_base + g_re2dj_io_in_byte_rva;
+    const bool is_write = g_re2dj_io_out_byte_rva != 0 &&
+                          address == g_re2dj_io_image_base + g_re2dj_io_out_byte_rva;
     if (!is_read && !is_write)
     {
         return EXCEPTION_CONTINUE_SEARCH;
@@ -578,12 +580,31 @@ bool HasPrefixIgnoreCase(const char* text, const char* prefix)
 {
     for (; *prefix != '\0'; ++text, ++prefix)
     {
-        if (*text == '\0' || _strnicmp(text, prefix, 1) != 0)
+        const bool text_separator = *text == '\\' || *text == '/';
+        const bool prefix_separator = *prefix == '\\' || *prefix == '/';
+        if (*text == '\0' ||
+            ((!text_separator || !prefix_separator) && _strnicmp(text, prefix, 1) != 0))
         {
             return false;
         }
     }
     return *text == '\0' || *text == '\\' || *text == '/';
+}
+
+bool FindPathSuffixUnderRoot(const char* name, const char* root, const char** suffix)
+{
+    if (name == nullptr || root == nullptr || suffix == nullptr || root[0] == '\0' ||
+        !HasPrefixIgnoreCase(name, root))
+    {
+        return false;
+    }
+    const char* candidate = name + std::strlen(root);
+    while (*candidate == '\\' || *candidate == '/')
+    {
+        ++candidate;
+    }
+    *suffix = candidate;
+    return true;
 }
 
 bool JoinRoot(const char* root, const char* suffix, char path[MAX_PATH])
@@ -722,6 +743,10 @@ bool GuestHddSuffix(const char* name, const char** suffix)
     {
         return false;
     }
+    if (FindPathSuffixUnderRoot(name, g_re2dj_vfs_hdd_root, suffix))
+    {
+        return true;
+    }
     if (HasPrefixIgnoreCase(name, "D:\\ez2dj"))
     {
         *suffix = name + 8;
@@ -807,19 +832,22 @@ bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[M
 {
     const char* hdd_suffix = nullptr;
     const char* support_suffix = nullptr;
-    if (HasPrefixIgnoreCase(name, "D:\\ez2dj"))
+    if (!FindPathSuffixUnderRoot(name, g_re2dj_vfs_hdd_root, &hdd_suffix) &&
+        !FindPathSuffixUnderRoot(name, g_re2dj_hle_windows_directory, &support_suffix) &&
+        HasPrefixIgnoreCase(name, "D:\\ez2dj"))
     {
         hdd_suffix = name + 8;
     }
-    else if (HasPrefixIgnoreCase(name, "C:\\windows"))
+    else if (hdd_suffix == nullptr && HasPrefixIgnoreCase(name, "C:\\windows"))
     {
         support_suffix = name + 10;
     }
-    else if (name[0] != '\\' && name[0] != '/')
+    else if (hdd_suffix == nullptr && support_suffix == nullptr &&
+             name[0] != '\\' && name[0] != '/')
     {
         hdd_suffix = name;
     }
-    else
+    else if (hdd_suffix == nullptr && support_suffix == nullptr)
     {
         return false;
     }

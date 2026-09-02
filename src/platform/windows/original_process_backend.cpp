@@ -44,6 +44,19 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         *error = "profile enables legacy I/O without an LPTDI device policy";
         return false;
     }
+    if (options.profile_defaults.lptdi.legacy_io_ports &&
+        options.profile_defaults.lptdi.legacy_io_in_byte_rva == 0 &&
+        options.profile_defaults.lptdi.legacy_io_out_byte_rva == 0)
+    {
+        *error = "profile enables legacy I/O without a confirmed helper RVA";
+        return false;
+    }
+    if (options.profile_defaults.lptdi.legacy_io_ports_default &&
+        !options.profile_defaults.lptdi.legacy_io_ports)
+    {
+        *error = "profile enables legacy I/O by default without the capability";
+        return false;
+    }
     if (options.profile_defaults.lptdi.device_mock_enabled &&
         options.profile_defaults.lptdi.device_mock_path_prefix.empty())
     {
@@ -143,7 +156,7 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         arguments->push_back("--demo-volume");
         arguments->push_back(std::to_string(*defaults.demo_volume));
     }
-    if (defaults.lptdi.legacy_io_ports)
+    if (defaults.lptdi.legacy_io_ports_default)
     {
         arguments->push_back("--hle-io-ports");
     }

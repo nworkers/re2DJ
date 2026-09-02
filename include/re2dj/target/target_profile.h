@@ -1,6 +1,7 @@
 #ifndef RE2DJ_TARGET_TARGET_PROFILE_H_
 #define RE2DJ_TARGET_TARGET_PROFILE_H_
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -27,8 +28,14 @@ enum class HddInputKind
 // setting means that the profile does not claim that capability.
 struct TargetLptdiPolicy
 {
-    // Enables the confirmed raw IN/OUT adapter for this profile.
+    // Allows explicit use of the profile's confirmed raw I/O contract.
     bool legacy_io_ports = false;
+    // Adds raw I/O HLE to the product facade's normal arguments.
+    bool legacy_io_ports_default = false;
+    // Main-image RVA of the confirmed byte-input helper. Zero means unknown.
+    std::uint32_t legacy_io_in_byte_rva = 0;
+    // Main-image RVA of the confirmed byte-output helper. Zero means unknown.
+    std::uint32_t legacy_io_out_byte_rva = 0;
     // Case-insensitive prefix for the synthetic Win32 device path.
     std::string device_mock_path_prefix;
     // Allows the diagnostic synthetic LPTDI device boundary for this profile.

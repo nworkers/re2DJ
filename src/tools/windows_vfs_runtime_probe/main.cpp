@@ -19,6 +19,7 @@
 
 extern "C" __declspec(dllimport) char g_re2dj_vfs_hdd_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_overlay_root[MAX_PATH];
+extern "C" __declspec(dllimport) char g_re2dj_hle_windows_directory[MAX_PATH];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_mock;
 extern "C" __declspec(dllimport) char g_re2dj_device_mock_path_prefix[MAX_PATH];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_ioctl_mode;
@@ -355,6 +356,16 @@ int main()
         std::ofstream original(hdd / "DATA" / "ORIGINAL.TXT", std::ios::binary);
         original << "original";
     }
+    {
+        std::ofstream absolute(hdd / "DATA" / "ABSOLUTE.TXT", std::ios::binary);
+        absolute << "absolute";
+    }
+    const std::filesystem::path windows = root / "windows";
+    std::filesystem::create_directories(windows);
+    {
+        std::ofstream support(windows / "SUPPORT.TXT", std::ios::binary);
+        support << "support";
+    }
     const std::filesystem::path profile = root / "ez2dj.ini";
     {
         std::ofstream ini(profile, std::ios::binary);
@@ -390,6 +401,8 @@ int main()
     if (!Check(strcpy_s(g_re2dj_vfs_hdd_root, hdd.string().c_str()) == 0, "cannot configure HDD root") ||
         !Check(strcpy_s(g_re2dj_vfs_overlay_root, overlay.string().c_str()) == 0,
                "cannot configure overlay root") ||
+        !Check(strcpy_s(g_re2dj_hle_windows_directory, windows.string().c_str()) == 0,
+               "cannot configure HLE Windows root") ||
         !Check(strcpy_s(g_re2dj_vfs_trace_path, trace.string().c_str()) == 0,
                "cannot configure VFS trace path") ||
         !Check(strcpy_s(g_re2dj_audio_trace_path, audio_trace.string().c_str()) == 0,
@@ -428,6 +441,47 @@ int main()
               "cannot read original through VFS") &&
         Check(std::string(contents, read) == "original", "VFS read returned wrong original data") &&
         Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close original VFS handle");
+
+    const std::string absolute_path = (hdd / "DATA" / "ABSOLUTE.TXT").generic_string();
+    handle = Re2djVfsCreateFileA(absolute_path.c_str(),
+                                 GENERIC_READ,
+                                 FILE_SHARE_READ,
+                                 nullptr,
+                                 OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL,
+                                 nullptr);
+    std::memset(contents, 0, sizeof(contents));
+    read = 0;
+    passed = passed &&
+             Check(handle != INVALID_HANDLE_VALUE,
+                   "cannot open HDD-root absolute path through VFS") &&
+             Check(Re2djVfsReadFile(handle, contents, sizeof(contents), &read, nullptr) != FALSE,
+                   "cannot read HDD-root absolute path through VFS") &&
+             Check(std::string(contents, read) == "absolute",
+                   "absolute HDD-root VFS read returned wrong data") &&
+             Check(Re2djVfsCloseHandle(handle) != FALSE,
+                   "cannot close HDD-root absolute VFS handle");
+
+    const std::string absolute_windows_path =
+        (windows / "SUPPORT.TXT").generic_string();
+    handle = Re2djVfsCreateFileA(absolute_windows_path.c_str(),
+                                 GENERIC_READ,
+                                 FILE_SHARE_READ,
+                                 nullptr,
+                                 OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL,
+                                 nullptr);
+    std::memset(contents, 0, sizeof(contents));
+    read = 0;
+    passed = passed &&
+             Check(handle != INVALID_HANDLE_VALUE,
+                   "cannot open HLE Windows-root absolute path through VFS") &&
+             Check(Re2djVfsReadFile(handle, contents, sizeof(contents), &read, nullptr) != FALSE,
+                   "cannot read HLE Windows-root absolute path through VFS") &&
+             Check(std::string(contents, read) == "support",
+                   "absolute HLE Windows-root VFS read returned wrong data") &&
+             Check(Re2djVfsCloseHandle(handle) != FALSE,
+                   "cannot close HLE Windows-root absolute VFS handle");
 
     HBITMAP bitmap = static_cast<HBITMAP>(Re2djVfsLoadImageA(
         nullptr,
@@ -1244,6 +1298,42 @@ int main()
              Check(copied_text == "Original", "overlay copy has wrong data");
     original.close();
     copied.close();
+
+    handle = Re2djVfsCreateFileA(absolute_path.c_str(),
+                                 GENERIC_WRITE,
+                                 0,
+                                 nullptr,
+                                 OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL,
+                                 nullptr);
+    const char absolute_replacement[] = "A";
+    written = 0;
+    passed = passed &&
+             Check(handle != INVALID_HANDLE_VALUE,
+                   "cannot open absolute path for copy-on-write VFS") &&
+             Check(Re2djVfsWriteFile(handle,
+                                     absolute_replacement,
+                                     1,
+                                     &written,
+                                     nullptr) != FALSE &&
+                       written == 1,
+                   "cannot write absolute path through overlay VFS") &&
+             Check(Re2djVfsCloseHandle(handle) != FALSE,
+                   "cannot close absolute copy-on-write VFS handle");
+
+    std::ifstream absolute_original(hdd / "DATA" / "ABSOLUTE.TXT", std::ios::binary);
+    const std::string absolute_original_text(
+        (std::istreambuf_iterator<char>(absolute_original)),
+        std::istreambuf_iterator<char>());
+    std::ifstream absolute_copied(overlay / "DATA" / "ABSOLUTE.TXT", std::ios::binary);
+    const std::string absolute_copied_text(
+        (std::istreambuf_iterator<char>(absolute_copied)),
+        std::istreambuf_iterator<char>());
+    passed = passed &&
+             Check(absolute_original_text == "absolute",
+                   "absolute HDD-root write modified the original") &&
+             Check(absolute_copied_text == "Absolute",
+                   "absolute path overlay copy has wrong data");
 
     handle = Re2djVfsCreateFileA("\\\\.\\LPTDI7",
                                   GENERIC_READ,
