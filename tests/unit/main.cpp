@@ -8,6 +8,8 @@ int main()
 
     RunAddressSpaceTests(context);
     RunCodeRegionScoreTests(context);
+    RunCodeScanTests(context);
+    RunImmediateScanTests(context);
     RunExecutionBackendTests(context);
     RunGuestPathTests(context);
     RunPeImageTests(context);

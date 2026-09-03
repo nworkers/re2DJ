@@ -57,6 +57,8 @@ struct Context
     } while (false)
 
 void RunCodeRegionScoreTests(re2dj::test::Context& context);
+void RunCodeScanTests(re2dj::test::Context& context);
+void RunImmediateScanTests(re2dj::test::Context& context);
 void RunGuestPathTests(re2dj::test::Context& context);
 void RunAddressSpaceTests(re2dj::test::Context& context);
 void RunExecutionBackendTests(re2dj::test::Context& context);

@@ -229,6 +229,8 @@ add_library(re2dj_core STATIC
     src/device/lptdi_response_profile.cpp
     src/input/ez2dj_io_board.cpp
     src/input/legacy_io_port_bus.cpp
+    src/exe/code_scan.cpp
+    src/exe/immediate_scan.cpp
     src/exe/pe_image.cpp
     src/hdd/hdd_root.cpp
     src/hdd/hdd_scan.cpp
@@ -362,6 +364,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/original_process_backend.cpp
         src/platform/windows/runtime_export_locator.cpp
         src/tools/windows_x86_launcher_probe/remote_module_exports.cpp
+        src/tools/windows_x86_launcher_probe/null_context_object_state.cpp
         src/tools/windows_x86_launcher_probe/main.cpp
     )
     target_include_directories(re2dj_windows_original_process_backend PUBLIC include)
@@ -441,6 +444,8 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/hardlock_api_descriptor_test.cpp
         tests/unit/hardlock_device_test.cpp
         tests/unit/hardlock_transform_responses_test.cpp
+        tests/unit/code_scan_test.cpp
+        tests/unit/immediate_scan_test.cpp
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp
         tests/unit/lptdi_challenge_response_test.cpp

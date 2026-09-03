@@ -461,6 +461,50 @@ Win32 제품의 `src/platform/windows/ini_profile_hle.*`는 원본 main image의
 
 ---
 
+## 2026-09-03 EZ2DJ 4th field writer 진단 / EZ2DJ 4th field-writer diagnostic
+
+`ez2dj4th` 전용 `--null-context-field-reference-execution-trace`는 Task 152에서 확인한 네 개의 `+0x11c` write 후보를 `DR0`–`DR3` local execution breakpoint로 관찰한다. primary thread와 CREATE_THREAD event로 보고된 새 thread에 후보를 설치하며, hit에서 candidate index, receiver register/value, 계산된 target, write source/value, `C7` immediate 읽기 결과와 target-field 일치 여부를 bounded JSONL로 기록한다. 원본 후보 instruction은 breakpoint를 잠시 비활성화하고 TF single-step으로 한 번 실행한 뒤 breakpoint를 복구한다. 이 옵션은 기존 slot/object-source/field 하드웨어 watch와 동시에 사용할 수 없으며, target match가 확인될 때까지 field 직접 주입과 Hardlock 응답 변경은 하지 않는다.
+
+*The `ez2dj4th`-specific `--null-context-field-reference-execution-trace` observes the four `+0x11c` write candidates identified by Task 152 as local execution breakpoints in `DR0`–`DR3`. It arms the candidates on the primary thread and on threads reported by CREATE_THREAD events, recording candidate index, receiver register/value, calculated target, write source/value, `C7` immediate-read status, and target-field equality in bounded JSONL. The original candidate instruction is executed once with the breakpoints temporarily disabled and TF single-step, then the breakpoints are restored. The option rejects concurrent slot/object-source/field hardware watches and never injects the field or changes Hardlock responses before a target match is confirmed.*
+
+## 2026-09-03 immediate 참조 스캔 / Immediate reference scan
+
+`re2dj::exe::ScanImmediateReferences`(`include/re2dj/exe/immediate_scan.h`)는 바이트 버퍼에서 지정한 32비트 little-endian 값을 찾아 offset, 값, 직전·직후 각 8바이트를 돌려주는 플랫폼 독립 순수 함수다. 명령 디코더가 아니므로 결과는 syntactic 후보이며, 호출자가 주변 바이트로 명령 형태를 해석한다. 기록 상한을 넘어도 스캔은 계속되어 `total_matches`로 총계를 돌려주고 `capped`로 절단을 알리므로, 로그 크기를 제한하면서도 통계는 온전하다. launcher probe의 `--null-context-object-reference-scan`은 이 함수를 값마다 한 번씩 돌려 복호화된 런타임 `.text`에서 target object, singleton 전역, vtable 참조를 수집하고, 참조 직후가 `call rel32`이면 대상 주소를 계산하며, vtable slot과 호출자 코드 창을 함께 기록한다.
+
+*`re2dj::exe::ScanImmediateReferences` (`include/re2dj/exe/immediate_scan.h`) is a platform-neutral pure function that finds requested 32-bit little-endian values in a byte buffer and returns each match's offset, value, and eight bytes on either side. It is not an instruction decoder, so results are syntactic candidates that the caller interprets from the surrounding bytes. Scanning continues past the record cap and returns the full count through `total_matches` while reporting truncation through `capped`, so log size stays bounded without losing the statistics. The launcher probe's `--null-context-object-reference-scan` runs it once per value to collect target-object, singleton-global, and vtable references from the decrypted runtime `.text`, resolves the target when a reference is followed by `call rel32`, and records vtable slots and caller code windows alongside.*
+
+## 2026-09-03 EZ2DJ 4th 진입 추적 / EZ2DJ 4th entry trace
+
+`ez2dj4th` 전용 `--null-context-entry-trace`는 Task 160이 확정한 초기화 체인의 네 함수 진입을 `DR0`–`DR3` execution breakpoint로 관찰한다. breakpoint가 함수 첫 바이트, 즉 `push ebp` 이전에 걸리므로 `[ESP]`에서 호출자 반환 주소를 읽어 receiver·호출자·진입 순서를 bounded JSONL로 기록한다. hit 후에는 breakpoint를 잠시 끄고 TF single-step으로 한 번 통과한 뒤 복구하므로 원본 실행은 바뀌지 않는다. 이 옵션은 기존 하드웨어 watch와 동시에 사용할 수 없다.
+
+*The `ez2dj4th`-specific `--null-context-entry-trace` observes the four function entries of the initialization chain Task 160 established, as `DR0`–`DR3` execution breakpoints. Because a breakpoint fires on the function's first byte, before `push ebp`, the caller's return address is read from `[ESP]`, and receiver, caller, and entry order are recorded as bounded JSONL. After each hit the breakpoints are disabled, TF steps once past the entry, and they are restored, so the original execution is unchanged. The option cannot be combined with the existing hardware watches.*
+
+## 2026-09-03 함수 시작 검색 / Function-start search
+
+`re2dj::exe::FindPrologueBefore`(`include/re2dj/exe/code_scan.h`)는 바이트 버퍼에서 anchor 앞쪽으로 `55 8b ec`를 찾아 함수 시작 후보와 거리를 돌려주는 플랫폼 독립 순수 함수다. anchor 자신은 제외해 함수 시작이 길이 0으로 보고되지 않게 하며, syntactic 검색이므로 결과는 후보다. launcher probe는 참조 스캔이 끝난 뒤 이 함수로 관심 anchor의 함수 시작을 찾고, 이미 읽어 둔 `.text` 복사본에서 코드 영역을 잘라 기록한다. anchor가 함수 시작 창 밖이면 anchor 중심 창을 추가로 남겨 관심 명령이 빠지지 않게 한다.
+
+같은 헤더의 `re2dj::exe::ListNearBranches`는 지정 범위 안의 `call rel32`, `jmp rel32/rel8`, `jcc rel8`, 두 바이트 `0f 8x jcc rel32`를 선형으로 훑어 목적지까지 계산해 돌려준다. 명령 길이를 디코드하지 않으므로 결과는 후보이며, launcher probe는 이를 raw 코드 창과 대조해 검증한다. 이 목록으로 함수 본문의 조기 이탈 분기를 찾아 실행 breakpoint 대상으로 좁힌다.
+
+*`re2dj::exe::ListNearBranches` in the same header linearly walks a range for `call rel32`, `jmp rel32/rel8`, `jcc rel8`, and the two-byte `0f 8x jcc rel32`, resolving each destination. It does not decode instruction lengths, so results are candidates that the launcher probe validates against raw code windows. The listing narrows a function body's early-exit branches down to execution-breakpoint targets.*
+
+같은 헤더의 `re2dj::exe::ScanRelativeBranches`는 버퍼 안의 `call rel32`·`jmp rel32` 중 계산된 목적지가 지정 주소와 같은 것을 모두 찾는다. 목적지 계산은 CPU와 같이 32비트 wrap을 따르고, 기록 상한을 넘어도 계속 세어 `total_sites`를 유지한다. launcher probe는 이 함수로 두 단계 추적을 수행한다. 먼저 함수 시작을 목적지로 하는 분기에서 incremental-link `jmp` thunk를 찾고, 이어서 그 thunk를 목적지로 하는 `call`을 찾아 실제 호출 지점을 얻는다.
+
+*`re2dj::exe::ScanRelativeBranches` in the same header finds every `call rel32` and `jmp rel32` in a buffer whose computed destination equals a given address, following 32-bit wrap as the CPU does and keeping `total_sites` complete past the record cap. The launcher probe uses it for two-stage tracing: branches to a function start reveal the incremental-link `jmp` thunk, and branches to that thunk give the real call sites.*
+
+*`re2dj::exe::FindPrologueBefore` (`include/re2dj/exe/code_scan.h`) is a platform-neutral pure function that searches a byte buffer backward from an anchor for `55 8b ec`, returning the candidate function start and its distance. It excludes the anchor itself so a function start is never reported with zero length, and the search is syntactic, so results are candidates. After the reference scan, the launcher probe uses it to locate the function starts of the anchors of interest and cuts their code regions from the already-read `.text` copy. When an anchor falls outside the function-start window, an anchor-centered window is recorded as well so the instruction of interest is never missing.*
+
+## 2026-09-03 EZ2DJ 4th 객체 상태 진단 / EZ2DJ 4th object-state diagnostic
+
+`ez2dj4th` 전용 `--null-context-object-state-trace`는 field read 직전 경계 `image_base + 0x001a64c`를 `DR0` execution breakpoint로 잡고, hit마다 receiver register, 최대 8단계 caller frame chain, target object 앞 `0x200`바이트의 구조 요약을 bounded JSONL로 기록한다. frame chain 수집과 객체 window 스캔은 `src/tools/windows_x86_launcher_probe/null_context_object_state.*`에 분리하고, main.cpp에는 breakpoint 조율과 기록만 둔다. guest 메모리는 읽기만 하며, hit 상한에 도달하면 breakpoint를 해제해 원래 실행을 방해하지 않는다. 이 옵션은 기존 하드웨어 watch와 동시에 사용할 수 없다.
+
+*The `ez2dj4th`-specific `--null-context-object-state-trace` sets a `DR0` execution breakpoint at boundary `image_base + 0x001a64c`, just before the field read, and records the receiver register, a caller frame chain of up to eight levels, and a structural summary of the first `0x200` bytes of the target object as bounded JSONL on each hit. Frame-chain collection and object-window scanning live in `src/tools/windows_x86_launcher_probe/null_context_object_state.*`, leaving only breakpoint orchestration and recording in main.cpp. Guest memory is read-only, and the breakpoint is released once the hit limit is reached so the original execution is undisturbed. The option cannot be combined with the existing hardware watches.*
+
+## 2026-09-03 진단 idle 경계 설정 / Diagnostic idle-boundary configuration
+
+launcher probe의 bounded 진단 debug-event loop는 `--diagnostic-idle-timeout <milliseconds>`로 idle 경계를 조정한다. 기본값은 기존 동작과 같은 `5000`이고 허용 범위는 `1000`–`600000`이며, 값은 이 loop의 `WaitForDebugEvent` 대기에만 적용한다. 초기 breakpoint 대기와 unload tail 수집 같은 다른 대기 경로는 바꾸지 않는다. 선택된 값은 `launch` 진단 event의 `diagnostic_idle_timeout_ms`에 기록되므로 로그만으로 관찰 경계를 재구성할 수 있다. 호스트 그래픽·오디오 초기화가 기본 경계보다 오래 걸리는 환경에서는 이 값을 늘려 같은 진단이 같은 구간을 덮게 한다.
+
+*The launcher probe's bounded diagnostic debug-event loop takes its idle boundary from `--diagnostic-idle-timeout <milliseconds>`. The default `5000` matches previous behavior, the accepted range is `1000`–`600000`, and the value applies only to that loop's `WaitForDebugEvent` wait; the initial-breakpoint wait, unload-tail collection, and other wait paths are unchanged. The selected value is recorded as `diagnostic_idle_timeout_ms` in the `launch` diagnostic event so the observation boundary can be reconstructed from the log alone. Raise it on hosts whose graphics and audio initialization takes longer than the default boundary so the same diagnostics cover the same interval.*
+
 ## 8. 계획된 HLE 계층 / Planned HLE layer **[계획]**
 
 이 표는 추측이 아니라 `ez2dj1.exe`의 import 테이블에서 나왔다. 근거와 전체 목록은 [EZ2DJ import 표면](docs/analysis/ez2dj-import-surface.md)에 있다.

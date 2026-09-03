@@ -35,6 +35,9 @@
 #include "../../platform/windows/injected_runtime_loader.h"
 #include "../../platform/windows/runtime_export_locator.h"
 #include "../windows_original_process_probe/iat_verifier.h"
+#include "re2dj/exe/code_scan.h"
+#include "re2dj/exe/immediate_scan.h"
+#include "null_context_object_state.h"
 #include "remote_module_exports.h"
 
 namespace
@@ -123,7 +126,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-allocation-trace|--api-trace] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -343,6 +346,13 @@ void NoteSystemModuleBase(const DEBUG_EVENT& event,
         *base = reinterpret_cast<std::uintptr_t>(event.u.LoadDll.lpBaseOfDll);
     }
 }
+
+// Idle boundary of the bounded diagnostic debug-event loop. The default keeps
+// the historical five-second window so existing diagnostic logs stay
+// comparable; slower hosts can widen it from the command line.
+constexpr std::uint32_t kDefaultDiagnosticIdleTimeoutMs = 5000;
+constexpr std::uint32_t kMinimumDiagnosticIdleTimeoutMs = 1000;
+constexpr std::uint32_t kMaximumDiagnosticIdleTimeoutMs = 600000;
 
 constexpr std::uint32_t kEz2dj4thEarlyFieldRva = 0x006cd824;
 constexpr DWORD kEarlyFieldBreakpointStatus = static_cast<DWORD>(1u << 3);
@@ -3039,6 +3049,9 @@ bool HandleSlotWriterBreakpoint(HANDLE process,
 
 constexpr std::uint32_t kEz2dj4thNullContextFieldRva = 0x006cd824;
 constexpr std::uint32_t kEz2dj4thNullContextObjectRva = 0x006cd708;
+// Global pointer that callers read the singleton receiver from, confirmed by
+// the Task 157 caller window `mov ecx, [0x00ac29b4]`.
+constexpr std::uint32_t kEz2dj4thNullContextObjectGlobalRva = 0x006c29b4;
 constexpr std::uint32_t kEz2dj4thNullContextFieldAccessRva = 0x001a699;
 constexpr std::uint32_t kEz2dj4thNullContextObjectSourcePrologueRva = 0x001a649;
 constexpr std::uint32_t kEz2dj4thNullContextObjectSourceBoundaryRva = 0x001a64c;
@@ -3054,6 +3067,96 @@ constexpr DWORD kNullContextFieldAccessBreakpointControl =
     static_cast<DWORD>((3u << 28) | (3u << 30));
 constexpr DWORD kNullContextFieldBreakpointMask =
     static_cast<DWORD>((0x3u << 6) | (0xfu << 28));
+constexpr DWORD kNullContextFieldReferenceExecutionStatusMask =
+    static_cast<DWORD>(0x0fu);
+constexpr DWORD kNullContextFieldReferenceExecutionBreakpointMask =
+    static_cast<DWORD>(0x000000ffu | 0xffff0000u);
+constexpr DWORD kNullContextFieldReferenceExecutionBreakpointEnable =
+    static_cast<DWORD>((1u << 0) | (1u << 2) | (1u << 4) | (1u << 6));
+constexpr std::uint32_t kNullContextFieldReferenceExecutionHitLimit = 64;
+
+enum class NullContextFieldReferenceRegister
+{
+    kEax,
+    kEcx,
+    kEdx,
+};
+
+struct NullContextFieldReferenceExecutionCandidate
+{
+    std::uint32_t rva;
+    NullContextFieldReferenceRegister receiver_register;
+    const char* receiver_name;
+    NullContextFieldReferenceRegister write_register;
+    const char* write_source;
+    bool immediate_write;
+    std::uint32_t instruction_size;
+};
+
+constexpr std::array<NullContextFieldReferenceExecutionCandidate, 4>
+    kNullContextFieldReferenceExecutionCandidates = {{
+        {0x0000fdbd,
+         NullContextFieldReferenceRegister::kEcx,
+         "ecx",
+         NullContextFieldReferenceRegister::kEax,
+         "eax",
+         false,
+         6},
+        {0x0000fde1,
+         NullContextFieldReferenceRegister::kEcx,
+         "ecx",
+         NullContextFieldReferenceRegister::kEax,
+         "immediate",
+         true,
+         10},
+        {0x0001825f,
+         NullContextFieldReferenceRegister::kEax,
+         "eax",
+         NullContextFieldReferenceRegister::kEax,
+         "immediate",
+         true,
+         10},
+        {0x0001dbd3,
+         NullContextFieldReferenceRegister::kEdx,
+         "edx",
+         NullContextFieldReferenceRegister::kEcx,
+         "ecx",
+         false,
+         6},
+    }};
+
+// Function entries whose execution order answers why the singleton field stays
+// zero: the virtual method that reaches the initializer, the initializer that
+// writes the field, the reader that faults on it, and the constructor that
+// bounds the whole sequence. RVAs come from the Task 160 call chain.
+struct NullContextEntryPoint
+{
+    std::uint32_t rva;
+    const char* name;
+};
+
+constexpr std::array<NullContextEntryPoint, 4> kNullContextEntryPoints = {{
+    // The three guard call return sites inside the slot 2 method, where EAX
+    // still holds the value the guard compares, plus the entry of the callee
+    // whose failure Task 162 measured.
+    {0x00011706, "guard0_return"},
+    {0x0001172a, "guard1_return"},
+    {0x00011828, "guard2_return"},
+    {0x000106d2, "guard2_target_entry"},
+}};
+
+constexpr std::uint32_t kNullContextEntryHitLimit = 8;
+
+struct NullContextEntryTraceState
+{
+    std::array<std::uint32_t, kNullContextEntryPoints.size()> hit_counts = {};
+    std::array<std::uint32_t, kNullContextEntryPoints.size()> recorded_counts = {};
+    std::uint32_t hit_count = 0;
+    std::uint32_t recorded_count = 0;
+    std::uint32_t singleton_receiver_count = 0;
+    bool capped = false;
+    std::set<DWORD> pending_single_step_threads;
+};
 
 struct NullContextFieldWriterTraceState
 {
@@ -3063,6 +3166,248 @@ struct NullContextFieldWriterTraceState
     std::uint32_t last_field_value = 0;
     bool last_field_readable = false;
 };
+
+struct NullContextFieldReferenceExecutionTraceState
+{
+    std::uint32_t hit_count = 0;
+    std::uint32_t recorded_count = 0;
+    std::uint32_t target_match_count = 0;
+    bool capped = false;
+    std::set<DWORD> pending_single_step_threads;
+};
+
+std::uint32_t ReadNullContextFieldReferenceRegister(
+    const CONTEXT& context,
+    NullContextFieldReferenceRegister register_name)
+{
+    switch (register_name)
+    {
+    case NullContextFieldReferenceRegister::kEax:
+        return context.Eax;
+    case NullContextFieldReferenceRegister::kEcx:
+        return context.Ecx;
+    case NullContextFieldReferenceRegister::kEdx:
+        return context.Edx;
+    }
+    return 0;
+}
+
+bool SetNullContextFieldReferenceExecutionBreakpoints(HANDLE thread,
+                                                       std::uintptr_t image_base,
+                                                       std::string* error)
+{
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot read null-context field reference debug registers";
+        return false;
+    }
+    context.Dr0 = static_cast<DWORD>(
+        image_base + kNullContextFieldReferenceExecutionCandidates[0].rva);
+    context.Dr1 = static_cast<DWORD>(
+        image_base + kNullContextFieldReferenceExecutionCandidates[1].rva);
+    context.Dr2 = static_cast<DWORD>(
+        image_base + kNullContextFieldReferenceExecutionCandidates[2].rva);
+    context.Dr3 = static_cast<DWORD>(
+        image_base + kNullContextFieldReferenceExecutionCandidates[3].rva);
+    context.Dr6 &= ~kNullContextFieldReferenceExecutionStatusMask;
+    context.Dr7 &= ~kNullContextFieldReferenceExecutionBreakpointMask;
+    context.Dr7 |= kNullContextFieldReferenceExecutionBreakpointEnable;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot set null-context field reference execution breakpoints";
+        return false;
+    }
+    CONTEXT verified = {};
+    verified.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &verified) == FALSE ||
+        verified.Dr0 != context.Dr0 || verified.Dr1 != context.Dr1 ||
+        verified.Dr2 != context.Dr2 || verified.Dr3 != context.Dr3 ||
+        (verified.Dr7 & kNullContextFieldReferenceExecutionBreakpointMask) !=
+            (kNullContextFieldReferenceExecutionBreakpointEnable))
+    {
+        *error = "null-context field reference execution breakpoints were not retained";
+        return false;
+    }
+    return true;
+}
+
+bool HandleNullContextFieldReferenceExecutionBreakpoint(
+    HANDLE process,
+    DWORD thread_id,
+    std::uintptr_t image_base,
+    NullContextFieldReferenceExecutionTraceState* state,
+    bool* handled,
+    std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot capture null-context field reference execution context";
+        return false;
+    }
+
+    const DWORD execution_status = context.Dr6 &
+                                    kNullContextFieldReferenceExecutionStatusMask;
+    const auto pending_step = state->pending_single_step_threads.find(thread_id);
+    if (pending_step != state->pending_single_step_threads.end() && execution_status == 0)
+    {
+        context.EFlags &= ~0x100u;
+        if (SetThreadContext(thread, &context) == FALSE ||
+            !SetNullContextFieldReferenceExecutionBreakpoints(thread, image_base, error))
+        {
+            CloseHandle(thread);
+            if (error->empty())
+            {
+                *error = "cannot restore null-context field reference execution breakpoints";
+            }
+            return false;
+        }
+        state->pending_single_step_threads.erase(pending_step);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_field_reference_execution_rearmed\",\"thread\":%u,\"eip_after\":\"0x%08x\"}",
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(context.Eip));
+        CloseHandle(thread);
+        *handled = true;
+        return true;
+    }
+    if (execution_status == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    std::size_t candidate_index = kNullContextFieldReferenceExecutionCandidates.size();
+    for (std::size_t index = 0;
+         index < kNullContextFieldReferenceExecutionCandidates.size();
+         ++index)
+    {
+        const auto& candidate = kNullContextFieldReferenceExecutionCandidates[index];
+        const DWORD candidate_address = static_cast<DWORD>(image_base + candidate.rva);
+        if ((execution_status & static_cast<DWORD>(1u << index)) != 0 &&
+            context.Eip == candidate_address)
+        {
+            candidate_index = index;
+            break;
+        }
+    }
+    if (candidate_index == kNullContextFieldReferenceExecutionCandidates.size())
+    {
+        for (std::size_t index = 0;
+             index < kNullContextFieldReferenceExecutionCandidates.size();
+             ++index)
+        {
+            if ((execution_status & static_cast<DWORD>(1u << index)) != 0)
+            {
+                candidate_index = index;
+                break;
+            }
+        }
+    }
+    if (candidate_index == kNullContextFieldReferenceExecutionCandidates.size())
+    {
+        context.Dr6 &= ~kNullContextFieldReferenceExecutionStatusMask;
+        if (SetThreadContext(thread, &context) == FALSE)
+        {
+            CloseHandle(thread);
+            *error = "cannot clear unknown null-context field reference status";
+            return false;
+        }
+        CloseHandle(thread);
+        *handled = true;
+        return true;
+    }
+
+    const auto& candidate = kNullContextFieldReferenceExecutionCandidates[candidate_index];
+    ++state->hit_count;
+    const std::uint32_t receiver =
+        ReadNullContextFieldReferenceRegister(context, candidate.receiver_register);
+    const bool target_valid = receiver <= (std::numeric_limits<std::uint32_t>::max)() - 0x11c;
+    const std::uint32_t target = target_valid ? receiver + 0x11c : 0;
+    const std::uint32_t target_field = static_cast<std::uint32_t>(
+        image_base + kEz2dj4thNullContextFieldRva);
+    const bool target_matches = target_valid && target == target_field;
+    if (target_matches)
+    {
+        ++state->target_match_count;
+    }
+
+    std::uint32_t write_value = 0;
+    bool write_value_readable = true;
+    std::uint32_t immediate_address = 0;
+    if (candidate.immediate_write)
+    {
+        const bool immediate_address_valid =
+            context.Eip <= (std::numeric_limits<DWORD>::max)() - 6;
+        immediate_address = immediate_address_valid ? context.Eip + 6 : 0;
+        write_value_readable = immediate_address_valid &&
+                               ReadRemoteU32(process, immediate_address, &write_value);
+    }
+    else
+    {
+        write_value = ReadNullContextFieldReferenceRegister(
+            context, candidate.write_register);
+    }
+    const RemoteBufferSnapshot instruction = ReadRemoteBufferSnapshot(
+        process, context.Eip, candidate.instruction_size);
+    const bool eip_matches_candidate =
+        context.Eip == static_cast<DWORD>(image_base + candidate.rva);
+    if (state->recorded_count < kNullContextFieldReferenceExecutionHitLimit)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"null_context_field_reference_execution_hit\",\"sequence\":%u,\"thread\":%u,\"candidate_index\":%u,\"candidate_rva\":\"0x%08x\",\"eip\":\"0x%08x\",\"eip_matches_candidate\":%s,\"receiver_register\":\"%s\",\"receiver\":\"0x%08x\",\"target\":\"0x%08x\",\"target_valid\":%s,\"target_field\":\"0x%08x\",\"target_matches\":%s,\"write_source\":\"%s\",\"write_value\":\"0x%08x\",\"write_value_readable\":%s,\"immediate_address\":\"0x%08x\",\"immediate_readable\":%s,\"dr6\":\"0x%08x\",\"code_readable\":%s,\"code\":\"%s\"}",
+            state->hit_count,
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(candidate_index),
+            candidate.rva,
+            static_cast<unsigned>(context.Eip),
+            eip_matches_candidate ? "true" : "false",
+            candidate.receiver_name,
+            receiver,
+            target,
+            target_valid ? "true" : "false",
+            target_field,
+            target_matches ? "true" : "false",
+            candidate.write_source,
+            write_value,
+            write_value_readable ? "true" : "false",
+            immediate_address,
+            candidate.immediate_write && write_value_readable ? "true" : "false",
+            static_cast<unsigned>(context.Dr6),
+            instruction.readable ? "true" : "false",
+            instruction.readable ? instruction.bytes.c_str() : "");
+        ++state->recorded_count;
+    }
+    else
+    {
+        state->capped = true;
+    }
+
+    context.Dr7 &= ~kNullContextFieldReferenceExecutionBreakpointMask;
+    context.Dr6 &= ~kNullContextFieldReferenceExecutionStatusMask;
+    context.EFlags |= 0x100u;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot single-step null-context field reference instruction";
+        return false;
+    }
+    state->pending_single_step_threads.insert(thread_id);
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
 
 bool SetNullContextFieldAccessBreakpoint(HANDLE thread,
                                          std::uintptr_t image_base,
@@ -3649,6 +3994,836 @@ bool HandleNullContextObjectSourceBreakpoint(
     return true;
 }
 
+constexpr std::uint32_t kNullContextObjectStateHitLimit = 4;
+constexpr std::uint32_t kNullContextObjectStateWindowBytes = 0x200;
+constexpr std::size_t kNullContextObjectStateEntryLimit = 32;
+constexpr std::size_t kNullContextObjectStateFrameLimit = 8;
+// Heuristic span used only to label observed values as stack-resident. The
+// probe never relies on it to decide what to read.
+constexpr std::uintptr_t kNullContextObjectStateStackSpan = 0x00100000;
+
+struct NullContextObjectStateTraceState
+{
+    std::uint32_t hit_count = 0;
+    std::uint32_t recorded_count = 0;
+    std::uint32_t frame_count = 0;
+    bool window_readable = false;
+    bool disarmed = false;
+};
+
+bool HandleNullContextObjectStateBreakpoint(
+    HANDLE process,
+    DWORD thread_id,
+    std::uintptr_t image_base,
+    std::uintptr_t image_end,
+    NullContextObjectStateTraceState* state,
+    bool* handled,
+    std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot read null-context object state thread context";
+        return false;
+    }
+    if ((context.Dr6 & kNullContextObjectSourceBoundaryStatus) == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++state->hit_count;
+    const std::uintptr_t object_address =
+        image_base + kEz2dj4thNullContextObjectRva;
+    const std::uintptr_t field_address =
+        image_base + kEz2dj4thNullContextFieldRva;
+    re2dj::tools::launcher_probe::AddressRanges ranges;
+    ranges.image_base = image_base;
+    ranges.image_end = image_end;
+    ranges.stack_base = context.Esp > kNullContextObjectStateStackSpan
+                            ? static_cast<std::uintptr_t>(context.Esp) -
+                                  kNullContextObjectStateStackSpan
+                            : 0;
+    ranges.stack_end =
+        static_cast<std::uintptr_t>(context.Esp) + kNullContextObjectStateStackSpan;
+
+    if (state->recorded_count < kNullContextObjectStateHitLimit)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_state_hit\",\"sequence\":%u,\"thread\":%u,\"eip\":\"0x%08x\",\"ecx\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"object\":\"0x%08x\",\"field\":\"0x%08x\",\"ecx_matches_object\":%s}",
+            state->hit_count,
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(context.Eip),
+            static_cast<unsigned>(context.Ecx),
+            static_cast<unsigned>(context.Ebp),
+            static_cast<unsigned>(context.Esp),
+            static_cast<unsigned>(object_address),
+            static_cast<unsigned>(field_address),
+            static_cast<std::uintptr_t>(context.Ecx) == object_address ? "true"
+                                                                      : "false");
+
+        const std::vector<re2dj::tools::launcher_probe::CallerFrame> frames =
+            re2dj::tools::launcher_probe::CollectCallerFrames(
+                process,
+                static_cast<std::uintptr_t>(context.Ebp),
+                ranges,
+                kNullContextObjectStateFrameLimit);
+        for (std::size_t index = 0; index < frames.size(); ++index)
+        {
+            const auto& frame = frames[index];
+            RecordDiagnostic(
+                "{\"event\":\"null_context_object_state_frame\",\"sequence\":%u,\"depth\":%u,\"frame\":\"0x%08x\",\"saved_frame\":\"0x%08x\",\"return\":\"0x%08x\",\"return_in_image\":%s,\"return_rva\":\"0x%08x\"}",
+                state->hit_count,
+                static_cast<unsigned>(index),
+                static_cast<unsigned>(frame.frame),
+                static_cast<unsigned>(frame.saved_frame),
+                static_cast<unsigned>(frame.return_address),
+                frame.return_in_image ? "true" : "false",
+                frame.return_in_image
+                    ? static_cast<unsigned>(frame.return_address - image_base)
+                    : 0u);
+        }
+        state->frame_count = static_cast<std::uint32_t>(frames.size());
+
+        const re2dj::tools::launcher_probe::ObjectWindowScan scan =
+            re2dj::tools::launcher_probe::ScanObjectWindow(
+                process,
+                object_address,
+                kNullContextObjectStateWindowBytes,
+                kEz2dj4thNullContextFieldRva - kEz2dj4thNullContextObjectRva,
+                ranges,
+                kNullContextObjectStateEntryLimit);
+        state->window_readable = scan.readable;
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_state_window\",\"sequence\":%u,\"object\":\"0x%08x\",\"readable\":%s,\"bytes\":%u,\"dwords\":%u,\"nonzero\":%u,\"field_offset\":\"0x%08x\",\"field_scanned\":%s,\"field_value\":\"0x%08x\",\"entries\":%u,\"capped\":%s}",
+            state->hit_count,
+            static_cast<unsigned>(object_address),
+            scan.readable ? "true" : "false",
+            scan.bytes_scanned,
+            scan.dwords_scanned,
+            scan.nonzero_count,
+            scan.field_offset,
+            scan.field_offset_scanned ? "true" : "false",
+            scan.field_value,
+            static_cast<unsigned>(scan.entries.size()),
+            scan.capped ? "true" : "false");
+        for (const auto& entry : scan.entries)
+        {
+            RecordDiagnostic(
+                "{\"event\":\"null_context_object_state_entry\",\"sequence\":%u,\"offset\":\"0x%08x\",\"value\":\"0x%08x\",\"class\":\"%s\"}",
+                state->hit_count,
+                entry.offset,
+                entry.value,
+                entry.classification);
+        }
+        ++state->recorded_count;
+    }
+
+    if (state->hit_count >= kNullContextObjectStateHitLimit)
+    {
+        context.Dr7 &= ~kNullContextObjectSourceBoundaryMask;
+        state->disarmed = true;
+    }
+    context.Dr6 &= ~kNullContextObjectSourceBoundaryStatus;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot clear null-context object state status";
+        return false;
+    }
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
+bool SetNullContextEntryBreakpoints(HANDLE thread,
+                                    std::uintptr_t image_base,
+                                    std::string* error)
+{
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot read null-context entry debug registers";
+        return false;
+    }
+    context.Dr0 = static_cast<DWORD>(image_base + kNullContextEntryPoints[0].rva);
+    context.Dr1 = static_cast<DWORD>(image_base + kNullContextEntryPoints[1].rva);
+    context.Dr2 = static_cast<DWORD>(image_base + kNullContextEntryPoints[2].rva);
+    context.Dr3 = static_cast<DWORD>(image_base + kNullContextEntryPoints[3].rva);
+    context.Dr6 &= ~kNullContextFieldReferenceExecutionStatusMask;
+    context.Dr7 &= ~kNullContextFieldReferenceExecutionBreakpointMask;
+    context.Dr7 |= kNullContextFieldReferenceExecutionBreakpointEnable;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot set null-context entry breakpoints";
+        return false;
+    }
+    CONTEXT verified = {};
+    verified.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &verified) == FALSE || verified.Dr0 != context.Dr0 ||
+        verified.Dr1 != context.Dr1 || verified.Dr2 != context.Dr2 ||
+        verified.Dr3 != context.Dr3 ||
+        (verified.Dr7 & kNullContextFieldReferenceExecutionBreakpointMask) !=
+            kNullContextFieldReferenceExecutionBreakpointEnable)
+    {
+        *error = "null-context entry breakpoints were not retained";
+        return false;
+    }
+    return true;
+}
+
+bool HandleNullContextEntryBreakpoint(HANDLE process,
+                                      DWORD thread_id,
+                                      std::uintptr_t image_base,
+                                      NullContextEntryTraceState* state,
+                                      bool* handled,
+                                      std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot read null-context entry thread context";
+        return false;
+    }
+
+    const DWORD execution_status =
+        context.Dr6 & kNullContextFieldReferenceExecutionStatusMask;
+    const auto pending_step = state->pending_single_step_threads.find(thread_id);
+    if (pending_step != state->pending_single_step_threads.end() && execution_status == 0)
+    {
+        context.EFlags &= ~0x100u;
+        if (SetThreadContext(thread, &context) == FALSE ||
+            !SetNullContextEntryBreakpoints(thread, image_base, error))
+        {
+            CloseHandle(thread);
+            if (error->empty())
+            {
+                *error = "cannot restore null-context entry breakpoints";
+            }
+            return false;
+        }
+        state->pending_single_step_threads.erase(pending_step);
+        CloseHandle(thread);
+        *handled = true;
+        return true;
+    }
+    if (execution_status == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    std::size_t entry_index = kNullContextEntryPoints.size();
+    for (std::size_t index = 0; index < kNullContextEntryPoints.size(); ++index)
+    {
+        if ((execution_status & (1u << index)) != 0 &&
+            context.Eip == static_cast<DWORD>(image_base + kNullContextEntryPoints[index].rva))
+        {
+            entry_index = index;
+            break;
+        }
+    }
+    if (entry_index == kNullContextEntryPoints.size())
+    {
+        for (std::size_t index = 0; index < kNullContextEntryPoints.size(); ++index)
+        {
+            if (context.Eip ==
+                static_cast<DWORD>(image_base + kNullContextEntryPoints[index].rva))
+            {
+                entry_index = index;
+                break;
+            }
+        }
+    }
+    if (entry_index == kNullContextEntryPoints.size())
+    {
+        context.Dr6 &= ~kNullContextFieldReferenceExecutionStatusMask;
+        SetThreadContext(thread, &context);
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++state->hit_count;
+    ++state->hit_counts[entry_index];
+    const std::uintptr_t singleton = image_base + kEz2dj4thNullContextObjectRva;
+    const bool receiver_matches = context.Ecx == static_cast<DWORD>(singleton);
+    if (receiver_matches)
+    {
+        ++state->singleton_receiver_count;
+    }
+    // The breakpoint fires on the function's first byte, before `push ebp`, so
+    // the caller's return address is still on top of the stack.
+    std::uint32_t return_address = 0;
+    const bool return_readable =
+        ReadRemoteU32(process, static_cast<std::uint32_t>(context.Esp), &return_address);
+    if (state->recorded_counts[entry_index] < kNullContextEntryHitLimit)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"null_context_entry_hit\",\"sequence\":%u,\"thread\":%u,\"name\":\"%s\",\"rva\":\"0x%08x\",\"eip\":\"0x%08x\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"receiver_is_singleton\":%s,\"esp\":\"0x%08x\",\"return\":\"0x%08x\",\"return_readable\":%s,\"return_rva\":\"0x%08x\"}",
+            state->hit_count,
+            static_cast<unsigned>(thread_id),
+            kNullContextEntryPoints[entry_index].name,
+            kNullContextEntryPoints[entry_index].rva,
+            static_cast<unsigned>(context.Eip),
+            static_cast<unsigned>(context.Eax),
+            static_cast<unsigned>(context.Ecx),
+            static_cast<unsigned>(context.Edx),
+            receiver_matches ? "true" : "false",
+            static_cast<unsigned>(context.Esp),
+            return_address,
+            return_readable ? "true" : "false",
+            return_readable && return_address >= image_base
+                ? static_cast<unsigned>(return_address - image_base)
+                : 0u);
+        ++state->recorded_counts[entry_index];
+        ++state->recorded_count;
+    }
+    else
+    {
+        state->capped = true;
+    }
+
+    context.Dr7 &= ~kNullContextFieldReferenceExecutionBreakpointMask;
+    context.Dr6 &= ~kNullContextFieldReferenceExecutionStatusMask;
+    context.EFlags |= 0x100u;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot arm null-context entry single step";
+        return false;
+    }
+    state->pending_single_step_threads.insert(thread_id);
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
+constexpr std::size_t kNullContextObjectReferenceLimit = 128;
+constexpr std::uint32_t kNullContextObjectVtableEntries = 16;
+// Backward search range for the enclosing `push ebp; mov ebp, esp` and the
+// size of the recorded code region around an anchor.
+constexpr std::size_t kNullContextPrologueScanBack = 0x2000;
+constexpr std::size_t kNullContextAnchorLeadBytes = 0x20;
+constexpr std::size_t kNullContextAnchorTrailBytes = 0x10;
+constexpr std::size_t kNullContextCodeWindowBytes = 0xc0;
+constexpr std::size_t kNullContextBranchSiteLimit = 32;
+constexpr std::size_t kNullContextBodyBranchLimit = 192;
+// Bytes read ahead of a caller return address, enough to contain the call and
+// the branch that selected it.
+constexpr std::uint32_t kNullContextObjectCallerLeadBytes = 24;
+constexpr std::uint32_t kNullContextObjectCallerWindowBytes = 32;
+
+struct NullContextObjectReferenceScanState
+{
+    std::uint32_t hit_count = 0;
+    bool scanned = false;
+    bool text_readable = false;
+    std::uint32_t match_count = 0;
+    bool capped = false;
+    bool disarmed = false;
+};
+
+bool HandleNullContextObjectReferenceScanBreakpoint(
+    HANDLE process,
+    DWORD thread_id,
+    std::uintptr_t image_base,
+    std::uintptr_t image_end,
+    NullContextObjectReferenceScanState* state,
+    bool* handled,
+    std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                               FALSE,
+                               thread_id);
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_DEBUG_REGISTERS;
+    if (thread == nullptr || GetThreadContext(thread, &context) == FALSE)
+    {
+        if (thread != nullptr)
+        {
+            CloseHandle(thread);
+        }
+        *error = "cannot read null-context object reference scan thread context";
+        return false;
+    }
+    if ((context.Dr6 & kNullContextObjectSourceBoundaryStatus) == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++state->hit_count;
+    if (!state->scanned)
+    {
+        const std::uintptr_t object_address =
+            image_base + kEz2dj4thNullContextObjectRva;
+        const std::uintptr_t global_address =
+            image_base + kEz2dj4thNullContextObjectGlobalRva;
+        const std::uintptr_t text_base = image_base + kEz2dj4thTextRva;
+        const std::uintptr_t text_end = text_base + kEz2dj4thTextVirtualSize;
+        std::uint32_t vtable_pointer = 0;
+        const bool vtable_readable = ReadRemoteU32(
+            process, static_cast<std::uint32_t>(object_address), &vtable_pointer);
+        const bool vtable_in_image =
+            vtable_readable && vtable_pointer >= image_base && vtable_pointer < image_end;
+        std::uint32_t global_value = 0;
+        const bool global_readable = ReadRemoteU32(
+            process, static_cast<std::uint32_t>(global_address), &global_value);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_reference_scan_context\",\"thread\":%u,\"eip\":\"0x%08x\",\"ecx\":\"0x%08x\",\"object\":\"0x%08x\",\"vtable\":\"0x%08x\",\"vtable_readable\":%s,\"vtable_in_image\":%s,\"vtable_rva\":\"0x%08x\",\"global\":\"0x%08x\",\"global_value\":\"0x%08x\",\"global_readable\":%s,\"global_matches_object\":%s}",
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(context.Eip),
+            static_cast<unsigned>(context.Ecx),
+            static_cast<unsigned>(object_address),
+            vtable_pointer,
+            vtable_readable ? "true" : "false",
+            vtable_in_image ? "true" : "false",
+            vtable_in_image ? static_cast<unsigned>(vtable_pointer - image_base) : 0u,
+            static_cast<unsigned>(global_address),
+            global_value,
+            global_readable ? "true" : "false",
+            global_readable && global_value == static_cast<std::uint32_t>(object_address)
+                ? "true"
+                : "false");
+
+        if (vtable_in_image)
+        {
+            for (std::uint32_t index = 0; index < kNullContextObjectVtableEntries;
+                 ++index)
+            {
+                const std::uint32_t slot =
+                    vtable_pointer + index * static_cast<std::uint32_t>(sizeof(std::uint32_t));
+                std::uint32_t entry = 0;
+                const bool entry_readable = ReadRemoteU32(process, slot, &entry);
+                const bool entry_in_text =
+                    entry_readable && entry >= text_base && entry < text_end;
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_object_vtable_entry\",\"index\":%u,\"slot\":\"0x%08x\",\"entry\":\"0x%08x\",\"readable\":%s,\"in_text\":%s,\"rva\":\"0x%08x\"}",
+                    index,
+                    slot,
+                    entry,
+                    entry_readable ? "true" : "false",
+                    entry_in_text ? "true" : "false",
+                    entry_in_text ? static_cast<unsigned>(entry - image_base) : 0u);
+            }
+        }
+
+        std::vector<std::uint8_t> text(kEz2dj4thTextVirtualSize);
+        SIZE_T copied = 0;
+        state->text_readable =
+            ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(text_base),
+                              text.data(),
+                              text.size(),
+                              &copied) != FALSE &&
+            copied == text.size();
+        if (state->text_readable)
+        {
+            // One pass per value so a heavily referenced address cannot hide
+            // the totals of the others behind the record cap.
+            const struct
+            {
+                const char* kind;
+                std::uint32_t value;
+                bool enabled;
+            } scans[] = {
+                {"object", static_cast<std::uint32_t>(object_address), true},
+                {"global", static_cast<std::uint32_t>(global_address), true},
+                {"vtable", vtable_pointer, vtable_in_image},
+                // The application-defined failure code the guard 2 call
+                // returned, so every site that produces it can be located.
+                {"error_code", 0x8200000au, true},
+            };
+            for (const auto& scan : scans)
+            {
+                if (!scan.enabled)
+                {
+                    continue;
+                }
+                bool capped = false;
+                std::size_t total = 0;
+                const std::vector<re2dj::exe::ImmediateReference> matches =
+                    re2dj::exe::ScanImmediateReferences(text.data(),
+                                                        text.size(),
+                                                        &scan.value,
+                                                        1,
+                                                        kNullContextObjectReferenceLimit,
+                                                        &capped,
+                                                        &total);
+                state->match_count += static_cast<std::uint32_t>(total);
+                state->capped = state->capped || capped;
+                for (const auto& match : matches)
+                {
+                    char leading[re2dj::exe::ImmediateReference::kContextBytes * 2 + 1] = {};
+                    for (std::size_t index = 0; index < match.leading_count; ++index)
+                    {
+                        std::snprintf(leading + index * 2, 3, "%02x", match.leading[index]);
+                    }
+                    char trailing[re2dj::exe::ImmediateReference::kContextBytes * 2 + 1] = {};
+                    for (std::size_t index = 0; index < match.trailing_count; ++index)
+                    {
+                        std::snprintf(trailing + index * 2, 3, "%02x", match.trailing[index]);
+                    }
+                    // A `call rel32` directly after the operand names the
+                    // function that received this value, so resolve it. Any
+                    // other following byte leaves the callee unreported.
+                    const std::uintptr_t next_instruction =
+                        text_base + match.offset + sizeof(std::uint32_t);
+                    const bool call_follows =
+                        match.trailing_count >= 5 && match.trailing[0] == 0xe8;
+                    std::uint32_t callee = 0;
+                    if (call_follows)
+                    {
+                        const std::uint32_t relative =
+                            static_cast<std::uint32_t>(match.trailing[1]) |
+                            (static_cast<std::uint32_t>(match.trailing[2]) << 8) |
+                            (static_cast<std::uint32_t>(match.trailing[3]) << 16) |
+                            (static_cast<std::uint32_t>(match.trailing[4]) << 24);
+                        callee = static_cast<std::uint32_t>(next_instruction) + 5 + relative;
+                    }
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_object_reference\",\"address\":\"0x%08x\",\"rva\":\"0x%08x\",\"value\":\"0x%08x\",\"kind\":\"%s\",\"leading\":\"%s\",\"trailing\":\"%s\",\"call_follows\":%s,\"callee\":\"0x%08x\",\"callee_rva\":\"0x%08x\"}",
+                        static_cast<unsigned>(text_base + match.offset),
+                        static_cast<unsigned>(kEz2dj4thTextRva + match.offset),
+                        match.value,
+                        scan.kind,
+                        leading,
+                        trailing,
+                        call_follows ? "true" : "false",
+                        callee,
+                        call_follows ? static_cast<unsigned>(callee - image_base) : 0u);
+                }
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_object_reference_kind\",\"kind\":\"%s\",\"value\":\"0x%08x\",\"total\":%u,\"recorded\":%u,\"capped\":%s}",
+                    scan.kind,
+                    scan.value,
+                    static_cast<unsigned>(total),
+                    static_cast<unsigned>(matches.size()),
+                    capped ? "true" : "false");
+            }
+        }
+
+        const std::vector<re2dj::tools::launcher_probe::CallerFrame> frames =
+            re2dj::tools::launcher_probe::CollectCallerFrames(
+                process,
+                static_cast<std::uintptr_t>(context.Ebp),
+                re2dj::tools::launcher_probe::AddressRanges{image_base, image_end, 0, 0},
+                kNullContextObjectStateFrameLimit);
+        for (std::size_t index = 0; index < frames.size(); ++index)
+        {
+            const auto& frame = frames[index];
+            if (frame.return_address < kNullContextObjectCallerLeadBytes)
+            {
+                continue;
+            }
+            const std::uint32_t window_base = static_cast<std::uint32_t>(
+                frame.return_address - kNullContextObjectCallerLeadBytes);
+            const RemoteBufferSnapshot window = ReadRemoteBufferSnapshot(
+                process, window_base, kNullContextObjectCallerWindowBytes);
+            RecordDiagnostic(
+                "{\"event\":\"null_context_object_caller_window\",\"depth\":%u,\"return\":\"0x%08x\",\"return_rva\":\"0x%08x\",\"window_base\":\"0x%08x\",\"lead_bytes\":%u,\"readable\":%s,\"bytes\":\"%s\"}",
+                static_cast<unsigned>(index),
+                static_cast<unsigned>(frame.return_address),
+                frame.return_in_image
+                    ? static_cast<unsigned>(frame.return_address - image_base)
+                    : 0u,
+                window_base,
+                kNullContextObjectCallerLeadBytes,
+                window.readable ? "true" : "false",
+                window.readable ? window.bytes.c_str() : "");
+        }
+
+        if (state->text_readable)
+        {
+            // Anchors whose enclosing function bodies decide the remaining
+            // question: the field read itself, the two `+0x11c` writers that
+            // actually execute, and the sites that install this class vtable.
+            const struct
+            {
+                const char* name;
+                std::uint32_t rva;
+            } anchors[] = {
+                {"field_read", kEz2dj4thNullContextFieldAccessRva},
+                {"write_candidate_0", 0x0000fdbd},
+                {"write_candidate_1", 0x0000fde1},
+                {"vtable_store_0", 0x00010381},
+                {"vtable_store_1", 0x000104a1},
+                {"write_candidate_2", 0x0001825f},
+                {"write_candidate_3", 0x0001dbd3},
+                // The only call site of the function that writes the field on
+                // its own receiver, found by the Task 160 branch scan.
+                {"candidate_2_call_site", 0x00011c23},
+                {"slot2_early_exit_0", 0x00011714},
+                {"slot2_early_exit_1", 0x00011738},
+                {"slot2_early_exit_2", 0x00011838},
+                {"guard2_target_entry", 0x000106d2},
+                {"guard2_failure_site", 0x00010a7b},
+            };
+            for (const auto& anchor : anchors)
+            {
+                if (anchor.rva < kEz2dj4thTextRva)
+                {
+                    continue;
+                }
+                const std::size_t offset = anchor.rva - kEz2dj4thTextRva;
+                if (offset >= text.size())
+                {
+                    continue;
+                }
+                const re2dj::exe::PrologueSearchResult prologue =
+                    re2dj::exe::FindPrologueBefore(text.data(),
+                                                   text.size(),
+                                                   offset,
+                                                   kNullContextPrologueScanBack);
+                // Two windows: one from the function start, and, when the
+                // anchor sits beyond that window, one centered on the anchor so
+                // the instruction of interest is never missing.
+                const std::size_t anchor_start =
+                    offset > kNullContextAnchorLeadBytes ? offset - kNullContextAnchorLeadBytes
+                                                         : 0;
+                const std::size_t window_start = prologue.found ? prologue.offset : offset;
+                const std::size_t window_end =
+                    (std::min)(text.size(), offset + kNullContextAnchorTrailBytes);
+                const std::size_t window_size =
+                    (std::min)(window_end - window_start, kNullContextCodeWindowBytes);
+                std::string bytes_text(window_size * 2, '\0');
+                for (std::size_t index = 0; index < window_size; ++index)
+                {
+                    std::snprintf(bytes_text.data() + index * 2,
+                                  3,
+                                  "%02x",
+                                  text[window_start + index]);
+                }
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_code_region\",\"name\":\"%s\",\"anchor\":\"0x%08x\",\"anchor_rva\":\"0x%08x\",\"prologue_found\":%s,\"prologue_rva\":\"0x%08x\",\"prologue_distance\":%u,\"window_rva\":\"0x%08x\",\"window_bytes\":%u,\"truncated\":%s,\"bytes\":\"%s\"}",
+                    anchor.name,
+                    static_cast<unsigned>(text_base + offset),
+                    anchor.rva,
+                    prologue.found ? "true" : "false",
+                    prologue.found
+                        ? static_cast<unsigned>(kEz2dj4thTextRva + prologue.offset)
+                        : 0u,
+                    static_cast<unsigned>(prologue.distance),
+                    static_cast<unsigned>(kEz2dj4thTextRva + window_start),
+                    static_cast<unsigned>(window_size),
+                    window_size < window_end - window_start ? "true" : "false",
+                    bytes_text.c_str());
+                if (prologue.found)
+                {
+                    // Callers usually reach a function through an incremental-
+                    // link `jmp rel32` thunk, so resolve the branches to the
+                    // function first and then the branches to each thunk found.
+                    const std::uint32_t function_address =
+                        static_cast<std::uint32_t>(text_base + prologue.offset);
+                    bool direct_capped = false;
+                    std::size_t direct_total = 0;
+                    const std::vector<re2dj::exe::RelativeBranchSite> direct =
+                        re2dj::exe::ScanRelativeBranches(text.data(),
+                                                         text.size(),
+                                                         static_cast<std::uint32_t>(text_base),
+                                                         function_address,
+                                                         kNullContextBranchSiteLimit,
+                                                         &direct_capped,
+                                                         &direct_total);
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_branch_scan\",\"name\":\"%s\",\"stage\":\"function\",\"target\":\"0x%08x\",\"target_rva\":\"0x%08x\",\"total\":%u,\"recorded\":%u,\"capped\":%s}",
+                        anchor.name,
+                        function_address,
+                        static_cast<unsigned>(kEz2dj4thTextRva + prologue.offset),
+                        static_cast<unsigned>(direct_total),
+                        static_cast<unsigned>(direct.size()),
+                        direct_capped ? "true" : "false");
+                    for (const auto& site : direct)
+                    {
+                        RecordDiagnostic(
+                            "{\"event\":\"null_context_branch_site\",\"name\":\"%s\",\"stage\":\"function\",\"site\":\"0x%08x\",\"site_rva\":\"0x%08x\",\"opcode\":\"0x%02x\",\"kind\":\"%s\"}",
+                            anchor.name,
+                            static_cast<unsigned>(text_base + site.offset),
+                            static_cast<unsigned>(kEz2dj4thTextRva + site.offset),
+                            static_cast<unsigned>(site.opcode),
+                            site.opcode == 0xe9 ? "thunk" : "call");
+                        if (site.opcode != 0xe9)
+                        {
+                            continue;
+                        }
+                        const std::uint32_t thunk_address =
+                            static_cast<std::uint32_t>(text_base + site.offset);
+                        bool thunk_capped = false;
+                        std::size_t thunk_total = 0;
+                        const std::vector<re2dj::exe::RelativeBranchSite> callers =
+                            re2dj::exe::ScanRelativeBranches(text.data(),
+                                                             text.size(),
+                                                             static_cast<std::uint32_t>(text_base),
+                                                             thunk_address,
+                                                             kNullContextBranchSiteLimit,
+                                                             &thunk_capped,
+                                                             &thunk_total);
+                        RecordDiagnostic(
+                            "{\"event\":\"null_context_branch_scan\",\"name\":\"%s\",\"stage\":\"thunk\",\"target\":\"0x%08x\",\"target_rva\":\"0x%08x\",\"total\":%u,\"recorded\":%u,\"capped\":%s}",
+                            anchor.name,
+                            thunk_address,
+                            static_cast<unsigned>(kEz2dj4thTextRva + site.offset),
+                            static_cast<unsigned>(thunk_total),
+                            static_cast<unsigned>(callers.size()),
+                            thunk_capped ? "true" : "false");
+                        for (const auto& caller : callers)
+                        {
+                            RecordDiagnostic(
+                                "{\"event\":\"null_context_branch_site\",\"name\":\"%s\",\"stage\":\"thunk\",\"site\":\"0x%08x\",\"site_rva\":\"0x%08x\",\"opcode\":\"0x%02x\",\"kind\":\"%s\"}",
+                                anchor.name,
+                                static_cast<unsigned>(text_base + caller.offset),
+                                static_cast<unsigned>(kEz2dj4thTextRva + caller.offset),
+                                static_cast<unsigned>(caller.opcode),
+                                caller.opcode == 0xe9 ? "thunk" : "call");
+                        }
+                    }
+                }
+                if (window_start + window_size <= offset)
+                {
+                    const std::size_t anchor_size =
+                        (std::min)(text.size() - anchor_start,
+                                   kNullContextAnchorLeadBytes + kNullContextAnchorTrailBytes);
+                    std::string anchor_text(anchor_size * 2, '\0');
+                    for (std::size_t index = 0; index < anchor_size; ++index)
+                    {
+                        std::snprintf(anchor_text.data() + index * 2,
+                                      3,
+                                      "%02x",
+                                      text[anchor_start + index]);
+                    }
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_code_region\",\"name\":\"%s_anchor\",\"anchor\":\"0x%08x\",\"anchor_rva\":\"0x%08x\",\"prologue_found\":%s,\"prologue_rva\":\"0x%08x\",\"prologue_distance\":%u,\"window_rva\":\"0x%08x\",\"window_bytes\":%u,\"truncated\":false,\"bytes\":\"%s\"}",
+                        anchor.name,
+                        static_cast<unsigned>(text_base + offset),
+                        anchor.rva,
+                        prologue.found ? "true" : "false",
+                        prologue.found
+                            ? static_cast<unsigned>(kEz2dj4thTextRva + prologue.offset)
+                            : 0u,
+                        static_cast<unsigned>(prologue.distance),
+                        static_cast<unsigned>(kEz2dj4thTextRva + anchor_start),
+                        static_cast<unsigned>(anchor_size),
+                        anchor_text.c_str());
+                }
+            }
+        }
+
+        if (state->text_readable)
+        {
+            // The method that should reach the field initializer, listed as
+            // branches so the early exit before its call site is visible
+            // without decoding every instruction.
+            const struct
+            {
+                const char* name;
+                std::uint32_t rva;
+                std::uint32_t length;
+                std::uint32_t call_rva;
+            } bodies[] = {
+                {"vtable_slot2_method", 0x000116c8, 0x00000580, 0x00011c23},
+                {"slot2_guard_thunk", 0x0000317f, 0x00000008, 0},
+                {"guard2_target", 0x000106d2, 0x00000400, 0},
+                {"slot2_error_thunk", 0x000038dc, 0x00000008, 0},
+            };
+            for (const auto& body : bodies)
+            {
+                if (body.rva < kEz2dj4thTextRva)
+                {
+                    continue;
+                }
+                const std::size_t start = body.rva - kEz2dj4thTextRva;
+                bool branch_capped = false;
+                std::size_t branch_total = 0;
+                const std::vector<re2dj::exe::NearBranch> branches =
+                    re2dj::exe::ListNearBranches(text.data(),
+                                                 text.size(),
+                                                 static_cast<std::uint32_t>(text_base),
+                                                 start,
+                                                 body.length,
+                                                 kNullContextBodyBranchLimit,
+                                                 &branch_capped,
+                                                 &branch_total);
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_body_branch_scan\",\"name\":\"%s\",\"rva\":\"0x%08x\",\"length\":\"0x%08x\",\"call_rva\":\"0x%08x\",\"total\":%u,\"recorded\":%u,\"capped\":%s}",
+                    body.name,
+                    body.rva,
+                    body.length,
+                    body.call_rva,
+                    static_cast<unsigned>(branch_total),
+                    static_cast<unsigned>(branches.size()),
+                    branch_capped ? "true" : "false");
+                for (const auto& branch : branches)
+                {
+                    const std::uint32_t branch_rva =
+                        static_cast<std::uint32_t>(kEz2dj4thTextRva + branch.offset);
+                    const bool target_in_image = branch.target >= image_base &&
+                                                 branch.target < image_end;
+                    const std::uint32_t target_rva =
+                        target_in_image
+                            ? static_cast<std::uint32_t>(branch.target - image_base)
+                            : 0;
+                    // A forward branch from before the call site to after it is
+                    // how the initializer would be skipped.
+                    const bool skips_call = target_in_image && branch_rva < body.call_rva &&
+                                            target_rva > body.call_rva;
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_body_branch\",\"name\":\"%s\",\"rva\":\"0x%08x\",\"opcode\":\"0x%02x\",\"near\":%s,\"target\":\"0x%08x\",\"target_rva\":\"0x%08x\",\"target_in_image\":%s,\"skips_call\":%s}",
+                        body.name,
+                        branch_rva,
+                        static_cast<unsigned>(branch.opcode),
+                        branch.near_form ? "true" : "false",
+                        branch.target,
+                        target_rva,
+                        target_in_image ? "true" : "false",
+                        skips_call ? "true" : "false");
+                }
+            }
+        }
+
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_reference_scan\",\"text_base\":\"0x%08x\",\"text_rva\":\"0x%08x\",\"text_size\":\"0x%08x\",\"readable\":%s,\"matches\":%u,\"capped\":%s,\"frames\":%u}",
+            static_cast<unsigned>(text_base),
+            kEz2dj4thTextRva,
+            kEz2dj4thTextVirtualSize,
+            state->text_readable ? "true" : "false",
+            state->match_count,
+            state->capped ? "true" : "false",
+            static_cast<unsigned>(frames.size()));
+        state->scanned = true;
+    }
+
+    context.Dr7 &= ~kNullContextObjectSourceBoundaryMask;
+    state->disarmed = true;
+    context.Dr6 &= ~kNullContextObjectSourceBoundaryStatus;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot clear null-context object reference scan status";
+        return false;
+    }
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
 bool WaitForExitProcessBreakpoint(HANDLE process,
                                   std::uint32_t exit_target,
                                   bool bounded_api_trace,
@@ -3657,10 +4832,15 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                   bool null_context_object_source_trace,
                                   bool null_context_field_access_trace,
                                   bool null_context_field_writer_trace,
+                                  bool null_context_field_reference_execution_trace,
+                                  bool null_context_object_state_trace,
+                                  bool null_context_object_reference_scan,
+                                  bool null_context_entry_trace,
                                   bool scan_fault_references,
                                   bool trace,
                                   std::uint32_t lptdi_post_ioctl_trace_steps,
                                   std::uint32_t lptdi_post_ioctl_trace_code,
+                                  std::uint32_t diagnostic_idle_timeout_ms,
                                   std::uintptr_t image_base,
                                   std::uintptr_t object_source_boundary,
                                   const LegacyIoTrapPolicy& io_policy,
@@ -3683,6 +4863,11 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
     NullContextObjectSourceTraceState null_context_object_source_state;
     NullContextFieldWriterTraceState null_context_field_writer_state;
     NullContextFieldWriterTraceState null_context_field_access_state;
+    NullContextFieldReferenceExecutionTraceState
+        null_context_field_reference_execution_state;
+    NullContextObjectStateTraceState null_context_object_state_state;
+    NullContextObjectReferenceScanState null_context_object_reference_state;
+    NullContextEntryTraceState null_context_entry_state;
     if (null_context_field_access_trace || null_context_field_writer_trace)
     {
         const std::uintptr_t field_address =
@@ -3777,7 +4962,15 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
     const std::uint64_t requested_event_cap = bounded_api_trace || allocation_trace || slot_writer_trace ||
                                                       null_context_object_source_trace ||
                                                       null_context_field_access_trace ||
-                                                      null_context_field_writer_trace
+                                                      null_context_field_writer_trace ||
+                                                      null_context_field_reference_execution_trace ||
+                                                      null_context_object_state_trace ||
+         null_context_object_reference_scan ||
+         null_context_entry_trace ||
+                              null_context_object_reference_scan ||
+                              null_context_entry_trace ||
+                                                      null_context_object_reference_scan ||
+                                                      null_context_entry_trace
                                                   ? kBoundedTraceEventCap
                                                   : (io_port_bus == nullptr ? 128ull : 8192ull) +
                                                         static_cast<std::uint64_t>(lptdi_post_ioctl_trace_steps) * 16ull;
@@ -3789,12 +4982,16 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
          ++event_count)
     {
         DEBUG_EVENT event = {};
-        if (WaitForDebugEvent(&event, 5000) == FALSE)
+        if (WaitForDebugEvent(&event, diagnostic_idle_timeout_ms) == FALSE)
         {
             const DWORD wait_error = GetLastError();
             if ((allocation_trace || slot_writer_trace || null_context_object_source_trace ||
                  null_context_field_access_trace ||
-                 null_context_field_writer_trace) &&
+                 null_context_field_writer_trace ||
+                 null_context_field_reference_execution_trace ||
+                 null_context_object_state_trace ||
+                 null_context_object_reference_scan ||
+                 null_context_entry_trace) &&
                 wait_error == ERROR_SEM_TIMEOUT)
             {
                 if (allocation_trace)
@@ -3889,6 +5086,51 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                      field_readable ? "true" : "false",
                                      field_value);
                 }
+                if (null_context_field_reference_execution_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_field_reference_execution_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"target_matches\":%u,\"pending\":%u,\"capped\":%s}",
+                        event_count,
+                        null_context_field_reference_execution_state.hit_count,
+                        null_context_field_reference_execution_state.recorded_count,
+                        null_context_field_reference_execution_state.target_match_count,
+                        static_cast<unsigned>(null_context_field_reference_execution_state
+                                                  .pending_single_step_threads.size()),
+                        null_context_field_reference_execution_state.capped ? "true" : "false");
+                }
+                if (null_context_object_state_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_object_state_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"frames\":%u,\"window_readable\":%s,\"disarmed\":%s}",
+                        event_count,
+                        null_context_object_state_state.hit_count,
+                        null_context_object_state_state.recorded_count,
+                        null_context_object_state_state.frame_count,
+                        null_context_object_state_state.window_readable ? "true" : "false",
+                        null_context_object_state_state.disarmed ? "true" : "false");
+                }
+                if (null_context_object_reference_scan)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_object_reference_scan_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"scanned\":%s,\"text_readable\":%s,\"matches\":%u,\"capped\":%s}",
+                        event_count,
+                        null_context_object_reference_state.hit_count,
+                        null_context_object_reference_state.scanned ? "true" : "false",
+                        null_context_object_reference_state.text_readable ? "true" : "false",
+                        null_context_object_reference_state.match_count,
+                        null_context_object_reference_state.capped ? "true" : "false");
+                }
+                if (null_context_entry_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_entry_trace_boundary\",\"reason\":\"idle_timeout\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"singleton_receivers\":%u,\"pending\":%u,\"capped\":%s}",
+                        event_count,
+                        null_context_entry_state.hit_count,
+                        null_context_entry_state.recorded_count,
+                        null_context_entry_state.singleton_receiver_count,
+                        static_cast<unsigned>(null_context_entry_state.pending_single_step_threads.size()),
+                        null_context_entry_state.capped ? "true" : "false");
+                }
                 return true;
             }
             *error = "cannot wait for ExitProcess breakpoint";
@@ -3915,10 +5157,21 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         }
         if ((allocation_trace || slot_writer_trace || null_context_object_source_trace ||
              null_context_field_access_trace ||
-             null_context_field_writer_trace) &&
+             null_context_field_writer_trace ||
+             null_context_field_reference_execution_trace ||
+             null_context_object_state_trace ||
+             null_context_object_reference_scan ||
+             null_context_entry_trace) &&
             event.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT)
         {
             bool armed = true;
+            if (null_context_field_reference_execution_trace)
+            {
+                armed = SetNullContextFieldReferenceExecutionBreakpoints(
+                    event.u.CreateThread.hThread,
+                    image_base,
+                    error);
+            }
             if (slot_writer_trace)
             {
                 armed = SetSlotWriterBreakpoints(event.u.CreateThread.hThread,
@@ -3931,6 +5184,28 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                     event.u.CreateThread.hThread,
                     object_source_boundary,
                     error);
+            }
+            if (armed && null_context_object_state_trace &&
+                !null_context_object_state_state.disarmed)
+            {
+                armed = SetNullContextObjectSourceBoundaryBreakpoint(
+                    event.u.CreateThread.hThread,
+                    image_base + kEz2dj4thNullContextObjectSourceBoundaryRva,
+                    error);
+            }
+            if (armed && null_context_object_reference_scan &&
+                !null_context_object_reference_state.disarmed)
+            {
+                armed = SetNullContextObjectSourceBoundaryBreakpoint(
+                    event.u.CreateThread.hThread,
+                    image_base + kEz2dj4thNullContextObjectSourceBoundaryRva,
+                    error);
+            }
+            if (armed && null_context_entry_trace)
+            {
+                armed = SetNullContextEntryBreakpoints(event.u.CreateThread.hThread,
+                                                       image_base,
+                                                       error);
             }
             if (armed && (null_context_field_access_trace ||
                           null_context_field_writer_trace))
@@ -3972,6 +5247,25 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 RecordDiagnostic("{\"event\":\"null_context_field_writer_thread_armed\",\"thread\":%u}",
                                  static_cast<unsigned>(event.dwThreadId));
             }
+            if (null_context_field_reference_execution_trace)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_field_reference_execution_thread_armed\",\"thread\":%u}",
+                    static_cast<unsigned>(event.dwThreadId));
+            }
+            if (null_context_object_state_trace &&
+                !null_context_object_state_state.disarmed)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_object_state_thread_armed\",\"thread\":%u}",
+                    static_cast<unsigned>(event.dwThreadId));
+            }
+            if (null_context_entry_trace)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_entry_thread_armed\",\"thread\":%u}",
+                    static_cast<unsigned>(event.dwThreadId));
+            }
         }
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT)
         {
@@ -3995,6 +5289,122 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                        DBG_CONTINUE) == FALSE)
                 {
                     *error = "cannot continue handled legacy I/O port trap";
+                    return false;
+                }
+                continue;
+            }
+        }
+        if (null_context_field_reference_execution_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleNullContextFieldReferenceExecutionBreakpoint(
+                    process,
+                    event.dwThreadId,
+                    image_base,
+                    &null_context_field_reference_execution_state,
+                    &handled,
+                    error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error =
+                        "cannot continue null-context field reference execution trace";
+                    return false;
+                }
+                continue;
+            }
+        }
+        if (null_context_object_reference_scan &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleNullContextObjectReferenceScanBreakpoint(
+                    process,
+                    event.dwThreadId,
+                    image_base,
+                    image_info != nullptr
+                        ? image_base +
+                              static_cast<std::uintptr_t>(image_info->size_of_image)
+                        : image_base,
+                    &null_context_object_reference_state,
+                    &handled,
+                    error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue null-context object reference scan hit";
+                    return false;
+                }
+                continue;
+            }
+        }
+        if (null_context_entry_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleNullContextEntryBreakpoint(process,
+                                                  event.dwThreadId,
+                                                  image_base,
+                                                  &null_context_entry_state,
+                                                  &handled,
+                                                  error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue null-context entry breakpoint hit";
+                    return false;
+                }
+                continue;
+            }
+        }
+        if (null_context_object_state_trace &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleNullContextObjectStateBreakpoint(
+                    process,
+                    event.dwThreadId,
+                    image_base,
+                    image_info != nullptr
+                        ? image_base +
+                              static_cast<std::uintptr_t>(image_info->size_of_image)
+                        : image_base,
+                    &null_context_object_state_state,
+                    &handled,
+                    error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue null-context object state breakpoint hit";
                     return false;
                 }
                 continue;
@@ -5618,7 +7028,11 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
         {
             if (bounded_api_trace || allocation_trace || slot_writer_trace ||
                 null_context_object_source_trace ||
-                null_context_field_access_trace || null_context_field_writer_trace)
+                null_context_field_access_trace || null_context_field_writer_trace ||
+                null_context_field_reference_execution_trace ||
+                null_context_object_state_trace ||
+                null_context_object_reference_scan ||
+                null_context_entry_trace)
             {
                 if (bounded_api_trace)
                 {
@@ -5681,6 +7095,55 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                      null_context_field_access_state.capped ? "true" : "false",
                                      static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
                 }
+                if (null_context_field_reference_execution_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_field_reference_execution_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"target_matches\":%u,\"pending\":%u,\"capped\":%s,\"code\":\"0x%08x\"}",
+                        event_count,
+                        null_context_field_reference_execution_state.hit_count,
+                        null_context_field_reference_execution_state.recorded_count,
+                        null_context_field_reference_execution_state.target_match_count,
+                        static_cast<unsigned>(null_context_field_reference_execution_state
+                                                  .pending_single_step_threads.size()),
+                        null_context_field_reference_execution_state.capped ? "true" : "false",
+                        static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
+                if (null_context_object_state_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_object_state_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"frames\":%u,\"window_readable\":%s,\"disarmed\":%s,\"code\":\"0x%08x\"}",
+                        event_count,
+                        null_context_object_state_state.hit_count,
+                        null_context_object_state_state.recorded_count,
+                        null_context_object_state_state.frame_count,
+                        null_context_object_state_state.window_readable ? "true" : "false",
+                        null_context_object_state_state.disarmed ? "true" : "false",
+                        static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
+                if (null_context_object_reference_scan)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_object_reference_scan_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"hits\":%u,\"scanned\":%s,\"text_readable\":%s,\"matches\":%u,\"capped\":%s,\"code\":\"0x%08x\"}",
+                        event_count,
+                        null_context_object_reference_state.hit_count,
+                        null_context_object_reference_state.scanned ? "true" : "false",
+                        null_context_object_reference_state.text_readable ? "true" : "false",
+                        null_context_object_reference_state.match_count,
+                        null_context_object_reference_state.capped ? "true" : "false",
+                        static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
+                if (null_context_entry_trace)
+                {
+                    RecordDiagnostic(
+                        "{\"event\":\"null_context_entry_trace_boundary\",\"reason\":\"child_exit\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"singleton_receivers\":%u,\"pending\":%u,\"capped\":%s,\"code\":\"0x%08x\"}",
+                        event_count,
+                        null_context_entry_state.hit_count,
+                        null_context_entry_state.recorded_count,
+                        null_context_entry_state.singleton_receiver_count,
+                        static_cast<unsigned>(null_context_entry_state.pending_single_step_threads.size()),
+                        null_context_entry_state.capped ? "true" : "false",
+                        static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                }
                 return true;
             }
             char message[160] = {};
@@ -5702,7 +7165,11 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
     }
     if (bounded_api_trace || allocation_trace || slot_writer_trace ||
         null_context_object_source_trace ||
-        null_context_field_access_trace || null_context_field_writer_trace)
+        null_context_field_access_trace || null_context_field_writer_trace ||
+        null_context_field_reference_execution_trace ||
+        null_context_object_state_trace ||
+        null_context_object_reference_scan ||
+        null_context_entry_trace)
     {
         if (bounded_api_trace)
         {
@@ -5758,6 +7225,51 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                              null_context_field_access_state.hit_count,
                              null_context_field_access_state.recorded_count,
                              null_context_field_access_state.capped ? "true" : "false");
+        }
+        if (null_context_field_reference_execution_trace)
+        {
+            RecordDiagnostic(
+                "{\"event\":\"null_context_field_reference_execution_trace_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"target_matches\":%u,\"pending\":%u,\"capped\":%s}",
+                event_count,
+                null_context_field_reference_execution_state.hit_count,
+                null_context_field_reference_execution_state.recorded_count,
+                null_context_field_reference_execution_state.target_match_count,
+                static_cast<unsigned>(null_context_field_reference_execution_state
+                                          .pending_single_step_threads.size()),
+                null_context_field_reference_execution_state.capped ? "true" : "false");
+        }
+        if (null_context_object_state_trace)
+        {
+            RecordDiagnostic(
+                "{\"event\":\"null_context_object_state_trace_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"frames\":%u,\"window_readable\":%s,\"disarmed\":%s}",
+                event_count,
+                null_context_object_state_state.hit_count,
+                null_context_object_state_state.recorded_count,
+                null_context_object_state_state.frame_count,
+                null_context_object_state_state.window_readable ? "true" : "false",
+                null_context_object_state_state.disarmed ? "true" : "false");
+        }
+        if (null_context_object_reference_scan)
+        {
+            RecordDiagnostic(
+                "{\"event\":\"null_context_object_reference_scan_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"hits\":%u,\"scanned\":%s,\"text_readable\":%s,\"matches\":%u,\"capped\":%s}",
+                event_count,
+                null_context_object_reference_state.hit_count,
+                null_context_object_reference_state.scanned ? "true" : "false",
+                null_context_object_reference_state.text_readable ? "true" : "false",
+                null_context_object_reference_state.match_count,
+                null_context_object_reference_state.capped ? "true" : "false");
+        }
+        if (null_context_entry_trace)
+        {
+            RecordDiagnostic(
+                "{\"event\":\"null_context_entry_trace_boundary\",\"reason\":\"event_cap\",\"events\":%u,\"hits\":%u,\"recorded\":%u,\"singleton_receivers\":%u,\"pending\":%u,\"capped\":%s}",
+                event_count,
+                null_context_entry_state.hit_count,
+                null_context_entry_state.recorded_count,
+                null_context_entry_state.singleton_receiver_count,
+                static_cast<unsigned>(null_context_entry_state.pending_single_step_threads.size()),
+                null_context_entry_state.capped ? "true" : "false");
         }
         return true;
     }
@@ -5875,11 +7387,16 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool null_context_field_writer_early_trace = false;
     bool null_context_field_writer_trace = false;
     bool null_context_field_access_trace = false;
+    bool null_context_field_reference_execution_trace = false;
+    bool null_context_object_state_trace = false;
+    bool null_context_object_reference_scan = false;
+    bool null_context_entry_trace = false;
     bool null_context_allocation_trace = false;
     bool api_trace = false;
     bool system_api_trace = false;
     std::uint32_t lptdi_post_ioctl_trace_steps = 0;
     std::uint32_t lptdi_post_ioctl_trace_code = 0;
+    std::uint32_t diagnostic_idle_timeout_ms = kDefaultDiagnosticIdleTimeoutMs;
     std::filesystem::path runtime_path;
     for (int index = 1; index < argc; ++index)
     {
@@ -6166,6 +7683,25 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             inject_runtime = true;
             software_breakpoint = true;
         }
+        else if (option == "--diagnostic-idle-timeout" && index + 1 < argc)
+        {
+            try
+            {
+                diagnostic_idle_timeout_ms = static_cast<std::uint32_t>(
+                    std::stoul(argv[++index]));
+            }
+            catch (const std::exception&)
+            {
+                PrintUsage();
+                return 1;
+            }
+            if (diagnostic_idle_timeout_ms < kMinimumDiagnosticIdleTimeoutMs ||
+                diagnostic_idle_timeout_ms > kMaximumDiagnosticIdleTimeoutMs)
+            {
+                PrintUsage();
+                return 1;
+            }
+        }
         else if (option == "--lptdi-post-ioctl-trace" && index + 1 < argc)
         {
             try
@@ -6255,6 +7791,30 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             break_exit_process = true;
             software_breakpoint = true;
         }
+        else if (option == "--null-context-field-reference-execution-trace")
+        {
+            null_context_field_reference_execution_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--null-context-object-state-trace")
+        {
+            null_context_object_state_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--null-context-object-reference-scan")
+        {
+            null_context_object_reference_scan = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--null-context-entry-trace")
+        {
+            null_context_entry_trace = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
         else if (option == "--null-context-allocation-trace")
         {
             null_context_allocation_trace = true;
@@ -6328,6 +7888,30 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      "{\"error\":\"null-context object source trace conflicts with slot-writer trace\"}\n");
         return 1;
     }
+    if (null_context_field_reference_execution_trace &&
+        (slot_writer_trace || null_context_object_source_trace ||
+         null_context_field_writer_early_trace || null_context_field_writer_trace ||
+         null_context_field_access_trace || null_context_object_state_trace ||
+         null_context_object_reference_scan || null_context_entry_trace))
+    {
+        std::fprintf(
+            stderr,
+            "{\"error\":\"null-context field reference execution trace conflicts with another hardware trace\"}\n");
+        return 1;
+    }
+    if ((null_context_object_state_trace || null_context_object_reference_scan ||
+         null_context_entry_trace) &&
+        (slot_writer_trace || null_context_object_source_trace ||
+         null_context_field_writer_early_trace || null_context_field_writer_trace ||
+         null_context_field_access_trace ||
+         null_context_field_reference_execution_trace ||
+         (null_context_object_state_trace && null_context_object_reference_scan)))
+    {
+        std::fprintf(
+            stderr,
+            "{\"error\":\"null-context object state trace conflicts with another hardware trace\"}\n");
+        return 1;
+    }
     if ((audio_gain_set || audio_volume_trace) && !hle_directsound)
     {
         PrintUsage();
@@ -6347,6 +7931,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                               hle_vfs || hle_display_mode || hle_d3d3 || hle_directsound || hle_io_ports || d3d_init_trace || ksnd_load_trace || probe_exit_process ||
                               break_exit_process || null_context_object_source_trace ||
                               null_context_field_writer_early_trace ||
+                              null_context_field_reference_execution_trace ||
+                              null_context_object_state_trace ||
                               null_context_allocation_trace))
     {
         PrintUsage();
@@ -6359,6 +7945,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
          null_context_field_access_trace ||
          null_context_object_source_trace ||
          null_context_field_writer_early_trace ||
+         null_context_field_reference_execution_trace ||
+         null_context_object_state_trace ||
          null_context_allocation_trace ||
          lptdi_post_ioctl_trace_steps != 0))
     {
@@ -6533,6 +8121,31 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::fprintf(stderr, "{\"error\":\"null-context field access trace requires ez2dj4th target\"}\n");
         return 2;
     }
+    if (null_context_entry_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr,
+                     "{\"error\":\"null-context entry trace supports ez2dj4th only\"}\n");
+        return 1;
+    }
+    if (null_context_object_reference_scan && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr,
+                     "{\"error\":\"null-context object reference scan supports ez2dj4th only\"}\n");
+        return 1;
+    }
+    if (null_context_object_state_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(stderr,
+                     "{\"error\":\"null-context object state trace supports ez2dj4th only\"}\n");
+        return 1;
+    }
+    if (null_context_field_reference_execution_trace && target->id != "ez2dj4th")
+    {
+        std::fprintf(
+            stderr,
+            "{\"error\":\"null-context field reference execution trace requires ez2dj4th target\"}\n");
+        return 2;
+    }
     if (null_context_allocation_trace && target->id != "ez2dj4th")
     {
         std::fprintf(stderr, "{\"error\":\"null-context allocation trace requires ez2dj4th target\"}\n");
@@ -6651,7 +8264,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\"}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      chd_path.generic_string().c_str(),
@@ -6664,6 +8277,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      null_context_field_writer_early_trace ? "true" : "false",
                      null_context_field_writer_trace ? "true" : "false",
                      null_context_field_access_trace ? "true" : "false",
+                     null_context_field_reference_execution_trace ? "true" : "false",
+                     null_context_object_state_trace ? "true" : "false",
                      null_context_allocation_trace ? "true" : "false",
                      hle_display_mode ? "true" : "false",
                      hle_d3d3 ? "true" : "false",
@@ -6680,7 +8295,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      static_cast<unsigned>(device_response_profile.entries.size()),
                      device_mock_lptdi_target_state_hex.empty() ? "false" : "true",
                      lptdi_post_ioctl_trace_steps,
-                     lptdi_post_ioctl_trace_code);
+                     lptdi_post_ioctl_trace_code,
+                     diagnostic_idle_timeout_ms);
     if (hardlock_cfg_replay || hardlock_cfg_tail || hardlock_cfg_map)
     {
         // Records which material a profile default applied, never its values.
@@ -7587,17 +9203,23 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         if (!exit_import_present &&
             (lptdi_post_ioctl_trace_steps != 0 || api_trace || slot_writer_trace ||
              null_context_object_source_trace ||
-             null_context_field_writer_trace || null_context_field_access_trace) &&
+             null_context_field_writer_trace || null_context_field_access_trace ||
+             null_context_field_reference_execution_trace ||
+             null_context_object_state_trace ||
+             null_context_object_reference_scan ||
+             null_context_entry_trace) &&
             error == "requested import is not present")
         {
             error.clear();
             exit_break_prepared = true;
-            RecordDiagnostic("{\"event\":\"exit_breakpoint\",\"status\":\"bounded_trace_without_static_import\",\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s}",
+            RecordDiagnostic("{\"event\":\"exit_breakpoint\",\"status\":\"bounded_trace_without_static_import\",\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s}",
                              api_trace ? "true" : "false",
                              slot_writer_trace ? "true" : "false",
                              null_context_object_source_trace ? "true" : "false",
                              null_context_field_writer_trace ? "true" : "false",
-                             null_context_field_access_trace ? "true" : "false");
+                             null_context_field_access_trace ? "true" : "false",
+                             null_context_field_reference_execution_trace ? "true" : "false",
+                             null_context_object_state_trace ? "true" : "false");
         }
         else
         {
@@ -7819,6 +9441,124 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             error = "cannot install null-context field access breakpoint";
         }
     }
+    bool null_context_field_reference_execution_trace_prepared =
+        !null_context_field_reference_execution_trace;
+    if (null_context_field_reference_execution_trace)
+    {
+        null_context_field_reference_execution_trace_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetNullContextFieldReferenceExecutionBreakpoints(
+                child.hThread,
+                main_image_base,
+                &error);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_field_reference_execution_trace_ready\",\"prepared\":%s,\"target_object\":\"0x%08x\",\"target_field\":\"0x%08x\",\"candidate_count\":%u}",
+            null_context_field_reference_execution_trace_prepared ? "true" : "false",
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextObjectRva),
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextFieldRva),
+            static_cast<unsigned>(kNullContextFieldReferenceExecutionCandidates.size()));
+        if (null_context_field_reference_execution_trace_prepared)
+        {
+            for (std::size_t index = 0;
+                 index < kNullContextFieldReferenceExecutionCandidates.size();
+                 ++index)
+            {
+                const auto& candidate =
+                    kNullContextFieldReferenceExecutionCandidates[index];
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_field_reference_execution_candidate\",\"candidate_index\":%u,\"rva\":\"0x%08x\",\"address\":\"0x%08x\",\"receiver_register\":\"%s\",\"write_source\":\"%s\",\"instruction_size\":%u}",
+                    static_cast<unsigned>(index),
+                    candidate.rva,
+                    static_cast<unsigned>(main_image_base + candidate.rva),
+                    candidate.receiver_name,
+                    candidate.write_source,
+                    candidate.instruction_size);
+            }
+        }
+        if (!null_context_field_reference_execution_trace_prepared && error.empty())
+        {
+            error =
+                "cannot install null-context field reference execution breakpoints";
+        }
+    }
+    bool null_context_object_state_trace_prepared = !null_context_object_state_trace;
+    if (null_context_object_state_trace)
+    {
+        // The protection stub has not decrypted runtime code yet, so the
+        // boundary comes from the RVA confirmed by Task 150 rather than a scan.
+        const std::uintptr_t state_boundary =
+            main_image_base + kEz2dj4thNullContextObjectSourceBoundaryRva;
+        null_context_object_state_trace_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetNullContextObjectSourceBoundaryBreakpoint(child.hThread,
+                                                         state_boundary,
+                                                         &error);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_state_trace_ready\",\"prepared\":%s,\"boundary\":\"0x%08x\",\"boundary_rva\":\"0x%08x\",\"field_access_anchor\":\"0x%08x\",\"target_object\":\"0x%08x\",\"target_field\":\"0x%08x\",\"window_bytes\":%u,\"frame_limit\":%u,\"hit_limit\":%u}",
+            null_context_object_state_trace_prepared ? "true" : "false",
+            static_cast<unsigned>(state_boundary),
+            kEz2dj4thNullContextObjectSourceBoundaryRva,
+            static_cast<unsigned>(main_image_base +
+                                  kEz2dj4thNullContextFieldAccessRva),
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextObjectRva),
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextFieldRva),
+            kNullContextObjectStateWindowBytes,
+            static_cast<unsigned>(kNullContextObjectStateFrameLimit),
+            kNullContextObjectStateHitLimit);
+        if (!null_context_object_state_trace_prepared && error.empty())
+        {
+            error = "cannot install null-context object state breakpoint";
+        }
+    }
+    bool null_context_object_reference_scan_prepared = !null_context_object_reference_scan;
+    if (null_context_object_reference_scan)
+    {
+        const std::uintptr_t scan_boundary =
+            main_image_base + kEz2dj4thNullContextObjectSourceBoundaryRva;
+        null_context_object_reference_scan_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetNullContextObjectSourceBoundaryBreakpoint(child.hThread,
+                                                         scan_boundary,
+                                                         &error);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_object_reference_scan_ready\",\"prepared\":%s,\"boundary\":\"0x%08x\",\"target_object\":\"0x%08x\",\"text_rva\":\"0x%08x\",\"text_size\":\"0x%08x\",\"vtable_entries\":%u,\"match_limit\":%u}",
+            null_context_object_reference_scan_prepared ? "true" : "false",
+            static_cast<unsigned>(scan_boundary),
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextObjectRva),
+            kEz2dj4thTextRva,
+            kEz2dj4thTextVirtualSize,
+            kNullContextObjectVtableEntries,
+            static_cast<unsigned>(kNullContextObjectReferenceLimit));
+        if (!null_context_object_reference_scan_prepared && error.empty())
+        {
+            error = "cannot install null-context object reference scan breakpoint";
+        }
+    }
+    bool null_context_entry_trace_prepared = !null_context_entry_trace;
+    if (null_context_entry_trace)
+    {
+        null_context_entry_trace_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetNullContextEntryBreakpoints(child.hThread, main_image_base, &error);
+        RecordDiagnostic(
+            "{\"event\":\"null_context_entry_trace_ready\",\"prepared\":%s,\"singleton\":\"0x%08x\",\"entries\":%u}",
+            null_context_entry_trace_prepared ? "true" : "false",
+            static_cast<unsigned>(main_image_base + kEz2dj4thNullContextObjectRva),
+            static_cast<unsigned>(kNullContextEntryPoints.size()));
+        for (std::size_t index = 0; index < kNullContextEntryPoints.size(); ++index)
+        {
+            RecordDiagnostic(
+                "{\"event\":\"null_context_entry_point\",\"index\":%u,\"name\":\"%s\",\"rva\":\"0x%08x\",\"address\":\"0x%08x\"}",
+                static_cast<unsigned>(index),
+                kNullContextEntryPoints[index].name,
+                kNullContextEntryPoints[index].rva,
+                static_cast<unsigned>(main_image_base + kNullContextEntryPoints[index].rva));
+        }
+        if (!null_context_entry_trace_prepared && error.empty())
+        {
+            error = "cannot install null-context entry breakpoints";
+        }
+    }
     re2dj::tools::windows_original_process_probe::IatVerificationResult iat;
     const bool iat_verified = reached && entry_restored && runtime_loaded && handoff_prepared &&
                               display_prepared && d3d3_prepared && directsound_prepared &&
@@ -7832,6 +9572,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                               null_context_object_source_trace_prepared &&
                               null_context_field_access_trace_prepared &&
                               null_context_field_writer_trace_prepared &&
+                              null_context_field_reference_execution_trace_prepared &&
+                              null_context_object_state_trace_prepared &&
+                              null_context_object_reference_scan_prepared &&
+                              null_context_entry_trace_prepared &&
                               re2dj::tools::windows_original_process_probe::VerifySuspendedIat(
                                   child.hProcess,
                                   main_image_base,
@@ -7905,6 +9649,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                          null_context_object_source_trace_prepared &&
                                          null_context_field_access_trace_prepared &&
                                          null_context_field_writer_trace_prepared &&
+                                         null_context_field_reference_execution_trace_prepared &&
+                                         null_context_object_state_trace_prepared &&
+                                         null_context_object_reference_scan_prepared &&
+                                         null_context_entry_trace_prepared &&
                                          run_detached_runtime())
                                       : instruction_trace
                                       ? (entry_restored &&
@@ -7928,6 +9676,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                           null_context_object_source_trace_prepared &&
                                           null_context_field_access_trace_prepared &&
                                           null_context_field_writer_trace_prepared &&
+                                          null_context_field_reference_execution_trace_prepared &&
+                                          null_context_object_state_trace_prepared &&
+                                          null_context_object_reference_scan_prepared &&
+                                          null_context_entry_trace_prepared &&
                                           (break_exit_process
                                                ? (resume_debuggee() &&
                                                   WaitForExitProcessBreakpoint(child.hProcess,
@@ -7938,10 +9690,15 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                                                null_context_object_source_trace,
                                                                                null_context_field_access_trace,
                                                                                null_context_field_writer_trace,
+                                                                               null_context_field_reference_execution_trace,
+                                                                               null_context_object_state_trace,
+                                                                               null_context_object_reference_scan,
+                                                                               null_context_entry_trace,
                                                                                scan_fault_references,
                                                                                trace,
                                                                                lptdi_post_ioctl_trace_steps,
                                                                                lptdi_post_ioctl_trace_code,
+                                                                               diagnostic_idle_timeout_ms,
                                                                                main_image_base,
                                                                                null_context_object_source_boundary,
                                                                                io_policy,
@@ -7991,6 +9748,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         !null_context_object_source_trace_prepared ||
         !null_context_field_access_trace_prepared ||
         !null_context_field_writer_trace_prepared ||
+        !null_context_field_reference_execution_trace_prepared ||
+        !null_context_object_state_trace_prepared ||
+        !null_context_object_reference_scan_prepared ||
+        !null_context_entry_trace_prepared ||
         !handoff_observed ||
         !iat_verified)
     {

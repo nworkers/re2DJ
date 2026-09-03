@@ -310,3 +310,247 @@ The related Task 151 design, work order, and work log are [Task 151 design](../d
 * **Unresolved — actual initialization writer.** It remains unresolved whether one of the four write candidates wrote `0x00acd708 + 0x11c` before the first access, or whether the field is established through another indirect copy path. The next step is a bounded trace of candidate execution and receiver/target addresses.
 
 The related Task 152 design, work order, and work log are [Task 152 design](../design/20260903-152-ez2dj4th-runtime-field-reference-scan.md), [Task 152 work order](../work-orders/20260903-152-ez2dj4th-runtime-field-reference-scan.md), and [Task 152 work log](../work-logs/20260903-152-ez2dj4th-runtime-field-reference-scan.md).
+
+## 2026-09-03 field writer 실행 추적
+
+- **확인됨 — 네 write 후보 실행 관찰.** `20260903-113127-946.jsonl`과 재현 실행 `20260903-113352-952.jsonl`에서 `DR0`–`DR3` execution breakpoint가 후보 주소 `0x0040fdbd`, `0x0040fde1`, `0x0041825f`, `0x0041dbd3`에 `prepared=true`로 설치되었습니다. 두 실행 모두 `hits=6`, `recorded=6`, `target_matches=0`, `pending=0`, `capped=false`였고 hit의 receiver·값·순서가 완전히 동일했습니다.
+- **확인됨 — 후보는 target object를 receiver로 쓰지 않습니다.** 관찰된 receiver는 `0x00946d50`, `0x00947220`, `0x009476f0`, `0x00947bc0`, `0x00948090`이며 계산된 target은 각각 `receiver + 0x11c`입니다. image-resident target object `0x00acd708`과 일치하는 hit는 없었습니다.
+- **확인됨 — 후보 0·1은 별도 객체 class입니다.** 다섯 receiver는 간격 `0x4d0`으로 배치된 heap 객체입니다. 후보 1(`c7 81`)은 immediate `0x00000000`을, 후보 0(`89 81`)은 `receiver + 0x4ac` 내부 self-pointer를 `+0x11c`에 씁니다.
+- **확인됨 — 후보 2·3 미실행.** `0x0041825f`와 `0x0041dbd3`는 관찰 구간에서 hit가 없었습니다.
+- **확인됨 — 원본 명령 비파괴 통과.** `rearmed` 6건의 `eip_after`는 `0x0040fdeb`(= `0x0040fde1 + 10`)와 `0x0040fdc3`(= `0x0040fdbd + 6`)이며, 각 후보 명령이 한 번만 실행된 뒤 breakpoint가 복구되었습니다. field 값과 Hardlock 응답은 변경되지 않았습니다.
+- **확인됨 — 이 환경에서 기존 AV 순서 미재현.** 같은 바이너리로 Tasks 150–152의 옵션 조합을 실행한 `20260903-113251-040.jsonl`은 object-source boundary hit 0건, field access hit 0건이었고 `0xc0000005`가 발생하지 않았습니다. 세 실행 모두 Hardlock descriptor IOCTL과 `EZ2DJ.ini` 열기 직후 DirectDraw·DirectSound·window DLL을 적재한 뒤 5초 동안 debug event가 없어 `idle_timeout`으로 종료했습니다. 관찰된 fault는 `0x004c3817`의 `in al, dx` privileged instruction 3건(`0xc0000096`)뿐입니다.
+- **미확정 — 첫 field access 직전 구간 전체.** 실행이 field read anchor `0x0041a699`까지 진행하지 않았으므로, 이번 결과는 관찰된 구간에 한정됩니다. 그 이후 구간에서 후보가 target을 쓸 가능성은 배제되지 않았습니다.
+- **판정 — 조사 방향 전환.** Task 146의 write watch(hit 0건)와 absolute reference scan(`matches=0`), Task 151의 pre-entry watch(hit 0건), 이번 execution trace(target match 0건)를 합치면 이 field는 사용 시점까지 관찰된 어떤 경로로도 쓰이지 않습니다. 다음 조사는 writer instruction 탐색이 아니라, 초기화 분기가 실행되지 않는 이유와 관찰 구간을 field read anchor까지 복원하는 실행 조건에 둡니다. field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — the four write candidates were observed in execution.** `20260903-113127-946.jsonl` and the reproduction run `20260903-113352-952.jsonl` installed `DR0`–`DR3` execution breakpoints at candidate addresses `0x0040fdbd`, `0x0040fde1`, `0x0041825f`, and `0x0041dbd3` with `prepared=true`. Both runs reported `hits=6`, `recorded=6`, `target_matches=0`, `pending=0`, and `capped=false`, with identical receivers, values, and ordering.
+* **Confirmed — no candidate uses the target object as its receiver.** The observed receivers were `0x00946d50`, `0x00947220`, `0x009476f0`, `0x00947bc0`, and `0x00948090`, each with calculated target `receiver + 0x11c`. No hit matched the image-resident target object `0x00acd708`.
+* **Confirmed — candidates 0 and 1 belong to a separate object class.** The five receivers are heap objects spaced `0x4d0` apart. Candidate 1 (`c7 81`) writes immediate `0x00000000`, and candidate 0 (`89 81`) writes the interior self-pointer `receiver + 0x4ac` into `+0x11c`.
+* **Confirmed — candidates 2 and 3 did not execute.** `0x0041825f` and `0x0041dbd3` produced no hits in the observed window.
+* **Confirmed — original instructions passed non-destructively.** The six `rearmed` events reported `eip_after` values `0x0040fdeb` (= `0x0040fde1 + 10`) and `0x0040fdc3` (= `0x0040fdbd + 6`); each candidate instruction executed once before the breakpoints were restored. Field values and Hardlock responses were unchanged.
+* **Confirmed — the earlier AV order does not reproduce in this environment.** `20260903-113251-040.jsonl` ran the same binary with the Task 150–152 option set and recorded zero object-source boundary hits, zero field-access hits, and no `0xc0000005`. All three runs loaded DirectDraw, DirectSound, and window DLLs right after the Hardlock descriptor IOCTL and the `EZ2DJ.ini` open, then produced no debug event for five seconds and ended at `idle_timeout`. The only observed faults were three `0xc0000096` privileged-instruction events for `in al, dx` at `0x004c3817`.
+* **Unresolved — the complete interval before the first field access.** Because execution never reached field-read anchor `0x0041a699`, this result is bounded to the observed window and does not exclude a later candidate write to the target.
+* **Classification — investigation direction change.** Task 146's write watch (zero hits) and absolute-reference scan (`matches=0`), Task 151's pre-entry watch (zero hits), and this execution trace (zero target matches) together show that no observed path writes the field before it is used. The next investigation targets why the initialization branch does not run and which execution configuration restores the observation window up to the field-read anchor, rather than searching for a writer instruction. Direct field injection and Hardlock-response changes remain deferred.
+
+관련 Task 154 설계, 작업 지시서, 작업 로그는 [Task 154 설계](../design/20260903-154-ez2dj4th-field-writer-execution-trace.md), [Task 154 작업 지시서](../work-orders/20260903-154-ez2dj4th-field-writer-execution-trace.md), [Task 154 작업 로그](../work-logs/20260903-154-ez2dj4th-field-writer-execution-trace.md)에 둡니다.
+
+The related Task 154 design, work order, and work log are [Task 154 design](../design/20260903-154-ez2dj4th-field-writer-execution-trace.md), [Task 154 work order](../work-orders/20260903-154-ez2dj4th-field-writer-execution-trace.md), and [Task 154 work log](../work-logs/20260903-154-ez2dj4th-field-writer-execution-trace.md).
+
+## 2026-09-03 진단 idle 경계 정정과 후보 판정 확정
+
+- **정정 — 직전 절의 "AV 미재현"은 관찰 절단이었습니다.** launcher probe의 bounded 진단 loop는 고정 5초 idle 경계를 사용했고, 이 호스트에서는 그래픽·오디오 초기화 구간이 5초보다 오래 debug event 없이 진행됩니다. `--diagnostic-idle-timeout`으로 경계를 60초로 늘리면 같은 바이너리·같은 옵션에서 이전 세션의 실행 순서가 그대로 재현됩니다. child가 정지한 것이 아니었습니다.
+- **확인됨 — 확장 경계에서 기존 실행 순서 재현.** `20260903-114428-322.jsonl`(`diagnostic_idle_timeout_ms=60000`)은 object source `boundary_hits=1`, `hits=2`, `target_matches=1`, field access `hits=1`(`eip_after=0x0041a69f`, `ECX=0x00000000`)을 기록하고 `0x00434137`에서 `0xc0000005`(참조 주소 `0x00000014`)로 종료했습니다. 두 boundary event 모두 `reason=child_exit`입니다.
+- **확인됨 — 네 write 후보는 fault 시점까지 target field를 쓰지 않습니다.** 확장 경계로 재실행한 `20260903-114501-799.jsonl`과 `20260903-114540-170.jsonl`은 모두 `reason=child_exit`, `hits=2`, `recorded=2`, `target_matches=0`, `pending=0`, `code=0xc0000005`였습니다. 관찰된 receiver는 `0x00946d50`, `0x00947220`으로 여전히 heap 객체입니다. 이로써 Task 154의 판정이 첫 field access와 AV를 포함한 전체 구간에 대해 확인됩니다.
+- **확인됨 — 기본 경계 유지.** `--diagnostic-idle-timeout` 기본값은 `5000`이며, 지정하지 않은 실행의 경계와 boundary event는 기존과 같습니다. 선택된 값은 `launch` event의 `diagnostic_idle_timeout_ms`에 기록됩니다.
+- **미확정 — field 초기화 경로.** `0x00acd708 + 0x11c`를 채워야 하는 경로는 여전히 미확정입니다. 다음 조사는 target object의 다른 field 초기화 상태와 field read anchor `0x0041a699` 함수의 호출자 경로입니다. 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Correction — the preceding section's "AV does not reproduce" was an observation truncation.** The launcher probe's bounded diagnostic loop used a fixed five-second idle boundary, and on this host the graphics and audio initialization interval runs longer than five seconds without producing a debug event. Raising the boundary to 60 seconds with `--diagnostic-idle-timeout` reproduces the previous session's execution order with the same binary and options. The child had not stopped.
+* **Confirmed — the earlier execution order reproduces at the extended boundary.** `20260903-114428-322.jsonl` (`diagnostic_idle_timeout_ms=60000`) recorded object-source `boundary_hits=1`, `hits=2`, `target_matches=1`, and field access `hits=1` (`eip_after=0x0041a69f`, `ECX=0x00000000`), then ended at `0x00434137` with `0xc0000005` and reference address `0x00000014`. Both boundary events report `reason=child_exit`.
+* **Confirmed — the four write candidates do not write the target field before the fault.** The extended-boundary reruns `20260903-114501-799.jsonl` and `20260903-114540-170.jsonl` both reported `reason=child_exit`, `hits=2`, `recorded=2`, `target_matches=0`, `pending=0`, and `code=0xc0000005`. The observed receivers `0x00946d50` and `0x00947220` remain heap objects. Task 154's classification is therefore confirmed for the complete interval including the first field access and the AV.
+* **Confirmed — the default boundary is unchanged.** `--diagnostic-idle-timeout` defaults to `5000`, so runs that omit it keep the previous boundary and boundary events. The selected value is recorded as `diagnostic_idle_timeout_ms` in the `launch` event.
+* **Unresolved — field-initialization path.** The path that should populate `0x00acd708 + 0x11c` is still unknown. The next investigation covers the initialization state of the target object's other fields and the caller path of the function containing field-read anchor `0x0041a699`. Direct injection and Hardlock-response changes remain deferred.
+
+관련 Task 155 설계, 작업 지시서, 작업 로그는 [Task 155 설계](../design/20260903-155-diagnostic-idle-timeout.md), [Task 155 작업 지시서](../work-orders/20260903-155-diagnostic-idle-timeout.md), [Task 155 작업 로그](../work-logs/20260903-155-diagnostic-idle-timeout.md)에 둡니다.
+
+The related Task 155 design, work order, and work log are [Task 155 design](../design/20260903-155-diagnostic-idle-timeout.md), [Task 155 work order](../work-orders/20260903-155-diagnostic-idle-timeout.md), and [Task 155 work log](../work-logs/20260903-155-diagnostic-idle-timeout.md).
+
+## 2026-09-03 null-context 객체 상태와 호출자 경로
+
+- **확인됨 — 객체는 생성되어 있고 field 하나만 비어 있습니다.** `20260903-121134-641.jsonl`과 재현 실행 `20260903-121242-364.jsonl`에서 경계 `0x0041a64c` hit 시 객체 base부터 `0x200`바이트 중 12개 dword가 0이 아니었고, `field_value`는 `0x00000000`이었습니다. 두 실행 모두 `reason=child_exit`, `hits=4`, `recorded=4`, `frames=8`, `code=0xc0000005`입니다.
+- **확인됨 — offset `0x00`은 `.rdata` 주소입니다.** 원본 이미지의 `.rdata`는 RVA `0x000dd000`에서 시작하며, 관찰된 값은 그 범위 안입니다. C++ 객체의 vtable pointer 형태와 일치하므로 생성자가 실행된 것으로 봅니다.
+- **확인됨 — target object는 `.data`의 파일 backing 없는 구간에 있습니다.** `.data`는 RVA `0x000ea000`, vsize `0x005e66b0`, raw size `0x0001c000`입니다. target object RVA `0x006cd708`은 raw 영역 밖이므로 적재 시 0으로 채워지며, 값은 런타임에만 생깁니다.
+- **확인됨 — 채워진 field와 빈 field가 공존합니다.** `0x008`, `0x044`, `0x048`, `0x0d4`, `0x12c`, `0x1d4`가 값을 가지고 `0x1d8`–`0x1e0`에는 ASCII 이름 문자열 field가 있는 반면, `0x11c`만 0입니다. `0x004`와 `0x1c4`는 실행마다 달라지는 값입니다.
+- **확인됨 — 호출자 경로는 결정적입니다.** 네 hit 모두 `ECX = 0x00acd708`, `EBP = 0x0019fe04`이고, 반환 주소 RVA는 `0x00071905`, `0x00071867`, `0x00071709`, `0x000076ad`, `0x000a4294`, `0x000a4fbf`, `0x00006834`, `0x00006d3b` 순서로 모두 `.text` 범위입니다. 같은 경로로 최소 4회 진입합니다.
+- **정정 — Task 154 receiver는 heap이 아니라 image-resident 정적 객체입니다.** size of image는 `0x0071a000`이므로 `0x00946d50`–`0x00948090`은 RVA `0x00546d50`–`0x00548090`이며 `.data` 범위입니다. 간격 `0x4d0`은 같은 클래스 정적 배열의 stride로 해석합니다. 이번 실행에서 target object의 offset `0x48`이 그중 하나(`0x009476f0`)를 가리키는 것도 확인됐습니다.
+- **추정 — 누락된 것은 생성자 이후 단계입니다.** 생성자 실행 흔적이 있으므로 `+0x11c`는 생성 이후 별도 초기화 단계에서 채워질 가능성이 큽니다. 실행 증거로는 아직 확인되지 않았습니다.
+- **미확정 — 초기화 단계와 분기 조건.** 어떤 함수가 이 field를 채워야 하는지와 건너뛰는 조건은 미확정입니다. field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+- **주의 — window entry의 `stack` 분류는 휴리스틱입니다.** `ESP ± 0x00100000` 범위 표시일 뿐 실제 stack 여부를 증명하지 않습니다. `image` 분류만 PE 범위로 확정됩니다.
+
+* **Confirmed — the object is constructed and only one field is empty.** In `20260903-121134-641.jsonl` and the reproduction `20260903-121242-364.jsonl`, the boundary hit at `0x0041a64c` found twelve nonzero dwords in the first `0x200` bytes of the object while `field_value` was `0x00000000`. Both runs report `reason=child_exit`, `hits=4`, `recorded=4`, `frames=8`, and `code=0xc0000005`.
+* **Confirmed — offset `0x00` holds an `.rdata` address.** The original image's `.rdata` starts at RVA `0x000dd000`, and the observed value lies inside it. This matches the shape of a C++ vtable pointer, so the constructor is taken to have run.
+* **Confirmed — the target object lies in the file-unbacked part of `.data`.** `.data` is RVA `0x000ea000` with vsize `0x005e66b0` and raw size `0x0001c000`. Target object RVA `0x006cd708` falls outside the raw region, so the loader zero-fills it and any value can only come from runtime initialization.
+* **Confirmed — populated and empty fields coexist.** `0x008`, `0x044`, `0x048`, `0x0d4`, `0x12c`, and `0x1d4` hold values and `0x1d8`–`0x1e0` carries an ASCII name field, while only `0x11c` is zero. `0x004` and `0x1c4` vary between runs.
+* **Confirmed — the caller path is deterministic.** All four hits had `ECX = 0x00acd708` and `EBP = 0x0019fe04`, with return-address RVAs `0x00071905`, `0x00071867`, `0x00071709`, `0x000076ad`, `0x000a4294`, `0x000a4fbf`, `0x00006834`, and `0x00006d3b`, all inside `.text`. The same path enters at least four times.
+* **Correction — the Task 154 receivers are image-resident static objects, not heap.** With size of image `0x0071a000`, `0x00946d50`–`0x00948090` are RVAs `0x00546d50`–`0x00548090`, inside `.data`. The `0x4d0` spacing is read as the stride of a static array of the same class. This run also shows the target object's offset `0x48` pointing at one of them (`0x009476f0`).
+* **Inferred — what is missing is a post-construction step.** Because construction evidently ran, `+0x11c` is most likely filled by a separate later initialization step. This is not yet confirmed by execution evidence.
+* **Unresolved — the initialization step and its branch condition.** Which function should fill the field, and under what condition it is skipped, remain unknown. Direct field injection and Hardlock-response changes remain deferred.
+* **Caveat — the `stack` label in window entries is heuristic.** It only marks the `ESP ± 0x00100000` range and does not prove stack residency. Only the `image` label is established from PE ranges.
+
+관련 Task 156 설계, 작업 지시서, 작업 로그는 [Task 156 설계](../design/20260903-156-ez2dj4th-object-state-and-caller-trace.md), [Task 156 작업 지시서](../work-orders/20260903-156-ez2dj4th-object-state-and-caller-trace.md), [Task 156 작업 로그](../work-logs/20260903-156-ez2dj4th-object-state-and-caller-trace.md)에 둡니다.
+
+The related Task 156 design, work order, and work log are [Task 156 design](../design/20260903-156-ez2dj4th-object-state-and-caller-trace.md), [Task 156 work order](../work-orders/20260903-156-ez2dj4th-object-state-and-caller-trace.md), and [Task 156 work log](../work-logs/20260903-156-ez2dj4th-object-state-and-caller-trace.md).
+
+## 2026-09-03 null-context 객체 참조 스캔
+
+- **확인됨 — `.text` 전체에서 객체·vtable immediate 참조는 5개뿐입니다.** `20260903-124903-472.jsonl`과 재현 실행 `20260903-125055-989.jsonl`에서 스캔은 `readable=true`, `matches=5`, `capped=false`였고 boundary는 `reason=child_exit`, `code=0xc0000005`입니다. 두 실행의 match 집합은 동일합니다.
+- **확인됨 — 객체 주소 참조 3개.** RVA `0x000a295c`와 `0x000a298b`는 직전 4바이트가 `55 8b ec b9`로, 함수 prologue 직후의 `mov ecx, obj`입니다. RVA `0x000a2b28`은 직전 dword가 `0x00ac29b4`입니다.
+- **확인됨 — vtable 설치 지점 2개.** RVA `0x00010381`과 `0x000104a1`은 직전 바이트가 `c7 00`이므로 `mov [eax], 0x004dd054` 형태입니다.
+- **확인됨 — vtable 위치와 slot.** vtable은 `.rdata` RVA `0x000dd054`이고, slot 0–3이 `.text` 주소 `RVA 0x0000111d`, `0x00002603`, `0x00001046`, `0x00002126`입니다. slot 4는 0이고 slot 5–12는 IEEE-754 단정도 상수 패턴입니다.
+- **확인됨 — 호출자는 전역 pointer에서 receiver를 읽습니다.** 호출자 depth 0 코드 창은 `0x004718fa`의 `8b 0d b4 29 ac 00`(`mov ecx, [0x00ac29b4]`) 다음에 `0x00471900`의 `call 0x00401ac3`, 그리고 반환 주소 `0x00471905`입니다. 같은 실행의 경계 hit에서 `ECX = 0x00acd708`이므로 이 시점 전역 값은 객체 주소입니다.
+- **확인됨 — 호출자 분기 요소.** depth 1 창에는 `cmp [ebp-0x14], 0` 후 조건 분기가, depth 3 창에는 `mov [edx+8], 1`과 `call [edx+0x10]` 가상 호출이 있습니다.
+- **추정 — `0x000a2b28`은 전역 등록 지점입니다.** 직전 dword가 정확히 전역 주소이므로 `c7 05 <global> <obj>` 형태로 읽힙니다. `c7 05` 두 바이트는 이번 수집 범위 밖입니다.
+- **추정 — 낮은 `.text` 주소는 incremental-link thunk입니다.** vtable slot과 call 대상이 모두 그 영역에 몰려 있습니다. thunk 바이트는 아직 읽지 않았습니다.
+- **판정 — field writer는 immediate 경로에 없습니다.** 객체 주소를 immediate로 갖는 세 지점은 receiver 적재 두 곳과 전역 저장 한 곳뿐이며 field write가 아닙니다. Task 146의 절대 주소 스캔(`matches=0`), Task 154의 후보 target match 0건과 합치면, `+0x11c`를 채우는 코드는 전역 pointer를 거쳐 receiver를 받은 함수 안에만 존재할 수 있습니다.
+- **미확정 — 그 함수와 건너뛰는 조건.** 여전히 미확정이며 field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — the whole `.text` holds only five object/vtable immediate references.** In `20260903-124903-472.jsonl` and the reproduction `20260903-125055-989.jsonl` the scan reported `readable=true`, `matches=5`, and `capped=false`, with the boundary at `reason=child_exit` and `code=0xc0000005`. Both runs produced the identical match set.
+* **Confirmed — three object-address references.** RVAs `0x000a295c` and `0x000a298b` are preceded by `55 8b ec b9`, a `mov ecx, obj` right after a function prologue. RVA `0x000a2b28` is preceded by the dword `0x00ac29b4`.
+* **Confirmed — two vtable installation sites.** RVAs `0x00010381` and `0x000104a1` are preceded by `c7 00`, giving `mov [eax], 0x004dd054`.
+* **Confirmed — vtable location and slots.** The vtable sits at `.rdata` RVA `0x000dd054`, with slots 0–3 holding `.text` addresses `RVA 0x0000111d`, `0x00002603`, `0x00001046`, and `0x00002126`. Slot 4 is zero and slots 5–12 follow an IEEE-754 single-precision constant pattern.
+* **Confirmed — callers load the receiver from a global pointer.** The depth 0 caller window shows `8b 0d b4 29 ac 00` (`mov ecx, [0x00ac29b4]`) at `0x004718fa`, `call 0x00401ac3` at `0x00471900`, and return address `0x00471905`. The same run's boundary hit had `ECX = 0x00acd708`, so the global holds the object address at that point.
+* **Confirmed — caller branch elements.** The depth 1 window contains `cmp [ebp-0x14], 0` with a conditional branch, and the depth 3 window contains `mov [edx+8], 1` and the virtual call `call [edx+0x10]`.
+* **Inferred — `0x000a2b28` is the global registration site.** The preceding dword is exactly the global address, giving the `c7 05 <global> <obj>` shape. The leading `c7 05` lies outside the bytes collected here.
+* **Inferred — the low `.text` addresses are incremental-link thunks.** Vtable slots and call targets cluster in that region. The thunk bytes have not been read.
+* **Classification — the field writer is not on the immediate path.** The three object-address sites are two receiver loads and one global store, none a field write. Combined with Task 146's absolute-address scan (`matches=0`) and Task 154's zero candidate target matches, the code that fills `+0x11c` can only exist inside a function that received the receiver through the global pointer.
+* **Unresolved — that function and the condition that skips it.** It remains unresolved, and direct field injection and Hardlock-response changes stay deferred.
+
+관련 Task 157 설계, 작업 지시서, 작업 로그는 [Task 157 설계](../design/20260903-157-ez2dj4th-object-reference-scan.md), [Task 157 작업 지시서](../work-orders/20260903-157-ez2dj4th-object-reference-scan.md), [Task 157 작업 로그](../work-logs/20260903-157-ez2dj4th-object-reference-scan.md)에 둡니다.
+
+The related Task 157 design, work order, and work log are [Task 157 design](../design/20260903-157-ez2dj4th-object-reference-scan.md), [Task 157 work order](../work-orders/20260903-157-ez2dj4th-object-reference-scan.md), and [Task 157 work log](../work-logs/20260903-157-ez2dj4th-object-reference-scan.md).
+
+## 2026-09-03 singleton 전역 참조 스캔
+
+- **확인됨 — 전역 참조 1210회, 객체 직접 참조 3회.** `20260903-131003-927.jsonl`의 값별 스캔은 `global=0x00ac29b4` 총 1210건(기록 128, capped), `object=0x00acd708` 3건, `vtable=0x004dd054` 2건입니다. 이 객체는 코드 전반에서 전역을 통해 접근되는 subsystem singleton이며, 객체 주소 자체는 등록 1회와 receiver 적재 2회에만 쓰입니다.
+- **확인됨 — 전역은 경계 시점에 객체를 가리킵니다.** context 이벤트가 `global_value=0x00acd708`, `global_matches_object=true`를 기록했습니다.
+- **확인됨 — 참조 형태 분포.** 기록된 128건 중 `8b 0d`(`mov ecx, [global]`) 115건, `8b 15`(`mov edx`) 6건, `a1`(`mov eax`) 7건입니다. 직후에 `call rel32`가 오는 경우가 109건이며 해석된 대상은 40개입니다.
+- **확인됨 — `0x00401ac3`은 경계 함수로 가는 thunk입니다.** 전역 receiver 적재 뒤 가장 많이 호출되는 대상(15건)이며, Task 157 호출자 창의 `call 0x00401ac3` 반환 주소 `0x00471905`가 경계 함수 frame chain의 depth 0입니다. 중간 frame이 없으므로 이 호출은 `0x0041a649`로 이어집니다.
+- **확인됨 — 기록된 전역 참조는 `RVA 0x00036072`–`0x0003d89e` 한 구간에 몰려 있습니다.** 상한 때문에 그 뒤는 기록되지 않았지만 총계는 온전합니다.
+- **추정 — 낮은 RVA 호출 대상은 incremental-link thunk 표입니다.** 해석된 40개 대상이 모두 `0x00003a67` 이하입니다. thunk 바이트는 아직 읽지 않았습니다.
+- **추정 — 이 singleton은 그래픽·장치 계열 관리자입니다.** 호출 인자에 `0x437f0000`(255.0), `0x41200000`(10.0) 같은 단정도 상수와 좌표성 정수가 반복됩니다. 클래스 이름이나 역할은 확인하지 않았습니다.
+- **판정 — `+0x11c` 초기화 후보 범위.** field를 채우는 코드는 이 40개 진입점 중 하나를 거쳐 receiver를 받은 함수 안에 있어야 합니다. Task 154가 `.text` 전체의 `+0x11c` write 명령이 네 개뿐임을 확인했으므로, 그 네 명령 중 하나가 이 singleton을 receiver로 실행되는 경로가 존재해야 하며 관찰 구간에서는 실행되지 않았습니다.
+- **미확정 — 그 경로와 건너뛰는 조건.** field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — 1210 global references against three direct object references.** The per-value scan in `20260903-131003-927.jsonl` reports `global=0x00ac29b4` with a total of 1210 (128 recorded, capped), `object=0x00acd708` with three, and `vtable=0x004dd054` with two. The object is a subsystem singleton reached through the global across the code base, and its address is used only for one registration and two receiver loads.
+* **Confirmed — the global points at the object at the boundary.** The context event recorded `global_value=0x00acd708` and `global_matches_object=true`.
+* **Confirmed — distribution of reference forms.** Of the 128 recorded, 115 are `8b 0d` (`mov ecx, [global]`), six are `8b 15` (`mov edx`), and seven are `a1` (`mov eax`). A `call rel32` follows in 109 cases, resolving to 40 distinct targets.
+* **Confirmed — `0x00401ac3` is the thunk into the boundary function.** It is the most frequent target after a global receiver load (15 sites), and the return address of Task 157's `call 0x00401ac3`, `0x00471905`, is depth 0 of the boundary function's frame chain. With no intervening frame, that call reaches `0x0041a649`.
+* **Confirmed — the recorded global references fall in one span, `RVA 0x00036072`–`0x0003d89e`.** The cap left the later region unrecorded while the total remains complete.
+* **Inferred — the low-RVA call targets are an incremental-link thunk table.** All 40 resolved targets are at or below `0x00003a67`. The thunk bytes have not been read.
+* **Inferred — the singleton is a graphics or device manager.** Call arguments repeatedly carry single-precision constants such as `0x437f0000` (255.0) and `0x41200000` (10.0) alongside coordinate-like integers. The class name and role were not established.
+* **Classification — the range for `+0x11c` initialization.** The code that fills the field must live in a function that received the receiver through one of these 40 entry points. Since Task 154 confirmed only four `+0x11c` write instructions exist in the whole `.text`, a path must exist where one of them executes with this singleton as its receiver, and that path did not run in the observed window.
+* **Unresolved — that path and the condition that skips it.** Direct field injection and Hardlock-response changes remain deferred.
+
+관련 Task 158 설계, 작업 지시서, 작업 로그는 [Task 158 설계](../design/20260903-158-ez2dj4th-singleton-global-scan.md), [Task 158 작업 지시서](../work-orders/20260903-158-ez2dj4th-singleton-global-scan.md), [Task 158 작업 로그](../work-logs/20260903-158-ez2dj4th-singleton-global-scan.md)에 둡니다.
+
+The related Task 158 design, work order, and work log are [Task 158 design](../design/20260903-158-ez2dj4th-singleton-global-scan.md), [Task 158 work order](../work-orders/20260903-158-ez2dj4th-singleton-global-scan.md), and [Task 158 work log](../work-logs/20260903-158-ez2dj4th-singleton-global-scan.md).
+
+## 2026-09-03 코드 영역 스캔
+
+- **확인됨 — field 읽기 전 검사가 없습니다.** `20260903-135023-263.jsonl`의 `field_read` 영역은 함수 시작 `RVA 0x0001a649`부터 96바이트입니다. 본문은 `mov [ebp-0x118], ecx`로 `this`를 저장하고, `[ebp+0x10]`이 0인지에 따라 인자를 고른 뒤, `mov ecx, [ebp-0x118]` · `mov ecx, [ecx+0x11c]` · `call 0x00402298` 순서로 진행합니다. field 자체를 검사하는 분기는 없습니다.
+- **확인됨 — 실행되는 두 write 후보는 같은 함수에 있습니다.** `0x0000fdbd`와 `0x0000fde1`의 함수 시작이 모두 `RVA 0x0000fc57`로 확인되었습니다(거리 358, 394).
+- **확인됨 — 그 함수는 정적 배열 원소를 초기화합니다.** 시작부에서 전역 카운터를 증가시키고, `imul edx, edx, 0x4d0` 및 `add edx, 0x00946d50`으로 원소 주소를 계산하며, `memset(원소, 0, 0x4d0)` 후 template에서 `0xec`바이트를 `원소+0x2c`로 복사하고 `+0x120`부터 `0x17c`바이트를 `rep movsd`로 복사합니다.
+- **확인됨 — 두 후보는 같은 if/else의 양쪽입니다.** 한쪽은 `mov [ecx+0x11c], eax`로 `원소 + 0x4ac`를, 다른 쪽은 `mov dword ptr [ecx+0x11c], 0`을 씁니다. 두 분기 모두 직후에 `call dword ptr [0x00ad1724]`를 수행합니다.
+- **확인됨 — singleton의 `+0x48`은 그 배열의 index 2 원소입니다.** `0x00946d50 + 2 * 0x4d0 = 0x009476f0`으로, Task 156이 기록한 값과 같습니다.
+- **확인됨 — vtable 설치 함수는 생성자 형태입니다.** `RVA 0x00010366`에서 `this`를 저장하고 base 생성자를 호출한 뒤 `mov [eax], 0x004dd054`로 vtable을 설치하고 `+0x04`를 0으로 둡니다.
+- **추정 — `0x00ad1724`는 IAT slot입니다.** `.idata`가 RVA `0x006d1000`, 크기 `0x0000171c`이므로 이 주소(RVA `0x006d1724`)는 그 범위 안입니다. import 이름은 확인하지 않았습니다.
+- **판정 — 네 후보가 singleton을 쓰지 않는 이유가 코드로 설명됩니다.** 후보 0·1은 다른 클래스의 배열 원소 초기화 코드이며 receiver가 구조적으로 그 원소입니다. singleton의 `+0x11c`는 `.text` 안에 전용 writer가 없으며, 값이 채워지려면 후보 2·3(`0x0001825f`, `0x0001dbd3`) 중 하나가 singleton을 receiver로 실행되어야 합니다. 두 후보는 관찰 구간에서 한 번도 실행되지 않았습니다.
+- **미확정 — 후보 2·3의 소속 함수와 호출 조건.** field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — nothing checks the field before the read.** The `field_read` region in `20260903-135023-263.jsonl` covers 96 bytes from function start `RVA 0x0001a649`. The body stores `this` with `mov [ebp-0x118], ecx`, selects an argument based on whether `[ebp+0x10]` is zero, and then runs `mov ecx, [ebp-0x118]`, `mov ecx, [ecx+0x11c]`, and `call 0x00402298`. No branch tests the field itself.
+* **Confirmed — the two executing write candidates share one function.** The function start for both `0x0000fdbd` and `0x0000fde1` resolves to `RVA 0x0000fc57` (distances 358 and 394).
+* **Confirmed — that function initializes static array elements.** It increments a global counter, computes the element address with `imul edx, edx, 0x4d0` and `add edx, 0x00946d50`, memsets `0x4d0` bytes, copies `0xec` bytes from a template into `element+0x2c`, and copies `0x17c` bytes from `+0x120` with `rep movsd`.
+* **Confirmed — the candidates are the two sides of one if/else.** One writes `element + 0x4ac` with `mov [ecx+0x11c], eax`, the other writes zero with `mov dword ptr [ecx+0x11c], 0`. Both branches then execute `call dword ptr [0x00ad1724]`.
+* **Confirmed — the singleton's `+0x48` is element index 2 of that array.** `0x00946d50 + 2 * 0x4d0 = 0x009476f0`, matching the value Task 156 recorded.
+* **Confirmed — the vtable installation function has constructor shape.** At `RVA 0x00010366` it stores `this`, calls a base constructor, installs the vtable with `mov [eax], 0x004dd054`, and zeroes `+0x04`.
+* **Inferred — `0x00ad1724` is an IAT slot.** `.idata` is RVA `0x006d1000` with size `0x0000171c`, and this address (RVA `0x006d1724`) falls inside it. The import name was not determined.
+* **Classification — the code explains why the four candidates never write the singleton.** Candidates 0 and 1 are element-initialization code for a different class whose receiver is structurally that element. The singleton's `+0x11c` has no dedicated writer in `.text`; for it to be filled, candidate 2 or 3 (`0x0001825f`, `0x0001dbd3`) would have to execute with the singleton as receiver, and neither ran even once in the observed window.
+* **Unresolved — the functions containing candidates 2 and 3 and their call conditions.** Direct field injection and Hardlock-response changes remain deferred.
+
+관련 Task 159 설계, 작업 지시서, 작업 로그는 [Task 159 설계](../design/20260903-159-ez2dj4th-code-region-scan.md), [Task 159 작업 지시서](../work-orders/20260903-159-ez2dj4th-code-region-scan.md), [Task 159 작업 로그](../work-logs/20260903-159-ez2dj4th-code-region-scan.md)에 둡니다.
+
+The related Task 159 design, work order, and work log are [Task 159 design](../design/20260903-159-ez2dj4th-code-region-scan.md), [Task 159 work order](../work-orders/20260903-159-ez2dj4th-code-region-scan.md), and [Task 159 work log](../work-logs/20260903-159-ez2dj4th-code-region-scan.md).
+
+## 2026-09-03 field initializer 호출 체인
+
+- **확인됨 — 후보 2는 자기 `this`의 field를 씁니다.** `20260903-173115-277.jsonl`의 코드 영역에서 함수 `RVA 0x00018234`는 `mov [ebp-0x100], ecx`로 `this`를 저장한 뒤 `mov dword ptr [eax+0x11c], 0x00964e18`을 수행합니다. singleton을 receiver로 이 함수가 실행되면 field가 채워집니다.
+- **확인됨 — 후보 2의 함수는 한 곳에서만 호출됩니다.** thunk `0x0000349a`를 목적지로 하는 호출은 `RVA 0x00011c23` 하나뿐입니다.
+- **확인됨 — 그 호출 지점은 `this`를 receiver로 넘깁니다.** 포함 함수 `RVA 0x000116c8`은 진입 시 `mov [ebp-0x284], ecx`로 `this`를 저장하고 호출 직전 `mov ecx, [ebp-0x284]`로 되읽습니다.
+- **확인됨 — 그 함수는 singleton 클래스의 가상 메서드 slot 2입니다.** 함수 `0x000116c8`의 thunk는 `0x00001046`이며 Task 157이 기록한 vtable slot 2 값과 같습니다. 이 thunk를 목적지로 하는 `call rel32`는 0건이므로 호출은 vtable을 통해서만 일어납니다.
+- **확인됨 — 후보 3은 고정 객체 전용입니다.** 함수 `RVA 0x0001db3e`는 `mov dword ptr [ebp-0x20], 0x00964e68`으로 대상을 고정하고, `+0x110`에 인자, `+0x114`에 `0x14`, `+0x118`에 `5`를 쓴 뒤 `[+0x110] * ([+0x114] + 1)`을 `+0x11c`에 저장합니다.
+- **확인됨 — 후보 0·1의 함수는 rel32로 불리지 않습니다.** `0x0000fc57`을 목적지로 하는 분기가 0건입니다. Task 159의 배열 원소 초기화 결론은 그대로입니다.
+- **확인됨 — 추적 방법 자기 검증.** field read 함수 `0x0041a649`를 목적지로 하는 분기는 thunk `0x00401ac3` 하나뿐이고 그 thunk 호출은 165건으로, Task 157·158의 관찰과 일치합니다.
+- **판정 — singleton `+0x11c`의 유일한 writer는 후보 2이며 가상 메서드 slot 2로만 도달합니다.** 관찰된 실행에서 후보 2는 한 번도 실행되지 않았으므로 slot 2 메서드가 singleton에 대해 호출되지 않았습니다. field는 0으로 남고, 검사 없는 read가 `0x00434137` null receiver AV로 이어집니다.
+- **추정 — `0x00964e18`과 `0x00964e68`은 같은 정적 테이블의 이웃 항목입니다.** 두 주소는 `0x50` 간격이며 모두 `.data` 범위입니다. 의미는 확인하지 않았습니다.
+- **미확정 — slot 2 메서드가 호출되지 않는 이유.** field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — candidate 2 writes the field of its own `this`.** In the code region from `20260903-173115-277.jsonl`, function `RVA 0x00018234` stores `this` with `mov [ebp-0x100], ecx` and then performs `mov dword ptr [eax+0x11c], 0x00964e18`. Running it with the singleton as receiver fills the field.
+* **Confirmed — candidate 2's function has exactly one call site.** Only `RVA 0x00011c23` targets thunk `0x0000349a`.
+* **Confirmed — that call site passes `this` as the receiver.** The containing function `RVA 0x000116c8` stores `this` at entry with `mov [ebp-0x284], ecx` and reloads it with `mov ecx, [ebp-0x284]` right before the call.
+* **Confirmed — that function is virtual method slot 2 of the singleton's class.** Its thunk is `0x00001046`, matching the vtable slot 2 value Task 157 recorded, and no `call rel32` targets that thunk, so it is reached only through the vtable.
+* **Confirmed — candidate 3 serves a fixed object.** Function `RVA 0x0001db3e` fixes its target with `mov dword ptr [ebp-0x20], 0x00964e68`, writes an argument to `+0x110`, `0x14` to `+0x114`, and `5` to `+0x118`, then stores `[+0x110] * ([+0x114] + 1)` into `+0x11c`.
+* **Confirmed — candidates 0 and 1's function is not called through rel32.** No branch targets `0x0000fc57`. The Task 159 conclusion that it initializes array elements is unchanged.
+* **Confirmed — self-check of the tracing method.** Exactly one branch targets the field-read function `0x0041a649`, the thunk `0x00401ac3`, with 165 calls on that thunk, agreeing with the Task 157 and 158 observations.
+* **Classification — candidate 2 is the only writer of the singleton's `+0x11c`, reachable only through virtual slot 2.** It never executed in the observed runs, so the slot 2 method was never invoked on the singleton. The field stays zero and the unchecked read leads to the `0x00434137` null-receiver AV.
+* **Inferred — `0x00964e18` and `0x00964e68` are neighboring entries of one static table.** They are `0x50` apart and both lie in `.data`. Their meaning was not established.
+* **Unresolved — why the slot 2 method is not called.** Direct field injection and Hardlock-response changes remain deferred.
+
+관련 Task 160 설계, 작업 지시서, 작업 로그는 [Task 160 설계](../design/20260903-160-ez2dj4th-field-initializer-chain.md), [Task 160 작업 지시서](../work-orders/20260903-160-ez2dj4th-field-initializer-chain.md), [Task 160 작업 로그](../work-logs/20260903-160-ez2dj4th-field-initializer-chain.md)에 둡니다.
+
+The related Task 160 design, work order, and work log are [Task 160 design](../design/20260903-160-ez2dj4th-field-initializer-chain.md), [Task 160 work order](../work-orders/20260903-160-ez2dj4th-field-initializer-chain.md), and [Task 160 work log](../work-logs/20260903-160-ez2dj4th-field-initializer-chain.md).
+
+## 2026-09-03 initializer 진입 추적
+
+- **확인됨 — 생성자와 slot 2 메서드는 실행됩니다.** `20260903-174026-243.jsonl`과 재현 실행 `20260903-174125-316.jsonl`에서 `singleton_constructor`(`RVA 0x00010366`)가 `ECX = 0x00acd708`으로 진입했고 호출자는 `RVA 0x000a2965`, `vtable_slot2_method`(`RVA 0x000116c8`)가 같은 receiver로 진입했고 호출자는 `RVA 0x000a2b67`입니다.
+- **확인됨 — field initializer는 진입하지 않습니다.** `field_initializer`(`RVA 0x00018234`) hit는 0건이며 `capped=false`이므로 기록 누락이 아닙니다. slot 2 메서드 안의 유일한 호출 지점 `RVA 0x00011c23`에 도달하지 못합니다.
+- **확인됨 — field reader는 실행되고 AV로 이어집니다.** `field_reader`(`RVA 0x0001a649`)가 같은 receiver로 진입했고 호출자는 `RVA 0x00071905`입니다. boundary는 `reason=child_exit`, `hits=3`, `singleton_receivers=3`, `code=0xc0000005`입니다.
+- **확인됨 — 정적 초기화 구간이 세 단계를 연달아 수행합니다.** 생성자 호출(`0x000a2965` 반환), 전역 등록(`0x000a2b22`), slot 2 가상 호출(`0x000a2b67` 반환)이 같은 구간에 있습니다.
+- **판정 — 체인은 slot 2 메서드 내부에서 끊깁니다.** 초기화 메서드가 호출되지 않는 것이 아니라, 호출된 메서드가 `0x000116c8`에서 시작해 `0x00011c23`의 field write 호출에 도달하기 전에 경로를 벗어납니다.
+- **추정 — 그 사이 코드는 장치·자원 생성이며 실패 시 조기 반환합니다.** 호출 지점 앞에 `call [eax+0x40]` 형태의 가상 호출이 있습니다. 어떤 호출이 실패하는지는 확인하지 않았습니다.
+- **미확정 — 이탈 지점과 조건.** field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — the constructor and the slot 2 method run.** In `20260903-174026-243.jsonl` and the reproduction `20260903-174125-316.jsonl`, `singleton_constructor` (`RVA 0x00010366`) was entered with `ECX = 0x00acd708` from caller `RVA 0x000a2965`, and `vtable_slot2_method` (`RVA 0x000116c8`) with the same receiver from caller `RVA 0x000a2b67`.
+* **Confirmed — the field initializer is not entered.** `field_initializer` (`RVA 0x00018234`) had zero hits with `capped=false`, so this is not a recording gap; the single call site inside the slot 2 method, `RVA 0x00011c23`, is never reached.
+* **Confirmed — the field reader runs and leads to the AV.** `field_reader` (`RVA 0x0001a649`) was entered with the same receiver from caller `RVA 0x00071905`. The boundary reports `reason=child_exit`, `hits=3`, `singleton_receivers=3`, and `code=0xc0000005`.
+* **Confirmed — one static-initialization span performs three steps in sequence.** The constructor call (returning to `0x000a2965`), the global registration (`0x000a2b22`), and the slot 2 virtual call (returning to `0x000a2b67`) all lie in that span.
+* **Classification — the chain breaks inside the slot 2 method.** The initialization method is not missing its call; the called method starts at `0x000116c8` and leaves its path before reaching the field-write call at `0x00011c23`.
+* **Inferred — the intervening code is device or resource creation that returns early on failure.** A `call [eax+0x40]` virtual call precedes the call site. Which call fails was not established.
+* **Unresolved — the exit point and its condition.** Direct field injection and Hardlock-response changes remain deferred.
+
+관련 Task 161 설계, 작업 지시서, 작업 로그는 [Task 161 설계](../design/20260903-161-ez2dj4th-initializer-entry-trace.md), [Task 161 작업 지시서](../work-orders/20260903-161-ez2dj4th-initializer-entry-trace.md), [Task 161 작업 로그](../work-logs/20260903-161-ez2dj4th-initializer-entry-trace.md)에 둡니다.
+
+The related Task 161 design, work order, and work log are [Task 161 design](../design/20260903-161-ez2dj4th-initializer-entry-trace.md), [Task 161 work order](../work-orders/20260903-161-ez2dj4th-initializer-entry-trace.md), and [Task 161 work log](../work-logs/20260903-161-ez2dj4th-initializer-entry-trace.md).
+
+## 2026-09-03 slot 2 메서드 조기 이탈
+
+- **확인됨 — 메서드에는 실패 시 반환하는 guard가 세 개 있습니다.** `20260903-174816-357.jsonl`의 분기 목록(범위 `0x000116c8`–`0x00011c48`, 110건, `capped=false`)과 코드 창에서, 세 곳 모두 `cmp [ebp-0x4c], 0` 뒤 `jge`와 `xor eax, eax` · `jmp 0x00011ce5` 형태입니다. `jmp` 주소는 `0x00011714`, `0x00011738`, `0x00011838`입니다.
+- **확인됨 — 실행은 guard 2에서 이탈합니다.** 세 `jmp`를 `DR0`–`DR3`로 동시에 감시한 `20260903-175046-180.jsonl`에서 hit는 `0x00011838` 1건뿐이며, 같은 실행에서 field initializer hit는 0건입니다. boundary는 `reason=child_exit`, `capped=false`, `code=0xc0000005`입니다.
+- **확인됨 — 실패하는 호출은 `RVA 0x00011823`이고 대상은 `RVA 0x000106d2`입니다.** 호출은 thunk `0x0000317f`를 거치며, receiver는 메서드의 `this`, 인자는 다른 객체의 `[ecx+4]`입니다. thunk 대상은 `20260903-175539-518.jsonl`의 분기 목록으로 확인했습니다.
+- **확인됨 — 실패 경로에만 오류 보고 호출이 있습니다.** `RVA 0x00011831`이 thunk `0x000038dc`를 거쳐 `RVA 0x00010066`으로 갑니다.
+- **확인됨 — 분기 목록 자기 검증.** 초기화 호출 지점이 목록에 `RVA 0x00011c23`, `opcode=0xe8`, 대상 `RVA 0x0000349a`로 나타나 Task 160의 정적 결과와 일치합니다.
+- **추정 — guard는 HRESULT 형태의 실패 검사입니다.** 부호 비교로 음수를 실패로 처리합니다. 반환값의 실제 의미는 확인하지 않았습니다.
+- **미확정 — `0x000106d2`가 실패하는 이유.** field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — the method has three return-on-failure guards.** From the branch listing in `20260903-174816-357.jsonl` (range `0x000116c8`–`0x00011c48`, 110 entries, `capped=false`) and the code windows, each is `cmp [ebp-0x4c], 0` followed by `jge`, then `xor eax, eax` and `jmp 0x00011ce5`. The `jmp` addresses are `0x00011714`, `0x00011738`, and `0x00011838`.
+* **Confirmed — execution exits at guard 2.** Watching all three `jmp` addresses in `DR0`–`DR3` in `20260903-175046-180.jsonl` produced exactly one hit, at `0x00011838`, and the field initializer had zero hits in the same run. The boundary reports `reason=child_exit`, `capped=false`, and `code=0xc0000005`.
+* **Confirmed — the failing call is at `RVA 0x00011823` and targets `RVA 0x000106d2`.** It goes through thunk `0x0000317f`, with the method's `this` as receiver and an argument from another object's `[ecx+4]`. The thunk target comes from the branch listing in `20260903-175539-518.jsonl`.
+* **Confirmed — only the failure path reports an error.** `RVA 0x00011831` goes through thunk `0x000038dc` to `RVA 0x00010066`.
+* **Confirmed — branch-listing self-check.** The initializer call site appears in the listing as `RVA 0x00011c23`, `opcode=0xe8`, target `RVA 0x0000349a`, matching Task 160's static result.
+* **Inferred — the guards are HRESULT-style failure checks.** They treat negative values as failure through a signed comparison; the actual meaning of the return value was not established.
+* **Unresolved — why `0x000106d2` fails.** Direct field injection and Hardlock-response changes remain deferred.
+
+관련 Task 162 설계, 작업 지시서, 작업 로그는 [Task 162 설계](../design/20260903-162-ez2dj4th-slot2-early-exit.md), [Task 162 작업 지시서](../work-orders/20260903-162-ez2dj4th-slot2-early-exit.md), [Task 162 작업 로그](../work-logs/20260903-162-ez2dj4th-slot2-early-exit.md)에 둡니다.
+
+The related Task 162 design, work order, and work log are [Task 162 design](../design/20260903-162-ez2dj4th-slot2-early-exit.md), [Task 162 work order](../work-orders/20260903-162-ez2dj4th-slot2-early-exit.md), and [Task 162 work log](../work-logs/20260903-162-ez2dj4th-slot2-early-exit.md).
+
+## 2026-09-03 guard 실패 원인
+
+- **확인됨 — guard 0·1은 통과하고 guard 2만 실패합니다.** `20260903-192806-776.jsonl`의 호출 반환 지점 관찰에서 `guard0_return`(`RVA 0x00011706`) `EAX = 0`, `guard1_return`(`0x0001172a`) `EAX = 0`, `guard2_return`(`0x00011828`) `EAX = 0x8200000a`입니다. `guard2_target_entry`(`0x000106d2`)는 `ECX = 0x00acd708`로 진입했습니다.
+- **확인됨 — 실패 코드의 생성 지점은 `.text`에서 유일합니다.** `20260903-192957-170.jsonl`의 스캔에서 `0x8200000a`의 `total`은 1, `capped=false`이며 위치는 `RVA 0x00010a8a`의 `mov eax, 0x8200000A`입니다.
+- **확인됨 — 실패 판정은 가상 호출 결과의 부호 검사입니다.** `RVA 0x00010a6f`의 `call dword ptr [ecx+0x54]` 뒤 `test eax, eax`(`0x00010a79`)와 `jge 0x00010a94`(`0x00010a7b`)가 성공 경로를 고릅니다. 인터페이스 포인터는 `[this+0x28]`에서 읽고 vtable은 그 객체의 첫 dword입니다. 실패 시 메시지 포인터를 밀어 로거(thunk `0x00001d7a`)를 부른 뒤 상수를 반환합니다.
+- **확인됨 — 호출 체인이 닫힙니다.** 실패 함수 시작은 `RVA 0x00010975`, 그 thunk는 `RVA 0x00001636`이며, thunk 호출자는 `RVA 0x000107d9` 한 곳뿐입니다. 그 주소는 guard 2 대상 함수 `RVA 0x000106d2` 안에 있습니다.
+- **확인됨 — `0x8200000N`은 프로그램 정의 오류 계열입니다.** 인접 함수가 같은 형태로 `RVA 0x000106b9`에서 `0x8200000C`를 반환합니다.
+- **추정 — 실패한 것은 COM 인터페이스 메서드 index 21입니다.** offset `0x54`를 가상 호출하는 형태입니다. 어떤 인터페이스인지는 확인하지 않았고, 간접 호출이므로 대상은 실행 중 값에 의존합니다.
+- **추정 — 이 계층은 IAT를 통한 외부 라이브러리에 의존합니다.** 실패 함수 시작부가 다섯 인자를 밀어 `call dword ptr [0x00ad1908]`을 수행하며, 이 주소(RVA `0x006d1908`)는 `.idata` 범위 안입니다. import 이름은 확인하지 않았습니다.
+- **미확정 — 가상 호출이 실패하는 이유.** field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+
+* **Confirmed — guards 0 and 1 pass and only guard 2 fails.** Observing the call return points in `20260903-192806-776.jsonl` gives `guard0_return` (`RVA 0x00011706`) `EAX = 0`, `guard1_return` (`0x0001172a`) `EAX = 0`, and `guard2_return` (`0x00011828`) `EAX = 0x8200000a`. `guard2_target_entry` (`0x000106d2`) was entered with `ECX = 0x00acd708`.
+* **Confirmed — the failure code has a unique producing site in `.text`.** The scan in `20260903-192957-170.jsonl` reports `total` 1 with `capped=false` for `0x8200000a`, at `mov eax, 0x8200000A`, `RVA 0x00010a8a`.
+* **Confirmed — the failure decision is a signed check on a virtual call's result.** `test eax, eax` (`0x00010a79`) and `jge 0x00010a94` (`0x00010a7b`) follow `call dword ptr [ecx+0x54]` at `RVA 0x00010a6f`. The interface pointer is read from `[this+0x28]` and the vtable from that object's first dword. On failure a message pointer is pushed, a logger (thunk `0x00001d7a`) is called, and the constant is returned.
+* **Confirmed — the call chain closes.** The failing function starts at `RVA 0x00010975` with thunk `RVA 0x00001636`, and that thunk has the single caller `RVA 0x000107d9`, which lies inside guard 2's callee `RVA 0x000106d2`.
+* **Confirmed — `0x8200000N` is a program-defined error family.** The adjacent function returns `0x8200000C` in the same shape at `RVA 0x000106b9`.
+* **Inferred — what failed is COM interface method index 21.** The shape virtually calls offset `0x54`. Which interface it is was not established, and because the call is indirect its target depends on runtime values.
+* **Inferred — this layer depends on an external library through the IAT.** The failing function's opening pushes five arguments and performs `call dword ptr [0x00ad1908]`, whose address (RVA `0x006d1908`) lies in the `.idata` range. The import name was not resolved.
+* **Unresolved — why the virtual call fails.** Direct field injection and Hardlock-response changes remain deferred.
+
+관련 Task 163 설계, 작업 지시서, 작업 로그는 [Task 163 설계](../design/20260903-163-ez2dj4th-guard-failure-source.md), [Task 163 작업 지시서](../work-orders/20260903-163-ez2dj4th-guard-failure-source.md), [Task 163 작업 로그](../work-logs/20260903-163-ez2dj4th-guard-failure-source.md)에 둡니다.
+
+The related Task 163 design, work order, and work log are [Task 163 design](../design/20260903-163-ez2dj4th-guard-failure-source.md), [Task 163 work order](../work-orders/20260903-163-ez2dj4th-guard-failure-source.md), and [Task 163 work log](../work-logs/20260903-163-ez2dj4th-guard-failure-source.md).
