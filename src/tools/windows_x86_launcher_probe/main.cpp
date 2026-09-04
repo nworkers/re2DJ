@@ -9786,24 +9786,36 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                  reinterpret_cast<const std::uint8_t*>(&audio_master_gain),
                  sizeof(audio_master_gain),
                  &error));
-        directsound_prepared = re2dj::platform::windows::FindPe32ExportRva(
-                                   runtime_path,
-                                   "_Re2djHleDirectSoundCreate@12",
-                                   &directsound_thunk_rva,
-                                   &error) &&
-                               audio_gain_prepared &&
-                               re2dj::tools::windows_original_process_probe::FindIatSlotByOrdinal(
-                                   info,
-                                   file.data(),
-                                   file.size(),
-                                   "DSOUND.dll",
-                                   1,
-                                   &directsound_slot_rva,
-                                   &error) &&
-                               WriteRemoteU32(child.hProcess,
-                                              main_image_base + directsound_slot_rva,
-                                              runtime_base + directsound_thunk_rva,
-                                              &error);
+        if (target->id == "ez2dj4th")
+        {
+            directsound_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                       runtime_path,
+                                       "_Re2djHleDirectSoundCreate@12",
+                                       &directsound_thunk_rva,
+                                       &error) &&
+                                   audio_gain_prepared;
+        }
+        else
+        {
+            directsound_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                       runtime_path,
+                                       "_Re2djHleDirectSoundCreate@12",
+                                       &directsound_thunk_rva,
+                                       &error) &&
+                                   audio_gain_prepared &&
+                                   re2dj::tools::windows_original_process_probe::FindIatSlotByOrdinal(
+                                       info,
+                                       file.data(),
+                                       file.size(),
+                                       "DSOUND.dll",
+                                       1,
+                                       &directsound_slot_rva,
+                                       &error) &&
+                                   WriteRemoteU32(child.hProcess,
+                                                  main_image_base + directsound_slot_rva,
+                                                  runtime_base + directsound_thunk_rva,
+                                                  &error);
+        }
         if (directsound_prepared && audio_gain_set)
         {
             RecordDiagnostic("{\"event\":\"audio_master_gain\",\"db\":%.3f,\"linear\":%.6f}",
@@ -9871,14 +9883,16 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         {
             std::uint32_t thunk_rva = 0;
             std::uint32_t slot_rva = 0;
+            bool import_present = false;
             audio_trace_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                        runtime_path, winmm_exports[index], &thunk_rva, &error) &&
-                                   re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                                   FindOptionalIatSlotByName(
                                        info, file.data(), file.size(), "WINMM.dll",
-                                       winmm_imports[index], &slot_rva, &error) &&
-                                   WriteRemoteU32(child.hProcess,
-                                                  main_image_base + slot_rva,
-                                                  runtime_base + thunk_rva, &error);
+                                       winmm_imports[index], &slot_rva, &import_present, &error) &&
+                                   (!import_present ||
+                                    WriteRemoteU32(child.hProcess,
+                                                   main_image_base + slot_rva,
+                                                   runtime_base + thunk_rva, &error));
         }
         if (audio_trace_prepared)
         {
@@ -10904,6 +10918,32 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         {
             directinput_prepared = false;
             error = "cannot find _Re2djHleDirectInputCreateA@16 in runtime: " + find_dinput_err;
+        }
+    }
+    if (reached && entry_restored && hle_directsound && target->id == "ez2dj4th")
+    {
+        std::uint32_t directsound_thunk_rva = 0;
+        std::string find_dsound_err;
+        if (re2dj::platform::windows::FindPe32ExportRva(
+                runtime_path,
+                "_Re2djHleDirectSoundCreate@12",
+                &directsound_thunk_rva,
+                &find_dsound_err))
+        {
+            constexpr std::uint32_t kEz2dj4thDirectSoundCreateSlotRva = 0x006d1664u;
+            const bool dsound_patched = WriteRemoteU32(
+                child.hProcess,
+                main_image_base + kEz2dj4thDirectSoundCreateSlotRva,
+                runtime_base + directsound_thunk_rva,
+                &error);
+            if (!dsound_patched && error.empty())
+            {
+                error = "cannot patch ez2dj4th DirectSoundCreate IAT slot";
+            }
+        }
+        else
+        {
+            error = "cannot find _Re2djHleDirectSoundCreate@12 in runtime: " + find_dsound_err;
         }
     }
     if (reached && entry_restored && !code_windows.empty())

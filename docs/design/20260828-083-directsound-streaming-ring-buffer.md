@@ -14,7 +14,8 @@
 - **확인됨:** 정적 sound bank descriptor는 flags `0x140e2`이며 최초 전체 upload 뒤 재사용된다.
 - **확인됨:** 첫 작업 083 실행에서 원본은 play cursor가 약 44–46KB씩 전진하는 동안 매번 `DSBLOCK_ENTIREBUFFER`로 전체 360,448바이트를 Lock/Unlock했다. 따라서 Unlock 인자 길이는 실제 새 PCM 길이가 아니다.
 - **추정:** 원본 streaming writer는 전체 lock 안에서 play cursor보다 앞선 일부 ring frame을 시간 순서대로 갱신한다. 이전 committed snapshot과 비교한 dirty circular 구간 및 queue 크기로 이를 확인한다.
-- **미확정:** 다른 게임 버전이 `DSBCAPS_LOCHARDWARE` 없이 같은 streaming 계약을 사용하는지 여부다. 따라서 첫 구현은 관찰된 descriptor에 한정한다.
+- **확인됨 (Task 189):** EZ2DJ 4th Trax는 `DSBCAPS_LOCHARDWARE` 없이 flags `0x140c0` (`DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_STICKYFOCUS | DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN`), 360,448바이트로 동일한 스트리밍 링 버퍼 계약을 사용한다. 이에 따라 `is_streaming()` 식별 조건이 `DSBCAPS_GETCURRENTPOSITION2` 및 360,448바이트 크기로 확장되었다.
+
 
 ### backend 구조
 
@@ -68,7 +69,7 @@ This task does not alter original WAV decoding or per-buffer DirectSound volume.
 - **Confirmed:** static sound-bank buffers use flags `0x140e2` and are reused after an initial whole-buffer upload.
 - **Confirmed:** the first Task 083 run shows whole-buffer `DSBLOCK_ENTIREBUFFER` Lock/Unlock calls while the play cursor advances by roughly 44–46 KB, so the Unlock argument size is not the amount of new PCM.
 - **Inferred:** the writer changes a subset of frames ahead of the play cursor. A committed-snapshot comparison identifies the actual dirty circular interval and queue size.
-- **Unresolved:** whether another game version streams without `DSBCAPS_LOCHARDWARE`; the first implementation is limited to the observed descriptor.
+- **Confirmed (Task 189):** EZ2DJ 4th Trax uses the same streaming ring buffer contract with flags `0x140c0` (`DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_STICKYFOCUS | DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN`) and 360,448 bytes without `DSBCAPS_LOCHARDWARE`. `is_streaming()` was broadened to check `DSBCAPS_GETCURRENTPOSITION2` and 360,448-byte size accordingly.
 
 ### Backend structure
 

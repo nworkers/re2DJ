@@ -25,6 +25,7 @@
 #include "ez2dj_keyboard_input.h"
 #include "message_box_boundary.h"
 #include "directinput7_com_facade.h"
+#include "directsound_com_facade.h"
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
@@ -2032,6 +2033,14 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
                 name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
             return result;
         }
+        if (_stricmp(name, "DirectSoundCreate") == 0)
+        {
+            const FARPROC result =
+                reinterpret_cast<FARPROC>(&Re2djHleDirectSoundCreate);
+            ReportDynamicResolverName(
+                name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+            return result;
+        }
         if (g_re2dj_vfs_dynamic_resolver != 0)
         {
             if (_stricmp(name, "CreateFileA") == 0)
@@ -2170,6 +2179,19 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
                     return result;
                 }
             }
+        }
+    }
+    if (reinterpret_cast<std::uintptr_t>(name) == 1)
+    {
+        char module_name[MAX_PATH] = {};
+        if (module != nullptr && GetModuleFileNameA(module, module_name, sizeof(module_name)) != 0 &&
+            strstr(module_name, "DSOUND") != nullptr)
+        {
+            const FARPROC result =
+                reinterpret_cast<FARPROC>(&Re2djHleDirectSoundCreate);
+            ReportDynamicResolverName(
+                "#1", "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+            return result;
         }
     }
     const FARPROC result = GetProcAddress(module, name);

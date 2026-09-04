@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
-extern "C" __declspec(dllexport) char g_re2dj_audio_trace_path[MAX_PATH] = {};
+extern "C" __declspec(dllexport) char g_re2dj_audio_trace_path[MAX_PATH] = "logs/audio_debug.log";
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_audio_image_base = 0;
 
 namespace
@@ -16,8 +16,7 @@ constexpr LONG kMaximumAudioTraceLines = 4096;
 
 void Re2djAudioTrace(const char* format, ...)
 {
-    if (g_re2dj_audio_trace_path[0] == '\0' || format == nullptr ||
-        InterlockedIncrement(&g_audio_trace_lines) > kMaximumAudioTraceLines)
+    if (format == nullptr)
     {
         return;
     }
@@ -34,6 +33,25 @@ void Re2djAudioTrace(const char* format, ...)
     message[used] = '\r';
     message[used + 1] = '\n';
     message[used + 2] = '\0';
+    OutputDebugStringA(message);
+
+    if (g_re2dj_audio_trace_path[0] == '\0' ||
+        InterlockedIncrement(&g_audio_trace_lines) > kMaximumAudioTraceLines)
+    {
+        return;
+    }
+    char directory[MAX_PATH] = {};
+    std::strncpy(directory, g_re2dj_audio_trace_path, sizeof(directory) - 1);
+    char* last_slash = std::strrchr(directory, '/');
+    if (!last_slash)
+    {
+        last_slash = std::strrchr(directory, '\\');
+    }
+    if (last_slash != nullptr)
+    {
+        *last_slash = '\0';
+        CreateDirectoryA(directory, nullptr);
+    }
     HANDLE trace = CreateFileA(g_re2dj_audio_trace_path,
                                FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
