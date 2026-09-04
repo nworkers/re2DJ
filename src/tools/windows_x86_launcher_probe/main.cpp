@@ -9908,7 +9908,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                        "_Re2djVfsCloseHandle@4",
                                        "_Re2djVfsGetFileType@4",
                                        "_Re2djVfsSetCurrentDirectoryA@4",
-                                       "_Re2djVfsGetCurrentDirectoryA@8"};
+                                       "_Re2djVfsGetCurrentDirectoryA@8",
+                                       "_Re2djVfsFindFirstFileA@8",
+                                       "_Re2djVfsFindNextFileA@8",
+                                       "_Re2djVfsFindClose@4"};
     const char* const vfs_imports[] = {"CreateFileA",
                                        "ReadFile",
                                        "WriteFile",
@@ -9917,7 +9920,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                        "CloseHandle",
                                        "GetFileType",
                                        "SetCurrentDirectoryA",
-                                       "GetCurrentDirectoryA"};
+                                       "GetCurrentDirectoryA",
+                                       "FindFirstFileA",
+                                       "FindNextFileA",
+                                       "FindClose"};
     bool vfs_prepared = !hle_vfs;
     // Tracked apart from vfs_prepared so a failed image-loader patch reports
     // itself instead of silently skipping the device patches that follow it.

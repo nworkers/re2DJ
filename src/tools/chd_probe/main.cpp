@@ -40,11 +40,46 @@ int main(int argc, char** argv)
     // relative open fails: the runtime resolves such names against one
     // directory, and only the image says whether the file is there.
     const bool list_requested = argc == 4 && std::string(argv[2]) == "--list";
-    if (argc != 2 && !list_requested)
+    const bool dump_requested = (argc == 4 || argc == 5) && std::string(argv[2]) == "--dump";
+    if (argc != 2 && !list_requested && !dump_requested)
     {
         std::fprintf(stderr,
-                     "usage: re2dj_chd_probe <mame-chd-path> [--list <relative-directory>]\n");
+                     "usage: re2dj_chd_probe <mame-chd-path> [--list <relative-directory> | --dump <relative-file> [output-path]]\n");
         return 1;
+    }
+
+    if (dump_requested)
+    {
+        std::unique_ptr<re2dj::storage::Fat32Volume> volume;
+        std::string filesystem_error;
+        if (!re2dj::storage::Fat32Volume::Open(argv[1], &volume, &filesystem_error))
+        {
+            std::fprintf(stderr, "error: cannot open FAT32 volume: %s\n", filesystem_error.c_str());
+            return 2;
+        }
+        std::vector<std::uint8_t> file_bytes;
+        if (!volume->ReadFile(argv[3], &file_bytes, &filesystem_error))
+        {
+            std::fprintf(stderr, "error: cannot read file %s: %s\n", argv[3], filesystem_error.c_str());
+            return 4;
+        }
+        if (argc == 5)
+        {
+            std::FILE* out = std::fopen(argv[4], "wb");
+            if (out == nullptr)
+            {
+                std::fprintf(stderr, "error: cannot open output file %s\n", argv[4]);
+                return 5;
+            }
+            std::fwrite(file_bytes.data(), 1, file_bytes.size(), out);
+            std::fclose(out);
+            std::printf("dumped %zu bytes to %s\n", file_bytes.size(), argv[4]);
+        }
+        else
+        {
+            std::fwrite(file_bytes.data(), 1, file_bytes.size(), stdout);
+        }
+        return 0;
     }
 
     std::unique_ptr<re2dj::storage::MameChdImage> image;
@@ -166,6 +201,7 @@ int main(int argc, char** argv)
         }
         return 0;
     }
+
 
     re2dj::storage::Fat32Entry executable;
     if (!volume->Find("EZ2DJ/EZ2DJ.EXE", &executable, &filesystem_error) ||

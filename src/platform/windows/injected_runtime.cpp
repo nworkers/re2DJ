@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -391,6 +392,155 @@ void ReportExitProcess(const char* route, unsigned code, std::uintptr_t caller)
     AppendVfsTraceMessage(message);
 }
 
+void ReportCrashException(EXCEPTION_POINTERS* exception)
+{
+    if (exception == nullptr || exception->ExceptionRecord == nullptr ||
+        exception->ContextRecord == nullptr)
+    {
+        return;
+    }
+    static volatile LONG s_crash_reported = 0;
+    if (InterlockedCompareExchange(&s_crash_reported, 1, 0) != 0)
+    {
+        return;
+    }
+
+    const DWORD code = exception->ExceptionRecord->ExceptionCode;
+    const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(
+        exception->ExceptionRecord->ExceptionAddress);
+    const std::uintptr_t image_base =
+        reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr));
+    const bool in_image = image_base != 0 && address >= image_base;
+    const std::uintptr_t rva = in_image ? (address - image_base) : 0;
+
+    unsigned char code_bytes[16] = {};
+    SIZE_T code_copied = 0;
+    const BOOL code_readable =
+        ReadProcessMemory(GetCurrentProcess(),
+                          reinterpret_cast<const void*>(address),
+                          code_bytes,
+                          sizeof(code_bytes),
+                          &code_copied) != FALSE;
+    char code_hex[sizeof(code_bytes) * 2 + 1] = {};
+    for (SIZE_T i = 0; code_readable && i < code_copied; ++i)
+    {
+        std::snprintf(code_hex + i * 2, 3, "%02x", code_bytes[i]);
+    }
+
+    const std::uintptr_t esp = exception->ContextRecord->Esp;
+    DWORD stack_words[8] = {};
+    SIZE_T stack_copied = 0;
+    const BOOL stack_readable =
+        ReadProcessMemory(GetCurrentProcess(),
+                          reinterpret_cast<const void*>(esp),
+                          stack_words,
+                          sizeof(stack_words),
+                          &stack_copied) != FALSE;
+    char stack_hex[sizeof(stack_words) * 9 + 1] = {};
+    int stack_pos = 0;
+    for (SIZE_T i = 0; stack_readable && i < (stack_copied / sizeof(DWORD)); ++i)
+    {
+        stack_pos += std::snprintf(stack_hex + stack_pos,
+                                   sizeof(stack_hex) - stack_pos,
+                                   "%s%08x",
+                                   i == 0 ? "" : ",",
+                                   static_cast<unsigned>(stack_words[i]));
+    }
+
+    char message[600] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:crash-exception:code=0x%08x:address=0x%08x:image_base=0x%08x:"
+                  "rva=0x%08x:in_image=%u:eax=0x%08x:ebx=0x%08x:ecx=0x%08x:edx=0x%08x:"
+                  "esi=0x%08x:edi=0x%08x:ebp=0x%08x:esp=0x%08x:eip=0x%08x:eflags=0x%08x:"
+                  "bytes=%s:stack=%s\r\n",
+                  static_cast<unsigned>(code),
+                  static_cast<unsigned>(address),
+                  static_cast<unsigned>(image_base),
+                  static_cast<unsigned>(rva),
+                  in_image ? 1U : 0U,
+                  static_cast<unsigned>(exception->ContextRecord->Eax),
+                  static_cast<unsigned>(exception->ContextRecord->Ebx),
+                  static_cast<unsigned>(exception->ContextRecord->Ecx),
+                  static_cast<unsigned>(exception->ContextRecord->Edx),
+                  static_cast<unsigned>(exception->ContextRecord->Esi),
+                  static_cast<unsigned>(exception->ContextRecord->Edi),
+                  static_cast<unsigned>(exception->ContextRecord->Ebp),
+                  static_cast<unsigned>(exception->ContextRecord->Esp),
+                  static_cast<unsigned>(exception->ContextRecord->Eip),
+                  static_cast<unsigned>(exception->ContextRecord->EFlags),
+                  code_hex,
+                  stack_hex);
+    AppendVfsTraceMessage(message);
+    OutputDebugStringA(message);
+
+    // Read 128-byte code window around faulting address (64 bytes before, 64 bytes after)
+    const std::uintptr_t code_win_start = address >= 64 ? address - 64 : 0;
+    unsigned char code_win_bytes[128] = {};
+    SIZE_T code_win_copied = 0;
+    ReadProcessMemory(GetCurrentProcess(),
+                      reinterpret_cast<const void*>(code_win_start),
+                      code_win_bytes,
+                      sizeof(code_win_bytes),
+                      &code_win_copied);
+    char code_win_hex[sizeof(code_win_bytes) * 2 + 1] = {};
+    for (SIZE_T i = 0; i < code_win_copied; ++i)
+    {
+        std::snprintf(code_win_hex + i * 2, 3, "%02x", code_win_bytes[i]);
+    }
+
+    // Read 32 bytes around EBP (caller return address is at [ebp+4])
+    const std::uintptr_t ebp_val = exception->ContextRecord->Ebp;
+    DWORD ebp_words[8] = {};
+    SIZE_T ebp_copied = 0;
+    ReadProcessMemory(GetCurrentProcess(),
+                      reinterpret_cast<const void*>(ebp_val),
+                      ebp_words,
+                      sizeof(ebp_words),
+                      &ebp_copied);
+    char ebp_hex[sizeof(ebp_words) * 9 + 1] = {};
+    int ebp_pos = 0;
+    for (SIZE_T i = 0; i < (ebp_copied / sizeof(DWORD)); ++i)
+    {
+        ebp_pos += std::snprintf(ebp_hex + ebp_pos,
+                                 sizeof(ebp_hex) - ebp_pos,
+                                 "%s%08x",
+                                 i == 0 ? "" : ",",
+                                 static_cast<unsigned>(ebp_words[i]));
+    }
+
+    // Read 32 bytes around ECX + 0x10494 (the divisor location)
+    const std::uintptr_t divisor_base = exception->ContextRecord->Ecx + 0x10484;
+    DWORD ecx_words[8] = {};
+    SIZE_T ecx_copied = 0;
+    ReadProcessMemory(GetCurrentProcess(),
+                      reinterpret_cast<const void*>(divisor_base),
+                      ecx_words,
+                      sizeof(ecx_words),
+                      &ecx_copied);
+    char ecx_hex[sizeof(ecx_words) * 9 + 1] = {};
+    int ecx_pos = 0;
+    for (SIZE_T i = 0; i < (ecx_copied / sizeof(DWORD)); ++i)
+    {
+        ecx_pos += std::snprintf(ecx_hex + ecx_pos,
+                                 sizeof(ecx_hex) - ecx_pos,
+                                 "%s%08x",
+                                 i == 0 ? "" : ",",
+                                 static_cast<unsigned>(ecx_words[i]));
+    }
+
+    char detail_msg[768] = {};
+    std::snprintf(detail_msg,
+                  sizeof(detail_msg),
+                  "re2dj:vfs:crash-context:code_win_start=0x%08x:code_win=%s:ebp_words=%s:ecx_words=%s\r\n",
+                  static_cast<unsigned>(code_win_start),
+                  code_win_hex,
+                  ebp_hex,
+                  ecx_hex);
+    AppendVfsTraceMessage(detail_msg);
+    OutputDebugStringA(detail_msg);
+}
+
 void ReportDynamicResolverName(const char* name,
                                const char* route,
                                std::uintptr_t address,
@@ -691,6 +841,19 @@ bool CompleteHardlockRequest(DWORD control_code,
 
 LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
 {
+    if (exception != nullptr && exception->ExceptionRecord != nullptr)
+    {
+        const DWORD code = exception->ExceptionRecord->ExceptionCode;
+        if (code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
+            code == EXCEPTION_ACCESS_VIOLATION ||
+            code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+            code == EXCEPTION_DATATYPE_MISALIGNMENT)
+        {
+            ReportCrashException(exception);
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+    }
+
     if (g_re2dj_hle_io_ports == 0 || g_re2dj_io_image_base == 0 ||
         exception == nullptr || exception->ExceptionRecord == nullptr ||
         exception->ContextRecord == nullptr ||
@@ -888,6 +1051,24 @@ ChdFileHandle* LookupChdFileHandle(HANDLE handle)
     return index < kMaximumChdFileHandles && g_chd_file_handles[index].used
                ? &g_chd_file_handles[index]
                : nullptr;
+}
+
+constexpr std::uintptr_t kChdFindHandleBase = 0xFCCE0000;
+constexpr std::size_t kMaximumChdFindHandles = 64;
+
+struct ChdFindSearch
+{
+    bool used = false;
+    std::vector<re2dj::storage::Fat32Entry> matches;
+    std::size_t next_index = 0;
+};
+ChdFindSearch g_chd_find_searches[kMaximumChdFindHandles];
+
+bool IsChdFindHandle(HANDLE handle)
+{
+    const std::uintptr_t value = reinterpret_cast<std::uintptr_t>(handle);
+    return value > kChdFindHandleBase &&
+           value <= kChdFindHandleBase + kMaximumChdFindHandles;
 }
 
 bool IsChdConfigured()
@@ -1714,6 +1895,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileSize(
     return GetFileSize(handle, high);
 }
 
+extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsFindClose(HANDLE handle);
+
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle)
 {
     OutputDebugStringA(kFileApiMessage);
@@ -1730,6 +1913,10 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle)
         chd_handle->relative_path.clear();
         SetLastError(ERROR_SUCCESS);
         return TRUE;
+    }
+    if (IsChdFindHandle(handle))
+    {
+        return Re2djVfsFindClose(handle);
     }
     return CloseHandle(handle);
 }
@@ -1748,6 +1935,218 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileType(HANDLE handle)
         return FILE_TYPE_DISK;
     }
     return GetFileType(handle);
+}
+
+bool WildcardMatch(const char* pattern, const char* text)
+{
+    if (pattern == nullptr || text == nullptr)
+    {
+        return false;
+    }
+    if (std::strcmp(pattern, "*.*") == 0 || std::strcmp(pattern, "*") == 0)
+    {
+        return true;
+    }
+    while (*pattern != '\0')
+    {
+        if (*pattern == '*')
+        {
+            ++pattern;
+            if (*pattern == '\0')
+            {
+                return true;
+            }
+            while (*text != '\0')
+            {
+                if (WildcardMatch(pattern, text))
+                {
+                    return true;
+                }
+                ++text;
+            }
+            return false;
+        }
+        if (*text == '\0')
+        {
+            return false;
+        }
+        if (*pattern != '?' &&
+            std::tolower(static_cast<unsigned char>(*pattern)) !=
+            std::tolower(static_cast<unsigned char>(*text)))
+        {
+            return false;
+        }
+        ++pattern;
+        ++text;
+    }
+    return *text == '\0';
+}
+
+void PopulateFindData(const re2dj::storage::Fat32Entry& entry, LPWIN32_FIND_DATAA data)
+{
+    if (data == nullptr)
+    {
+        return;
+    }
+    std::memset(data, 0, sizeof(*data));
+    data->dwFileAttributes = entry.directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+    data->nFileSizeLow = entry.size;
+    data->nFileSizeHigh = 0;
+    strncpy_s(data->cFileName, sizeof(data->cFileName), entry.name.c_str(), _TRUNCATE);
+}
+
+extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsFindClose(HANDLE handle)
+{
+    if (IsChdFindHandle(handle))
+    {
+        const std::size_t index = static_cast<std::size_t>(
+            reinterpret_cast<std::uintptr_t>(handle) - kChdFindHandleBase - 1);
+        if (index < kMaximumChdFindHandles && g_chd_find_searches[index].used)
+        {
+            g_chd_find_searches[index].used = false;
+            g_chd_find_searches[index].matches.clear();
+            g_chd_find_searches[index].next_index = 0;
+            SetLastError(ERROR_SUCCESS);
+            return TRUE;
+        }
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    return FindClose(handle);
+}
+
+extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsFindFirstFileA(
+    LPCSTR name,
+    LPWIN32_FIND_DATAA data)
+{
+    if (name == nullptr || data == nullptr)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    std::string resolved;
+    std::string dir_part;
+    std::string pattern;
+    if (ResolveGuestRelativePath(name, &resolved))
+    {
+        const std::size_t last_slash = resolved.find_last_of('/');
+        if (last_slash != std::string::npos)
+        {
+            dir_part = resolved.substr(0, last_slash);
+            pattern = resolved.substr(last_slash + 1);
+        }
+        else
+        {
+            pattern = resolved;
+        }
+    }
+    else
+    {
+        const std::string name_str(name);
+        const std::size_t last_slash = name_str.find_last_of("\\/");
+        if (last_slash != std::string::npos)
+        {
+            dir_part = name_str.substr(0, last_slash);
+            pattern = name_str.substr(last_slash + 1);
+        }
+        else
+        {
+            pattern = name_str;
+        }
+    }
+
+    std::string chd_dir = dir_part.empty() ? "EZ2DJ" : ("EZ2DJ/" + dir_part);
+
+    std::vector<re2dj::storage::Fat32Entry> matches;
+    if (EnsureChdMounted())
+    {
+        std::vector<re2dj::storage::Fat32Entry> entries;
+        std::string error;
+        if (g_chd_volume->ReadDirectory(chd_dir, &entries, &error))
+        {
+            for (const auto& entry : entries)
+            {
+                if (WildcardMatch(pattern.c_str(), entry.name.c_str()))
+                {
+                    matches.push_back(entry);
+                }
+            }
+        }
+    }
+
+    if (!matches.empty())
+    {
+        for (std::size_t index = 0; index < kMaximumChdFindHandles; ++index)
+        {
+            ChdFindSearch& search = g_chd_find_searches[index];
+            if (search.used)
+            {
+                continue;
+            }
+            search.used = true;
+            search.matches = std::move(matches);
+            search.next_index = 1;
+            PopulateFindData(search.matches[0], data);
+            const HANDLE handle = reinterpret_cast<HANDLE>(kChdFindHandleBase + index + 1);
+            char message[384] = {};
+            std::snprintf(message,
+                          sizeof(message),
+                          "re2dj:vfs:find-first:name=%s:chd_dir=%s:pattern=%s:matches=%zu:handle=0x%08x\r\n",
+                          name,
+                          chd_dir.c_str(),
+                          pattern.c_str(),
+                          search.matches.size(),
+                          static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(handle)));
+            AppendVfsTraceMessage(message);
+            SetLastError(ERROR_SUCCESS);
+            return handle;
+        }
+    }
+
+    const HANDLE host_handle = FindFirstFileA(name, data);
+    const DWORD host_error = host_handle == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    char message[384] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:find-first-fallback:name=%s:success=%u:error=%lu\r\n",
+                  name,
+                  host_handle != INVALID_HANDLE_VALUE ? 1U : 0U,
+                  host_error);
+    AppendVfsTraceMessage(message);
+    SetLastError(host_error);
+    return host_handle;
+}
+
+extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsFindNextFileA(
+    HANDLE handle,
+    LPWIN32_FIND_DATAA data)
+{
+    if (data == nullptr)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (IsChdFindHandle(handle))
+    {
+        const std::size_t index = static_cast<std::size_t>(
+            reinterpret_cast<std::uintptr_t>(handle) - kChdFindHandleBase - 1);
+        if (index < kMaximumChdFindHandles && g_chd_find_searches[index].used)
+        {
+            ChdFindSearch& search = g_chd_find_searches[index];
+            if (search.next_index < search.matches.size())
+            {
+                PopulateFindData(search.matches[search.next_index++], data);
+                SetLastError(ERROR_SUCCESS);
+                return TRUE;
+            }
+            SetLastError(ERROR_NO_MORE_FILES);
+            return FALSE;
+        }
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    return FindNextFileA(handle, data);
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djDeviceIoControlMock(
@@ -2132,6 +2531,30 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
             {
                 const FARPROC result =
                     reinterpret_cast<FARPROC>(&Re2djVfsGetCurrentDirectoryA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "FindFirstFileA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsFindFirstFileA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "FindNextFileA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsFindNextFileA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "FindClose") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsFindClose);
                 ReportDynamicResolverName(
                     name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
                 return result;

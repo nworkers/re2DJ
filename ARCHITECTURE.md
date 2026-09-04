@@ -52,6 +52,7 @@ flowchart LR
 | FAT 디렉터리 이름 해독 | `include/re2dj/storage/fat32_directory_name.h`, `src/storage/fat32_directory_name.cpp` | 8.3 짧은 이름, 짧은 이름 체크섬, 긴 이름 슬롯 조립. 이미지 없이 합성 항목으로 시험 가능 | **[구현됨]** |
 | 게스트 경로 | `include/re2dj/storage/`, `src/storage/` | Win32 경로 파싱·정규화, 드라이브 문자 매핑, overlay 정책과 파일 테이블 | **[구현됨]** |
 | 게스트 현재 디렉터리 | `src/platform/windows/injected_runtime.cpp` | `SetCurrentDirectoryA`/`GetCurrentDirectoryA` HLE와 상대 이름 해석. 호스트 프로세스 작업 디렉터리는 바꾸지 않는다 | **[구현됨]** |
+| 게스트 디렉터리 검색 | `src/platform/windows/injected_runtime.cpp` | `FindFirstFileA`/`FindNextFileA`/`FindClose` HLE 및 wildcard(*, ?) 매칭, CHD/호스트 디스크 탐색 | **[구현됨]** |
 | 실행 파일 분석 | `include/re2dj/exe/`, `src/exe/` | PE32 헤더·섹션·디렉터리 판독 | **[구현됨]** (헤더·섹션), **[계획]** (import/reloc) |
 | 타깃 프로파일 | `include/re2dj/target/`, `src/target/` | 버전별 실행 파일 경로, 작업 디렉터리, HLE 프로파일 ID | **[구현됨]** (자료구조·감지), **[계획]** (버전별 항목) |
 | 런타임 | `include/re2dj/runtime/`, `src/runtime/` | 게스트 주소 공간, 레지스터 컨텍스트, 실행 backend 인터페이스 | **[계획]** |
