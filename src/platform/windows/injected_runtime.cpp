@@ -267,6 +267,128 @@ void ReportDynamicResolverCallerWindow(std::uintptr_t caller)
     AppendVfsTraceMessage(message);
 }
 
+// Running totals of the Hardlock requests this process answered, kept so the
+// exit record can say whether the protection was involved. Log order alone
+// cannot: a request can be the last line written and still be seconds old.
+struct HardlockActivity
+{
+    unsigned total = 0;
+    unsigned initialize = 0;
+    unsigned handshake = 0;
+    unsigned descriptor = 0;
+    unsigned transform = 0;
+    unsigned other = 0;
+    unsigned rejected = 0;
+    const char* last_kind = "none";
+    const char* last_outcome = "none";
+    unsigned last_bytes = 0;
+    ULONGLONG last_tick = 0;
+};
+
+HardlockActivity g_hardlock_activity;
+
+// Set once the observation wrapper runs. Not every exit reaches it: a run that
+// ends through the executable's own ExitProcess import never passes the
+// dynamic resolver, and such a run was observed exiting with code 1.
+volatile LONG g_exit_wrapper_fired = 0;
+
+void ReportExitProcessHardlock()
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0')
+    {
+        return;
+    }
+    const HardlockActivity& activity = g_hardlock_activity;
+    char elapsed[32] = "none";
+    if (activity.total != 0)
+    {
+        const ULONGLONG now = GetTickCount64();
+        const ULONGLONG delta = now >= activity.last_tick ? now - activity.last_tick : 0;
+        std::snprintf(elapsed, sizeof(elapsed), "%llu", delta);
+    }
+    char message[384] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:exit-process-hardlock:total=%u:initialize=%u:handshake=%u:"
+                  "descriptor=%u:transform=%u:other=%u:rejected=%u:"
+                  "last_kind=%.31s:last_outcome=%.31s:last_bytes=%u:elapsed_ms=%s\r\n",
+                  activity.total,
+                  activity.initialize,
+                  activity.handshake,
+                  activity.descriptor,
+                  activity.transform,
+                  activity.other,
+                  activity.rejected,
+                  activity.last_kind,
+                  activity.last_outcome,
+                  activity.last_bytes,
+                  elapsed);
+    AppendVfsTraceMessage(message);
+}
+
+// Written from process detach for the exits the wrapper never sees, so every
+// run ends with one attribution record regardless of which path it took. The
+// exit code is not available here: during detach the process is still marked
+// active, so only the route is recorded.
+void ReportExitDetach()
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0')
+    {
+        return;
+    }
+    AppendVfsTraceMessage(
+        "re2dj:vfs:exit-detach:route=process_detach:wrapper=0:code=unknown\r\n");
+}
+
+// Records who ended the process. The guest exits deliberately once its own
+// checks fail, so the caller's address is what separates a protection
+// rejection from an ordinary shutdown. No budget guards this: it fires once
+// per process, and losing it would lose the whole point of the wrapper.
+void ReportExitProcess(const char* route, unsigned code, std::uintptr_t caller)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0')
+    {
+        return;
+    }
+    const std::uintptr_t image_base =
+        reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr));
+    const bool caller_in_image = image_base != 0 && caller >= image_base;
+    constexpr std::size_t kBytesBeforeCaller = 24;
+    constexpr std::size_t kBytesAfterCaller = 8;
+    unsigned char bytes[kBytesBeforeCaller + kBytesAfterCaller] = {};
+    SIZE_T copied = 0;
+    const std::uintptr_t base =
+        caller >= kBytesBeforeCaller ? caller - kBytesBeforeCaller : 0;
+    const BOOL readable =
+        base != 0 &&
+        ReadProcessMemory(GetCurrentProcess(),
+                          reinterpret_cast<const void*>(base),
+                          bytes,
+                          sizeof(bytes),
+                          &copied) != FALSE &&
+        copied == sizeof(bytes);
+    char hex[sizeof(bytes) * 2 + 1] = {};
+    for (SIZE_T index = 0; readable && index < copied; ++index)
+    {
+        std::snprintf(hex + index * 2, 3, "%02x", bytes[index]);
+    }
+    char message[320] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:exit-process:route=%.31s:code=%u:caller=0x%08x:image_base=0x%08x:"
+                  "caller_rva=0x%08x:in_image=%u:window_base=0x%08x:readable=%u:bytes=%s\r\n",
+                  route == nullptr ? "unknown" : route,
+                  code,
+                  static_cast<unsigned>(caller),
+                  static_cast<unsigned>(image_base),
+                  caller_in_image ? static_cast<unsigned>(caller - image_base) : 0U,
+                  caller_in_image ? 1U : 0U,
+                  static_cast<unsigned>(base),
+                  readable ? 1U : 0U,
+                  hex);
+    AppendVfsTraceMessage(message);
+}
+
 void ReportDynamicResolverName(const char* name,
                                const char* route,
                                std::uintptr_t address,
@@ -500,8 +622,8 @@ bool CompleteHardlockRequest(DWORD control_code,
     std::snprintf(message,
                   sizeof(message),
                   "re2dj:vfs:hardlock-device:request=%s:outcome=%s:bytes=%u:"
-                  "answered=%u:status_cleared=%u:tail=%u:"
-                  "mapped=%u:unmapped=%u\r\n",
+                  "handshake_answered=%u:status_cleared=%u:tail=%u:"
+                  "mapped=%u:unmapped=%u:tick_ms=%llu\r\n",
                   re2dj::hle::hardlock::HardlockRequestKindName(result.kind),
                   re2dj::hle::hardlock::HardlockOutcomeName(result.outcome),
                   static_cast<unsigned>(result.bytes_written),
@@ -509,8 +631,42 @@ bool CompleteHardlockRequest(DWORD control_code,
                   result.descriptor_status_cleared ? 1u : 0u,
                   result.descriptor_tail_written ? 1u : 0u,
                   static_cast<unsigned>(result.transform_blocks_mapped),
-                  static_cast<unsigned>(result.transform_blocks_unmapped));
+                  static_cast<unsigned>(result.transform_blocks_unmapped),
+                  static_cast<unsigned long long>(GetTickCount64()));
     AppendVfsTraceMessage(message);
+
+    // Same place, same facts, kept for the exit record. Counting here rather
+    // than parsing the trace back keeps the two in step even when the trace
+    // file is absent.
+    ++g_hardlock_activity.total;
+    switch (result.kind)
+    {
+        case re2dj::hle::hardlock::HardlockRequestKind::kInitialize:
+            ++g_hardlock_activity.initialize;
+            break;
+        case re2dj::hle::hardlock::HardlockRequestKind::kHandshake:
+            ++g_hardlock_activity.handshake;
+            break;
+        case re2dj::hle::hardlock::HardlockRequestKind::kDescriptor:
+            ++g_hardlock_activity.descriptor;
+            break;
+        case re2dj::hle::hardlock::HardlockRequestKind::kTransform:
+            ++g_hardlock_activity.transform;
+            break;
+        default:
+            ++g_hardlock_activity.other;
+            break;
+    }
+    if (result.outcome == re2dj::hle::hardlock::HardlockOutcome::kRejectedShape)
+    {
+        ++g_hardlock_activity.rejected;
+    }
+    g_hardlock_activity.last_kind =
+        re2dj::hle::hardlock::HardlockRequestKindName(result.kind);
+    g_hardlock_activity.last_outcome =
+        re2dj::hle::hardlock::HardlockOutcomeName(result.outcome);
+    g_hardlock_activity.last_bytes = static_cast<unsigned>(result.bytes_written);
+    g_hardlock_activity.last_tick = GetTickCount64();
 
     if (result.outcome == re2dj::hle::hardlock::HardlockOutcome::kRejectedShape)
     {
@@ -1152,6 +1308,41 @@ extern "C" __declspec(dllexport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
         return DISP_CHANGE_SUCCESSFUL;
     }
     return ChangeDisplaySettingsExA(device_name, dev_mode, window, flags, reserved);
+}
+
+// Observes the guest's own exit and then performs it. Nothing about the exit
+// changes: the wrapper exists because this executable resolves ExitProcess
+// through GetProcAddress, so the launcher's static IAT breakpoint never sees
+// the call.
+extern "C" __declspec(dllexport) void WINAPI Re2djHleExitProcess(UINT code)
+{
+    InterlockedExchange(&g_exit_wrapper_fired, 1);
+    ReportExitProcess("exit_process",
+                      static_cast<unsigned>(code),
+                      reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
+    ReportExitProcessHardlock();
+    ExitProcess(code);
+}
+
+// The observed code-1 exit reaches neither the ExitProcess wrapper nor process
+// detach, and the guest resolves TerminateProcess dynamically, which is the
+// one remaining way to end this process. Terminating self skips every cleanup
+// path, so this is the only place that exit can be attributed.
+extern "C" __declspec(dllexport) BOOL WINAPI Re2djHleTerminateProcess(HANDLE process,
+                                                                     UINT code)
+{
+    const bool terminates_self =
+        process == GetCurrentProcess() ||
+        (process != nullptr && GetProcessId(process) == GetCurrentProcessId());
+    if (terminates_self)
+    {
+        InterlockedExchange(&g_exit_wrapper_fired, 1);
+        ReportExitProcess("terminate_process",
+                          static_cast<unsigned>(code),
+                          reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
+        ReportExitProcessHardlock();
+    }
+    return TerminateProcess(process, code);
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsSetCurrentDirectoryA(LPCSTR name)
@@ -1892,6 +2083,25 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
                     name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
                 return result;
             }
+            // The guest ends itself through dynamically resolved exit APIs, so
+            // this is the only place those calls can be seen. Both are covered
+            // because an observed exit took the terminate path instead.
+            if (_stricmp(name, "ExitProcess") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djHleExitProcess);
+                ReportDynamicResolverName(
+                    name, "observe", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "TerminateProcess") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djHleTerminateProcess);
+                ReportDynamicResolverName(
+                    name, "observe", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
             // The guest opens resources by bare name after changing directory,
             // so these two decide what every later relative open means.
             if (_stricmp(name, "SetCurrentDirectoryA") == 0)
@@ -2038,6 +2248,15 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
         {
             return FALSE;
         }
+    }
+    if (reason == DLL_PROCESS_DETACH &&
+        InterlockedCompareExchange(&g_exit_wrapper_fired, 0, 0) == 0)
+    {
+        // Detach is the one point every exit crosses. Writing a trace line
+        // here runs under the loader lock, which is why it is limited to the
+        // two records that make an exit attributable and nothing else.
+        ReportExitDetach();
+        ReportExitProcessHardlock();
     }
     return TRUE;
 }

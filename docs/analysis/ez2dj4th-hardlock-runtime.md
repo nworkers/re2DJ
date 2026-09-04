@@ -1036,3 +1036,62 @@ The related Task 178 documents are [Task 178 design](../design/20260904-178-ez2d
 관련 Task 179 문서는 [Task 179 설계](../design/20260904-179-direct3d7-vertex-buffer-facade.md), [Task 179 작업 지시서](../work-orders/20260904-179-direct3d7-vertex-buffer-facade.md), [Task 179 작업 로그](../work-logs/20260904-179-direct3d7-vertex-buffer-facade.md)에 둡니다.
 
 The related Task 179 documents are [Task 179 design](../design/20260904-179-direct3d7-vertex-buffer-facade.md), [Task 179 work order](../work-orders/20260904-179-direct3d7-vertex-buffer-facade.md), and [Task 179 work log](../work-logs/20260904-179-direct3d7-vertex-buffer-facade.md).
+
+## 2026-09-04 자발적 종료를 부르는 것은 보호 스텁이다
+
+- **확인됨 — `ExitProcess`를 부르는 것은 보호 스텁입니다.** 관측 wrapper가 기록한 호출자 반환 주소는 `0x00aed26a`(`RVA 0x006ed26a`)이고, 그 앞 6바이트 `ff 15 cc e6 ae 00`은 `call dword [0x00aee6cc]`입니다. `0x00aed264 + 6`이 반환 주소와 정확히 맞습니다. 이 RVA는 진입점 `RVA 0x006e0240`과 같은 `.protect` 구간입니다.
+- **확인됨 — 정적 IAT 관측으로는 잡히지 않습니다.** 이 실행 파일은 `ExitProcess`를 `GetProcAddress`로 해석하므로 런처의 `--break-exit-process`가 심는 정적 slot이 존재하지 않고, 동적 resolver 자리에서만 관측됩니다. 호출도 스텁 자신의 import slot `0x00aee6cc`를 거칩니다.
+- **확인됨 — 종료 코드는 실행마다 다릅니다.** Task 179 실행은 `1`, 이번 실행은 `0xffffffff`입니다.
+- **확인됨 — Hardlock 요청 네 종류가 모두 완료 처리됩니다.** 한 실행에서 `handshake` 4회(6바이트), `initialize` 1회(0바이트), `transform` 36회(264바이트, `mapped=1`), `descriptor` 103회(256바이트, `status_cleared=1`)이며 전부 `outcome=completed`이고 거절은 없습니다. IOCTL 코드는 `0x9c40244c` 82회, `0x9c402458` 36회, `0x9c402450` 4회, `0x9c402468` 1회입니다. 로그의 `answered` 필드는 `result.handshake_answered`를 찍은 handshake 전용 값이므로, 다른 종류에서 0인 것은 미응답을 뜻하지 않습니다.
+- **확인됨 — 종료 직전 기록이 descriptor 요청입니다.** 두 건 모두 `outcome=completed`이고 256바이트를 씁니다. 다만 로그 순서만으로는 종료가 그 요청 직후인지 한참 뒤인지 알 수 없습니다.
+- **확인됨 — 실행이 타이틀과 모드 선택 자원까지 갑니다.** surface 1,484개를 만들고 `System/Title/Press.str`, `System/ez2catch/title/title-c.str`, `System/scratchmix/title/title-s.str`을 적재합니다. 접근 위반은 없습니다.
+- **추정 — 종료를 결정하는 것이 Hardlock 검사인지는 확실하지 않습니다.** 호출자가 보호 스텁 안이고 직전 기록이 Hardlock 요청이지만, 같은 실행에서 요청 144건이 모두 완료 처리되고도 게스트가 계속 진행했습니다. 스텁 안의 어느 검사가 이 분기를 만드는지도 아직 읽지 않았습니다.
+- **미확정 — 두 실행의 종료 코드가 다른 이유.**
+
+* **Confirmed — the protection stub calls `ExitProcess`.** The observation wrapper recorded caller `0x00aed26a` (`RVA 0x006ed26a`), preceded by `ff 15 cc e6 ae 00`, a `call dword [0x00aee6cc]` whose return address matches exactly. That RVA sits in the same `.protect` region as the entry point at `RVA 0x006e0240`.
+* **Confirmed — a static IAT observation cannot see this call,** because the executable resolves `ExitProcess` through `GetProcAddress` and calls it through the stub's own import slot.
+* **Confirmed — the exit code varies between runs:** `1` in the Task 179 run and `0xffffffff` here.
+* **Confirmed — all four Hardlock request kinds complete.** One run shows 4 handshakes (6 bytes), 1 initialize (0 bytes), 36 transforms (264 bytes, `mapped=1`), and 103 descriptors (256 bytes, `status_cleared=1`), every one `outcome=completed` with no rejection. The log's `answered` field prints `result.handshake_answered` and is handshake-specific, so a zero on another kind does not mean the request went unanswered.
+* **Confirmed — the records immediately before the exit are two descriptor requests,** both `outcome=completed` writing 256 bytes; log order alone cannot say whether the exit followed them immediately or long after.
+* **Confirmed — execution reaches title and mode-select resources** after 1,484 surfaces, with no access violation.
+* **Inferred — whether a Hardlock check decides the exit is not settled.** The caller is inside the stub and the preceding records are Hardlock requests, yet the same run completed all 144 of them and kept going, and the branch inside the stub has not been read.
+* **Unresolved — why the two runs exit with different codes.**
+
+```mermaid
+flowchart TD
+    A["guest: GetProcAddress(\"ExitProcess\")"] --> B[dynamic resolver returns the observation wrapper]
+    C["protect stub RVA 0x006ed264: call [0x00aee6cc]"] --> D[Re2djHleExitProcess]
+    D --> E["trace: code, caller, RVA, bytes"]
+    E --> F[real ExitProcess]
+    G["Hardlock descriptor: answered=0"] -.-> C
+```
+
+관련 Task 180 문서는 [Task 180 설계](../design/20260904-180-ez2dj4th-exit-process-source.md), [Task 180 작업 지시서](../work-orders/20260904-180-ez2dj4th-exit-process-source.md), [Task 180 작업 로그](../work-logs/20260904-180-ez2dj4th-exit-process-source.md)에 둡니다.
+
+The related Task 180 documents are [Task 180 design](../design/20260904-180-ez2dj4th-exit-process-source.md), [Task 180 work order](../work-orders/20260904-180-ez2dj4th-exit-process-source.md), and [Task 180 work log](../work-logs/20260904-180-ez2dj4th-exit-process-source.md).
+
+## 2026-09-04 종료 귀속 로그와 Hardlock 검토 종료
+
+- **확인됨 — 사용자 모드 종료 훅은 이 게스트에 닿지 않습니다.** `ExitProcess`와 `TerminateProcess`에 관측 wrapper를 달아 동적 resolver가 게스트에게 전달했는데도(`route=observe`) 어느 쪽도 불리지 않았고, `DLL_PROCESS_DETACH`도 실행되지 않았습니다. 같은 실행에서 스레드 11개가 모두 코드 `1`로 종료된 뒤 프로세스가 끝났습니다(`20260904-204959-444`).
+- **추정 — 종료는 kernel32 아래에서 일어납니다.** 사용자 모드 wrapper를 모두 비켜가면서 detach도 실행되지 않는 경로는 ntdll 수준의 강제 종료입니다. 해당 함수를 직접 확인하지는 않았습니다.
+- **확인됨 — tick 짝짓기는 종료 경로와 무관하게 동작합니다.** `hardlock-device` 줄과 런처의 `exit_process` 진단에 각각 `GetTickCount64` 값을 넣었습니다. `20260904-205408-549`에서 마지막 요청 `tick_ms=381776031`, 종료 `tick_ms=381779937`으로 간격 3,906ms를 얻었습니다. 종료 훅이 하나도 불리지 않은 실행입니다.
+- **확인됨 — 이번 종료는 Hardlock 요청 직후가 아닙니다.** 같은 실행의 마지막 요청 간격이 0, 28,016, 94, 23,344, 4,406ms로 흩어져 있어, 3,906ms는 정상 간격 범위 안입니다.
+- **확인됨 — Hardlock 요청은 계속 모두 완료됩니다.** 여섯 실행에서 네 종류 모두 `outcome=completed`이고 거절은 0건입니다. 한 실행 기준 `descriptor` 52–96회, `transform` 36회, `handshake` 4회, `initialize` 1회입니다.
+- **확인됨 — 로그 필드 이름을 정정했습니다.** `answered`를 `handshake_answered`로 바꿨습니다. 이 이름이 Task 180의 오독을 불렀습니다.
+- **미확정 — `exit-process`와 `exit-detach` 기록의 실제 출력.** 그것을 내보내는 종료가 관측 실행에서 일어나지 않았습니다. 진단 이벤트 상한에 도달한 실행은 런처가 `TerminateProcess`로 끝내므로 detach가 실행되지 않습니다.
+
+**Hardlock 검토는 여기서 종료합니다.** 근거는 네 가지입니다. 요청이 모두 처리되고, 응답이 진행을 막지 않으며(요청 90여 건을 지나 타이틀·모드 선택 자원까지 적재), 종료가 요청에 붙어 있지 않고, 종료 코드가 실행마다 다릅니다. 다시 열 조건은 `exit_process`의 `tick_ms`와 마지막 `hardlock-device`의 `tick_ms` 차이가 작고 그 요청의 `outcome`이 `completed`가 아닐 때입니다.
+
+* **Confirmed — user-mode exit hooks do not reach this guest.** Wrappers on `ExitProcess` and `TerminateProcess` were handed to the guest by the dynamic resolver and neither fired, and `DLL_PROCESS_DETACH` did not run; eleven threads exited with code `1` and the process ended.
+* **Inferred — the exit happens below kernel32,** since a path that bypasses every user-mode wrapper and skips detach is an ntdll-level termination. The function itself was not confirmed.
+* **Confirmed — tick pairing works regardless of the exit path.** With `GetTickCount64` on both the Hardlock request line and the launcher's exit diagnostic, a run where no exit hook fired still yielded an interval of 3,906 ms.
+* **Confirmed — that exit did not immediately follow a Hardlock request,** since request spacing in the same run ranged from 94 ms to 28,016 ms.
+* **Confirmed — Hardlock requests keep completing:** all four kinds `outcome=completed` with no rejection across six runs.
+* **Confirmed — the log field was renamed** from `answered` to `handshake_answered`, the name that caused the Task 180 misreading.
+* **Unresolved — the `exit-process` and `exit-detach` records have not been seen in a run,** because no observed exit took a path that emits them.
+
+**The Hardlock line closes here,** on four grounds — every request completes, answers do not gate progress, the exit is not adjacent to a request, and the exit code varies between runs — with an explicit reopening condition: a small tick difference together with a last request whose `outcome` is not `completed`.
+
+관련 Task 181 문서는 [Task 181 설계](../design/20260904-181-hardlock-exit-attribution-log.md), [Task 181 작업 지시서](../work-orders/20260904-181-hardlock-exit-attribution-log.md), [Task 181 작업 로그](../work-logs/20260904-181-hardlock-exit-attribution-log.md)에 둡니다.
+
+The related Task 181 documents are [Task 181 design](../design/20260904-181-hardlock-exit-attribution-log.md), [Task 181 work order](../work-orders/20260904-181-hardlock-exit-attribution-log.md), and [Task 181 work log](../work-logs/20260904-181-hardlock-exit-attribution-log.md).

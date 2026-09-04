@@ -728,8 +728,13 @@ void TraceDebugEvent(const DEBUG_EVENT& event)
                          static_cast<unsigned>(event.u.ExitThread.dwExitCode));
         break;
     case EXIT_PROCESS_DEBUG_EVENT:
-        RecordDiagnostic("{\"debug_event\":\"exit_process\",\"code\":\"0x%08x\"}",
-                         static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+        // The tick pairs with the one on each Hardlock request line. Some exits
+        // end the process below kernel32, where no in-process wrapper can
+        // observe them, and comparing the two ticks is what still says whether
+        // the protection acted just before the process died.
+        RecordDiagnostic("{\"debug_event\":\"exit_process\",\"code\":\"0x%08x\",\"tick_ms\":%llu}",
+                         static_cast<unsigned>(event.u.ExitProcess.dwExitCode),
+                         static_cast<unsigned long long>(GetTickCount64()));
         break;
     case OUTPUT_DEBUG_STRING_EVENT:
         break;
