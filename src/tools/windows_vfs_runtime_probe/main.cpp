@@ -52,6 +52,8 @@ extern "C" __declspec(dllimport) BOOL WINAPI Re2djDeviceIoControlMock(
     DWORD output_size, LPDWORD bytes_returned, LPOVERLAPPED overlapped);
 extern "C" __declspec(dllimport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
     LPCSTR device_name, DEVMODEA* dev_mode, HWND window, DWORD flags, LPVOID reserved);
+extern "C" __declspec(dllimport) LONG WINAPI Re2djHleChangeDisplaySettingsA(
+    DEVMODEA* dev_mode, DWORD flags);
 extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectDrawCreate(
     GUID* device_guid, LPDIRECTDRAW* direct_draw, IUnknown* outer);
 extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
@@ -590,6 +592,14 @@ int main()
                        std::string::npos,
                    "VFS trace is missing a device marker");
 
+    // The host display mode is never changed. The invariant these checks hold
+    // is not the return value alone but that the host mode is the same after
+    // every shape of request the boundary can receive.
+    DEVMODEA host_mode_before = {};
+    host_mode_before.dmSize = sizeof(host_mode_before);
+    const bool host_mode_read =
+        EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &host_mode_before) != FALSE;
+
     DEVMODEA guest_mode = {};
     guest_mode.dmSize = sizeof(guest_mode);
     guest_mode.dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
@@ -603,10 +613,13 @@ int main()
                                                      nullptr,
                                                      CDS_UPDATEREGISTRY,
                                                      nullptr) == DISP_CHANGE_SUCCESSFUL,
-                   "logical display mode was not accepted") &&
+                   "guest display mode request was not absorbed") &&
              Check(GetLastError() == ERROR_SUCCESS,
-                   "logical display mode did not clear last error");
+                   "absorbed display request did not clear last error");
 
+    // A named device, a mode the host cannot present, and CDS_TEST are all
+    // absorbed too: a request the boundary does not recognise is exactly the
+    // one that must not reach the host.
     DEVMODEA unsupported_mode = guest_mode;
     unsupported_mode.dmPelsWidth = 1;
     unsupported_mode.dmPelsHeight = 1;
@@ -616,8 +629,30 @@ int main()
                                                      &unsupported_mode,
                                                      nullptr,
                                                      CDS_TEST,
-                                                     nullptr) != DISP_CHANGE_SUCCESSFUL,
-                   "nonmatching display request did not use host fallback");
+                                                     nullptr) == DISP_CHANGE_SUCCESSFUL,
+                   "unrecognised display request was not absorbed") &&
+             Check(Re2djHleChangeDisplaySettingsExA(nullptr, nullptr, nullptr, 0, nullptr) ==
+                       DISP_CHANGE_SUCCESSFUL,
+                   "display mode restore request was not absorbed") &&
+             Check(Re2djHleChangeDisplaySettingsA(&guest_mode, CDS_UPDATEREGISTRY) ==
+                       DISP_CHANGE_SUCCESSFUL,
+                   "non-extended display request was not absorbed");
+
+    if (host_mode_read)
+    {
+        DEVMODEA host_mode_after = {};
+        host_mode_after.dmSize = sizeof(host_mode_after);
+        passed = passed &&
+                 Check(EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &host_mode_after) !=
+                           FALSE,
+                       "host display mode could not be read back") &&
+                 Check(host_mode_after.dmPelsWidth == host_mode_before.dmPelsWidth &&
+                           host_mode_after.dmPelsHeight == host_mode_before.dmPelsHeight &&
+                           host_mode_after.dmBitsPerPel == host_mode_before.dmBitsPerPel &&
+                           host_mode_after.dmDisplayFrequency ==
+                               host_mode_before.dmDisplayFrequency,
+                       "host display mode changed across the display boundary");
+    }
 
     LPDIRECTDRAW direct_draw = nullptr;
     LPDIRECTDRAW4 direct_draw4 = nullptr;

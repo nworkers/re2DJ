@@ -30,5 +30,6 @@
 | [ez2dj3rd-hardlock-function-0e.md](ez2dj3rd-hardlock-function-0e.md) | 3rd Hardlock device name, API descriptor, and Function 0x0e boundary | Device/API boundary confirmed; valid 0x0e response unresolved |
 | [ez2dj4th-chd-filesystem.md](ez2dj4th-chd-filesystem.md) | 4th Trax CHD v5, FAT32 geometry, directory and executable layout | Real `4thTrax.chd` read confirmed; cabinet boot sequence unresolved |
 | [ez2dj4th-hardlock-runtime.md](ez2dj4th-hardlock-runtime.md) | 4th Hardlock config, device/IOCTL sequence, DirectDraw/D3D7 startup, and validation boundary | Vendor driver, raw I/O, DDraw/D3D7 entry confirmed; D3D7 adapter pending |
+| [ez2dj4th-graphics-path.md](ez2dj4th-graphics-path.md) | 4th가 DirectX 7 경계에 요구하는 인터페이스·표면·디바이스와 현재 차단 지점 | 표면 형식과 디바이스 요구는 실행으로 확인됨, present와 종료 원인은 미확정 |
 
 *Update this table in the same task whenever an analysis document is added or renamed.*

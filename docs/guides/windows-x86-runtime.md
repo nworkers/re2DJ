@@ -54,7 +54,16 @@
 
 `[buttons]` 값은 `A`~`Z`, `0`~`9`, `F1`~`F24`, `ENTER`, `SPACE`, `LSHIFT`, `RSHIFT`, 방향키, `NUMPAD0`~`NUMPAD9`, `DECIMAL`, `NONE`을 지원한다. `[turntables] step`은 1~32다. 설정을 생략하면 I/O board는 idle 상태로 동작한다.
 
-창을 클릭하거나 이동한 뒤에도 화면 갱신이 계속되고 Windows 작업 관리자에서 응답 중인지 확인한다. fullscreen 종료 뒤 desktop 해상도가 바뀌지 않아야 한다.
+창을 클릭하거나 이동한 뒤에도 화면 갱신이 계속되고 Windows 작업 관리자에서 응답 중인지 확인한다.
+
+re2DJ는 실행 중 어느 시점에도 데스크탑 해상도를 바꾸지 않는다. 원본이 요구하는 해상도 변경은 경계에서 흡수되며, `--fullscreen`은 현재 해상도를 그대로 둔 채 모니터를 덮는 borderless 창이다. 실행 전후의 표시 모드가 같은지 확인하려면 다음처럼 비교한다.
+
+```powershell
+Get-CimInstance Win32_VideoController |
+  Select-Object CurrentHorizontalResolution, CurrentVerticalResolution, CurrentBitsPerPixel, CurrentRefreshRate
+```
+
+흡수된 요청은 실행 로그의 `re2dj:hle:display-mode:absorbed` 줄로 남는다. 근거는 [호스트 표시 모드 불변 정책 설계](../design/20260905-183-host-display-mode-policy.md)에 있다.
 
 제품은 원본 HDD의 `ez2dj.ini`를 수정하지 않고 `GAMEASSIGNMENTS/DemoVolume`만 기본 profile 3으로 재정의한다. profile 0..3은 원본 DirectSound 값 `-10000`, `-2222`, `-1111`, `0`에 대응한다. 원본 profile을 비교하려면 다음처럼 선택한다.
 
@@ -82,7 +91,7 @@ Run the product-loader command above from the repository root in PowerShell, rep
 
 The 3rd profile uses `roms\ez2dj3rd` relative to the repository root, so `re2dj ez2dj3rd` is sufficient to select `ez2dj\EZ2DJ.EXE` and run it. `--hdd <directory>` overrides that path. Its `EZ2DJ.INI` contains `FullScreen=1`; the current 3rd baseline follows the original configuration because the executable imports `DirectDrawCreateEx`, while the launcher’s DirectDraw/display hooks target different imports. The 3rd guest drive and Win32 directory remain unresolved because no `System.ini` is present.
 
-The default run uses a resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. It initially scales the original 640x480 logical display by 2x in each dimension. Add `--fullscreen` to the same command for monitor-sized borderless fullscreen without editing the original INI. After clicking or moving the window, confirm that frames continue and Task Manager still reports it as responsive. The desktop resolution must remain unchanged after fullscreen exits.
+The default run uses a resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. It initially scales the original 640x480 logical display by 2x in each dimension. Add `--fullscreen` to the same command for monitor-sized borderless fullscreen without editing the original INI. After clicking or moving the window, confirm that frames continue and Task Manager still reports it as responsive. re2DJ never changes the desktop resolution at any point in a run: the original's mode change is absorbed at the boundary, and `--fullscreen` is a borderless window covering the monitor at the unchanged resolution. Compare `Get-CimInstance Win32_VideoController` before and after a run to check it, and look for `re2dj:hle:display-mode:absorbed` lines in the run log.
 
 For keyboard I/O, copy and edit [`config/ez2dj-io.example.ini`](../../config/ez2dj-io.example.ini), then add `--io-config <path>` to the product command. Button values accept `A` through `Z`, digits, `F1` through `F24`, the named navigation/numpad keys shown above, or `NONE`; turntable `step` accepts 1 through 32. Omitting the option leaves the emulated board idle.
 

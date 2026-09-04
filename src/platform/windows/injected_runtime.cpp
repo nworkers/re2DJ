@@ -21,8 +21,10 @@
 #include "re2dj/storage/guest_path.h"
 #include "direct3d3_com_facade.h"
 #include "directdraw7_com_facade.h"
+#include "display_mode_boundary.h"
 #include "ez2dj_keyboard_input.h"
 #include "message_box_boundary.h"
+#include "directinput7_com_facade.h"
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
@@ -78,7 +80,6 @@ constexpr char kWindowsDirectoryMessage[] = "re2dj:hle:GetWindowsDirectoryA";
 constexpr char kCreateFileMessage[] = "re2dj:vfs:CreateFileA";
 constexpr char kFileApiMessage[] = "re2dj:vfs:file-api";
 constexpr char kDeviceIoControlMessage[] = "re2dj:device:DeviceIoControl";
-constexpr char kDisplayModeMessage[] = "re2dj:hle:ChangeDisplaySettingsExA";
 constexpr char kExitProcessMessage[] = "re2dj:probe:ExitProcess";
 
 re2dj::input::LegacyIoPortBus g_legacy_io_port_bus;
@@ -1289,27 +1290,6 @@ void ReportVfsCurrentDirectory(const char* stage,
 
 }  // namespace
 
-extern "C" __declspec(dllexport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
-    LPCSTR device_name,
-    DEVMODEA* dev_mode,
-    HWND window,
-    DWORD flags,
-    LPVOID reserved)
-{
-    constexpr DWORD kRequiredFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
-    if (device_name == nullptr && dev_mode != nullptr && window == nullptr &&
-        flags == CDS_UPDATEREGISTRY && reserved == nullptr &&
-        (dev_mode->dmFields & kRequiredFields) == kRequiredFields &&
-        dev_mode->dmPelsWidth == 640 && dev_mode->dmPelsHeight == 480 &&
-        dev_mode->dmBitsPerPel == 16)
-    {
-        OutputDebugStringA(kDisplayModeMessage);
-        SetLastError(ERROR_SUCCESS);
-        return DISP_CHANGE_SUCCESSFUL;
-    }
-    return ChangeDisplaySettingsExA(device_name, dev_mode, window, flags, reserved);
-}
-
 // Observes the guest's own exit and then performs it. Nothing about the exit
 // changes: the wrapper exists because this executable resolves ExitProcess
 // through GetProcAddress, so the launcher's static IAT breakpoint never sees
@@ -2025,6 +2005,33 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
         reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     if (name != nullptr && reinterpret_cast<std::uintptr_t>(name) > 0xffffu)
     {
+        // The host display mode is never changed, so this boundary is not tied
+        // to any diagnostic flag. A guest that resolves its imports through
+        // GetProcAddress would otherwise reach the real API.
+        if (_stricmp(name, "ChangeDisplaySettingsExA") == 0)
+        {
+            const FARPROC result =
+                reinterpret_cast<FARPROC>(&Re2djHleChangeDisplaySettingsExA);
+            ReportDynamicResolverName(
+                name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+            return result;
+        }
+        if (_stricmp(name, "ChangeDisplaySettingsA") == 0)
+        {
+            const FARPROC result =
+                reinterpret_cast<FARPROC>(&Re2djHleChangeDisplaySettingsA);
+            ReportDynamicResolverName(
+                name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+            return result;
+        }
+        if (_stricmp(name, "DirectInputCreateA") == 0)
+        {
+            const FARPROC result =
+                reinterpret_cast<FARPROC>(&Re2djHleDirectInputCreateA);
+            ReportDynamicResolverName(
+                name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+            return result;
+        }
         if (g_re2dj_vfs_dynamic_resolver != 0)
         {
             if (_stricmp(name, "CreateFileA") == 0)

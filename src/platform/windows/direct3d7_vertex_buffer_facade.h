@@ -2,20 +2,14 @@
 
 #include <windows.h>
 
-#include "directdraw_com_context.h"
-
-struct IDirect3DVertexBuffer7;
-struct _D3DVERTEXBUFFERDESC;
+#include "directdraw_legacy_interop.h"
 
 namespace re2dj::platform::windows
 {
 
-// Creates an IDirect3DVertexBuffer7 backed by the platform-neutral vertex
-// storage. The guest locks the buffer immediately after creating it and does
-// not check the result, so this either yields a usable interface or reports a
-// real failure; it never reports success with a null interface.
-HRESULT CreateDirect3DVertexBuffer7Facade(DirectDrawComContext* context,
-                                          const _D3DVERTEXBUFFERDESC* descriptor,
-                                          IDirect3DVertexBuffer7** out);
+// The IDirect3DVertexBuffer7 table, typed as the DirectX 6 table it extends so
+// the shared facade can install it on the vertex buffers it creates without
+// naming DirectX 7 types. The object is the same object either way.
+const IDirect3DVertexBufferVtbl* Direct3DVertexBuffer7VtableAsLegacy();
 
 }  // namespace re2dj::platform::windows

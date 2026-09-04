@@ -126,7 +126,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -3063,6 +3063,459 @@ constexpr std::uint32_t kEz2dj4thNullContextObjectSourceBoundaryRva = 0x001a64c;
 constexpr std::uint32_t kEz2dj4thTextRva = 0x00001000;
 constexpr std::uint32_t kEz2dj4thTextVirtualSize = 0x000db022;
 constexpr std::uint32_t kNullContextFieldWriterHitLimit = 64;
+
+// Finds the instructions that reference one 32-bit constant in the guest's
+// decrypted .text.
+//
+// The question this answers is which code writes a field that a fault shows to
+// be empty. A write watchpoint cannot answer it: in the failing run nobody
+// writes the field, so the watchpoint never fires. Locating the writer has to
+// come first, and because the executable is packed the search runs against the
+// live process rather than the file.
+//
+// This is a byte search, not a disassembler. A constant can appear at a
+// position that is not an instruction boundary, so every result carries the
+// surrounding bytes for a person to confirm.
+
+// Classifies what an instruction does to the operand the constant addresses.
+// Anything not recognised stays "other" rather than being guessed at: a
+// misfiled write would send the investigation to the wrong code.
+const char* ClassifyFieldReferenceOpcode(std::uint8_t opcode, std::uint8_t modrm)
+{
+    switch (opcode)
+    {
+        case 0x8b:  // mov r32, r/m32
+        case 0x3b:  // cmp r32, r/m32
+        case 0x03:  // add r32, r/m32
+        case 0x2b:  // sub r32, r/m32
+        case 0x33:  // xor r32, r/m32
+        case 0x0b:  // or  r32, r/m32
+        case 0x23:  // and r32, r/m32
+        case 0x39:  // cmp r/m32, r32
+            return "read";
+        case 0x89:  // mov r/m32, r32
+        case 0xc7:  // mov r/m32, imm32
+            return "write";
+        case 0x01:  // add r/m32, r32
+        case 0x29:  // sub r/m32, r32
+        case 0x31:  // xor r/m32, r32
+        case 0x09:  // or  r/m32, r32
+        case 0x21:  // and r/m32, r32
+            return "modify";
+        case 0x83:  // group 1 r/m32, imm8
+        case 0x81:  // group 1 r/m32, imm32
+        case 0x80:  // group 1 r/m8, imm8
+        {
+            // Group 1 packs eight operations into one opcode and the reg field
+            // selects which. Seven of them write the operand; the eighth, cmp,
+            // only reads it. Calling a cmp a write would point the search at a
+            // null check instead of at an assignment.
+            const std::uint8_t reg = static_cast<std::uint8_t>((modrm >> 3) & 0x07u);
+            return reg == 0x07u ? "read" : "modify";
+        }
+        case 0x8d:  // lea r32, m
+            return "address";
+        case 0xff:
+        {
+            // The reg field selects the operation: 0 inc, 1 dec, 2 and 3 call,
+            // 4 and 5 jmp, 6 push.
+            const std::uint8_t reg = static_cast<std::uint8_t>((modrm >> 3) & 0x07u);
+            if (reg == 0 || reg == 1)
+            {
+                return "modify";
+            }
+            if (reg == 6)
+            {
+                return "read";
+            }
+            return "indirect";
+        }
+        default:
+            return "other";
+    }
+}
+
+// A hardware write watchpoint on one guest address.
+//
+// A byte search of the guest's code can only find writes it can recognise as
+// instructions. This traps the write itself, so it sees a bulk copy, a computed
+// address, and code in any section alike - which is what separates "the field is
+// installed somewhere the search cannot see" from "the install never runs".
+//
+// Debug register 1 carries the watch. All four registers are claimed by one
+// diagnostic or another, so the modes that also use Dr1 are rejected on the
+// command line rather than silently overwriting each other.
+constexpr DWORD kFieldWriteWatchStatus = static_cast<DWORD>(1u << 1);
+constexpr DWORD kFieldWriteWatchEnable = static_cast<DWORD>(1u << 2);
+// R/W1 = 01 (write) at bits 20-21, LEN1 = 11 (four bytes) at bits 22-23.
+constexpr DWORD kFieldWriteWatchControl =
+    static_cast<DWORD>(0x1u << 20) | static_cast<DWORD>(0x3u << 22);
+constexpr DWORD kFieldWriteWatchMask =
+    kFieldWriteWatchEnable | static_cast<DWORD>(0xfu << 20);
+constexpr std::uint32_t kFieldWriteWatchHitLimit = 64;
+
+struct FieldWriteWatchState
+{
+    std::uint32_t hit_count = 0;
+    std::uint32_t recorded_count = 0;
+};
+
+bool SetFieldWriteWatch(HANDLE thread, std::uintptr_t address, std::string* error)
+{
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot read debug registers for the field write watch";
+        return false;
+    }
+    context.Dr1 = static_cast<DWORD>(address);
+    context.Dr6 = 0;
+    context.Dr7 &= ~kFieldWriteWatchMask;
+    context.Dr7 |= kFieldWriteWatchEnable | kFieldWriteWatchControl;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        *error = "cannot set the field write watch";
+        return false;
+    }
+    CONTEXT verified = {};
+    verified.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(thread, &verified) == FALSE ||
+        verified.Dr1 != context.Dr1 ||
+        (verified.Dr7 & kFieldWriteWatchMask) !=
+            (kFieldWriteWatchEnable | kFieldWriteWatchControl))
+    {
+        *error = "the field write watch was not retained";
+        return false;
+    }
+    return true;
+}
+
+bool HandleFieldWriteWatchHit(HANDLE process,
+                              DWORD thread_id,
+                              std::uintptr_t address,
+                              std::uintptr_t image_base,
+                              const re2dj::exe::PeImageInfo* image_info,
+                              FieldWriteWatchState* state,
+                              bool* handled,
+                              std::string* error)
+{
+    *handled = false;
+    HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, thread_id);
+    if (thread == nullptr)
+    {
+        *error = "cannot open the thread that hit the field write watch";
+        return false;
+    }
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS | CONTEXT_CONTROL | CONTEXT_INTEGER;
+    if (GetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot read the context of a field write watch hit";
+        return false;
+    }
+    if ((context.Dr6 & kFieldWriteWatchStatus) == 0)
+    {
+        CloseHandle(thread);
+        return true;
+    }
+
+    ++state->hit_count;
+    // A data breakpoint traps after the store completes, so the value at the
+    // address is the value that was just written and EIP is the instruction
+    // after the one that wrote it.
+    std::uint32_t written_value = 0;
+    const bool value_readable = ReadRemoteU32(process, address, &written_value);
+    std::uint32_t return_address = 0;
+    const bool return_readable =
+        context.Ebp != 0 && ReadRemoteU32(process, context.Ebp + 4, &return_address);
+    const bool eip_in_image = context.Eip >= image_base;
+    const std::uint32_t eip_rva =
+        eip_in_image ? static_cast<std::uint32_t>(context.Eip - image_base) : 0;
+    const bool return_in_image = return_readable && return_address >= image_base;
+    const std::uint32_t return_rva =
+        return_in_image ? static_cast<std::uint32_t>(return_address - image_base) : 0;
+    // Sixteen bytes before EIP so the storing instruction can be decoded, and a
+    // few after for context.
+    const std::uintptr_t window_base = context.Eip >= 16 ? context.Eip - 16 : image_base;
+    const RemoteBufferSnapshot window = ReadRemoteBufferSnapshot(process, window_base, 24);
+
+    if (state->recorded_count < kFieldWriteWatchHitLimit)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"field_write_watch_hit\",\"sequence\":%u,\"thread\":%u,\"address\":\"0x%08x\",\"value\":\"0x%08x\",\"value_readable\":%s,\"eip\":\"0x%08x\",\"eip_in_image\":%s,\"eip_rva\":\"0x%08x\",\"section\":\"%s\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"ebx\":\"0x%08x\",\"esi\":\"0x%08x\",\"edi\":\"0x%08x\",\"ebp\":\"0x%08x\",\"esp\":\"0x%08x\",\"return\":\"0x%08x\",\"return_readable\":%s,\"return_rva\":\"0x%08x\",\"window_base\":\"0x%08x\",\"window_readable\":%s,\"bytes\":\"%s\"}",
+            state->hit_count,
+            static_cast<unsigned>(thread_id),
+            static_cast<unsigned>(address),
+            static_cast<unsigned>(written_value),
+            value_readable ? "true" : "false",
+            static_cast<unsigned>(context.Eip),
+            eip_in_image ? "true" : "false",
+            eip_rva,
+            image_info == nullptr || !eip_in_image
+                ? "<unknown>"
+                : FindSectionNameForRva(*image_info, eip_rva),
+            static_cast<unsigned>(context.Eax),
+            static_cast<unsigned>(context.Ecx),
+            static_cast<unsigned>(context.Edx),
+            static_cast<unsigned>(context.Ebx),
+            static_cast<unsigned>(context.Esi),
+            static_cast<unsigned>(context.Edi),
+            static_cast<unsigned>(context.Ebp),
+            static_cast<unsigned>(context.Esp),
+            static_cast<unsigned>(return_address),
+            return_readable ? "true" : "false",
+            return_rva,
+            static_cast<unsigned>(window_base),
+            window.readable ? "true" : "false",
+            window.bytes.c_str());
+        ++state->recorded_count;
+    }
+
+    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    context.Dr6 = 0;
+    if (SetThreadContext(thread, &context) == FALSE)
+    {
+        CloseHandle(thread);
+        *error = "cannot clear the field write watch status";
+        return false;
+    }
+    CloseHandle(thread);
+    *handled = true;
+    return true;
+}
+
+// Reads a byte window around one guest address.
+//
+// The 4th's .text is ciphertext on disk and is decrypted only in the running
+// process, so its code cannot be read from the file at all. Every address this
+// investigation needs - a constructor's caller, the frames above a fault - is
+// known only as a return address, which points just past the call that produced
+// it. The window is therefore centred on the given address rather than starting
+// at it, so the call and the branch before it come into view.
+struct GuestCodeWindowRequest
+{
+    std::uintptr_t address = 0;
+    std::uint32_t length = 0;
+};
+
+constexpr std::uint32_t kGuestCodeWindowDefaultLength = 128;
+constexpr std::uint32_t kGuestCodeWindowMaxLength = 512;
+
+void CaptureGuestCodeWindow(HANDLE process,
+                            std::uintptr_t image_base,
+                            const re2dj::exe::PeImageInfo* image_info,
+                            const GuestCodeWindowRequest& request)
+{
+    const std::uint32_t length = request.length == 0 ? kGuestCodeWindowDefaultLength
+                                                     : request.length;
+    const std::uintptr_t lead = length / 2;
+    const std::uintptr_t window_base =
+        request.address > lead ? request.address - lead : request.address;
+    std::vector<std::uint8_t> bytes(length);
+    SIZE_T copied = 0;
+    const bool readable = ReadProcessMemory(process,
+                                            reinterpret_cast<const void*>(window_base),
+                                            bytes.data(),
+                                            bytes.size(),
+                                            &copied) != FALSE &&
+                          copied != 0;
+    const bool in_image = request.address >= image_base;
+    const std::uint32_t rva =
+        in_image ? static_cast<std::uint32_t>(request.address - image_base) : 0;
+    std::string text;
+    if (readable)
+    {
+        text.reserve(static_cast<std::size_t>(copied) * 2);
+        char pair[3] = {};
+        for (SIZE_T index = 0; index < copied; ++index)
+        {
+            std::snprintf(pair, sizeof(pair), "%02x", bytes[index]);
+            text.append(pair);
+        }
+    }
+    RecordDiagnostic(
+        "{\"event\":\"guest_code_window\",\"address\":\"0x%08x\",\"rva\":\"0x%08x\",\"in_image\":%s,\"section\":\"%s\",\"window_base\":\"0x%08x\",\"window_rva\":\"0x%08x\",\"requested\":%u,\"copied\":%u,\"readable\":%s,\"bytes\":\"%s\"}",
+        static_cast<unsigned>(request.address),
+        rva,
+        in_image ? "true" : "false",
+        image_info == nullptr || !in_image ? "<unknown>"
+                                           : FindSectionNameForRva(*image_info, rva),
+        static_cast<unsigned>(window_base),
+        static_cast<unsigned>(window_base >= image_base ? window_base - image_base : 0),
+        length,
+        static_cast<unsigned>(copied),
+        readable ? "true" : "false",
+        text.c_str());
+}
+
+void ScanGuestFieldReferences(HANDLE process,
+                              std::uintptr_t image_base,
+                              const re2dj::exe::PeImageInfo* image_info,
+                              std::uint32_t constant)
+{
+    constexpr std::uint32_t kMatchLimit = 96;
+    const std::uintptr_t text_base = image_base + kEz2dj4thTextRva;
+    std::vector<std::uint8_t> bytes(kEz2dj4thTextVirtualSize);
+    SIZE_T copied = 0;
+    const bool readable =
+        ReadProcessMemory(process,
+                          reinterpret_cast<const void*>(text_base),
+                          bytes.data(),
+                          bytes.size(),
+                          &copied) != FALSE &&
+        copied == bytes.size();
+    if (!readable)
+    {
+        RecordDiagnostic(
+            "{\"event\":\"field_reference_scan\",\"constant\":\"0x%08x\",\"readable\":false,\"text_base\":\"0x%08x\",\"bytes_copied\":%u,\"matches\":0,\"writes\":0,\"recorded\":0,\"capped\":false}",
+            constant,
+            static_cast<unsigned>(text_base),
+            static_cast<unsigned>(copied));
+        return;
+    }
+
+    const auto read_u32 = [&bytes](std::size_t at) {
+        return static_cast<std::uint32_t>(bytes[at]) |
+               (static_cast<std::uint32_t>(bytes[at + 1]) << 8) |
+               (static_cast<std::uint32_t>(bytes[at + 2]) << 16) |
+               (static_cast<std::uint32_t>(bytes[at + 3]) << 24);
+    };
+
+    std::uint32_t match_count = 0;
+    std::uint32_t write_count = 0;
+    std::uint32_t recorded = 0;
+    bool capped = false;
+    for (std::size_t index = 0; index + 7 <= bytes.size(); ++index)
+    {
+        const std::uint8_t opcode = bytes[index];
+        const std::uint8_t modrm = bytes[index + 1];
+        const std::uint8_t mod = static_cast<std::uint8_t>(modrm & 0xc0u);
+        const std::uint8_t rm = static_cast<std::uint8_t>(modrm & 0x07u);
+
+        std::size_t displacement_at = 0;
+        const char* form = nullptr;
+        // Forms that carry the constant as an immediate rather than as a
+        // memory displacement. Code that computes a field address before
+        // storing through it leaves the offset here instead.
+        if (opcode >= 0xb8u && opcode <= 0xbfu)
+        {
+            // mov r32, imm32
+            if (index + 5 <= bytes.size() && read_u32(index + 1) == constant)
+            {
+                displacement_at = index + 1;
+                form = "imm32-mov";
+            }
+            else
+            {
+                continue;
+            }
+        }
+        else if (opcode == 0x68u)
+        {
+            // push imm32
+            if (index + 5 <= bytes.size() && read_u32(index + 1) == constant)
+            {
+                displacement_at = index + 1;
+                form = "imm32-push";
+            }
+            else
+            {
+                continue;
+            }
+        }
+        else if (opcode == 0x81u && mod == 0xc0u)
+        {
+            // group 1 r32, imm32 - register destination, so the constant is
+            // being folded into an address rather than addressing memory.
+            if (index + 6 <= bytes.size() && read_u32(index + 2) == constant)
+            {
+                displacement_at = index + 2;
+                form = "imm32-alu";
+            }
+            else
+            {
+                continue;
+            }
+        }
+        else if (mod == 0x80u)
+        {
+            // A base register with a 32-bit displacement. rm == 100 means a SIB
+            // byte sits between the ModRM and the displacement; missing that
+            // case would drop every indexed access to the field.
+            displacement_at = index + (rm == 0x04u ? 3u : 2u);
+            form = rm == 0x04u ? "base+sib+disp32" : "base+disp32";
+        }
+        else if (mod == 0x00u && rm == 0x05u)
+        {
+            displacement_at = index + 2;
+            form = "absolute";
+        }
+        else
+        {
+            continue;
+        }
+        if (displacement_at + 4 > bytes.size() || read_u32(displacement_at) != constant)
+        {
+            continue;
+        }
+
+        const char* const kind = std::strncmp(form, "imm32", 5) == 0
+                                     ? "offset-load"
+                                     : ClassifyFieldReferenceOpcode(opcode, modrm);
+        ++match_count;
+        if (std::strcmp(kind, "write") == 0 || std::strcmp(kind, "modify") == 0)
+        {
+            ++write_count;
+        }
+        if (recorded >= kMatchLimit)
+        {
+            capped = true;
+            continue;
+        }
+
+        // Eight bytes before and after, so the instruction and its neighbours
+        // can be decoded by hand from the record alone.
+        const std::size_t window_start = index >= 8 ? index - 8 : 0;
+        const std::size_t window_end = (std::min)(bytes.size(), displacement_at + 12);
+        char window_text[80] = {};
+        std::size_t written = 0;
+        for (std::size_t at = window_start;
+             at < window_end && written + 2 < sizeof(window_text);
+             ++at)
+        {
+            std::snprintf(window_text + written, 3, "%02x", bytes[at]);
+            written += 2;
+        }
+        const std::uint32_t rva = static_cast<std::uint32_t>(kEz2dj4thTextRva + index);
+        RecordDiagnostic(
+            "{\"event\":\"field_reference\",\"constant\":\"0x%08x\",\"rva\":\"0x%08x\",\"address\":\"0x%08x\",\"kind\":\"%s\",\"form\":\"%s\",\"opcode\":\"0x%02x\",\"modrm\":\"0x%02x\",\"section\":\"%s\",\"window_rva\":\"0x%08x\",\"bytes\":\"%s\"}",
+            constant,
+            rva,
+            static_cast<unsigned>(text_base + index),
+            kind,
+            form,
+            static_cast<unsigned>(opcode),
+            static_cast<unsigned>(modrm),
+            image_info == nullptr ? "<unknown>"
+                                 : FindSectionNameForRva(*image_info, rva),
+            static_cast<unsigned>(kEz2dj4thTextRva + window_start),
+            window_text);
+        ++recorded;
+    }
+
+    RecordDiagnostic(
+        "{\"event\":\"field_reference_scan\",\"constant\":\"0x%08x\",\"readable\":true,\"text_base\":\"0x%08x\",\"bytes_copied\":%u,\"matches\":%u,\"writes\":%u,\"recorded\":%u,\"capped\":%s}",
+        constant,
+        static_cast<unsigned>(text_base),
+        static_cast<unsigned>(copied),
+        match_count,
+        write_count,
+        recorded,
+        capped ? "true" : "false");
+}
+
 constexpr std::uint32_t kNullContextFieldReferenceLimit = 128;
 constexpr DWORD kNullContextFieldBreakpointStatus = static_cast<DWORD>(1u << 3);
 constexpr DWORD kNullContextFieldBreakpointEnable = static_cast<DWORD>(1u << 6);
@@ -5319,6 +5772,9 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                   bool null_context_object_reference_scan,
                                   bool null_context_entry_trace,
                                   bool scan_fault_references,
+                                  const std::vector<std::uint32_t>& field_reference_scan_constants,
+                                  std::uintptr_t field_write_watch_address,
+                                  const std::vector<GuestCodeWindowRequest>& code_windows,
                                   bool trace,
                                   std::uint32_t lptdi_post_ioctl_trace_steps,
                                   std::uint32_t lptdi_post_ioctl_trace_code,
@@ -5370,6 +5826,9 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
     }
     std::set<std::uintptr_t> dynamic_module_bases;
     bool original_initializer_recorded = false;
+    bool field_references_scanned = false;
+    FieldWriteWatchState field_write_watch_state;
+    bool code_windows_captured = false;
     bool unload_tail_collecting = false;
     DWORD unload_tail_thread = 0;
     std::vector<InstructionSample> unload_history;
@@ -5636,6 +6095,22 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 event.dwThreadId,
                 event.u.Exception.ExceptionRecord,
                 event.u.Exception.dwFirstChance != 0);
+        }
+        if (field_write_watch_address != 0 &&
+            event.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT)
+        {
+            // Debug registers are per thread, so a thread armed late writes the
+            // field unobserved.
+            if (!SetFieldWriteWatch(event.u.CreateThread.hThread,
+                                    field_write_watch_address,
+                                    error))
+            {
+                return false;
+            }
+            RecordDiagnostic(
+                "{\"event\":\"field_write_watch_thread_armed\",\"thread\":%u,\"address\":\"0x%08x\"}",
+                static_cast<unsigned>(event.dwThreadId),
+                static_cast<unsigned>(field_write_watch_address));
         }
         if ((allocation_trace || slot_writer_trace || null_context_object_source_trace ||
              null_context_field_access_trace ||
@@ -7303,6 +7778,34 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 }
             }
         }
+        if (field_write_watch_address != 0 &&
+            event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+            event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP)
+        {
+            bool handled = false;
+            if (!HandleFieldWriteWatchHit(process,
+                                          event.dwThreadId,
+                                          field_write_watch_address,
+                                          image_base,
+                                          image_info,
+                                          &field_write_watch_state,
+                                          &handled,
+                                          error))
+            {
+                return false;
+            }
+            if (handled)
+            {
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue a field write watch hit";
+                    return false;
+                }
+                continue;
+            }
+        }
         if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT)
         {
             if (event.u.Exception.dwFirstChance != 0 &&
@@ -7313,6 +7816,25 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                              event.u.Exception.ExceptionRecord,
                                              image_base,
                                              image_info);
+                // The packed image is decrypted by the time it faults, so this
+                // is where a scan of the guest's own code can run. Once per
+                // run: the answer does not change between faults.
+                if (!field_reference_scan_constants.empty() && !field_references_scanned)
+                {
+                    field_references_scanned = true;
+                    for (const std::uint32_t constant : field_reference_scan_constants)
+                    {
+                        ScanGuestFieldReferences(process, image_base, image_info, constant);
+                    }
+                }
+                if (!code_windows.empty() && !code_windows_captured)
+                {
+                    code_windows_captured = true;
+                    for (const GuestCodeWindowRequest& request : code_windows)
+                    {
+                        CaptureGuestCodeWindow(process, image_base, image_info, request);
+                    }
+                }
             }
             if (scan_fault_references &&
                 event.u.Exception.dwFirstChance != 0 &&
@@ -7360,8 +7882,8 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
             }
                 HANDLE thread = OpenThread(THREAD_GET_CONTEXT, FALSE, event.dwThreadId);
                 CONTEXT context = {};
-                context.ContextFlags = CONTEXT_CONTROL;
-                std::uint32_t stack[4] = {};
+                context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                std::uint32_t stack[16] = {};
                 SIZE_T stack_copied = 0;
                 if (thread != nullptr && GetThreadContext(thread, &context) != FALSE &&
                     ReadProcessMemory(process,
@@ -7369,14 +7891,41 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                                       stack,
                                       sizeof(stack),
                                       &stack_copied) != FALSE &&
-                    stack_copied == sizeof(stack))
+                    stack_copied >= sizeof(std::uint32_t))
                 {
-                    RecordDiagnostic("{\"exception_esp\":\"0x%08x\",\"exception_stack\":[\"0x%08x\",\"0x%08x\",\"0x%08x\",\"0x%08x\"]}",
+                    const std::size_t words = stack_copied / sizeof(std::uint32_t);
+                    std::string words_json;
+                    for (std::size_t i = 0; i < words; ++i)
+                    {
+                        if (i > 0) words_json += ",";
+                        char buf[16] = {};
+                        std::snprintf(buf, sizeof(buf), "\"0x%08x\"", stack[i]);
+                        words_json += buf;
+                    }
+                    std::uint32_t frame[16] = {};
+                    SIZE_T frame_copied = 0;
+                    std::string frame_json;
+                    if (ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(context.Ebp),
+                                          frame,
+                                          sizeof(frame),
+                                          &frame_copied) != FALSE &&
+                        frame_copied >= sizeof(std::uint32_t))
+                    {
+                        const std::size_t fwords = frame_copied / sizeof(std::uint32_t);
+                        for (std::size_t i = 0; i < fwords; ++i)
+                        {
+                            if (i > 0) frame_json += ",";
+                            char buf[16] = {};
+                            std::snprintf(buf, sizeof(buf), "\"0x%08x\"", frame[i]);
+                            frame_json += buf;
+                        }
+                    }
+                    RecordDiagnostic("{\"exception_esp\":\"0x%08x\",\"exception_ebp\":\"0x%08x\",\"exception_stack\":[%s],\"exception_frame\":[%s]}",
                                      static_cast<unsigned>(context.Esp),
-                                     stack[0],
-                                     stack[1],
-                                     stack[2],
-                                     stack[3]);
+                                     static_cast<unsigned>(context.Ebp),
+                                     words_json.c_str(),
+                                     frame_json.c_str());
                 }
                 if (thread != nullptr)
                 {
@@ -7400,7 +7949,7 @@ bool WaitForExitProcessBreakpoint(HANDLE process,
                 }
             }
         if (event.dwDebugEventCode == UNLOAD_DLL_DEBUG_EVENT && api_watches != nullptr &&
-            !unload_tail_collecting && last_activity_thread != 0)
+            !api_watches->empty() && !unload_tail_collecting && last_activity_thread != 0)
         {
             const std::uintptr_t unloaded_base = reinterpret_cast<std::uintptr_t>(
                 event.u.UnloadDll.lpBaseOfDll);
@@ -7865,6 +8414,12 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool probe_exit_process = false;
     bool break_exit_process = false;
     bool scan_fault_references = false;
+    // Constants to look for in the guest's decrypted .text at the first fault.
+    std::vector<std::uint32_t> field_reference_scan_constants;
+    // Guest address whose writes are watched, or zero for no watch.
+    std::uintptr_t field_write_watch_address = 0;
+    // Guest addresses whose surrounding bytes are captured at the first fault.
+    std::vector<GuestCodeWindowRequest> code_windows;
     bool slot_writer_trace = false;
     bool null_context_object_source_trace = false;
     bool null_context_field_writer_early_trace = false;
@@ -7976,6 +8531,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         }
         else if (option == "--hle-display-mode")
         {
+            // The display boundary is installed on every injected run because
+            // the host mode is never changed. This option now only asks the
+            // launcher to inject the runtime and to wait for the boundary's
+            // first record, which is what the older diagnostic runs used it for.
             hle_display_mode = true;
             inject_runtime = true;
             software_breakpoint = true;
@@ -8249,6 +8808,105 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             break_exit_process = true;
             software_breakpoint = true;
         }
+        else if (option == "--code-window" && index + 1 < argc)
+        {
+            try
+            {
+                const std::string value = argv[++index];
+                const std::size_t separator = value.find(':');
+                const std::string address_text = value.substr(0, separator);
+                std::size_t parsed = 0;
+                const unsigned long address_value =
+                    std::stoul(address_text, &parsed, 16);
+                if (parsed != address_text.size() || address_value == 0 ||
+                    address_value > (std::numeric_limits<std::uint32_t>::max)())
+                {
+                    throw std::out_of_range("code window address");
+                }
+                GuestCodeWindowRequest request;
+                request.address = static_cast<std::uintptr_t>(address_value);
+                if (separator != std::string::npos)
+                {
+                    const std::string length_text = value.substr(separator + 1);
+                    std::size_t length_parsed = 0;
+                    const unsigned long length_value =
+                        std::stoul(length_text, &length_parsed, 16);
+                    if (length_parsed != length_text.size() || length_value == 0 ||
+                        length_value > kGuestCodeWindowMaxLength)
+                    {
+                        throw std::out_of_range("code window length");
+                    }
+                    request.length = static_cast<std::uint32_t>(length_value);
+                }
+                code_windows.push_back(request);
+                // The capture runs from the debugger's fault handler.
+                break_exit_process = true;
+                software_breakpoint = true;
+            }
+            catch (const std::exception&)
+            {
+                PrintUsage();
+                return 1;
+            }
+        }
+        else if (option == "--field-write-watch" && index + 1 < argc)
+        {
+            try
+            {
+                std::size_t parsed = 0;
+                const std::string value = argv[++index];
+                const unsigned long parsed_value = std::stoul(value, &parsed, 16);
+                if (parsed != value.size() || parsed_value == 0 ||
+                    parsed_value > (std::numeric_limits<std::uint32_t>::max)())
+                {
+                    throw std::out_of_range("field write watch address");
+                }
+                // x86 four-byte data breakpoints require a four-byte aligned
+                // address. Accepting an unaligned one would watch a range the
+                // caller did not ask for and report writes that never touched
+                // the field.
+                if ((parsed_value & 0x3u) != 0)
+                {
+                    throw std::out_of_range("field write watch alignment");
+                }
+                field_write_watch_address = static_cast<std::uintptr_t>(parsed_value);
+                break_exit_process = true;
+                software_breakpoint = true;
+            }
+            catch (const std::exception&)
+            {
+                PrintUsage();
+                return 1;
+            }
+        }
+        else if (option == "--field-reference-scan" && index + 1 < argc)
+        {
+            // Repeatable: one run can look for a field displacement and the
+            // same field's absolute address at once, which is the pair a
+            // structure field is addressed by.
+            try
+            {
+                std::size_t parsed = 0;
+                const std::string value = argv[++index];
+                const unsigned long parsed_value = std::stoul(value, &parsed, 16);
+                if (parsed != value.size() ||
+                    parsed_value > (std::numeric_limits<std::uint32_t>::max)())
+                {
+                    throw std::out_of_range("field reference constant");
+                }
+                field_reference_scan_constants.push_back(
+                    static_cast<std::uint32_t>(parsed_value));
+                // The scan runs from the debugger's fault handler, so the run
+                // has to be traced for it to happen at all.
+                break_exit_process = true;
+                software_breakpoint = true;
+            }
+            catch (const std::exception&)
+            {
+                PrintUsage();
+                return 1;
+            }
+        }
         else if (option == "--slot-writer-trace")
         {
             slot_writer_trace = true;
@@ -8441,9 +9099,20 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         PrintUsage();
         return 1;
     }
+    // Debug register 1 carries the field write watch, and these two diagnostics
+    // claim it as well. Running them together would leave both reporting
+    // whichever armed last, so the combination is refused rather than trusted.
+    if (field_write_watch_address != 0 &&
+        (slot_writer_trace || null_context_field_reference_execution_trace))
+    {
+        PrintUsage();
+        return 1;
+    }
     if (run_detached &&
         (trace || instruction_trace || d3d_init_trace || ksnd_load_trace ||
          api_trace || probe_exit_process || scan_fault_references || slot_writer_trace ||
+         !field_reference_scan_constants.empty() || field_write_watch_address != 0 ||
+         !code_windows.empty() ||
          null_context_field_writer_trace ||
          null_context_field_access_trace ||
          null_context_object_source_trace ||
@@ -8956,36 +9625,48 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                   main_image_base + hook_slot_rva,
                                                   runtime_base + handoff_thunk_rva,
                                                   &error));
-    bool display_prepared = !hle_display_mode;
-    if (hle_display_mode && runtime_loaded)
+    // The host display mode is never changed, so this boundary is installed on
+    // every run that injects the runtime rather than behind a diagnostic
+    // option. A guest that does not import the entry point simply has nothing
+    // to redirect.
+    bool display_prepared = true;
+    if (runtime_loaded)
     {
-        std::uint32_t display_thunk_rva = 0;
-        std::uint32_t display_slot_rva = 0;
-        std::string display_find_err;
-        const bool has_display_slot =
-            re2dj::tools::windows_original_process_probe::FindIatSlotByName(
-                info,
-                file.data(),
-                file.size(),
-                "USER32.dll",
-                "ChangeDisplaySettingsExA",
-                &display_slot_rva,
-                &display_find_err);
-        if (has_display_slot)
+        struct DisplayEntryPoint
         {
-            display_prepared = re2dj::platform::windows::FindPe32ExportRva(
-                                   runtime_path,
-                                   "_Re2djHleChangeDisplaySettingsExA@20",
-                                   &display_thunk_rva,
-                                   &error) &&
-                               WriteRemoteU32(child.hProcess,
-                                              main_image_base + display_slot_rva,
-                                              runtime_base + display_thunk_rva,
-                                              &error);
-        }
-        else
+            const char* import_name;
+            const char* export_name;
+        };
+        constexpr DisplayEntryPoint kDisplayEntryPoints[] = {
+            {"ChangeDisplaySettingsExA", "_Re2djHleChangeDisplaySettingsExA@20"},
+            {"ChangeDisplaySettingsA", "_Re2djHleChangeDisplaySettingsA@8"},
+        };
+        for (const DisplayEntryPoint& display_entry : kDisplayEntryPoints)
         {
-            display_prepared = true;
+            std::uint32_t display_thunk_rva = 0;
+            std::uint32_t display_slot_rva = 0;
+            std::string display_find_err;
+            if (!re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                    info,
+                    file.data(),
+                    file.size(),
+                    "USER32.dll",
+                    display_entry.import_name,
+                    &display_slot_rva,
+                    &display_find_err))
+            {
+                continue;
+            }
+            if (!re2dj::platform::windows::FindPe32ExportRva(
+                    runtime_path, display_entry.export_name, &display_thunk_rva, &error) ||
+                !WriteRemoteU32(child.hProcess,
+                                main_image_base + display_slot_rva,
+                                runtime_base + display_thunk_rva,
+                                &error))
+            {
+                display_prepared = false;
+                break;
+            }
         }
     }
     bool d3d3_prepared = !hle_d3d3;
@@ -9788,13 +10469,18 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 &exit_break_slot_rva,
                 &error);
         if (!exit_import_present &&
-            (lptdi_post_ioctl_trace_steps != 0 || api_trace || slot_writer_trace ||
+            (target->id == "ez2dj4th" ||
+             lptdi_post_ioctl_trace_steps != 0 || api_trace || slot_writer_trace ||
              null_context_object_source_trace ||
              null_context_field_writer_trace || null_context_field_access_trace ||
              null_context_field_reference_execution_trace ||
              null_context_object_state_trace ||
              null_context_object_reference_scan ||
-             null_context_entry_trace) &&
+             null_context_entry_trace ||
+             // These two are bounded traces as well: they observe and never
+             // need the static exit slot the packed 4th does not carry.
+             !field_reference_scan_constants.empty() ||
+             field_write_watch_address != 0 || !code_windows.empty()) &&
             error == "requested import is not present")
         {
             error.clear();
@@ -10146,9 +10832,91 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             error = "cannot install null-context entry breakpoints";
         }
     }
+    bool field_write_watch_prepared = field_write_watch_address == 0;
+    if (field_write_watch_address != 0)
+    {
+        // The primary thread exists before the loop starts, so it is armed here
+        // rather than through the thread-creation path the loop uses.
+        field_write_watch_prepared =
+            reached && entry_restored && exit_break_prepared &&
+            SetFieldWriteWatch(child.hThread, field_write_watch_address, &error);
+        RecordDiagnostic(
+            "{\"event\":\"field_write_watch_ready\",\"prepared\":%s,\"address\":\"0x%08x\",\"rva\":\"0x%08x\",\"limit\":%u}",
+            field_write_watch_prepared ? "true" : "false",
+            static_cast<unsigned>(field_write_watch_address),
+            static_cast<unsigned>(field_write_watch_address >= main_image_base
+                                      ? field_write_watch_address - main_image_base
+                                      : 0),
+            static_cast<unsigned>(kFieldWriteWatchHitLimit));
+        if (!field_write_watch_prepared && error.empty())
+        {
+            error = "cannot install the field write watch";
+        }
+    }
+    bool directinput_prepared = true;
+    if (reached && entry_restored && runtime_loaded)
+    {
+        std::uint32_t directinput_thunk_rva = 0;
+        std::string find_dinput_err;
+        if (re2dj::platform::windows::FindPe32ExportRva(
+                runtime_path,
+                "_Re2djHleDirectInputCreateA@16",
+                &directinput_thunk_rva,
+                &find_dinput_err))
+        {
+            if (target->id == "ez2dj4th")
+            {
+                // On ez2dj4th, 0x00ad1634 (RVA 0x006d1634) is the DirectInputCreateA
+                // import slot unpacked by the protector. Overwrite it so any call
+                // via `jmp dword ptr [0x00ad1634]` lands on the HLE facade.
+                constexpr std::uint32_t kEz2dj4thDirectInputCreateASlotRva = 0x006d1634u;
+                directinput_prepared = WriteRemoteU32(
+                    child.hProcess,
+                    main_image_base + kEz2dj4thDirectInputCreateASlotRva,
+                    runtime_base + directinput_thunk_rva,
+                    &error);
+                if (!directinput_prepared && error.empty())
+                {
+                    error = "cannot patch ez2dj4th DirectInputCreateA IAT slot";
+                }
+            }
+            else
+            {
+                std::uint32_t dinput_slot_rva = 0;
+                if (re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                        info,
+                        file.data(),
+                        file.size(),
+                        "DINPUT.dll",
+                        "DirectInputCreateA",
+                        &dinput_slot_rva,
+                        &find_dinput_err))
+                {
+                    directinput_prepared = WriteRemoteU32(
+                        child.hProcess,
+                        main_image_base + dinput_slot_rva,
+                        runtime_base + directinput_thunk_rva,
+                        &error);
+                }
+            }
+        }
+        else
+        {
+            directinput_prepared = false;
+            error = "cannot find _Re2djHleDirectInputCreateA@16 in runtime: " + find_dinput_err;
+        }
+    }
+    if (reached && entry_restored && !code_windows.empty())
+    {
+        for (const GuestCodeWindowRequest& request : code_windows)
+        {
+            CaptureGuestCodeWindow(child.hProcess, main_image_base, &info, request);
+        }
+    }
     re2dj::tools::windows_original_process_probe::IatVerificationResult iat;
     const bool iat_verified = reached && entry_restored && runtime_loaded && handoff_prepared &&
                               display_prepared && d3d3_prepared && directsound_prepared &&
+                              directinput_prepared &&
                               demo_volume_prepared && audio_trace_prepared && vfs_prepared &&
                               image_loader_prepared &&
                               io_runtime_prepared && message_box_prepared &&
@@ -10196,7 +10964,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     const char* const expected_message = probe_exit_process ? "re2dj:probe:ExitProcess"
                                                              : (hle_vfs ? "re2dj:vfs:CreateFileA"
                                                                 : hle_display_mode
-                                                                    ? "re2dj:hle:ChangeDisplaySettingsExA"
+                                                                    ? "re2dj:hle:display-mode:absorbed"
                                                                     : handoff_message);
     const auto resume_debuggee = [&]() {
         if (inject_runtime)
@@ -10304,6 +11072,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                                                null_context_object_reference_scan,
                                                                                null_context_entry_trace,
                                                                                scan_fault_references,
+                                                                               field_reference_scan_constants,
+                                                                               field_write_watch_address,
+                                                                               code_windows,
                                                                                trace,
                                                                                lptdi_post_ioctl_trace_steps,
                                                                                lptdi_post_ioctl_trace_code,

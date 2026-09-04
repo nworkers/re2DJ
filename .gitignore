@@ -60,6 +60,7 @@
 # settings and score data here, so a user's local run never shows up as a
 # repository change.
 /overlay/
+/overlays/
 /nvram/
 /cfg/
 

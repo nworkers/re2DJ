@@ -84,4 +84,22 @@ void WriteGraphicsTraceFormat(const char* format, ...)
     WriteGraphicsTraceLine(message);
 }
 
+void ReportUnimplementedGraphicsCall(const char* interface_name,
+                                     GraphicsCallLedger* ledger)
+{
+    if (interface_name == nullptr || ledger == nullptr || ledger->method == nullptr)
+    {
+        return;
+    }
+    // The ledger lives in a function-local static shared by every thread that
+    // reaches the slot, so the budget is decremented atomically. Going negative
+    // is harmless; the comparison is what stops the writes.
+    if (InterlockedDecrement(reinterpret_cast<volatile LONG*>(&ledger->remaining)) < 0)
+    {
+        return;
+    }
+    WriteGraphicsTraceFormat(
+        "re2dj:hle:%s::%s:not-implemented", interface_name, ledger->method);
+}
+
 }  // namespace re2dj::platform::windows

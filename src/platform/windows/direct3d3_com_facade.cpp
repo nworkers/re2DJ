@@ -24,6 +24,7 @@
 #include "re2dj/graphics/legacy_transform.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
+#include "directdraw_legacy_interop.h"
 #include "graphics_trace_log.h"
 #include "window_mode.h"
 
@@ -128,6 +129,8 @@ HRESULT WINAPI SurfaceBltFast(IDirectDrawSurface4* self,
 HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
                            IDirectDrawSurface4* override_surface,
                            DWORD flags);
+HRESULT WINAPI SurfaceAddAttachedSurface(IDirectDrawSurface4* self,
+                                         IDirectDrawSurface4* attachment);
 HRESULT WINAPI SurfaceGetAttachedSurface(IDirectDrawSurface4* self,
                                          DDSCAPS2* capabilities,
                                          IDirectDrawSurface4** surface);
@@ -141,6 +144,12 @@ HRESULT WINAPI SurfaceRestore(IDirectDrawSurface4* self);
 HRESULT WINAPI SurfaceSetColorKey(IDirectDrawSurface4* self,
                                   DWORD flags,
                                   DDCOLORKEY* color_key);
+HRESULT WINAPI SurfaceLock(IDirectDrawSurface4* self,
+                           RECT* rect,
+                           DDSURFACEDESC2* descriptor,
+                           DWORD flags,
+                           HANDLE event);
+HRESULT WINAPI SurfaceUnlock(IDirectDrawSurface4* self, RECT* rect);
 
 HRESULT WINAPI TextureQueryInterface(IDirect3DTexture2* self, REFIID iid, void** object);
 ULONG WINAPI TextureAddRef(IDirect3DTexture2* self);
@@ -213,6 +222,17 @@ HRESULT WINAPI DeviceDrawIndexedPrimitiveVB(IDirect3DDevice3* self,
                                             WORD* indices,
                                             DWORD index_count,
                                             DWORD flags);
+HRESULT WINAPI DeviceDrawPrimitiveVB(IDirect3DDevice3* self,
+                                     D3DPRIMITIVETYPE primitive,
+                                     IDirect3DVertexBuffer* vertex_buffer,
+                                     DWORD start_vertex,
+                                     DWORD vertex_count,
+                                     DWORD flags);
+HRESULT WINAPI DeviceSetRenderTarget(IDirect3DDevice3* self,
+                                     IDirectDrawSurface4* surface,
+                                     DWORD flags);
+HRESULT WINAPI DeviceGetRenderTarget(IDirect3DDevice3* self,
+                                     IDirectDrawSurface4** surface);
 
 HRESULT WINAPI ViewportQueryInterface(IDirect3DViewport3* self, REFIID iid, void** object);
 ULONG WINAPI ViewportAddRef(IDirect3DViewport3* self);
@@ -268,6 +288,7 @@ IDirectDrawSurface4Vtbl* SurfaceVtable()
         table.QueryInterface = SurfaceQueryInterface;
         table.AddRef = SurfaceAddRef;
         table.Release = SurfaceRelease;
+        table.AddAttachedSurface = SurfaceAddAttachedSurface;
         table.Blt = SurfaceBlt;
         table.BltFast = SurfaceBltFast;
         table.Flip = SurfaceFlip;
@@ -277,9 +298,11 @@ IDirectDrawSurface4Vtbl* SurfaceVtable()
         table.GetPixelFormat = SurfaceGetPixelFormat;
         table.GetSurfaceDesc = SurfaceGetSurfaceDesc;
         table.IsLost = SurfaceIsLost;
+        table.Lock = SurfaceLock;
         table.ReleaseDC = SurfaceReleaseDC;
         table.Restore = SurfaceRestore;
         table.SetColorKey = SurfaceSetColorKey;
+        table.Unlock = SurfaceUnlock;
         initialized = true;
     }
     return &table;
@@ -331,7 +354,10 @@ IDirect3DDevice3Vtbl* DeviceVtable()
         table.GetTextureStageState = DeviceGetTextureStageState;
         table.SetTextureStageState = DeviceSetTextureStageState;
         table.DrawPrimitive = DeviceDrawPrimitive;
+        table.DrawPrimitiveVB = DeviceDrawPrimitiveVB;
         table.DrawIndexedPrimitiveVB = DeviceDrawIndexedPrimitiveVB;
+        table.SetRenderTarget = DeviceSetRenderTarget;
+        table.GetRenderTarget = DeviceGetRenderTarget;
         initialized = true;
     }
     return &table;
@@ -378,6 +404,13 @@ struct RootFacade
     IDirect3D3 direct3d = {Direct3dVtable()};
     volatile LONG references = 1;
     DWORD magic = kRootMagic;
+    // The tables this root installs on the surfaces, devices, and vertex
+    // buffers it creates. A later interface version hands its own tables in
+    // here so the objects it receives speak that version while staying the same
+    // objects this file implements. Null selects the DirectX 6 table.
+    const IDirectDrawSurface4Vtbl* surface_vtable = nullptr;
+    const IDirect3DDevice3Vtbl* device_vtable = nullptr;
+    const IDirect3DVertexBufferVtbl* vertex_buffer_vtable = nullptr;
     DWORD width = 640;
     DWORD height = 480;
     DWORD bits_per_pixel = 16;
@@ -442,6 +475,10 @@ struct SurfaceFacade
     DWORD magic = kSurfaceMagic;
     RootFacade* root = nullptr;
     SurfaceFacade* attached_back_buffer = nullptr;
+    // A depth buffer the guest attached with AddAttachedSurface. DirectDraw
+    // lets a guest read its attachments back, and one that stores the result
+    // without checking would keep a null pointer if this were not recorded.
+    SurfaceFacade* attached_depth_buffer = nullptr;
     DWORD width = 640;
     DWORD height = 480;
     DWORD bits_per_pixel = 16;
@@ -483,6 +520,11 @@ struct DeviceFacade
     IDirect3DViewport3* attached_viewport = nullptr;
     IDirect3DViewport3* current_viewport = nullptr;
     IDirect3DTexture2* texture_stage_zero = nullptr;
+    // DirectX 7 sets the viewport on the device instead of through a viewport
+    // object. The draw path reads `current_viewport` when the guest attached
+    // one and falls back to this state otherwise.
+    re2dj::platform::windows::LegacyViewportState viewport_state = {};
+    bool has_viewport_state = false;
     bool scene_active = false;
     bool draw_success_reported = false;
     bool draw_failure_reported = false;
@@ -1322,34 +1364,56 @@ bool BuildLegacyTransformState(const DeviceFacade& device,
                                re2dj::graphics::LegacyTransformState* transform,
                                std::string* error)
 {
-    if (transform == nullptr || error == nullptr || device.current_viewport == nullptr)
+    if (transform == nullptr || error == nullptr)
     {
         if (error != nullptr)
         {
-            *error = "untransformed draw has no current viewport";
+            *error = "untransformed draw has no transform destination";
         }
         return false;
     }
-    const ViewportFacade* const viewport = ViewportFromInterface(device.current_viewport);
-    if (viewport->magic != kViewportMagic)
+    if (device.current_viewport == nullptr && !device.has_viewport_state)
     {
-        *error = "untransformed draw has an invalid viewport";
+        *error = "untransformed draw has no current viewport";
         return false;
     }
     CopyMatrix(device.transforms[D3DTRANSFORMSTATE_WORLD], &transform->world);
     CopyMatrix(device.transforms[D3DTRANSFORMSTATE_VIEW], &transform->view);
     CopyMatrix(device.transforms[D3DTRANSFORMSTATE_PROJECTION], &transform->projection);
-    const D3DVIEWPORT2& source = viewport->viewport;
-    transform->viewport.screen_x = static_cast<float>(source.dwX);
-    transform->viewport.screen_y = static_cast<float>(source.dwY);
-    transform->viewport.screen_width = static_cast<float>(source.dwWidth);
-    transform->viewport.screen_height = static_cast<float>(source.dwHeight);
-    transform->viewport.clip_x = source.dvClipX;
-    transform->viewport.clip_y = source.dvClipY;
-    transform->viewport.clip_width = source.dvClipWidth;
-    transform->viewport.clip_height = source.dvClipHeight;
-    transform->viewport.min_z = source.dvMinZ;
-    transform->viewport.max_z = source.dvMaxZ;
+    if (device.current_viewport != nullptr)
+    {
+        const ViewportFacade* const viewport =
+            ViewportFromInterface(device.current_viewport);
+        if (viewport->magic != kViewportMagic)
+        {
+            *error = "untransformed draw has an invalid viewport";
+            return false;
+        }
+        const D3DVIEWPORT2& source = viewport->viewport;
+        transform->viewport.screen_x = static_cast<float>(source.dwX);
+        transform->viewport.screen_y = static_cast<float>(source.dwY);
+        transform->viewport.screen_width = static_cast<float>(source.dwWidth);
+        transform->viewport.screen_height = static_cast<float>(source.dwHeight);
+        transform->viewport.clip_x = source.dvClipX;
+        transform->viewport.clip_y = source.dvClipY;
+        transform->viewport.clip_width = source.dvClipWidth;
+        transform->viewport.clip_height = source.dvClipHeight;
+        transform->viewport.min_z = source.dvMinZ;
+        transform->viewport.max_z = source.dvMaxZ;
+        error->clear();
+        return true;
+    }
+    // DirectX 7 has no clip volume on the viewport: the projection matrix
+    // already produces normalized device coordinates, which is what the clip
+    // defaults of LegacyViewportTransform describe. Only the screen rectangle
+    // and depth range come from the guest.
+    const re2dj::platform::windows::LegacyViewportState& source = device.viewport_state;
+    transform->viewport.screen_x = static_cast<float>(source.x);
+    transform->viewport.screen_y = static_cast<float>(source.y);
+    transform->viewport.screen_width = static_cast<float>(source.width);
+    transform->viewport.screen_height = static_cast<float>(source.height);
+    transform->viewport.min_z = source.min_z;
+    transform->viewport.max_z = source.max_z;
     error->clear();
     return true;
 }
@@ -1493,6 +1557,20 @@ VertexBufferFacade* VertexBufferFromInterface(IDirect3DVertexBuffer* self)
                                                  offsetof(VertexBufferFacade, interface_value));
 }
 
+// Whether a vertex buffer belongs to this facade. The interface version the
+// guest holds decides which table the object carries, so both the DirectX 6
+// table and whichever table the device's root installs are ours.
+bool IsVertexBufferOfDevice(const DeviceFacade* device, const IDirect3DVertexBuffer* buffer)
+{
+    if (device == nullptr || device->root == nullptr || buffer == nullptr)
+    {
+        return false;
+    }
+    return buffer->lpVtbl == VertexBufferVtable() ||
+           (device->root->vertex_buffer_vtable != nullptr &&
+            buffer->lpVtbl == device->root->vertex_buffer_vtable);
+}
+
 ULONG AddRootReference(RootFacade* root)
 {
     return static_cast<ULONG>(InterlockedIncrement(&root->references));
@@ -1527,6 +1605,18 @@ bool IsRgb565Format(const DDPIXELFORMAT& format)
            (format.dwFlags & DDPF_RGB) != 0 && format.dwRGBBitCount == 16 &&
            format.dwRBitMask == 0xf800 && format.dwGBitMask == 0x07e0 &&
            format.dwBBitMask == 0x001f;
+}
+
+// Gives a freshly created surface the interface version its root hands out.
+// The object is identical either way; only the table the guest calls through
+// differs.
+void InstallSurfaceVtable(const RootFacade* root, SurfaceFacade* surface)
+{
+    if (root->surface_vtable != nullptr)
+    {
+        surface->interface_value.lpVtbl =
+            const_cast<IDirectDrawSurface4Vtbl*>(root->surface_vtable);
+    }
 }
 
 bool CreateRgb565GdiBacking(SurfaceFacade* surface)
@@ -1689,6 +1779,47 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
         ReportCreateSurfaceDiagnostic(root, *descriptor, created, result);
         return result;
     };
+    // The pixel format decides whether a texture request can be served, and the
+    // only 16-bit layout the shared surface backing provides is RGB565. Record
+    // what the guest asked for so a rejection is attributable to the format
+    // rather than to the request being unsupported in general.
+    re2dj::platform::windows::WriteGraphicsTraceFormat(
+        "re2dj:hle:CreateSurface:flags=0x%08lx:caps=0x%08lx:%lux%lu:"
+        "back_buffers=%lu:pf_flags=0x%08lx:bpp=%lu:r=0x%08lx:g=0x%08lx:b=0x%08lx:"
+        "a=0x%08lx",
+        descriptor->dwFlags,
+        descriptor->ddsCaps.dwCaps,
+        static_cast<unsigned long>(descriptor->dwWidth),
+        static_cast<unsigned long>(descriptor->dwHeight),
+        static_cast<unsigned long>(descriptor->dwBackBufferCount),
+        descriptor->ddpfPixelFormat.dwFlags,
+        static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwRGBBitCount),
+        static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwRBitMask),
+        static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwGBitMask),
+        static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwBBitMask),
+        static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwRGBAlphaBitMask));
+    if ((descriptor->ddsCaps.dwCaps & DDSCAPS_ZBUFFER) != 0)
+    {
+        // The depth buffer belongs to the render backend, which owns its own
+        // depth attachment. The guest only needs an object it can attach to the
+        // device and release, so this surface carries the descriptor and no
+        // pixels.
+        auto* const depth = new (std::nothrow) SurfaceFacade;
+        if (depth == nullptr)
+        {
+            return finish(DDERR_OUTOFMEMORY);
+        }
+        depth->root = root;
+        depth->width = descriptor->dwWidth != 0 ? descriptor->dwWidth : root->width;
+        depth->height = descriptor->dwHeight != 0 ? descriptor->dwHeight : root->height;
+        depth->bits_per_pixel = 16;
+        depth->capabilities = descriptor->ddsCaps.dwCaps;
+        depth->diagnostic_id = AllocateSurfaceDiagnosticId(root);
+        InstallSurfaceVtable(root, depth);
+        AddRootReference(root);
+        *surface = &depth->interface_value;
+        return finish(DD_OK, depth);
+    }
     if ((descriptor->ddsCaps.dwCaps & DDSCAPS_TEXTURE) != 0)
     {
         constexpr DWORD kRequiredFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT |
@@ -1716,6 +1847,7 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
             delete texture;
             return finish(DDERR_OUTOFMEMORY);
         }
+        InstallSurfaceVtable(root, texture);
         AddRootReference(root);
         *surface = &texture->interface_value;
         OutputDebugStringA(kCreateTextureSurfaceMessage);
@@ -1748,6 +1880,7 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
             delete offscreen;
             return finish(DDERR_OUTOFMEMORY);
         }
+        InstallSurfaceVtable(root, offscreen);
         AddRootReference(root);
         *surface = &offscreen->interface_value;
         return finish(DD_OK, offscreen);
@@ -1769,7 +1902,11 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
     primary->width = root->width;
     primary->height = root->height;
     primary->bits_per_pixel = root->bits_per_pixel;
-    primary->capabilities = DDSCAPS_PRIMARYSURFACE | DDSCAPS_COMPLEX | DDSCAPS_FLIP;
+    // The guest may ask for the primary itself to be the 3D render target, as
+    // the 4th does. Carrying that request through means CreateDevice accepts
+    // the surface the guest hands it either way.
+    primary->capabilities = DDSCAPS_PRIMARYSURFACE | DDSCAPS_COMPLEX | DDSCAPS_FLIP |
+                            (descriptor->ddsCaps.dwCaps & DDSCAPS_3DDEVICE);
     primary->diagnostic_id = AllocateSurfaceDiagnosticId(root);
     primary->texture_identity = AllocateSurfaceIdentity(root);
     primary->attached_back_buffer = back;
@@ -1788,6 +1925,8 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
         delete back;
         return finish(DDERR_OUTOFMEMORY);
     }
+    InstallSurfaceVtable(root, primary);
+    InstallSurfaceVtable(root, back);
     AddRootReference(root);
     AddRootReference(root);
     *surface = &primary->interface_value;
@@ -1923,7 +2062,17 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
         return DDERR_INVALIDPARAMS;
     }
     *device = nullptr;
-    if (!IsEqualGUID(device_class, IID_IDirect3DHALDevice))
+    // The device enumeration this facade publishes offers the RGB emulation,
+    // the HAL, and the DirectX 7 transform-and-lighting HAL. A guest may pick
+    // any of the three, and all three land on the same implementation because
+    // the backend transforms and rasterizes the same way regardless. The
+    // transform-and-lighting identifier is declared only at DIRECT3D_VERSION
+    // 0x0700, so it is spelled out here rather than named.
+    constexpr GUID kIidDirect3DTnLHalDevice = {
+        0xf5049e78, 0x4861, 0x11d2, {0xa4, 0x07, 0x00, 0xa0, 0xc9, 0x06, 0x29, 0xa8}};
+    if (!IsEqualGUID(device_class, IID_IDirect3DHALDevice) &&
+        !IsEqualGUID(device_class, IID_IDirect3DRGBDevice) &&
+        !IsEqualGUID(device_class, kIidDirect3DTnLHalDevice))
     {
         return DDERR_INVALIDOBJECT;
     }
@@ -1949,6 +2098,11 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
     facade->transforms[D3DTRANSFORMSTATE_WORLD] = IdentityMatrix();
     facade->transforms[D3DTRANSFORMSTATE_VIEW] = IdentityMatrix();
     facade->transforms[D3DTRANSFORMSTATE_PROJECTION] = IdentityMatrix();
+    if (facade->root->device_vtable != nullptr)
+    {
+        facade->interface_value.lpVtbl =
+            const_cast<IDirect3DDevice3Vtbl*>(facade->root->device_vtable);
+    }
     AddRootReference(facade->root);
     SurfaceAddRef(render_target);
     *device = &facade->interface_value;
@@ -2009,6 +2163,11 @@ HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
         delete facade;
         return DDERR_INVALIDPARAMS;
     }
+    if (facade->root->vertex_buffer_vtable != nullptr)
+    {
+        facade->interface_value.lpVtbl =
+            const_cast<IDirect3DVertexBufferVtbl*>(facade->root->vertex_buffer_vtable);
+    }
     AddRootReference(facade->root);
     *vertex_buffer = &facade->interface_value;
     char result_message[160] = {};
@@ -2061,6 +2220,7 @@ ULONG WINAPI SurfaceRelease(IDirectDrawSurface4* self)
     if (references == 0)
     {
         SurfaceFacade* const attached = surface->attached_back_buffer;
+        SurfaceFacade* const depth = surface->attached_depth_buffer;
         RootFacade* const root = surface->root;
         if (root->render_backend != nullptr && surface->texture_identity != 0)
         {
@@ -2072,6 +2232,10 @@ ULONG WINAPI SurfaceRelease(IDirectDrawSurface4* self)
         if (attached != nullptr)
         {
             SurfaceRelease(&attached->interface_value);
+        }
+        if (depth != nullptr)
+        {
+            SurfaceRelease(&depth->interface_value);
         }
         ReleaseRootReference(root);
     }
@@ -2231,6 +2395,39 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
     return finish(DD_OK);
 }
 
+HRESULT WINAPI SurfaceAddAttachedSurface(IDirectDrawSurface4* self,
+                                         IDirectDrawSurface4* attachment)
+{
+    if (attachment == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    SurfaceFacade* const facade = SurfaceFromInterface(self);
+    SurfaceFacade* const attached = SurfaceFromInterface(attachment);
+    if (facade->magic != kSurfaceMagic || attached->magic != kSurfaceMagic ||
+        attached->root != facade->root)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    // The only attachment a guest makes to a render target here is its depth
+    // buffer; a back buffer arrives already attached from CreateSurface.
+    if ((attached->capabilities & DDSCAPS_ZBUFFER) == 0)
+    {
+        return DDERR_CANNOTATTACHSURFACE;
+    }
+    if (facade->attached_depth_buffer == attached)
+    {
+        return DD_OK;
+    }
+    SurfaceAddRef(attachment);
+    if (facade->attached_depth_buffer != nullptr)
+    {
+        SurfaceRelease(&facade->attached_depth_buffer->interface_value);
+    }
+    facade->attached_depth_buffer = attached;
+    return DD_OK;
+}
+
 HRESULT WINAPI SurfaceGetAttachedSurface(IDirectDrawSurface4* self,
                                          DDSCAPS2* capabilities,
                                          IDirectDrawSurface4** surface)
@@ -2241,12 +2438,20 @@ HRESULT WINAPI SurfaceGetAttachedSurface(IDirectDrawSurface4* self,
     }
     *surface = nullptr;
     SurfaceFacade* const facade = SurfaceFromInterface(self);
-    if ((capabilities->dwCaps & DDSCAPS_BACKBUFFER) == 0 ||
-        facade->attached_back_buffer == nullptr)
+    SurfaceFacade* found = nullptr;
+    if ((capabilities->dwCaps & DDSCAPS_BACKBUFFER) != 0)
+    {
+        found = facade->attached_back_buffer;
+    }
+    else if ((capabilities->dwCaps & DDSCAPS_ZBUFFER) != 0)
+    {
+        found = facade->attached_depth_buffer;
+    }
+    if (found == nullptr)
     {
         return DDERR_NOTFOUND;
     }
-    *surface = &facade->attached_back_buffer->interface_value;
+    *surface = &found->interface_value;
     SurfaceAddRef(*surface);
     return DD_OK;
 }
@@ -2353,6 +2558,74 @@ HRESULT WINAPI SurfaceSetColorKey(IDirectDrawSurface4* self,
     SurfaceFacade* const surface = SurfaceFromInterface(self);
     surface->source_blt_color_key = *color_key;
     surface->has_source_blt_color_key = true;
+    return DD_OK;
+}
+
+// Hands the guest the surface's own pixels. The 1st SE guest uploads through
+// GetDC and Blt and never reaches here; the 4th guest locks its textures and
+// writes them directly, so the memory the surface already owns is what it gets.
+// A sub-rectangle lock returns the address of that rectangle's first pixel, as
+// DirectDraw does, and the pitch stays the whole surface's pitch.
+HRESULT WINAPI SurfaceLock(IDirectDrawSurface4* self,
+                           RECT* rect,
+                           DDSURFACEDESC2* descriptor,
+                           DWORD flags,
+                           HANDLE event)
+{
+    (void)flags;
+    if (descriptor == nullptr || event != nullptr ||
+        descriptor->dwSize != sizeof(DDSURFACEDESC2))
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    SurfaceFacade* const surface = SurfaceFromInterface(self);
+    if (surface->magic != kSurfaceMagic || surface->pixels == nullptr)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    LONG left = 0;
+    LONG top = 0;
+    DWORD width = surface->width;
+    DWORD height = surface->height;
+    if (rect != nullptr)
+    {
+        if (rect->left < 0 || rect->top < 0 || rect->right <= rect->left ||
+            rect->bottom <= rect->top ||
+            static_cast<DWORD>(rect->right) > surface->width ||
+            static_cast<DWORD>(rect->bottom) > surface->height)
+        {
+            return DDERR_INVALIDRECT;
+        }
+        left = rect->left;
+        top = rect->top;
+        width = static_cast<DWORD>(rect->right - rect->left);
+        height = static_cast<DWORD>(rect->bottom - rect->top);
+    }
+    const HRESULT described = SurfaceGetSurfaceDesc(self, descriptor);
+    if (described != DD_OK)
+    {
+        return described;
+    }
+    descriptor->dwWidth = width;
+    descriptor->dwHeight = height;
+    descriptor->dwFlags |= DDSD_LPSURFACE;
+    descriptor->lpSurface =
+        static_cast<unsigned char*>(surface->pixels) +
+        static_cast<std::size_t>(top) * surface->pitch +
+        static_cast<std::size_t>(left) * (surface->bits_per_pixel / 8);
+    return DD_OK;
+}
+
+HRESULT WINAPI SurfaceUnlock(IDirectDrawSurface4* self, RECT*)
+{
+    SurfaceFacade* const surface = SurfaceFromInterface(self);
+    if (surface->magic != kSurfaceMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    // The guest may have written anything into the pixels, so the texture the
+    // backend caches for this surface is stale from here on.
+    MarkSurfaceDirty(surface);
     return DD_OK;
 }
 
@@ -3037,7 +3310,7 @@ HRESULT WINAPI DeviceDrawIndexedPrimitiveVB(IDirect3DDevice3* self,
         index_count > (std::numeric_limits<std::size_t>::max)() / sizeof(WORD) ||
         IsBadReadPtr(vertex_buffer, sizeof(*vertex_buffer)) != FALSE ||
         IsBadReadPtr(indices, static_cast<std::size_t>(index_count) * sizeof(WORD)) != FALSE ||
-        vertex_buffer->lpVtbl != VertexBufferVtable())
+        !IsVertexBufferOfDevice(device, vertex_buffer))
     {
         ReportDrawDiagnostic(
             device, primitive, 0, index_count, flags, DDERR_INVALIDPARAMS, "invalid-indexed-vb");
@@ -3088,6 +3361,124 @@ HRESULT WINAPI DeviceDrawIndexedPrimitiveVB(IDirect3DDevice3* self,
                                expanded.data(),
                                index_count,
                                flags);
+}
+
+HRESULT WINAPI DeviceDrawPrimitiveVB(IDirect3DDevice3* self,
+                                     D3DPRIMITIVETYPE primitive,
+                                     IDirect3DVertexBuffer* vertex_buffer,
+                                     DWORD start_vertex,
+                                     DWORD vertex_count,
+                                     DWORD flags)
+{
+    DeviceFacade* const device = DeviceFromInterface(self);
+    if (vertex_buffer == nullptr || vertex_count == 0 ||
+        IsBadReadPtr(vertex_buffer, sizeof(*vertex_buffer)) != FALSE ||
+        !IsVertexBufferOfDevice(device, vertex_buffer))
+    {
+        ReportDrawDiagnostic(
+            device, primitive, 0, vertex_count, flags, DDERR_INVALIDPARAMS, "invalid-vb");
+        return DDERR_INVALIDPARAMS;
+    }
+    VertexBufferFacade* const facade = VertexBufferFromInterface(vertex_buffer);
+    if (IsBadReadPtr(facade, sizeof(*facade)) != FALSE ||
+        facade->magic != kVertexBufferMagic || facade->root != device->root ||
+        facade->buffer == nullptr)
+    {
+        ReportDrawDiagnostic(
+            device, primitive, 0, vertex_count, flags, DDERR_INVALIDPARAMS, "foreign-vb");
+        return DDERR_INVALIDPARAMS;
+    }
+    if (facade->buffer->locked())
+    {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             facade->descriptor.fvf,
+                             vertex_count,
+                             flags,
+                             D3DERR_VERTEXBUFFERLOCKED,
+                             "locked-vb");
+        return D3DERR_VERTEXBUFFERLOCKED;
+    }
+    if (start_vertex > facade->descriptor.vertex_count ||
+        vertex_count > facade->descriptor.vertex_count - start_vertex)
+    {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             facade->descriptor.fvf,
+                             vertex_count,
+                             flags,
+                             DDERR_INVALIDPARAMS,
+                             "vb-range");
+        return DDERR_INVALIDPARAMS;
+    }
+    const std::span<const std::byte> vertices = facade->buffer->vertices();
+    const std::size_t stride = facade->buffer->stride();
+    const std::size_t offset = static_cast<std::size_t>(start_vertex) * stride;
+    if (stride == 0 || offset > vertices.size())
+    {
+        ReportDrawDiagnostic(device,
+                             primitive,
+                             facade->descriptor.fvf,
+                             vertex_count,
+                             flags,
+                             DDERR_INVALIDPARAMS,
+                             "vb-stride");
+        return DDERR_INVALIDPARAMS;
+    }
+    // The draw path takes a plain vertex array, and a vertex buffer is exactly
+    // that once the starting offset is applied.
+    return DeviceDrawPrimitive(
+        self,
+        primitive,
+        facade->descriptor.fvf,
+        const_cast<std::byte*>(vertices.data()) + offset,
+        vertex_count,
+        flags);
+}
+
+HRESULT WINAPI DeviceSetRenderTarget(IDirect3DDevice3* self,
+                                     IDirectDrawSurface4* surface,
+                                     DWORD flags)
+{
+    (void)flags;
+    DeviceFacade* const device = DeviceFromInterface(self);
+    if (surface == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    SurfaceFacade* const target = SurfaceFromInterface(surface);
+    if (target->magic != kSurfaceMagic || target->root != device->root)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    if (target == device->render_target)
+    {
+        return DD_OK;
+    }
+    SurfaceAddRef(surface);
+    if (device->render_target != nullptr)
+    {
+        SurfaceRelease(&device->render_target->interface_value);
+    }
+    device->render_target = target;
+    return DD_OK;
+}
+
+HRESULT WINAPI DeviceGetRenderTarget(IDirect3DDevice3* self, IDirectDrawSurface4** surface)
+{
+    if (surface == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *surface = nullptr;
+    DeviceFacade* const device = DeviceFromInterface(self);
+    if (device->render_target == nullptr)
+    {
+        return DDERR_NOTFOUND;
+    }
+    *surface = &device->render_target->interface_value;
+    SurfaceAddRef(*surface);
+    return DD_OK;
 }
 
 HRESULT WINAPI ViewportQueryInterface(IDirect3DViewport3* self, REFIID iid, void** object)
@@ -3302,6 +3693,204 @@ HRESULT WINAPI VbOptimize(IDirect3DVertexBuffer* self, IDirect3DDevice3*, DWORD)
 }
 
 }  // namespace
+
+namespace re2dj::platform::windows
+{
+
+const IDirectDraw4Vtbl* LegacyDirectDrawVtable()
+{
+    return DirectDrawVtable();
+}
+
+const IDirectDrawSurface4Vtbl* LegacyDirectDrawSurfaceVtable()
+{
+    return SurfaceVtable();
+}
+
+const IDirect3D3Vtbl* LegacyDirect3DVtable()
+{
+    return Direct3dVtable();
+}
+
+const IDirect3DDevice3Vtbl* LegacyDirect3DDeviceVtable()
+{
+    return DeviceVtable();
+}
+
+const IDirect3DVertexBufferVtbl* LegacyDirect3DVertexBufferVtable()
+{
+    return VertexBufferVtable();
+}
+
+HRESULT CreateLegacyDirectDrawRoot(const LegacyFacadeVtables& vtables, IDirectDraw4** root)
+{
+    if (root == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *root = nullptr;
+    auto* const facade = new (std::nothrow) RootFacade;
+    if (facade == nullptr)
+    {
+        return DDERR_OUTOFMEMORY;
+    }
+    facade->surface_vtable = vtables.surface;
+    facade->device_vtable = vtables.device;
+    facade->vertex_buffer_vtable = vtables.vertex_buffer;
+    *root = &facade->direct_draw;
+    return DD_OK;
+}
+
+void SetLegacyDirectDrawVtable(IDirectDraw4* root, const IDirectDraw4Vtbl* vtable)
+{
+    if (root == nullptr || vtable == nullptr)
+    {
+        return;
+    }
+    root->lpVtbl = const_cast<IDirectDraw4Vtbl*>(vtable);
+}
+
+IDirect3D3* LegacyDirect3DOfRoot(IDirectDraw4* root)
+{
+    if (root == nullptr)
+    {
+        return nullptr;
+    }
+    return &RootFromDirectDraw(root)->direct3d;
+}
+
+IDirect3DTexture2* LegacyTextureOfSurface(IDirectDrawSurface4* surface)
+{
+    if (surface == nullptr)
+    {
+        return nullptr;
+    }
+    SurfaceFacade* const facade = SurfaceFromInterface(surface);
+    if (facade->magic != kSurfaceMagic)
+    {
+        return nullptr;
+    }
+    return &facade->texture_interface;
+}
+
+IDirectDrawSurface4* LegacySurfaceOfTexture(IDirect3DTexture2* texture)
+{
+    if (texture == nullptr)
+    {
+        return nullptr;
+    }
+    SurfaceFacade* const facade = SurfaceFromTexture(texture);
+    if (facade->magic != kSurfaceMagic)
+    {
+        return nullptr;
+    }
+    return &facade->interface_value;
+}
+
+HRESULT LegacyDeviceSetViewport(IDirect3DDevice3* device, const LegacyViewportState& viewport)
+{
+    if (device == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    DeviceFacade* const facade = DeviceFromInterface(device);
+    if (facade->magic != kDeviceMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    if (viewport.width == 0 || viewport.height == 0)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    facade->viewport_state = viewport;
+    facade->has_viewport_state = true;
+    return D3D_OK;
+}
+
+HRESULT LegacyDeviceGetViewport(IDirect3DDevice3* device, LegacyViewportState* viewport)
+{
+    if (device == nullptr || viewport == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    DeviceFacade* const facade = DeviceFromInterface(device);
+    if (facade->magic != kDeviceMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    if (!facade->has_viewport_state)
+    {
+        return DDERR_NOTFOUND;
+    }
+    *viewport = facade->viewport_state;
+    return D3D_OK;
+}
+
+HRESULT LegacyDeviceClear(IDirect3DDevice3* device,
+                          DWORD rect_count,
+                          const D3DRECT* rects,
+                          DWORD flags,
+                          D3DCOLOR color,
+                          float depth,
+                          DWORD stencil)
+{
+    (void)rects;
+    (void)stencil;
+    if (device == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    DeviceFacade* const facade = DeviceFromInterface(device);
+    if (facade->magic != kDeviceMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    // The render backend already clears colour and depth once per presented
+    // frame, before the frame's first draw. A guest that clears the whole
+    // target to black at the top of its frame therefore gets what it asked for
+    // without this doing any work. A different colour, a sub-rectangle, or a
+    // mid-frame clear would not, so the request is recorded rather than
+    // silently accepted.
+    static GraphicsCallLedger ledger = {"Clear", 8};
+    if (InterlockedDecrement(reinterpret_cast<volatile LONG*>(&ledger.remaining)) >= 0)
+    {
+        WriteGraphicsTraceFormat(
+            "re2dj:hle:LegacyDeviceClear:rects=%lu:flags=0x%08lx:color=0x%08lx:depth=%.3f",
+            static_cast<unsigned long>(rect_count),
+            flags,
+            static_cast<unsigned long>(color),
+            static_cast<double>(depth));
+    }
+    return D3D_OK;
+}
+
+HRESULT LegacyDeviceSetRenderTarget(IDirect3DDevice3* device,
+                                    IDirectDrawSurface4* surface,
+                                    DWORD flags)
+{
+    return DeviceSetRenderTarget(device, surface, flags);
+}
+
+HRESULT LegacyDeviceGetRenderTarget(IDirect3DDevice3* device, IDirectDrawSurface4** surface)
+{
+    return DeviceGetRenderTarget(device, surface);
+}
+
+HRESULT LegacySurfaceLock(IDirectDrawSurface4* surface,
+                          RECT* rect,
+                          DDSURFACEDESC2* descriptor,
+                          DWORD flags,
+                          HANDLE event)
+{
+    return SurfaceLock(surface, rect, descriptor, flags, event);
+}
+
+HRESULT LegacySurfaceUnlock(IDirectDrawSurface4* surface, RECT* rect)
+{
+    return SurfaceUnlock(surface, rect);
+}
+
+}  // namespace re2dj::platform::windows
 
 extern "C" __declspec(dllexport) HRESULT WINAPI Re2djHleDirectDrawCreate(
     GUID*,

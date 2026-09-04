@@ -350,6 +350,18 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 *Confirmed — Task 095 attributes the execute-at-zero failure to a null `IDirect3DDevice3::DrawIndexedPrimitiveVB` slot. Exception thread 23292 in WER dump `ez2dj.exe.20768.dmp` records EIP zero, ESP `0x001af9d4`, and first stack return `0x004206a3`. Original code `0x00420670`–`0x004206a3` pushes flags zero, index count `0x258` (600), an index pointer, a vertex-buffer pointer, and primitive 4 before indirectly calling global device `[0x01eb7cc0]` at vtable offset `+0x8c`. In the DirectX 6 `IDirect3DDevice3` ABI that slot is exactly `DrawIndexedPrimitiveVB`, and primitive 4 is `D3DPT_TRIANGLELIST`. The facade vtable addressed by dump register EDX also has a null `+0x8c` slot. Confirmed: after implementing shared bounds-checked 16-bit index expansion, triangle-list commands, and the Win32 COM slot, Debug and Release CTest each pass 3/3. Product run `20260830-000841-620` remains responsive for roughly three minutes and exits both child and parent with code zero after a normal close; the former `0xc0000005` does not recur. Unresolved: that rerun contains no primitive-four draw marker, so actual entry into the same product call is verified only by the runtime probe. The original state condition that first selected the call path in the earlier run remains unknown.*
 
+### 2.16 호스트 표시 모드 요청 — 작업 183
+
+45. **확인됨 — 원본은 실행마다 `ChangeDisplaySettingsExA`를 정확히 한 번 호출한다.** 제품 실행 `20260905-012007-893`과 `20260905-012235-527`은 각각 `entry=ChangeDisplaySettingsExA:device=default:flags=0x00000001:fields=0x001c0000:640x480x16:refresh=0` 한 줄을 남겼다. `flags=0x1`은 `CDS_UPDATEREGISTRY`, `fields=0x1c0000`은 `DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT`이며 주사율은 지정하지 않는다. 항목 18이 정적으로 기록한 `0x00437cba`의 요청과 일치하는 실행 증거다.
+
+46. **확인됨 — 이 요청이 흡수되지 않으면 호스트 데스크탑 해상도가 실제로 바뀐다.** 표시 경계가 설치되지 않은 실행 `20260905-005825-782`에는 흡수 기록이 없고 데스크탑이 640×480으로 바뀌었다. 경계를 무조건 설치한 뒤의 두 실행은 실행 전후와 실행 중 표본 14회 모두 3,840×2,160×32 @60Hz로 동일했다.
+
+47. **확인됨 — 요청을 흡수해도 그리기 동작은 달라지지 않는다.** 경계 설치 전후 세 실행의 그래픽 추적이 항목별로 같다. `DrawPrimitive` 25, `Flip` 8, `Blt` 8, `CreateSurface` 10, `GetDC`/`ReleaseDC` 각 9, `LateDraw` 2,599, 실패 기록 0이다. 유일한 차이는 새로 추가된 흡수 기록 한 줄이다. 따라서 `DISP_CHANGE_SUCCESSFUL` 응답은 항목 18이 기록한 `PostQuitMessage(0)` 분기를 유발하지 않는다.
+
+48. **추정 — 창 모드 크기가 고DPI 데스크탑에서 축소된다.** 데스크탑이 640×480으로 강제된 상태에서는 창이 의도한 1,296×999로 나왔으나, 3,840×2,160 데스크탑에서는 868×677로 나온다. 1,296 × (96/144) ≈ 864가 관측값과 맞으므로 게스트 프로세스가 DPI 인식을 선언하지 않아 Windows가 창을 축소 배치하는 것으로 보인다. 프로세스의 DPI 인식 상태를 직접 조회해 확인하지는 않았다.
+
+*Confirmed — the original calls `ChangeDisplaySettingsExA` exactly once per run, with `CDS_UPDATEREGISTRY` and a 640x480x16 `DEVMODEA` that specifies no refresh rate, matching the static call site recorded in item 18. Left unabsorbed, that request really does change the host desktop resolution: the run without the boundary switched the desktop to 640x480, while the runs with it stayed at 3840x2160x32 @60Hz throughout. Absorbing it does not change what the guest draws — three runs before and after produce identical trace counts (25 DrawPrimitive, 8 Flip, 8 Blt, 10 CreateSurface, 9 GetDC/ReleaseDC, 2,599 LateDraw, zero failures) — so answering `DISP_CHANGE_SUCCESSFUL` does not take the `PostQuitMessage(0)` branch of item 18. Inferred: the windowed size shrinks on a high-DPI desktop, 868x677 instead of the intended 1,296x999, consistent with the guest process not declaring DPI awareness; its awareness state has not been queried directly.*
+
 ---
 
 ## 3. `EZ2DJ.EXE` — 3rd Trax 정식 실행 파일 (보호됨)

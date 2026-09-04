@@ -323,6 +323,8 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/direct3d7_com_facade.cpp
         src/platform/windows/direct3d7_vertex_buffer_facade.cpp
         src/platform/windows/directdraw7_com_facade.cpp
+        src/platform/windows/directinput7_com_facade.cpp
+        src/platform/windows/display_mode_boundary.cpp
         src/platform/windows/ez2dj_keyboard_input.cpp
         src/platform/windows/graphics_trace_log.cpp
         src/platform/windows/host_window_shell.cpp
