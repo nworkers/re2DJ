@@ -183,6 +183,7 @@ target_link_libraries(re2dj_storage_common PRIVATE re2dj_warnings)
 
 add_library(re2dj_chd_storage STATIC
     src/storage/fat32_chd.cpp
+    src/storage/fat32_directory_name.cpp
     src/storage/mame_chd.cpp
 )
 target_include_directories(re2dj_chd_storage
@@ -319,10 +320,15 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/input/legacy_io_port_bus.cpp
         src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
+        src/platform/windows/direct3d7_com_facade.cpp
+        src/platform/windows/direct3d7_vertex_buffer_facade.cpp
+        src/platform/windows/directdraw7_com_facade.cpp
         src/platform/windows/ez2dj_keyboard_input.cpp
+        src/platform/windows/graphics_trace_log.cpp
         src/platform/windows/host_window_shell.cpp
         src/platform/windows/ini_profile_hle.cpp
         src/platform/windows/injected_runtime.cpp
+        src/platform/windows/message_box_boundary.cpp
         src/platform/windows/window_mode.cpp
         src/platform/windows/winmm_mixer_trace.cpp
     )
@@ -458,6 +464,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/legacy_audio_buffer_test.cpp
         tests/unit/mame_chd_test.cpp
         tests/unit/fat32_chd_test.cpp
+        tests/unit/fat32_directory_name_test.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp

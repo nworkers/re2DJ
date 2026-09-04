@@ -84,5 +84,6 @@ void RunLegacyVertexBufferTests(re2dj::test::Context& context);
 void RunLegacyAudioBufferTests(re2dj::test::Context& context);
 void RunMameChdTests(re2dj::test::Context& context);
 void RunFat32ChdTests(re2dj::test::Context& context);
+void RunFat32DirectoryNameTests(re2dj::test::Context& context);
 
 #endif  // RE2DJ_TESTS_UNIT_TEST_SUPPORT_H_

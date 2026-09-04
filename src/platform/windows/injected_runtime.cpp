@@ -18,7 +18,11 @@
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/input/legacy_io_port_bus.h"
 #include "re2dj/storage/fat32_chd.h"
+#include "re2dj/storage/guest_path.h"
+#include "direct3d3_com_facade.h"
+#include "directdraw7_com_facade.h"
 #include "ez2dj_keyboard_input.h"
+#include "message_box_boundary.h"
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
@@ -62,6 +66,8 @@ extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_image_base = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_in_byte_rva = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_out_byte_rva = 0;
 extern "C" __declspec(dllexport) char g_re2dj_io_config_path[MAX_PATH] = {};
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_message_box = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_message_box_result = 1;
 
 namespace
 {
@@ -210,6 +216,20 @@ void AppendVfsTraceMessage(const char* message)
               &written,
               nullptr);
     CloseHandle(trace);
+}
+
+void EnsureDiagnosticBoundariesInstalled()
+{
+    // The launcher fills the enable flags after this module is loaded, so the
+    // boundary cannot be installed from DllMain. It is installed from the HLE
+    // entry points the guest reaches earliest instead, and the boundary itself
+    // ignores every call after the first successful install.
+    if (g_re2dj_hle_message_box == 0)
+    {
+        return;
+    }
+    re2dj::platform::windows::InstallMessageBoxBoundary(
+        &AppendVfsTraceMessage, static_cast<int>(g_re2dj_message_box_result));
 }
 
 void ReportDynamicResolverCallerWindow(std::uintptr_t caller)
@@ -737,53 +757,112 @@ bool EnsureChdMounted()
     return true;
 }
 
-bool GuestHddSuffix(const char* name, const char** suffix)
+// The guest's logical current directory, held as path components under the HDD
+// root. The guest changes it with SetCurrentDirectoryA and then opens resources
+// by bare name, so a relative request means something different after every
+// change. The host process directory stays where the launcher put it: only this
+// mapping moves, which keeps unrelated host APIs unaffected.
+std::vector<std::string> g_guest_directory_components;
+
+// Strips whichever root prefix `name` carries and reports whether one was
+// found. A name under the mapped HDD root, or under the drive letter the
+// original used, names the root directly rather than the current directory.
+bool StripGuestRoot(const char* name, const char** suffix)
 {
-    if (name == nullptr || suffix == nullptr)
-    {
-        return false;
-    }
     if (FindPathSuffixUnderRoot(name, g_re2dj_vfs_hdd_root, suffix))
     {
         return true;
     }
     if (HasPrefixIgnoreCase(name, "D:\\ez2dj"))
     {
-        *suffix = name + 8;
-        return true;
-    }
-    if (name[0] != '\\' && name[0] != '/')
-    {
-        *suffix = name;
+        const char* candidate = name + 8;
+        while (*candidate == '\\' || *candidate == '/')
+        {
+            ++candidate;
+        }
+        *suffix = candidate;
         return true;
     }
     return false;
 }
 
-bool ChdRelativePath(const char* name, std::string* relative)
+// Resolves a guest request to a path relative to the HDD root, '/'-separated.
+// Root-anchored forms resolve against the root; every other form resolves
+// against the tracked current directory. Returns false for a path Win32 syntax
+// rejects, for a UNC path, and for one that climbs above the root.
+bool ResolveGuestRelativePath(const char* name, std::string* relative)
 {
-    const char* suffix = nullptr;
-    if (!GuestHddSuffix(name, &suffix) || relative == nullptr)
+    if (name == nullptr || relative == nullptr || g_re2dj_vfs_hdd_root[0] == '\0')
     {
         return false;
     }
-    while (*suffix == '\\' || *suffix == '/')
+    const char* suffix = nullptr;
+    const bool rooted = StripGuestRoot(name, &suffix);
+    if (!rooted)
     {
-        ++suffix;
+        suffix = name;
     }
     if (*suffix == '\0')
+    {
+        relative->clear();
+        return rooted;
+    }
+
+    re2dj::storage::GuestPath request;
+    if (!re2dj::storage::ParseGuestPath(suffix, &request))
+    {
+        return false;
+    }
+    // The base the request combines with. Only a plainly relative request keeps
+    // the current directory; anything that names a root starts empty.
+    re2dj::storage::GuestPath base;
+    base.kind = re2dj::storage::GuestPathKind::kDriveAbsolute;
+    base.drive_letter = 'D';
+    if (!rooted && request.kind == re2dj::storage::GuestPathKind::kRelative)
+    {
+        base.components = g_guest_directory_components;
+    }
+    // The root prefix is already gone, so what remains resolves against the
+    // base regardless of the shape the guest wrote it in.
+    request.kind = re2dj::storage::GuestPathKind::kRelative;
+    request.drive_letter = '\0';
+
+    re2dj::storage::GuestPath combined;
+    if (!re2dj::storage::CombineGuestPath(base, request, &combined))
+    {
+        return false;
+    }
+    *relative = re2dj::storage::GuestPathToRelativeString(combined);
+    return true;
+}
+
+// The same resolution rendered as a native suffix, for joining onto a root.
+bool ResolveGuestNativeSuffix(const char* name, std::string* suffix)
+{
+    if (!ResolveGuestRelativePath(name, suffix))
+    {
+        return false;
+    }
+    for (char& value : *suffix)
+    {
+        if (value == '/')
+        {
+            value = '\\';
+        }
+    }
+    return true;
+}
+
+bool ChdRelativePath(const char* name, std::string* relative)
+{
+    std::string resolved;
+    if (relative == nullptr || !ResolveGuestRelativePath(name, &resolved) ||
+        resolved.empty())
     {
         return false;
     }
     relative->assign("EZ2DJ/");
-    relative->append(suffix);
-    for (char& value : *relative)
-    {
-        if (value == '\\')
-        {
-            value = '/';
-        }
-    }
+    relative->append(resolved);
     return true;
 }
 
@@ -830,26 +909,32 @@ bool HasDeviceMockPrefix(const char* name)
 
 bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[MAX_PATH])
 {
-    const char* hdd_suffix = nullptr;
-    const char* support_suffix = nullptr;
-    if (!FindPathSuffixUnderRoot(name, g_re2dj_vfs_hdd_root, &hdd_suffix) &&
-        !FindPathSuffixUnderRoot(name, g_re2dj_hle_windows_directory, &support_suffix) &&
-        HasPrefixIgnoreCase(name, "D:\\ez2dj"))
-    {
-        hdd_suffix = name + 8;
-    }
-    else if (hdd_suffix == nullptr && HasPrefixIgnoreCase(name, "C:\\windows"))
-    {
-        support_suffix = name + 10;
-    }
-    else if (hdd_suffix == nullptr && support_suffix == nullptr &&
-             name[0] != '\\' && name[0] != '/')
-    {
-        hdd_suffix = name;
-    }
-    else if (hdd_suffix == nullptr && support_suffix == nullptr)
+    if (name == nullptr)
     {
         return false;
+    }
+    // A support-directory path is decided first and by prefix alone; everything
+    // else is an HDD path and goes through the guest current directory.
+    const char* support_suffix = nullptr;
+    std::string hdd_storage;
+    const char* hdd_suffix = nullptr;
+    if (!FindPathSuffixUnderRoot(name, g_re2dj_vfs_hdd_root, &hdd_suffix) &&
+        (FindPathSuffixUnderRoot(name, g_re2dj_hle_windows_directory, &support_suffix) ||
+         HasPrefixIgnoreCase(name, "C:\\windows")))
+    {
+        if (support_suffix == nullptr)
+        {
+            support_suffix = name + 10;
+        }
+    }
+    else if (!ResolveGuestNativeSuffix(name, &hdd_storage))
+    {
+        return false;
+    }
+    else
+    {
+        hdd_suffix = hdd_storage.c_str();
+        support_suffix = nullptr;
     }
 
     const char* target_root = write ? g_re2dj_vfs_overlay_root
@@ -943,6 +1028,109 @@ bool MaterializeChdFile(const char* name, const char* output)
     return g_chd_volume->MaterializeFile(relative, output, &g_chd_mount_error);
 }
 
+// True when a resolved guest path names a directory. The overlay and the
+// native tree are consulted first because a materialized copy is what the host
+// will actually open, and the CHD last because it is the source of truth for
+// anything not yet copied out.
+bool GuestDirectoryExists(const std::string& relative)
+{
+    if (relative.empty())
+    {
+        return true;
+    }
+    std::string native = relative;
+    for (char& value : native)
+    {
+        if (value == '/')
+        {
+            value = '\\';
+        }
+    }
+    const char* const roots[] = {g_re2dj_vfs_hdd_root, g_re2dj_vfs_overlay_root};
+    for (const char* root : roots)
+    {
+        char path[MAX_PATH] = {};
+        if (root[0] == '\0' || !JoinRoot(root, native.c_str(), path))
+        {
+            continue;
+        }
+        const DWORD attributes = GetFileAttributesA(path);
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        {
+            return true;
+        }
+    }
+    if (!IsChdConfigured() || !EnsureChdMounted())
+    {
+        return false;
+    }
+    re2dj::storage::Fat32Entry entry;
+    std::string error;
+    return g_chd_volume->Find("EZ2DJ/" + relative, &entry, &error) && entry.directory;
+}
+
+std::vector<std::string> SplitGuestRelative(const std::string& relative)
+{
+    std::vector<std::string> components;
+    std::string current;
+    for (const char value : relative)
+    {
+        if (value == '/')
+        {
+            if (!current.empty())
+            {
+                components.push_back(current);
+                current.clear();
+            }
+            continue;
+        }
+        current.push_back(value);
+    }
+    if (!current.empty())
+    {
+        components.push_back(current);
+    }
+    return components;
+}
+
+// The current directory as the native path the guest can hand back to us. The
+// guest already round-trips paths in this form: every open that succeeds today
+// is an absolute path it built from what we returned.
+bool GuestDirectoryNativePath(char path[MAX_PATH])
+{
+    std::string native;
+    for (const std::string& component : g_guest_directory_components)
+    {
+        if (!native.empty())
+        {
+            native.push_back('\\');
+        }
+        native.append(component);
+    }
+    return JoinRoot(g_re2dj_vfs_hdd_root, native.c_str(), path);
+}
+
+void ReportVfsCurrentDirectory(const char* stage,
+                               const char* requested,
+                               const char* resolved,
+                               bool success)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || !ClaimVfsOpenTraceBudget())
+    {
+        return;
+    }
+    char message[900] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:current-directory:stage=%.31s:request=%.383s:resolved=%.383s:success=%u\r\n",
+                  stage,
+                  requested == nullptr ? "" : requested,
+                  resolved == nullptr ? "" : resolved,
+                  success ? 1U : 0U);
+    AppendVfsTraceMessage(message);
+}
+
 }  // namespace
 
 extern "C" __declspec(dllexport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
@@ -964,6 +1152,45 @@ extern "C" __declspec(dllexport) LONG WINAPI Re2djHleChangeDisplaySettingsExA(
         return DISP_CHANGE_SUCCESSFUL;
     }
     return ChangeDisplaySettingsExA(device_name, dev_mode, window, flags, reserved);
+}
+
+extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsSetCurrentDirectoryA(LPCSTR name)
+{
+    std::string resolved;
+    if (name == nullptr || !ResolveGuestRelativePath(name, &resolved) ||
+        !GuestDirectoryExists(resolved))
+    {
+        ReportVfsCurrentDirectory("set", name, resolved.c_str(), false);
+        SetLastError(ERROR_PATH_NOT_FOUND);
+        return FALSE;
+    }
+    g_guest_directory_components = SplitGuestRelative(resolved);
+    ReportVfsCurrentDirectory("set", name, resolved.c_str(), true);
+    SetLastError(ERROR_SUCCESS);
+    return TRUE;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetCurrentDirectoryA(DWORD size,
+                                                                          LPSTR buffer)
+{
+    char path[MAX_PATH] = {};
+    if (!GuestDirectoryNativePath(path))
+    {
+        SetLastError(ERROR_INVALID_NAME);
+        return 0;
+    }
+    const DWORD length = static_cast<DWORD>(std::strlen(path));
+    // Win32 reports the buffer size it needs, terminator included, when the
+    // caller's buffer is too small, and the written length when it fits.
+    if (buffer == nullptr || size <= length)
+    {
+        ReportVfsCurrentDirectory("get-size", path, path, true);
+        return length + 1;
+    }
+    std::memcpy(buffer, path, static_cast<std::size_t>(length) + 1);
+    ReportVfsCurrentDirectory("get", path, path, true);
+    SetLastError(ERROR_SUCCESS);
+    return length;
 }
 
 extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsLoadImageA(
@@ -1012,6 +1239,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     DWORD flags,
     HANDLE template_handle)
 {
+    EnsureDiagnosticBoundariesInstalled();
     OutputDebugStringA(kCreateFileMessage);
     ReportVfsCreateFileRequest(name, access, disposition, flags);
     if (name == nullptr)
@@ -1601,6 +1829,7 @@ BOOL WINAPI Re2djObserveWtsQuerySessionInformationA(
 extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
     HMODULE module, LPCSTR name)
 {
+    EnsureDiagnosticBoundariesInstalled();
     const std::uintptr_t caller =
         reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     if (name != nullptr && reinterpret_cast<std::uintptr_t>(name) > 0xffffu)
@@ -1659,6 +1888,40 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
             {
                 const FARPROC result =
                     reinterpret_cast<FARPROC>(&Re2djVfsGetFileType);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            // The guest opens resources by bare name after changing directory,
+            // so these two decide what every later relative open means.
+            if (_stricmp(name, "SetCurrentDirectoryA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsSetCurrentDirectoryA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetCurrentDirectoryA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetCurrentDirectoryA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "DirectDrawCreate") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djHleDirectDrawCreate);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "DirectDrawCreateEx") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djHleDirectDrawCreateEx);
                 ReportDynamicResolverName(
                     name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
                 return result;

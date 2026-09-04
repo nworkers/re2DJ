@@ -184,10 +184,14 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
             entry.profile.run_defaults.hle_vfs = true;
             entry.profile.run_defaults.hle_dynamic_vfs = true;
-            // The privileged byte read is confirmed at this RVA. Keep the
-            // shared raw-I/O board opt-in until its response contract is known.
+            entry.profile.run_defaults.hle_d3d3 = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000c3817;
+            // The byte-width out helper, observed as the faulting instruction
+            // of an untrapped `out dx, al` once graphics initialization got
+            // past device creation.
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000c384b;
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix =
                 "\\\\.\\FEnteDev";

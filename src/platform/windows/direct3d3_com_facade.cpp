@@ -24,9 +24,8 @@
 #include "re2dj/graphics/legacy_transform.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
+#include "graphics_trace_log.h"
 #include "window_mode.h"
-
-extern "C" __declspec(dllexport) char g_re2dj_graphics_trace_path[MAX_PATH] = {};
 
 namespace
 {
@@ -43,7 +42,6 @@ constexpr DWORD kSurfaceMagic = 0x52325346;
 constexpr DWORD kDeviceMagic = 0x52324456;
 constexpr DWORD kViewportMagic = 0x52325650;
 constexpr DWORD kVertexBufferMagic = 0x52325642;
-HANDLE g_composition_trace_file = INVALID_HANDLE_VALUE;
 
 struct RootFacade;
 struct SurfaceFacade;
@@ -548,43 +546,10 @@ void ReportCompositionDiagnostic(RootFacade* root, const char* detail)
         return;
     }
     const std::uint64_t sequence = root->next_composition_diagnostic_sequence++;
-    char message[800] = {};
-    std::snprintf(message,
-                  sizeof(message),
-                  "re2dj:hle:ddraw-trace:seq=%llu:%s",
-                  static_cast<unsigned long long>(sequence),
-                  detail);
-    OutputDebugStringA(message);
-    if (g_re2dj_graphics_trace_path[0] == '\0')
-    {
-        return;
-    }
-    if (g_composition_trace_file == INVALID_HANDLE_VALUE)
-    {
-        g_composition_trace_file = CreateFileA(g_re2dj_graphics_trace_path,
-                                               FILE_APPEND_DATA,
-                                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                               nullptr,
-                                               OPEN_ALWAYS,
-                                               FILE_ATTRIBUTE_NORMAL,
-                                               nullptr);
-        if (g_composition_trace_file == INVALID_HANDLE_VALUE)
-        {
-            return;
-        }
-    }
-    DWORD written = 0;
-    WriteFile(g_composition_trace_file,
-              message,
-              static_cast<DWORD>(std::strlen(message)),
-              &written,
-              nullptr);
-    constexpr char kNewline[] = "\r\n";
-    WriteFile(g_composition_trace_file,
-              kNewline,
-              static_cast<DWORD>(sizeof(kNewline) - 1),
-              &written,
-              nullptr);
+    re2dj::platform::windows::WriteGraphicsTraceFormat(
+        "re2dj:hle:ddraw-trace:seq=%llu:%s",
+        static_cast<unsigned long long>(sequence),
+        detail);
 }
 
 void ReportCreateSurfaceDiagnostic(RootFacade* root,
@@ -1636,6 +1601,13 @@ void DestroyGdiBacking(SurfaceFacade* surface)
 
 HRESULT WINAPI RootQueryInterface(IDirectDraw4* self, REFIID iid, void** object)
 {
+    char qi_buf[96] = {};
+    std::snprintf(qi_buf, sizeof(qi_buf),
+                  "re2dj:hle:RootQueryInterface iid={%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
+                  iid.Data1, iid.Data2, iid.Data3,
+                  iid.Data4[0], iid.Data4[1], iid.Data4[2], iid.Data4[3],
+                  iid.Data4[4], iid.Data4[5], iid.Data4[6], iid.Data4[7]);
+    OutputDebugStringA(qi_buf);
     if (object == nullptr)
     {
         return E_POINTER;
@@ -1646,8 +1618,10 @@ HRESULT WINAPI RootQueryInterface(IDirectDraw4* self, REFIID iid, void** object)
     {
         return E_FAIL;
     }
+    constexpr GUID kIidDirectDraw2 = {
+        0xb10f182e, 0x04a7, 0x11d1, {0xa4, 0x5f, 0x00, 0xaa, 0x00, 0xc7, 0x49, 0x68}};
     if (IsEqualGUID(iid, IID_IUnknown) || IsEqualGUID(iid, IID_IDirectDraw) ||
-        IsEqualGUID(iid, IID_IDirectDraw4))
+        IsEqualGUID(iid, kIidDirectDraw2) || IsEqualGUID(iid, IID_IDirectDraw4))
     {
         *object = &root->direct_draw;
     }
@@ -1673,8 +1647,10 @@ ULONG WINAPI RootRelease(IDirectDraw4* self)
     return ReleaseRootReference(RootFromDirectDraw(self));
 }
 
-HRESULT WINAPI RootGetCaps(IDirectDraw4*, DDCAPS* driver_caps, DDCAPS* hel_caps)
+HRESULT WINAPI RootGetCaps(IDirectDraw4* self, DDCAPS* driver_caps, DDCAPS* hel_caps)
 {
+    (void)self;
+    OutputDebugStringA("re2dj:hle:IDirectDraw4::GetCaps");
     bool valid = true;
     const auto fill = [&valid](DDCAPS* caps) {
         if (caps != nullptr)
@@ -1701,6 +1677,7 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
                                  IDirectDrawSurface4** surface,
                                  IUnknown* outer)
 {
+    OutputDebugStringA("re2dj:hle:IDirectDraw4::CreateSurface");
     if (descriptor == nullptr || surface == nullptr || outer != nullptr ||
         descriptor->dwSize != sizeof(DDSURFACEDESC2))
     {
@@ -1817,8 +1794,12 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
     return finish(DD_OK, primary);
 }
 
-HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD)
+HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD flags)
 {
+    char coop_buf[80] = {};
+    std::snprintf(coop_buf, sizeof(coop_buf), "re2dj:hle:IDirectDraw4::SetCooperativeLevel hwnd=0x%08x flags=0x%08x",
+                  static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(window)), static_cast<unsigned>(flags));
+    OutputDebugStringA(coop_buf);
     RootFacade* const root = RootFromDirectDraw(self);
     if (window == nullptr)
     {
@@ -1842,6 +1823,10 @@ HRESULT WINAPI RootSetDisplayMode(IDirectDraw4* self,
                                   DWORD,
                                   DWORD)
 {
+    char mode_buf[80] = {};
+    std::snprintf(mode_buf, sizeof(mode_buf), "re2dj:hle:IDirectDraw4::SetDisplayMode %ux%ux%u",
+                  static_cast<unsigned>(width), static_cast<unsigned>(height), static_cast<unsigned>(bits_per_pixel));
+    OutputDebugStringA(mode_buf);
     if (width != 640 || height != 480 || bits_per_pixel != 16)
     {
         return DDERR_UNSUPPORTEDMODE;

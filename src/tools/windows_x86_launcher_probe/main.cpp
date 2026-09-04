@@ -126,7 +126,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -3136,13 +3136,15 @@ struct NullContextEntryPoint
 };
 
 constexpr std::array<NullContextEntryPoint, 4> kNullContextEntryPoints = {{
-    // The three guard call return sites inside the slot 2 method, where EAX
-    // still holds the value the guard compares, plus the entry of the callee
-    // whose failure Task 162 measured.
-    {0x00011706, "guard0_return"},
-    {0x0001172a, "guard1_return"},
-    {0x00011828, "guard2_return"},
-    {0x000106d2, "guard2_target_entry"},
+    // Task 169 showed guard 1's callee returns 0x81000004 because all four of
+    // its candidate slots stay zero. These anchors answer why: the loop head
+    // gives the iteration count, the two helper call sites give the compared
+    // pointer in stack_arg0 and the match result in EAX on the way back, and
+    // the decision start bounds the loop.
+    {0x00010174, "guard1_loop_head"},
+    {0x000101cf, "guard1_helper_call_0"},
+    {0x00010217, "guard1_helper_call_1"},
+    {0x0001024c, "guard1_decision_start"},
 }};
 
 constexpr std::uint32_t kNullContextEntryHitLimit = 8;
@@ -4273,10 +4275,250 @@ bool HandleNullContextEntryBreakpoint(HANDLE process,
     std::uint32_t return_address = 0;
     const bool return_readable =
         ReadRemoteU32(process, static_cast<std::uint32_t>(context.Esp), &return_address);
+
+    std::uint32_t virtual_func_target = 0;
+    bool virtual_func_readable = false;
+    std::string virtual_func_symbol;
+    std::uint32_t stack_arg0 = 0;
+    bool stack_arg0_readable = false;
+    std::uint32_t this_ptr = 0;
+    bool this_ptr_readable = false;
+
+    if (entry_index == 0)  // virtual_call_site: call dword ptr [ecx+0x54]
+    {
+        virtual_func_readable = ReadRemoteU32(
+            process, static_cast<std::uint32_t>(context.Ecx + 0x54), &virtual_func_target);
+        if (virtual_func_readable)
+        {
+            MEMORY_BASIC_INFORMATION region = {};
+            if (VirtualQueryEx(process,
+                               reinterpret_cast<const void*>(virtual_func_target),
+                               &region,
+                               sizeof(region)) == sizeof(region) &&
+                region.Type == MEM_IMAGE && region.AllocationBase != nullptr)
+            {
+                const std::uintptr_t mod_base =
+                    reinterpret_cast<std::uintptr_t>(region.AllocationBase);
+                re2dj::tools::windows_x86_launcher_probe::RemoteNearestExport nearest = {};
+                std::string nearest_err;
+                if (re2dj::tools::windows_x86_launcher_probe::FindRemotePe32NearestExport(
+                        process, mod_base, virtual_func_target, &nearest, &nearest_err))
+                {
+                    char sym_buf[288] = {};
+                    std::snprintf(sym_buf,
+                                  sizeof(sym_buf),
+                                  "%s!%s+0x%x",
+                                  nearest.module,
+                                  nearest.function,
+                                  static_cast<unsigned>(nearest.offset));
+                    SanitizeJsonText(sym_buf);
+                    virtual_func_symbol = sym_buf;
+                }
+                else
+                {
+                    char sym_buf[64] = {};
+                    std::snprintf(sym_buf,
+                                  sizeof(sym_buf),
+                                  "module_base_0x%08x",
+                                  static_cast<unsigned>(mod_base));
+                    virtual_func_symbol = sym_buf;
+                }
+            }
+        }
+        stack_arg0_readable = ReadRemoteU32(
+            process, static_cast<std::uint32_t>(context.Esp), &stack_arg0);
+        this_ptr_readable = ReadRemoteU32(
+            process, static_cast<std::uint32_t>(context.Ebp - 0xa8), &this_ptr);
+
+        // 1. Read code bytes around call site: 0x00410a50 to 0x00410a75 (38 bytes)
+        const std::uintptr_t code_win_start = image_base + 0x00010a50;
+        std::uint8_t code_buf[40] = {};
+        SIZE_T code_copied = 0;
+        std::string code_hex;
+        if (ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(code_win_start),
+                              code_buf,
+                              sizeof(code_buf),
+                              &code_copied) != FALSE &&
+            code_copied > 0)
+        {
+            char hex_buf[sizeof(code_buf) * 2 + 1] = {};
+            for (SIZE_T i = 0; i < code_copied; ++i)
+            {
+                std::snprintf(hex_buf + i * 2, 3, "%02x", code_buf[i]);
+            }
+            code_hex = hex_buf;
+        }
+
+        // 2. Read stack arguments: 6 DWORDs from ESP
+        char stack_buf[128] = {};
+        std::size_t stack_pos = 0;
+        for (std::size_t i = 0; i < 6; ++i)
+        {
+            std::uint32_t val = 0;
+            if (ReadRemoteU32(process, static_cast<std::uint32_t>(context.Esp + i * 4), &val))
+            {
+                stack_pos += std::snprintf(stack_buf + stack_pos,
+                                           sizeof(stack_buf) - stack_pos,
+                                           "%s0x%08x",
+                                           i > 0 ? "," : "",
+                                           val);
+            }
+        }
+
+        // 3. Resolve IAT slots 0x006d1908 and 0x006d1724
+        char iat_buf[512] = {};
+        std::size_t iat_pos = 0;
+        for (std::uint32_t slot_rva : {0x006d1908u, 0x006d1724u})
+        {
+            const std::uintptr_t slot_va = image_base + slot_rva;
+            std::uint32_t func_ptr = 0;
+            const bool ptr_readable =
+                ReadRemoteU32(process, static_cast<std::uint32_t>(slot_va), &func_ptr);
+            std::string sym_name;
+            if (ptr_readable && func_ptr != 0)
+            {
+                MEMORY_BASIC_INFORMATION reg = {};
+                if (VirtualQueryEx(process,
+                                   reinterpret_cast<const void*>(func_ptr),
+                                   &reg,
+                                   sizeof(reg)) == sizeof(reg) &&
+                    reg.Type == MEM_IMAGE && reg.AllocationBase != nullptr)
+                {
+                    const std::uintptr_t mod_base =
+                        reinterpret_cast<std::uintptr_t>(reg.AllocationBase);
+                    re2dj::tools::windows_x86_launcher_probe::RemoteNearestExport near_exp = {};
+                    std::string err;
+                    if (re2dj::tools::windows_x86_launcher_probe::FindRemotePe32NearestExport(
+                            process, mod_base, func_ptr, &near_exp, &err))
+                    {
+                        char sym_buf[288] = {};
+                        std::snprintf(sym_buf,
+                                      sizeof(sym_buf),
+                                      "%s!%s+0x%x",
+                                      near_exp.module,
+                                      near_exp.function,
+                                      static_cast<unsigned>(near_exp.offset));
+                        SanitizeJsonText(sym_buf);
+                        sym_name = sym_buf;
+                    }
+                }
+            }
+            iat_pos += std::snprintf(iat_buf + iat_pos,
+                                     sizeof(iat_buf) - iat_pos,
+                                     "%s{\"slot_rva\":\"0x%08x\",\"ptr\":\"0x%08x\",\"sym\":\"%s\"}",
+                                     iat_pos > 0 ? "," : "",
+                                     slot_rva,
+                                     func_ptr,
+                                     sym_name.c_str());
+        }
+
+        // 4. Inspect vtable entries: index 0 (0x00), 6 (0x18), 20 (0x50), 21 (0x54), 22 (0x58)
+        char vt_buf[512] = {};
+        std::size_t vt_pos = 0;
+        for (std::uint32_t idx : {0u, 6u, 20u, 21u, 22u})
+        {
+            const std::uint32_t vt_slot = static_cast<std::uint32_t>(context.Ecx + idx * 4);
+            std::uint32_t fn_addr = 0;
+            if (ReadRemoteU32(process, vt_slot, &fn_addr))
+            {
+                std::string sym_name;
+                MEMORY_BASIC_INFORMATION reg = {};
+                if (VirtualQueryEx(process,
+                                   reinterpret_cast<const void*>(fn_addr),
+                                   &reg,
+                                   sizeof(reg)) == sizeof(reg) &&
+                    reg.Type == MEM_IMAGE && reg.AllocationBase != nullptr)
+                {
+                    const std::uintptr_t mod_base =
+                        reinterpret_cast<std::uintptr_t>(reg.AllocationBase);
+                    re2dj::tools::windows_x86_launcher_probe::RemoteNearestExport near_exp = {};
+                    std::string err;
+                    if (re2dj::tools::windows_x86_launcher_probe::FindRemotePe32NearestExport(
+                            process, mod_base, fn_addr, &near_exp, &err))
+                    {
+                        char sym_buf[288] = {};
+                        std::snprintf(sym_buf,
+                                      sizeof(sym_buf),
+                                      "%s!%s+0x%x",
+                                      near_exp.module,
+                                      near_exp.function,
+                                      static_cast<unsigned>(near_exp.offset));
+                        SanitizeJsonText(sym_buf);
+                        sym_name = sym_buf;
+                    }
+                }
+                vt_pos += std::snprintf(vt_buf + vt_pos,
+                                        sizeof(vt_buf) - vt_pos,
+                                        "%s{\"idx\":%u,\"addr\":\"0x%08x\",\"sym\":\"%s\"}",
+                                        vt_pos > 0 ? "," : "",
+                                        idx,
+                                        fn_addr,
+                                        sym_name.c_str());
+            }
+        }
+
+        RecordDiagnostic(
+            "{\"event\":\"null_context_virtual_call_context\",\"code_hex\":\"%s\",\"stack\":[%s],\"iat\":[%s],\"vtable\":[%s]}",
+            code_hex.c_str(),
+            stack_buf,
+            iat_buf,
+            vt_buf);
+
+        // 5. Scan unpacked .idata range (0x006d1000 to 0x006d3000) for DDRAW.dll pointers
+        const std::uintptr_t idata_base = image_base + 0x006d1000;
+        constexpr std::size_t idata_size = 0x2000;
+        std::vector<std::uint32_t> idata_words(idata_size / sizeof(std::uint32_t));
+        SIZE_T idata_read = 0;
+        if (ReadProcessMemory(process,
+                              reinterpret_cast<const void*>(idata_base),
+                              idata_words.data(),
+                              idata_size,
+                              &idata_read) != FALSE &&
+            idata_read > 0)
+        {
+            for (std::size_t i = 0; i < idata_words.size(); ++i)
+            {
+                const std::uint32_t ptr = idata_words[i];
+                if (ptr == 0)
+                {
+                    continue;
+                }
+                MEMORY_BASIC_INFORMATION reg = {};
+                if (VirtualQueryEx(process,
+                                   reinterpret_cast<const void*>(ptr),
+                                   &reg,
+                                   sizeof(reg)) == sizeof(reg) &&
+                    reg.Type == MEM_IMAGE && reg.AllocationBase != nullptr)
+                {
+                    const std::uintptr_t mod_base =
+                        reinterpret_cast<std::uintptr_t>(reg.AllocationBase);
+                    re2dj::tools::windows_x86_launcher_probe::RemoteNearestExport near_exp = {};
+                    std::string err;
+                    if (re2dj::tools::windows_x86_launcher_probe::FindRemotePe32NearestExport(
+                            process, mod_base, ptr, &near_exp, &err))
+                    {
+                        if (_stricmp(near_exp.module, "ddraw.dll") == 0 ||
+                            std::strstr(near_exp.function, "DirectDraw") != nullptr)
+                        {
+                            RecordDiagnostic(
+                                "{\"event\":\"unpacked_idata_ddraw_slot\",\"slot_rva\":\"0x%08x\",\"ptr\":\"0x%08x\",\"module\":\"%s\",\"function\":\"%s\",\"offset\":\"0x%x\"}",
+                                static_cast<unsigned>(0x006d1000 + i * sizeof(std::uint32_t)),
+                                ptr,
+                                near_exp.module,
+                                near_exp.function,
+                                static_cast<unsigned>(near_exp.offset));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if (state->recorded_counts[entry_index] < kNullContextEntryHitLimit)
     {
         RecordDiagnostic(
-            "{\"event\":\"null_context_entry_hit\",\"sequence\":%u,\"thread\":%u,\"name\":\"%s\",\"rva\":\"0x%08x\",\"eip\":\"0x%08x\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"receiver_is_singleton\":%s,\"esp\":\"0x%08x\",\"return\":\"0x%08x\",\"return_readable\":%s,\"return_rva\":\"0x%08x\"}",
+            "{\"event\":\"null_context_entry_hit\",\"sequence\":%u,\"thread\":%u,\"name\":\"%s\",\"rva\":\"0x%08x\",\"eip\":\"0x%08x\",\"eax\":\"0x%08x\",\"ecx\":\"0x%08x\",\"edx\":\"0x%08x\",\"receiver_is_singleton\":%s,\"esp\":\"0x%08x\",\"return\":\"0x%08x\",\"return_readable\":%s,\"return_rva\":\"0x%08x\",\"virtual_func_target\":\"0x%08x\",\"virtual_func_readable\":%s,\"virtual_func_symbol\":\"%s\",\"stack_arg0\":\"0x%08x\",\"stack_arg0_readable\":%s,\"this_ptr\":\"0x%08x\",\"this_ptr_readable\":%s}",
             state->hit_count,
             static_cast<unsigned>(thread_id),
             kNullContextEntryPoints[entry_index].name,
@@ -4291,7 +4533,14 @@ bool HandleNullContextEntryBreakpoint(HANDLE process,
             return_readable ? "true" : "false",
             return_readable && return_address >= image_base
                 ? static_cast<unsigned>(return_address - image_base)
-                : 0u);
+                : 0u,
+            virtual_func_target,
+            virtual_func_readable ? "true" : "false",
+            virtual_func_symbol.c_str(),
+            stack_arg0,
+            stack_arg0_readable ? "true" : "false",
+            this_ptr,
+            this_ptr_readable ? "true" : "false");
         ++state->recorded_counts[entry_index];
         ++state->recorded_count;
     }
@@ -4317,6 +4566,18 @@ bool HandleNullContextEntryBreakpoint(HANDLE process,
 
 constexpr std::size_t kNullContextObjectReferenceLimit = 128;
 constexpr std::uint32_t kNullContextObjectVtableEntries = 16;
+// The device enumeration record table guard 1 walks, confirmed by Task 170.
+// The selection loop takes the base and the count from these two globals,
+// indexes with the stride, and drops every record whose gate reads zero.
+constexpr std::uint32_t kEz2dj4thDeviceRecordTableRva = 0x00546d50;
+constexpr std::uint32_t kEz2dj4thDeviceRecordCountRva = 0x0054cd9c;
+constexpr std::uint32_t kEz2dj4thDeviceRecordStride = 0x000004d0;
+constexpr std::uint32_t kEz2dj4thDeviceRecordGateOffset = 0x000004c8;
+// Records summarized by the window scan, and the per-record cap on reported
+// nonzero dwords. A full record holds 0x134 dwords, so the cap only truncates
+// a record that is almost entirely filled.
+constexpr std::uint32_t kEz2dj4thDeviceRecordWindowCount = 2;
+constexpr std::size_t kEz2dj4thDeviceRecordEntryLimit = 128;
 // Backward search range for the enclosing `push ebp; mov ebp, esp` and the
 // size of the recorded code region around an anchor.
 constexpr std::size_t kNullContextPrologueScanBack = 0x2000;
@@ -4448,9 +4709,24 @@ bool HandleNullContextObjectReferenceScanBreakpoint(
                 {"object", static_cast<std::uint32_t>(object_address), true},
                 {"global", static_cast<std::uint32_t>(global_address), true},
                 {"vtable", vtable_pointer, vtable_in_image},
-                // The application-defined failure code the guard 2 call
-                // returned, so every site that produces it can be located.
+                // The application-defined failure codes the guard calls
+                // returned, so every site that produces them can be located.
                 {"error_code", 0x8200000au, true},
+                {"guard1_error_code", 0x81000004u, true},
+                // The device record table guard 1 walks. The two absolute
+                // addresses find every site that touches the table, the stride
+                // finds the sites that index it, and the gate displacement
+                // finds the sites that touch the field that skipped every
+                // record. A `0x4c8` access inside a function that also indexes
+                // with `0x4d0` is the gate writer candidate.
+                {"device_table_base",
+                 static_cast<std::uint32_t>(image_base + kEz2dj4thDeviceRecordTableRva),
+                 true},
+                {"device_count_global",
+                 static_cast<std::uint32_t>(image_base + kEz2dj4thDeviceRecordCountRva),
+                 true},
+                {"device_record_stride", kEz2dj4thDeviceRecordStride, true},
+                {"device_gate_displacement", kEz2dj4thDeviceRecordGateOffset, true},
             };
             for (const auto& scan : scans)
             {
@@ -4576,6 +4852,24 @@ bool HandleNullContextObjectReferenceScanBreakpoint(
                 {"slot2_early_exit_2", 0x00011838},
                 {"guard2_target_entry", 0x000106d2},
                 {"guard2_failure_site", 0x00010a7b},
+                {"guard1_target_entry", 0x0001010f},
+                // The loop that precedes the decision, and the four-way
+                // comparison chain whose last mismatch falls into the
+                // 0x81000004 return at 0x000102a0.
+                {"guard1_loop_head", 0x00010190},
+                {"guard1_loop_body", 0x000101d0},
+                {"guard1_loop_tail", 0x00010220},
+                {"guard1_chain_0", 0x00010250},
+                {"guard1_chain_1", 0x00010270},
+                {"guard1_chain_2", 0x00010290},
+                {"guard1_chain_3", 0x000102b0},
+                // Task 171: the driver stage that builds the context whose
+                // +0x4c8 the device callback copies, and the callback itself.
+                {"driver_stage_context_zero", 0x0000f93e},
+                {"device_enum_callback", 0x0000fc57},
+                // Task 178: the instruction that faults on a null object
+                // during panel-sprite loading.
+                {"panel_null_object", 0x0001290e},
             };
             for (const auto& anchor : anchors)
             {
@@ -4742,6 +5036,22 @@ bool HandleNullContextObjectReferenceScanBreakpoint(
                 {"slot2_guard_thunk", 0x0000317f, 0x00000008, 0},
                 {"guard2_target", 0x000106d2, 0x00000400, 0},
                 {"slot2_error_thunk", 0x000038dc, 0x00000008, 0},
+                // The thunk guard 1 calls, from the Task 169 branch listing of
+                // the slot 2 method. Listing its eight bytes resolves the jump
+                // to the function that actually fails.
+                {"guard1_thunk", 0x00003913, 0x00000008, 0},
+                // Where thunk 0x00003913 lands. This is the function whose
+                // 0x81000004 return makes guard 1 exit.
+                {"guard1_target", 0x0001010f, 0x00000400, 0},
+                // The three helpers guard 1's target calls: two from inside its
+                // loop and one at the loop tail. Listing their eight bytes
+                // resolves each incremental-link thunk to a real function.
+                {"guard1_helper_12a8", 0x000012a8, 0x00000008, 0},
+                {"guard1_helper_2595", 0x00002595, 0x00000008, 0},
+                {"guard1_helper_2b34", 0x00002b34, 0x00000008, 0},
+                // What the loop compares with. Its shape says whether the
+                // match is a string compare or something else.
+                {"guard1_match_helper", 0x00012820, 0x00000100, 0},
             };
             for (const auto& body : bodies)
             {
@@ -4795,6 +5105,173 @@ bool HandleNullContextObjectReferenceScanBreakpoint(
                         target_in_image ? "true" : "false",
                         skips_call ? "true" : "false");
                 }
+            }
+        }
+
+        // Read-only data the guest compares against. `.rdata` is encrypted on
+        // disk exactly as `.text` is, so a named constant can only be read from
+        // the child after the packer has unpacked the image.
+        {
+            const struct
+            {
+                const char* name;
+                std::uint32_t rva;
+                std::uint32_t length;
+            } data_windows[] = {
+                // The two operands the selection loop pushes at 0x000101b9 and
+                // 0x00010201 before calling its comparison helper.
+                {"guard1_match_string_0", 0x000e4da0, 32},
+                {"guard1_match_string_1", 0x000e4dc0, 32},
+                // The device table the selection loop walks. 0x000100ea hands
+                // the loop the fixed base 0x00946d50 and the count held at
+                // 0x0094cd9c, so both are globals with known RVAs. The record
+                // stride is 0x4d0; +0x28 is the pointer the GUID comparison
+                // takes, +0x118 selects which GUID, and +0x4c8 is the gate that
+                // skipped every element.
+                {"device_table_count", 0x0054cd9c, 4},
+                {"device_record_0_head", 0x00546d50, 48},
+                {"device_record_0_select", 0x00546e68, 16},
+                {"device_record_0_gate", 0x00547218, 16},
+                {"device_record_1_head", 0x00547220, 48},
+                {"device_record_1_gate", 0x005476e8, 16},
+                // The names the caller of the faulting function passes to the
+                // singleton loader. Reading them says which resource the load
+                // that left its out parameter empty was asked for.
+                {"loader_names_0", 0x000f8800, 64},
+                {"loader_names_1", 0x000f8840, 64},
+                {"loader_names_2", 0x000f8880, 64},
+            };
+            for (const auto& window : data_windows)
+            {
+                const RemoteBufferSnapshot snapshot =
+                    ReadRemoteBufferSnapshot(process, image_base + window.rva, window.length);
+                std::string printable;
+                printable.reserve(window.length);
+                for (std::size_t index = 0; index + 1 < snapshot.bytes.size(); index += 2)
+                {
+                    const unsigned value = static_cast<unsigned>(
+                        std::stoul(snapshot.bytes.substr(index, 2), nullptr, 16));
+                    // Only bare printable ASCII, so nothing in the recorded
+                    // text can close or escape the surrounding JSON string.
+                    printable.push_back(value >= 0x20 && value < 0x7f && value != '"' && value != 0x5cu
+                                            ? static_cast<char>(value)
+                                            : '.');
+                }
+                RecordDiagnostic(
+                    "{\"event\":\"null_context_data_window\",\"name\":\"%s\",\"rva\":\"0x%08x\",\"address\":\"0x%08x\",\"length\":%u,\"readable\":%s,\"bytes\":\"%s\",\"printable\":\"%s\"}",
+                    window.name,
+                    window.rva,
+                    static_cast<unsigned>(image_base + window.rva),
+                    static_cast<unsigned>(window.length),
+                    snapshot.readable ? "true" : "false",
+                    snapshot.bytes.c_str(),
+                    printable.c_str());
+            }
+        }
+
+        // Whole code ranges, chunked so one JSON line stays readable. The gate
+        // the selection loop tests is copied from a context that looks like a
+        // stack local, so its writer carries a folded displacement no scan can
+        // find; only reading the range recovers the condition.
+        if (state->text_readable)
+        {
+            constexpr std::uint32_t kCodeChunkBytes = 64;
+            const struct
+            {
+                const char* name;
+                std::uint32_t rva;
+                std::uint32_t length;
+            } code_ranges[] = {
+                // The function that faults on a null object once the game
+                // reaches panel-sprite loading, and the two frames above it
+                // taken from the fault's recorded return addresses. The
+                // incremental-link thunk table resolves the calls between them.
+                {"av2_callee", 0x00012880, 0x00000100},
+                {"av2_caller", 0x00038200, 0x00000220},
+                {"av2_outer", 0x0003f780, 0x00000120},
+                {"link_thunks", 0x00001840, 0x00000040},
+            };
+            for (const auto& range : code_ranges)
+            {
+                if (range.rva < kEz2dj4thTextRva)
+                {
+                    continue;
+                }
+                const std::size_t start = range.rva - kEz2dj4thTextRva;
+                const std::size_t end =
+                    (std::min)(text.size(), start + static_cast<std::size_t>(range.length));
+                RecordDiagnostic(
+                    "{\"event\":\"device_enum_code_range\",\"name\":\"%s\",\"rva\":\"0x%08x\",\"address\":\"0x%08x\",\"requested\":\"0x%08x\",\"available\":\"0x%08x\",\"chunk_bytes\":%u}",
+                    range.name,
+                    range.rva,
+                    static_cast<unsigned>(text_base + start),
+                    range.length,
+                    static_cast<unsigned>(start < end ? end - start : 0),
+                    kCodeChunkBytes);
+                for (std::size_t offset = start; offset < end; offset += kCodeChunkBytes)
+                {
+                    const std::size_t chunk =
+                        (std::min)(static_cast<std::size_t>(kCodeChunkBytes), end - offset);
+                    std::string bytes_text(chunk * 2, '\0');
+                    for (std::size_t index = 0; index < chunk; ++index)
+                    {
+                        std::snprintf(bytes_text.data() + index * 2,
+                                      3,
+                                      "%02x",
+                                      text[offset + index]);
+                    }
+                    RecordDiagnostic(
+                        "{\"event\":\"device_enum_code_chunk\",\"name\":\"%s\",\"rva\":\"0x%08x\",\"address\":\"0x%08x\",\"bytes\":%u,\"code\":\"%s\"}",
+                        range.name,
+                        static_cast<unsigned>(kEz2dj4thTextRva + offset),
+                        static_cast<unsigned>(text_base + offset),
+                        static_cast<unsigned>(chunk),
+                        bytes_text.c_str());
+                }
+            }
+        }
+
+        // How much of a device record the enumeration callback actually filled.
+        // Task 170 read only three small windows per record, which cannot say
+        // whether the tail that holds the gate is filled at all.
+        for (std::uint32_t record = 0; record < kEz2dj4thDeviceRecordWindowCount;
+             ++record)
+        {
+            const std::uint32_t record_rva =
+                kEz2dj4thDeviceRecordTableRva + record * kEz2dj4thDeviceRecordStride;
+            const std::uintptr_t record_address = image_base + record_rva;
+            const re2dj::tools::launcher_probe::ObjectWindowScan window =
+                re2dj::tools::launcher_probe::ScanObjectWindow(
+                    process,
+                    record_address,
+                    kEz2dj4thDeviceRecordStride,
+                    kEz2dj4thDeviceRecordGateOffset,
+                    re2dj::tools::launcher_probe::AddressRanges{image_base,
+                                                                image_end,
+                                                                0,
+                                                                0},
+                    kEz2dj4thDeviceRecordEntryLimit);
+            RecordDiagnostic(
+                "{\"event\":\"device_record_window\",\"record\":%u,\"address\":\"0x%08x\",\"rva\":\"0x%08x\",\"readable\":%s,\"bytes\":\"0x%08x\",\"nonzero\":%u,\"recorded\":%u,\"capped\":%s,\"gate_offset\":\"0x%08x\",\"gate_scanned\":%s,\"gate\":\"0x%08x\"}",
+                static_cast<unsigned>(record),
+                static_cast<unsigned>(record_address),
+                record_rva,
+                window.readable ? "true" : "false",
+                window.bytes_scanned,
+                window.nonzero_count,
+                static_cast<unsigned>(window.entries.size()),
+                window.capped ? "true" : "false",
+                kEz2dj4thDeviceRecordGateOffset,
+                window.field_offset_scanned ? "true" : "false",
+                window.field_value);
+            for (const auto& entry : window.entries)
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"device_record_field\",\"record\":%u,\"offset\":\"0x%08x\",\"value\":\"0x%08x\",\"classification\":\"%s\"}",
+                    static_cast<unsigned>(record),
+                    entry.offset,
+                    entry.value,
+                    entry.classification);
             }
         }
 
@@ -7366,6 +7843,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool hle_io_ports = false;
     std::filesystem::path io_config_path;
     bool run_detached = false;
+    bool hle_message_box = false;
     bool d3d_init_trace = false;
     bool ksnd_load_trace = false;
     bool device_mock_lptdi = false;
@@ -7500,7 +7978,6 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         else if (option == "--hle-d3d3")
         {
             hle_d3d3 = true;
-            hle_display_mode = true;
             inject_runtime = true;
             software_breakpoint = true;
         }
@@ -7575,6 +8052,12 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             hle_io_ports = true;
             inject_runtime = true;
             break_exit_process = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--hle-message-box")
+        {
+            hle_message_box = true;
+            inject_runtime = true;
             software_breakpoint = true;
         }
         else if (option == "--run-detached")
@@ -7845,6 +8328,21 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     {
         std::fprintf(stderr, "{\"error\":\"CHD path does not exist\"}\n");
         return 1;
+    }
+    if (!chd_path.empty())
+    {
+        // The injected runtime opens this path from inside the child, whose
+        // working directory is the guest's, not the launcher's. A relative
+        // path given on the command line would silently fail to mount there.
+        std::error_code chd_absolute_error;
+        const std::filesystem::path absolute_chd_path =
+            std::filesystem::absolute(chd_path, chd_absolute_error);
+        if (chd_absolute_error)
+        {
+            std::fprintf(stderr, "{\"error\":\"CHD path cannot be made absolute\"}\n");
+            return 1;
+        }
+        chd_path = absolute_chd_path;
     }
     if (!target_executable_path.empty() &&
         std::filesystem::path(target_executable_path).is_absolute())
@@ -8264,7 +8762,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"hle_message_box\":%s,\"run_detached\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      chd_path.generic_string().c_str(),
@@ -8285,6 +8783,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      fullscreen ? "true" : "false",
                      hle_directsound ? "true" : "false",
                      hle_io_ports ? "true" : "false",
+                     hle_message_box ? "true" : "false",
                      run_detached ? "true" : "false",
                      d3d_init_trace ? "true" : "false",
                      ksnd_load_trace ? "true" : "false",
@@ -8457,75 +8956,128 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     {
         std::uint32_t display_thunk_rva = 0;
         std::uint32_t display_slot_rva = 0;
-        display_prepared = re2dj::platform::windows::FindPe32ExportRva(
-                               runtime_path,
-                               "_Re2djHleChangeDisplaySettingsExA@20",
-                               &display_thunk_rva,
-                               &error) &&
-                           re2dj::tools::windows_original_process_probe::FindIatSlotByName(
-                               info,
-                               file.data(),
-                               file.size(),
-                               "USER32.dll",
-                               "ChangeDisplaySettingsExA",
-                               &display_slot_rva,
-                               &error) &&
-                           WriteRemoteU32(child.hProcess,
-                                          main_image_base + display_slot_rva,
-                                          runtime_base + display_thunk_rva,
-                                          &error);
+        std::string display_find_err;
+        const bool has_display_slot =
+            re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                info,
+                file.data(),
+                file.size(),
+                "USER32.dll",
+                "ChangeDisplaySettingsExA",
+                &display_slot_rva,
+                &display_find_err);
+        if (has_display_slot)
+        {
+            display_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                   runtime_path,
+                                   "_Re2djHleChangeDisplaySettingsExA@20",
+                                   &display_thunk_rva,
+                                   &error) &&
+                               WriteRemoteU32(child.hProcess,
+                                              main_image_base + display_slot_rva,
+                                              runtime_base + display_thunk_rva,
+                                              &error);
+        }
+        else
+        {
+            display_prepared = true;
+        }
     }
     bool d3d3_prepared = !hle_d3d3;
     if (hle_d3d3 && runtime_loaded)
     {
         std::uint32_t d3d3_thunk_rva = 0;
         std::uint32_t d3d3_slot_rva = 0;
+        std::uint32_t d3d3_ex_thunk_rva = 0;
+        std::uint32_t d3d3_ex_slot_rva = 0;
         std::uint32_t graphics_trace_path_rva = 0;
         std::uint32_t fullscreen_rva = 0;
         const DWORD fullscreen_value = fullscreen ? TRUE : FALSE;
         std::filesystem::path graphics_trace_path = diagnostic_log.path();
         graphics_trace_path.replace_extension(".ddraw.log");
-        d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
-                            runtime_path,
-                            "_Re2djHleDirectDrawCreate@12",
-                            &d3d3_thunk_rva,
-                            &error) &&
-                        re2dj::platform::windows::FindPe32ExportRva(
-                            runtime_path,
-                            "g_re2dj_graphics_trace_path",
-                            &graphics_trace_path_rva,
-                            &error) &&
-                        re2dj::platform::windows::FindPe32ExportRva(
-                            runtime_path,
-                            "g_re2dj_fullscreen",
-                            &fullscreen_rva,
-                            &error) &&
-                        re2dj::tools::windows_original_process_probe::FindIatSlotByName(
-                            info,
-                            file.data(),
-                            file.size(),
-                            "DDRAW.dll",
-                            "DirectDrawCreate",
-                            &d3d3_slot_rva,
-                            &error) &&
-                        WriteRemoteU32(child.hProcess,
-                                       main_image_base + d3d3_slot_rva,
-                                       runtime_base + d3d3_thunk_rva,
-                                       &error) &&
-                        WriteRemoteAnsi(child.hProcess,
-                                        runtime_base + graphics_trace_path_rva,
-                                        graphics_trace_path.string(),
-                                        &error) &&
-                        WriteRemoteBytes(
-                            child.hProcess,
-                            runtime_base + fullscreen_rva,
-                            reinterpret_cast<const std::uint8_t*>(&fullscreen_value),
-                            sizeof(fullscreen_value),
-                            &error);
+
+        std::string find_create_err;
+        const bool has_create =
+            re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                info,
+                file.data(),
+                file.size(),
+                "DDRAW.dll",
+                "DirectDrawCreate",
+                &d3d3_slot_rva,
+                &find_create_err);
+
+        std::string find_create_ex_err;
+        const bool has_create_ex =
+            re2dj::tools::windows_original_process_probe::FindIatSlotByName(
+                info,
+                file.data(),
+                file.size(),
+                "DDRAW.dll",
+                "DirectDrawCreateEx",
+                &d3d3_ex_slot_rva,
+                &find_create_ex_err);
+
+        if (!has_create && !has_create_ex)
+        {
+            error = "cannot find DirectDrawCreate or DirectDrawCreateEx IAT slot in DDRAW.dll: " +
+                    find_create_err + "; " + find_create_ex_err;
+            d3d3_prepared = false;
+        }
+        else
+        {
+            d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                runtime_path,
+                                "g_re2dj_graphics_trace_path",
+                                &graphics_trace_path_rva,
+                                &error) &&
+                            re2dj::platform::windows::FindPe32ExportRva(
+                                runtime_path,
+                                "g_re2dj_fullscreen",
+                                &fullscreen_rva,
+                                &error) &&
+                            WriteRemoteAnsi(child.hProcess,
+                                            runtime_base + graphics_trace_path_rva,
+                                            graphics_trace_path.string(),
+                                            &error) &&
+                            WriteRemoteBytes(
+                                child.hProcess,
+                                runtime_base + fullscreen_rva,
+                                reinterpret_cast<const std::uint8_t*>(&fullscreen_value),
+                                sizeof(fullscreen_value),
+                                &error);
+
+            if (d3d3_prepared && has_create)
+            {
+                d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                    runtime_path,
+                                    "_Re2djHleDirectDrawCreate@12",
+                                    &d3d3_thunk_rva,
+                                    &error) &&
+                                WriteRemoteU32(child.hProcess,
+                                               main_image_base + d3d3_slot_rva,
+                                               runtime_base + d3d3_thunk_rva,
+                                               &error);
+            }
+            if (d3d3_prepared && has_create_ex)
+            {
+                // On ez2dj4th, DirectDrawCreateEx in the PE import directory
+                // belongs to the packer's import table (.protect). Patching it
+                // overwrites packer data and breaks unpacking. For ez2dj4th,
+                // do not overwrite the packer slot.
+                d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                    runtime_path,
+                                    "_Re2djHleDirectDrawCreateEx@16",
+                                    &d3d3_ex_thunk_rva,
+                                    &error);
+            }
+        }
         if (d3d3_prepared)
         {
-            RecordDiagnostic("{\"event\":\"graphics_trace\",\"path\":\"%s\"}",
-                             graphics_trace_path.generic_string().c_str());
+            RecordDiagnostic("{\"event\":\"graphics_trace\",\"path\":\"%s\",\"has_create\":%s,\"has_create_ex\":%s}",
+                             graphics_trace_path.generic_string().c_str(),
+                             has_create ? "true" : "false",
+                             has_create_ex ? "true" : "false");
         }
     }
     bool directsound_prepared = !hle_directsound;
@@ -8654,14 +9206,18 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                        "_Re2djVfsSetFilePointer@16",
                                        "_Re2djVfsGetFileSize@8",
                                        "_Re2djVfsCloseHandle@4",
-                                       "_Re2djVfsGetFileType@4"};
+                                       "_Re2djVfsGetFileType@4",
+                                       "_Re2djVfsSetCurrentDirectoryA@4",
+                                       "_Re2djVfsGetCurrentDirectoryA@8"};
     const char* const vfs_imports[] = {"CreateFileA",
                                        "ReadFile",
                                        "WriteFile",
                                        "SetFilePointer",
                                        "GetFileSize",
                                        "CloseHandle",
-                                       "GetFileType"};
+                                       "GetFileType",
+                                       "SetCurrentDirectoryA",
+                                       "GetCurrentDirectoryA"};
     bool vfs_prepared = !hle_vfs;
     // Tracked apart from vfs_prepared so a failed image-loader patch reports
     // itself instead of silently skipping the device patches that follow it.
@@ -9164,6 +9720,32 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                              static_cast<unsigned>(io_policy.out_byte_rva));
         }
     }
+    bool message_box_prepared = !hle_message_box;
+    if (hle_message_box && runtime_loaded)
+    {
+        std::uint32_t message_box_enable_rva = 0;
+        std::uint32_t message_box_result_rva = 0;
+        message_box_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                   runtime_path,
+                                   "g_re2dj_message_box_result",
+                                   &message_box_result_rva,
+                                   &error) &&
+                               re2dj::platform::windows::FindPe32ExportRva(
+                                   runtime_path,
+                                   "g_re2dj_hle_message_box",
+                                   &message_box_enable_rva,
+                                   &error) &&
+                               WriteRemoteU32(child.hProcess,
+                                              runtime_base + message_box_result_rva,
+                                              1,
+                                              &error) &&
+                               WriteRemoteU32(child.hProcess,
+                                              runtime_base + message_box_enable_rva,
+                                              1,
+                                              &error);
+        RecordDiagnostic("{\"event\":\"message_box_boundary\",\"status\":\"%s\",\"result\":1}",
+                         message_box_prepared ? "prepared" : "unavailable");
+    }
     std::uint32_t exit_thunk_rva = 0;
     std::uint32_t exit_slot_rva = 0;
     bool exit_probe_prepared = !probe_exit_process;
@@ -9564,7 +10146,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                               display_prepared && d3d3_prepared && directsound_prepared &&
                               demo_volume_prepared && audio_trace_prepared && vfs_prepared &&
                               image_loader_prepared &&
-                              io_runtime_prepared && exit_probe_prepared &&
+                              io_runtime_prepared && message_box_prepared &&
+                              exit_probe_prepared &&
                               exit_break_prepared && d3d_init_trace_prepared &&
                               ksnd_load_trace_prepared &&
                               api_trace_prepared &&
@@ -9584,6 +10167,25 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                   file.size(),
                                   &iat,
                                   &error);
+    if (iat_verified && null_context_entry_trace)
+    {
+        for (std::uint32_t target_slot : {0x006d1908u, 0x006d1724u})
+        {
+            re2dj::tools::windows_original_process_probe::IatSlotResolution resolution;
+            std::string resolve_error;
+            const bool resolved = re2dj::tools::windows_original_process_probe::ResolveIatSlot(
+                info, file.data(), file.size(), target_slot, &resolution, &resolve_error);
+            RecordDiagnostic(
+                "{\"event\":\"null_context_iat_slot_resolved\",\"slot_rva\":\"0x%08x\",\"resolved\":%s,\"module\":\"%s\",\"function\":\"%s\",\"ordinal\":%u,\"is_ordinal\":%s,\"error\":\"%s\"}",
+                target_slot,
+                resolved ? "true" : "false",
+                resolution.module.c_str(),
+                resolution.function.c_str(),
+                static_cast<unsigned>(resolution.ordinal),
+                resolution.is_ordinal ? "true" : "false",
+                resolve_error.c_str());
+        }
+    }
     const bool resume_for_handoff = handoff_requested || hle_vfs || hle_display_mode || hle_d3d3 ||
                                     probe_exit_process || break_exit_process;
     const char* const expected_message = probe_exit_process ? "re2dj:probe:ExitProcess"
@@ -9642,7 +10244,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                          directsound_prepared && demo_volume_prepared &&
                                          audio_trace_prepared && vfs_prepared &&
                                          image_loader_prepared &&
-                                         io_runtime_prepared && exit_probe_prepared &&
+                                         io_runtime_prepared && message_box_prepared &&
+                                         exit_probe_prepared &&
                                          exit_break_prepared && d3d_init_trace_prepared &&
                                          ksnd_load_trace_prepared && api_trace_prepared &&
                                          slot_writer_trace_prepared &&
@@ -9668,6 +10271,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                           audio_trace_prepared && vfs_prepared &&
                                           image_loader_prepared &&
                                           io_runtime_prepared &&
+                                          message_box_prepared &&
                                           exit_probe_prepared &&
                                           exit_break_prepared && d3d_init_trace_prepared &&
                                           ksnd_load_trace_prepared &&
@@ -9742,7 +10346,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         !display_prepared || !d3d3_prepared || !directsound_prepared ||
         !demo_volume_prepared || !audio_trace_prepared || !vfs_prepared ||
         !image_loader_prepared ||
-        !io_runtime_prepared || !exit_probe_prepared ||
+        !io_runtime_prepared || !message_box_prepared || !exit_probe_prepared ||
         !exit_break_prepared || !d3d_init_trace_prepared || !ksnd_load_trace_prepared ||
         !slot_writer_trace_prepared ||
         !null_context_object_source_trace_prepared ||

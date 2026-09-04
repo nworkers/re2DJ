@@ -1,5 +1,6 @@
 #include "window_mode.h"
 
+#include "graphics_trace_log.h"
 #include "host_window_shell.h"
 
 #include <dwmapi.h>
@@ -14,7 +15,6 @@
 #endif
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_fullscreen = FALSE;
-extern "C" char g_re2dj_graphics_trace_path[MAX_PATH];
 
 namespace
 {
@@ -87,25 +87,7 @@ void TraceWindowCaption(const char* event, HWND window)
     {
         return;
     }
-    OutputDebugStringA(line);
-    if (g_re2dj_graphics_trace_path[0] == '\0')
-    {
-        return;
-    }
-    const HANDLE file = CreateFileA(g_re2dj_graphics_trace_path,
-                                    FILE_APPEND_DATA,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                    nullptr,
-                                    OPEN_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL,
-                                    nullptr);
-    if (file == INVALID_HANDLE_VALUE)
-    {
-        return;
-    }
-    DWORD written = 0;
-    WriteFile(file, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
-    CloseHandle(file);
+    re2dj::platform::windows::WriteGraphicsTraceLine(line);
 }
 
 void TraceWindowLifetime(const char* event, HWND window, BOOL valid, BOOL visible)
@@ -127,25 +109,7 @@ void TraceWindowLifetime(const char* event, HWND window, BOOL valid, BOOL visibl
     {
         return;
     }
-    OutputDebugStringA(line);
-    if (g_re2dj_graphics_trace_path[0] == '\0')
-    {
-        return;
-    }
-    const HANDLE file = CreateFileA(g_re2dj_graphics_trace_path,
-                                    FILE_APPEND_DATA,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                    nullptr,
-                                    OPEN_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL,
-                                    nullptr);
-    if (file == INVALID_HANDLE_VALUE)
-    {
-        return;
-    }
-    DWORD written = 0;
-    WriteFile(file, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
-    CloseHandle(file);
+    re2dj::platform::windows::WriteGraphicsTraceLine(line);
 }
 
 [[noreturn]] void TerminateCurrentProcessForHostClose()

@@ -60,6 +60,21 @@ bool FindIatSlotByOrdinal(const exe::PeImageInfo& info,
                           std::uint32_t* slot_rva,
                           std::string* error);
 
+struct IatSlotResolution
+{
+    std::string module;
+    std::string function;
+    std::uint16_t ordinal = 0;
+    bool is_ordinal = false;
+};
+
+bool ResolveIatSlot(const exe::PeImageInfo& info,
+                    const std::uint8_t* file,
+                    std::size_t file_size,
+                    std::uint32_t slot_rva,
+                    IatSlotResolution* resolution,
+                    std::string* error);
+
 }  // namespace re2dj::tools::windows_original_process_probe
 
 #endif  // RE2DJ_TOOLS_WINDOWS_ORIGINAL_PROCESS_PROBE_IAT_VERIFIER_H_

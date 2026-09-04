@@ -36,9 +36,14 @@ void PrintPrefix(const std::vector<std::uint8_t>& bytes)
 
 int main(int argc, char** argv)
 {
-    if (argc != 2)
+    // The optional listing answers where a guest resource actually lives when a
+    // relative open fails: the runtime resolves such names against one
+    // directory, and only the image says whether the file is there.
+    const bool list_requested = argc == 4 && std::string(argv[2]) == "--list";
+    if (argc != 2 && !list_requested)
     {
-        std::fprintf(stderr, "usage: re2dj_chd_probe <mame-chd-path>\n");
+        std::fprintf(stderr,
+                     "usage: re2dj_chd_probe <mame-chd-path> [--list <relative-directory>]\n");
         return 1;
     }
 
@@ -138,6 +143,29 @@ int main(int argc, char** argv)
         filesystem.cluster_count,
         filesystem.volume_label.c_str(),
         filesystem.filesystem_type.c_str());
+
+    if (list_requested)
+    {
+        std::vector<re2dj::storage::Fat32Entry> entries;
+        if (!volume->ReadDirectory(argv[3], &entries, &filesystem_error))
+        {
+            std::fprintf(stderr,
+                         "error: cannot read directory %s: %s\n",
+                         argv[3],
+                         filesystem_error.c_str());
+            return 4;
+        }
+        std::printf("listing=%s entries=%zu\n", argv[3], entries.size());
+        for (const re2dj::storage::Fat32Entry& entry : entries)
+        {
+            std::printf("entry name=%s directory=%s size=%u first_cluster=%u\n",
+                        entry.name.c_str(),
+                        entry.directory ? "true" : "false",
+                        entry.size,
+                        entry.first_cluster);
+        }
+        return 0;
+    }
 
     re2dj::storage::Fat32Entry executable;
     if (!volume->Find("EZ2DJ/EZ2DJ.EXE", &executable, &filesystem_error) ||

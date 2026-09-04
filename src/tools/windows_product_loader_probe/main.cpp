@@ -1,10 +1,121 @@
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
 
+#include "re2dj/exe/pe_image.h"
 #include "re2dj/platform/windows/original_process_backend.h"
+#include "../windows_original_process_probe/iat_verifier.h"
+
+namespace
+{
+
+void PutU16(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint16_t value)
+{
+    bytes[offset + 0] = static_cast<std::uint8_t>(value & 0xFF);
+    bytes[offset + 1] = static_cast<std::uint8_t>((value >> 8) & 0xFF);
+}
+
+void PutU32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value)
+{
+    for (std::size_t index = 0; index < 4; ++index)
+    {
+        bytes[offset + index] = static_cast<std::uint8_t>((value >> (index * 8)) & 0xFF);
+    }
+}
+
+std::vector<std::uint8_t> MakeSyntheticPeWithImports()
+{
+    std::vector<std::uint8_t> bytes(0x600, 0);
+    bytes[0] = 'M';
+    bytes[1] = 'Z';
+    PutU32(bytes, 0x3C, 0x80);
+
+    bytes[0x80] = 'P';
+    bytes[0x81] = 'E';
+
+    PutU16(bytes, 0x84, re2dj::exe::kMachineI386);
+    PutU16(bytes, 0x86, 1);
+    PutU16(bytes, 0x94, 224);
+    PutU16(bytes, 0x96, 0x010E);
+
+    PutU16(bytes, 0x98, static_cast<std::uint16_t>(re2dj::exe::PeMagic::kPe32));
+    PutU32(bytes, 0x98 + 16, 0x1000);
+    PutU32(bytes, 0x98 + 28, 0x00400000);
+    PutU32(bytes, 0x98 + 32, 0x1000);
+    PutU32(bytes, 0x98 + 36, 0x200);
+    PutU32(bytes, 0x98 + 56, 0x4000);
+    PutU32(bytes, 0x98 + 60, 0x400);
+    PutU16(bytes, 0x98 + 68, re2dj::exe::kSubsystemWindowsGui);
+    PutU32(bytes, 0x98 + 92, 16);
+
+    const std::size_t import_dir = 0x98 + 96 + 8;
+    PutU32(bytes, import_dir + 0, 0x1000);
+    PutU32(bytes, import_dir + 4, 0x100);
+
+    const std::size_t sec = 0x98 + 224;
+    std::memcpy(&bytes[sec], ".rdata\0\0", 8);
+    PutU32(bytes, sec + 8, 0x1000);
+    PutU32(bytes, sec + 12, 0x1000);
+    PutU32(bytes, sec + 16, 0x200);
+    PutU32(bytes, sec + 20, 0x400);
+    PutU32(bytes, sec + 36, 0xC0000040);
+
+    PutU32(bytes, 0x400 + 0, 0x1030);
+    PutU32(bytes, 0x400 + 12, 0x1050);
+    PutU32(bytes, 0x400 + 16, 0x1040);
+
+    PutU32(bytes, 0x430 + 0, 0x1060);
+    PutU32(bytes, 0x430 + 4, 0x80000005);
+    PutU32(bytes, 0x430 + 8, 0);
+
+    PutU32(bytes, 0x440 + 0, 0x1060);
+    PutU32(bytes, 0x440 + 4, 0x80000005);
+    PutU32(bytes, 0x440 + 8, 0);
+
+    std::memcpy(&bytes[0x450], "sample.dll\0", 11);
+
+    PutU16(bytes, 0x460, 1);
+    std::memcpy(&bytes[0x462], "SampleFunc\0", 11);
+
+    return bytes;
+}
+
+bool TestResolveIatSlot()
+{
+    const std::vector<std::uint8_t> pe_bytes = MakeSyntheticPeWithImports();
+    re2dj::exe::PeImageInfo info;
+    std::string err;
+    if (!re2dj::exe::ReadPeImageInfo(pe_bytes.data(), pe_bytes.size(), &info, &err))
+    {
+        return false;
+    }
+    re2dj::tools::windows_original_process_probe::IatSlotResolution res1;
+    if (!re2dj::tools::windows_original_process_probe::ResolveIatSlot(
+            info, pe_bytes.data(), pe_bytes.size(), 0x1040, &res1, &err) ||
+        res1.module != "sample.dll" || res1.function != "SampleFunc" || res1.is_ordinal)
+    {
+        return false;
+    }
+    re2dj::tools::windows_original_process_probe::IatSlotResolution res2;
+    if (!re2dj::tools::windows_original_process_probe::ResolveIatSlot(
+            info, pe_bytes.data(), pe_bytes.size(), 0x1044, &res2, &err) ||
+        res2.module != "sample.dll" || !res2.is_ordinal || res2.ordinal != 5)
+    {
+        return false;
+    }
+    re2dj::tools::windows_original_process_probe::IatSlotResolution res3;
+    if (re2dj::tools::windows_original_process_probe::ResolveIatSlot(
+            info, pe_bytes.data(), pe_bytes.size(), 0x9999, &res3, &err))
+    {
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 int main()
 {
@@ -162,20 +273,22 @@ int main()
         fourth_profile->profile.run_defaults.hle_dynamic_vfs &&
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments.size() == 15 && arguments[1] == "--hdd" &&
+        arguments.size() == 17 && arguments[1] == "--hdd" &&
         arguments[2] == "staged-chd" && arguments[3] == "--target" &&
         arguments[4] == "ez2dj4th" && arguments[5] == "--chd" &&
         arguments[6] == "4thTrax.chd" && arguments[7] == "--target-executable" &&
         arguments[8] == "EZ2DJ/EZ2DJ.EXE" && arguments[9] == "--hle-vfs" &&
-        arguments[10] == "--run-detached" &&
-        arguments[11] == "--device-mock-lptdi" &&
-        arguments[12] == "--device-mock-lptdi-path-prefix" &&
-        arguments[13] == "\\\\.\\FEnteDev" &&
-        arguments[14] == "--device-mock-wts-console-session" &&
+        arguments[10] == "--hle-d3d3" &&
+        arguments[11] == "--hle-io-ports" &&
+        arguments[12] == "--run-detached" &&
+        arguments[13] == "--device-mock-lptdi" &&
+        arguments[14] == "--device-mock-lptdi-path-prefix" &&
+        arguments[15] == "\\\\.\\FEnteDev" &&
+        arguments[16] == "--device-mock-wts-console-session" &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_ports &&
-        !fourth_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
+        fourth_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x000c3817 &&
-        fourth_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0;
+        fourth_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0x000c384b;
 
     // Hardlock material is resolved inside the launcher from cfg, so no
     // Hardlock option may appear on the product command line.
@@ -246,15 +359,16 @@ int main()
         !re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
         error.find("invalid Windows original-process options") != std::string::npos;
+    const bool resolve_iat_slot = TestResolveIatSlot();
     if (!canonical || !custom_gain || !custom_demo_volume || !audio_trace || !fullscreen ||
         !invalid_gain || !invalid_demo_volume || !io_config || !invalid_lptdi_policy ||
         !third_defaults || !chd_handoff || !no_diagnostic_options ||
-        !invalid_console_policy || !invalid_material_policy || !rejected)
+        !invalid_console_policy || !invalid_material_policy || !rejected || !resolve_iat_slot)
     {
         // Naming the failed checks keeps a policy change from producing an
         // error message that describes only the last call made.
         std::fprintf(stderr,
-                     "windows-product-loader-probe: failed%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s (last error: %s)\n",
+                     "windows-product-loader-probe: failed%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s (last error: %s)\n",
                      canonical ? "" : " canonical",
                      custom_gain ? "" : " custom-gain",
                      custom_demo_volume ? "" : " custom-demo-volume",
@@ -270,9 +384,10 @@ int main()
                      invalid_console_policy ? "" : " invalid-console-policy",
                      invalid_material_policy ? "" : " invalid-material-policy",
                      rejected ? "" : " rejected",
+                     resolve_iat_slot ? "" : " resolve-iat-slot",
                      error.c_str());
         return 1;
     }
-    std::printf("windows-product-loader-probe: profile-defaults=ok unsupported-target=ok\n");
+    std::printf("windows-product-loader-probe: profile-defaults=ok unsupported-target=ok resolve-iat-slot=ok\n");
     return 0;
 }

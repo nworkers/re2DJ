@@ -538,19 +538,501 @@ The related Task 162 design, work order, and work log are [Task 162 design](../d
 - **확인됨 — 실패 판정은 가상 호출 결과의 부호 검사입니다.** `RVA 0x00010a6f`의 `call dword ptr [ecx+0x54]` 뒤 `test eax, eax`(`0x00010a79`)와 `jge 0x00010a94`(`0x00010a7b`)가 성공 경로를 고릅니다. 인터페이스 포인터는 `[this+0x28]`에서 읽고 vtable은 그 객체의 첫 dword입니다. 실패 시 메시지 포인터를 밀어 로거(thunk `0x00001d7a`)를 부른 뒤 상수를 반환합니다.
 - **확인됨 — 호출 체인이 닫힙니다.** 실패 함수 시작은 `RVA 0x00010975`, 그 thunk는 `RVA 0x00001636`이며, thunk 호출자는 `RVA 0x000107d9` 한 곳뿐입니다. 그 주소는 guard 2 대상 함수 `RVA 0x000106d2` 안에 있습니다.
 - **확인됨 — `0x8200000N`은 프로그램 정의 오류 계열입니다.** 인접 함수가 같은 형태로 `RVA 0x000106b9`에서 `0x8200000C`를 반환합니다.
-- **추정 — 실패한 것은 COM 인터페이스 메서드 index 21입니다.** offset `0x54`를 가상 호출하는 형태입니다. 어떤 인터페이스인지는 확인하지 않았고, 간접 호출이므로 대상은 실행 중 값에 의존합니다.
-- **추정 — 이 계층은 IAT를 통한 외부 라이브러리에 의존합니다.** 실패 함수 시작부가 다섯 인자를 밀어 `call dword ptr [0x00ad1908]`을 수행하며, 이 주소(RVA `0x006d1908`)는 `.idata` 범위 안입니다. import 이름은 확인하지 않았습니다.
-- **미확정 — 가상 호출이 실패하는 이유.** field 직접 주입과 Hardlock 응답 변경은 계속 보류합니다.
+- **확인됨 — 실패한 가상 호출은 `IDirectDraw4::SetDisplayMode`입니다.** Task 164에서 `RVA 0x00010a6f` 관찰 결과 `[this+0x28]` 객체의 vtable(`0x7badcfc0`) index 21(offset `0x54`) 함수 주소는 `0x7baa9210`이며 `DDRAW.dll!SetAppCompatData+0x2ba0`에 해당합니다. 인자 크기는 6 DWORD(24바이트, `ret 0x18`)로 `IDirectDraw4::SetDisplayMode(this, width, height, bpp, refresh_rate, flags)` 시그니처와 완전히 일치합니다.
+- **확인됨 — IAT 외부 라이브러리 슬롯 심볼.** 실패 함수 시작부의 `0x00ad1908`(RVA `0x006d1908`)은 `USER32.dll!SetRect`, Task 159의 `0x00ad1724`(RVA `0x006d1724`)는 `KERNEL32.dll!lstrcpynA`로 확정되었습니다.
+- **확인됨 — 가상 호출 실패 원인은 호스트 DirectDraw의 `E_NOTIMPL` 반환입니다.** 호출 직후 반환값 `EAX`는 `0x80004001`(`E_NOTIMPL`)이며, 이로 인해 `jge` 실패 후 `mov eax, 0x8200000A`가 반환되어 guard 2에서 조기 이탈했습니다.
 
-* **Confirmed — guards 0 and 1 pass and only guard 2 fails.** Observing the call return points in `20260903-192806-776.jsonl` gives `guard0_return` (`RVA 0x00011706`) `EAX = 0`, `guard1_return` (`0x0001172a`) `EAX = 0`, and `guard2_return` (`0x00011828`) `EAX = 0x8200000a`. `guard2_target_entry` (`0x000106d2`) was entered with `ECX = 0x00acd708`.
-* **Confirmed — the failure code has a unique producing site in `.text`.** The scan in `20260903-192957-170.jsonl` reports `total` 1 with `capped=false` for `0x8200000a`, at `mov eax, 0x8200000A`, `RVA 0x00010a8a`.
-* **Confirmed — the failure decision is a signed check on a virtual call's result.** `test eax, eax` (`0x00010a79`) and `jge 0x00010a94` (`0x00010a7b`) follow `call dword ptr [ecx+0x54]` at `RVA 0x00010a6f`. The interface pointer is read from `[this+0x28]` and the vtable from that object's first dword. On failure a message pointer is pushed, a logger (thunk `0x00001d7a`) is called, and the constant is returned.
-* **Confirmed — the call chain closes.** The failing function starts at `RVA 0x00010975` with thunk `RVA 0x00001636`, and that thunk has the single caller `RVA 0x000107d9`, which lies inside guard 2's callee `RVA 0x000106d2`.
-* **Confirmed — `0x8200000N` is a program-defined error family.** The adjacent function returns `0x8200000C` in the same shape at `RVA 0x000106b9`.
-* **Inferred — what failed is COM interface method index 21.** The shape virtually calls offset `0x54`. Which interface it is was not established, and because the call is indirect its target depends on runtime values.
-* **Inferred — this layer depends on an external library through the IAT.** The failing function's opening pushes five arguments and performs `call dword ptr [0x00ad1908]`, whose address (RVA `0x006d1908`) lies in the `.idata` range. The import name was not resolved.
-* **Unresolved — why the virtual call fails.** Direct field injection and Hardlock-response changes remain deferred.
+* **Confirmed — what failed is `IDirectDraw4::SetDisplayMode`.** Observing `RVA 0x00010a6f` in Task 164 showed the object at `[this+0x28]` has vtable `0x7badcfc0` whose index 21 (offset `0x54`) function address `0x7baa9210` maps to `DDRAW.dll!SetAppCompatData+0x2ba0`. The parameter size is 6 DWORDs (24 bytes, `ret 0x18`), perfectly matching `IDirectDraw4::SetDisplayMode(this, width, height, bpp, refresh_rate, flags)`.
+* **Confirmed — IAT external library slot symbols.** The failing function's opening `0x00ad1908` (RVA `0x006d1908`) is `USER32.dll!SetRect`, and Task 159's `0x00ad1724` (RVA `0x006d1724`) is `KERNEL32.dll!lstrcpynA`.
+* **Confirmed — the virtual call failure cause is host DirectDraw returning `E_NOTIMPL`.** Immediately after the call `EAX` returns `0x80004001` (`E_NOTIMPL`), causing the signed test to fail and returning `mov eax, 0x8200000A`, which triggers the early exit at guard 2.
 
 관련 Task 163 설계, 작업 지시서, 작업 로그는 [Task 163 설계](../design/20260903-163-ez2dj4th-guard-failure-source.md), [Task 163 작업 지시서](../work-orders/20260903-163-ez2dj4th-guard-failure-source.md), [Task 163 작업 로그](../work-logs/20260903-163-ez2dj4th-guard-failure-source.md)에 둡니다.
 
 The related Task 163 design, work order, and work log are [Task 163 design](../design/20260903-163-ez2dj4th-guard-failure-source.md), [Task 163 work order](../work-orders/20260903-163-ez2dj4th-guard-failure-source.md), and [Task 163 work log](../work-logs/20260903-163-ez2dj4th-guard-failure-source.md).
+
+## 2026-09-04 실패 가상 호출 대상 및 원인 특정
+
+- **확인됨 — 가상 호출 대상은 시스템 `DDRAW.dll`의 `IDirectDraw4::SetDisplayMode`입니다.** 진단 로그 `20260904-001030-168.jsonl`에서 `RVA 0x00010a6f` 진입 시 `[this+0x28]`의 vtable `0x7badcfc0` 인덱스 21 함수 주소는 `0x7baa9210`(`DDRAW.dll!SetAppCompatData+0x2ba0`)이며, 스택 복구 크기는 24바이트(6 DWORD)입니다.
+- **확인됨 — 가상 호출 반환값은 `0x80004001` (`E_NOTIMPL`)입니다.** 현대 Windows 호환성 계층의 DirectDraw가 해당 호출에 대해 `E_NOTIMPL`을 반환함으로써 `test eax, eax` / `jge`가 실패하고 오류 코드 `0x8200000A`가 생성되었습니다.
+- **확인됨 — IAT 슬롯 심볼.** 런타임 언패킹된 IAT 슬롯 `0x00ad1908`은 `USER32.dll!SetRect`, `0x00ad1724`는 `KERNEL32.dll!lstrcpynA`로 확인되었습니다.
+- **판정 — ez2dj4th DirectDraw HLE 연결 필요.** re2DJ의 DirectDraw4 / Direct3D3 HLE(`RootSetDisplayMode`)를 `ez2dj4th`에 연결하면 `SetDisplayMode`가 `DD_OK`를 반환하여 guard 2를 통과하고 필드 초기화기(`0x00018234`)에 도달할 수 있습니다.
+
+* **Confirmed — the virtual call target is `IDirectDraw4::SetDisplayMode` in system `DDRAW.dll`.** In diagnostic log `20260904-001030-168.jsonl`, at `RVA 0x00010a6f`, the vtable `0x7badcfc0` index 21 function pointer is `0x7baa9210` (`DDRAW.dll!SetAppCompatData+0x2ba0`), unwinding 24 bytes (6 DWORDs) from the stack.
+* **Confirmed — the virtual call return value is `0x80004001` (`E_NOTIMPL`).** The modern Windows DirectDraw compatibility layer returns `E_NOTIMPL`, causing `test eax, eax` / `jge` to fail and generating error code `0x8200000A`.
+* **Confirmed — IAT slot symbols.** Unpacked runtime IAT slots `0x00ad1908` and `0x00ad1724` are confirmed as `USER32.dll!SetRect` and `KERNEL32.dll!lstrcpynA`.
+* **Classification — requirement to wire ez2dj4th DirectDraw HLE.** Connecting re2DJ's DirectDraw4 / Direct3D3 HLE (`RootSetDisplayMode`) to `ez2dj4th` will allow `SetDisplayMode` to return `DD_OK`, passing guard 2 and reaching field initializer `0x00018234`.
+
+관련 Task 164 설계, 작업 지시서, 작업 로그는 [Task 164 설계](../design/20260903-164-ez2dj4th-failing-virtual-call-target.md), [Task 164 작업 지시서](../work-orders/20260903-164-ez2dj4th-failing-virtual-call-target.md), [Task 164 작업 로그](../work-logs/20260903-164-ez2dj4th-failing-virtual-call-target.md)에 둡니다.
+
+The related Task 164 design, work order, and work log are [Task 164 design](../design/20260903-164-ez2dj4th-failing-virtual-call-target.md), [Task 164 work order](../work-orders/20260903-164-ez2dj4th-failing-virtual-call-target.md), and [Task 164 work log](../work-logs/20260903-164-ez2dj4th-failing-virtual-call-target.md).
+
+## 2026-09-04 --hle-d3d3 및 SetDisplayMode 대체 구현 검증 결과
+
+- **확인됨 — `DirectDrawCreateEx` 동적 임포트.** `EZ2DJ 4th`는 정적 IAT가 아닌 `GetProcAddress("DirectDrawCreateEx")`를 통해 동적으로 DirectDraw 팩토리를 로드하며, `IID_IDirectDraw7` (`15e65ec0-3b9c-11d2-b92f-00609797ea5b`) 인터페이스를 요청합니다.
+- **확인됨 — HLE 진입 성공.** `Re2djHleDirectDrawCreateEx`가 정상 호출되어 HLE `RootFacade`가 생성되었고, 게스트는 즉시 `QueryInterface(IID_IDirect3D7)` (`f5049e77-4861-11d2-a407-00a0c90629a8`) 및 `IDirectDraw4::GetCaps`를 호출했습니다.
+- **확인됨 — `SetDisplayMode` 진입 조건.** 게스트는 DirectDraw 생성 직후 `SetDisplayMode`를 부르기 전에 `IDirect3D7` 인터페이스를 통한 3D 서브시스템 초기화를 먼저 수행합니다. 현재 HLE는 `IDirect3D3` vtable 레이아웃만 구현되어 있으므로, 게스트가 `IDirect3D7`의 vtable 인덱스 8(`call dword ptr [eax+0x20]`)을 호출하면서 `0x00000000` 역참조로 정지합니다.
+- **판정 — `IDirect3D7` 호환 어댑터 필요.** `SetDisplayMode` 대체 구현에 도달하여 guard 2를 넘기 위해서는 `IDirect3D7` COM 인터페이스 어댑터 계층의 vtable 지원이 수반되어야 합니다.
+
+* **Confirmed — dynamic import of `DirectDrawCreateEx`.** `EZ2DJ 4th` dynamically resolves DirectDraw factory via `GetProcAddress("DirectDrawCreateEx")` rather than static IAT, requesting `IID_IDirectDraw7` (`15e65ec0-3b9c-11d2-b92f-00609797ea5b`).
+* **Confirmed — successful HLE entry.** `Re2djHleDirectDrawCreateEx` successfully intercepts the call, instantiating `RootFacade`, and the guest immediately invokes `QueryInterface(IID_IDirect3D7)` (`f5049e77-4861-11d2-a407-00a0c90629a8`) and `IDirectDraw4::GetCaps`.
+* **Confirmed — prerequisite to reach `SetDisplayMode`.** The guest completes 3D device initialization through `IDirect3D7` before calling `SetDisplayMode`. Because the HLE currently implements only the `IDirect3D3` vtable layout, the guest hits a null pointer call at `0x00000000` when invoking `IDirect3D7` vtable index 8 (`call dword ptr [eax+0x20]`).
+* **Classification — `IDirect3D7` compatibility adapter required.** Reaching the `SetDisplayMode` replacement to pass guard 2 requires implementing an `IDirect3D7` COM interface vtable adapter layer.
+
+관련 Task 165 설계, 작업 지시서, 작업 로그는 [Task 165 설계](../design/20260904-165-ez2dj4th-hle-d3d3-display-mode.md), [Task 165 작업 지시서](../work-orders/20260904-165-ez2dj4th-hle-d3d3-display-mode.md), [Task 165 작업 로그](../work-logs/20260904-165-ez2dj4th-hle-d3d3-display-mode.md)에 둡니다.
+
+The related Task 165 design, work order, and work log are [Task 165 design](../design/20260904-165-ez2dj4th-hle-d3d3-display-mode.md), [Task 165 work order](../work-orders/20260904-165-ez2dj4th-hle-d3d3-display-mode.md), and [Task 165 work log](../work-logs/20260904-165-ez2dj4th-hle-d3d3-display-mode.md).
+
+## 2026-09-04 IDirect3D7 / IDirectDraw7 COM Facade 분리 구현 및 검증 결과
+
+- **확인됨 — DirectX 7 파일 분리 및 인터페이스 vtable 독립.** DirectDraw와 Direct3D의 버전별 분리 원칙에 따라 `directdraw7_com_facade.*` 및 `direct3d7_com_facade.*`로 소스를 분리하고, 공통 상태를 `directdraw_com_context.h`로 묶었습니다.
+- **확인됨 — DirectX 7 디바이스/모드 열거 루틴 정상 통과.** `20260904-005052-508.jsonl`에서 `IDirectDraw7::EnumDisplayModes` (640x480x16 열거) 및 `IDirect3D7::EnumDevices` (하드웨어 HAL 디바이스 열거)가 정상 호출되었으며, 게스트 콜백이 `0x00000001` (`D3DENUMRET_OK`)을 반환하여 이전의 `0x00000000` 가상 함수 크래시를 완전히 극복했습니다.
+
+* **Confirmed — DirectX 7 file separation and independent interface vtables.** In accordance with the version separation principle between DirectDraw and Direct3D, sources were isolated into `directdraw7_com_facade.*` and `direct3d7_com_facade.*`, with shared state unified in `directdraw_com_context.h`.
+* **Confirmed — DirectX 7 device/mode enumeration success.** In `20260904-005052-508.jsonl`, `IDirectDraw7::EnumDisplayModes` (enumerating 640x480x16) and `IDirect3D7::EnumDevices` (enumerating hardware HAL device) succeeded, with the guest callback returning `0x00000001` (`D3DENUMRET_OK`), completely eliminating the previous `0x00000000` virtual call crash.
+
+관련 Task 166 설계, 작업 지시서, 작업 로그는 [Task 166 설계](../design/20260904-166-direct3d7-com-facade.md), [Task 166 작업 지시서](../work-orders/20260904-166-direct3d7-com-facade.md), [Task 166 작업 로그](../work-logs/20260904-166-direct3d7-com-facade.md)에 둡니다.
+
+The related Task 166 design, work order, and work log are [Task 166 design](../design/20260904-166-direct3d7-com-facade.md), [Task 166 work order](../work-orders/20260904-166-direct3d7-com-facade.md), and [Task 166 work log](../work-logs/20260904-166-direct3d7-com-facade.md).
+
+## 2026-09-04 ez2dj4th hle-io-ports 기본 활성화 결과
+
+- **확인됨 — 기본 실행 옵션 승격.** `ez2dj4th` 프로파일의 `run_defaults.lptdi.legacy_io_ports_default = true` 승격을 통해 `re2dj.exe ez2dj4th` 실행 시 `--hle-io-ports`가 기본 인자에 포함됩니다.
+- **확인됨 — `0xc0000096` 특권 명령 예외 해소.** 실행 로그 `20260904-010042-172.jsonl`에서 `io_port_runtime` (`in_rva=0x000c3817`)이 정상 주입되어, 포트 `0x0103` 읽기 시점에서 발생하던 `0xc0000096` 예외 없이 다음 실행 단계로 안전하게 진행함을 확인했습니다.
+
+* **Confirmed — promotion to default run option.** By promoting `run_defaults.lptdi.legacy_io_ports_default = true` in the `ez2dj4th` profile, `--hle-io-ports` is automatically included in default arguments when running `re2dj.exe ez2dj4th`.
+* **Confirmed — resolution of `0xc0000096` privileged instruction exception.** In execution log `20260904-010042-172.jsonl`, `io_port_runtime` (`in_rva=0x000c3817`) was injected, safely advancing past the port `0x0103` read without the `0xc0000096` exception.
+
+관련 Task 167 설계, 작업 지시서, 작업 로그는 [Task 167 설계](../design/20260904-167-ez2dj4th-default-hle-io-ports.md), [Task 167 작업 지시서](../work-orders/20260904-167-ez2dj4th-default-hle-io-ports.md), [Task 167 작업 로그](../work-logs/20260904-167-ez2dj4th-default-hle-io-ports.md)에 둡니다.
+
+The related Task 167 design, work order, and work log are [Task 167 design](../design/20260904-167-ez2dj4th-default-hle-io-ports.md), [Task 167 work order](../work-orders/20260904-167-ez2dj4th-default-hle-io-ports.md), and [Task 167 work log](../work-logs/20260904-167-ez2dj4th-default-hle-io-ports.md).
+
+
+
+
+## 2026-09-04 DX7 facade 연결 후 초기화 중단 지점 이동
+
+- **확인됨 — 제품 기본 실행이 특권 명령 경계를 넘고 AV로 끝납니다.** 사용자 실행 로그 `20260904-010601-836.jsonl`에서 `hle_io_ports=true`, `io_port_runtime`(`in_rva=0x000c3817`) `status=prepared`가 기록되고, `runtime_detached_exit`가 `0xc0000005`입니다. `0xc0000096`은 더 이상 나타나지 않습니다.
+- **확인됨 — HLE facade가 실제로 받은 호출은 6개뿐입니다.** attached 진단 `20260904-005052-508.jsonl`(`hle_io_ports=true`, `run_detached=false`)에서 한 시도마다 `DirectDrawCreateEx` → `IDirectDraw7::QueryInterface(IID_IDirectDraw7)` → `QueryInterface(IID_IDirect3D7)` → `IDirectDraw7::GetCaps` → `IDirectDraw7::EnumDisplayModes` → `IDirect3D7::EnumDevices` 순으로 호출되고, 그 뒤 facade 호출이 없습니다.
+- **확인됨 — 같은 시퀀스가 3회 반복됩니다.** 매 회 `DirectDrawCreateEx`부터 다시 시작하며, 게스트 `EnumDevices` 콜백은 3회 모두 `0x00000001`(`D3DENUMRET_OK`, 열거 계속)을 반환합니다.
+- **확인됨 — AV 지점과 레지스터는 Task 147 이후와 동일합니다.** thread `34048`이 `0x00434137`에서 `mov ecx,[eax+0x14]`를 실행하며 `EAX=0`, `ECX=0`, 참조 주소 `0x00000014`입니다. callee return `0x00417dc7`, caller return `0x0041a6a4`, outer return `0x00471905`로 프레임 체인도 같습니다.
+- **확인됨 — I/O 포트 읽기는 AV 직전에 처리됩니다.** 같은 실행에서 포트 `0x0103`·`0x0104`·`0x0105`에 대한 `in al, dx`가 `0x004c3817`에서 세 번 기록되고, 그 뒤 `re2dj:device:DeviceIoControl` 한 건을 거쳐 AV가 발생합니다.
+- **추정 — `SetDisplayMode`·`SetCooperativeLevel`·`CreateSurface`·`CreateDevice`는 실행되지 않았습니다.** 네 메서드 모두 진입 즉시 `OutputDebugStringA`를 남기지만 캡처된 스트림에 없습니다. 부재 기반 판단이므로 guard 진입 추적으로 확인해야 합니다.
+- **추정 — 시도 사이에 모달 대화상자가 표시됩니다.** `comctl32`(WinSxS v6), `dui70.dll`, `duser.dll`, `InputSwitch.dll`, `DWrite.dll`, `d3d11.dll`, `dcomp.dll`이 두 차례 무리지어 적재됩니다. 문자열 증거는 아직 없습니다.
+- **확인됨 — detached 제품 실행에는 그래픽 HLE 증거가 남지 않습니다.** DX7 facade는 `OutputDebugStringA`만 사용하므로 디버거 없이 실행하면 아무 기록도 남지 않고, `graphics_trace`가 가리키는 `.ddraw.log`도 생성되지 않았습니다.
+- **미확정 — `EnumDevices` 직후 초기화를 포기하는 판정 지점.** 중단이 guard 2(`0x00011838`)인지 그보다 앞선 guard 0·1인지, 그리고 거부 대상이 디스플레이 모드 목록인지 `D3DDEVICEDESC7` caps인지 `deviceGUID`인지는 아직 확인되지 않았습니다.
+
+* **Confirmed — the product default run clears the privileged-instruction boundary and ends in an access violation.** The user's run log `20260904-010601-836.jsonl` records `hle_io_ports=true` and `io_port_runtime` (`in_rva=0x000c3817`) with `status=prepared`, and `runtime_detached_exit` reports `0xc0000005`. `0xc0000096` no longer appears.
+* **Confirmed — the HLE facades receive only six calls.** In the attached diagnostic `20260904-005052-508.jsonl` (`hle_io_ports=true`, `run_detached=false`), each attempt calls `DirectDrawCreateEx` → `IDirectDraw7::QueryInterface(IID_IDirectDraw7)` → `QueryInterface(IID_IDirect3D7)` → `IDirectDraw7::GetCaps` → `IDirectDraw7::EnumDisplayModes` → `IDirect3D7::EnumDevices`, and no facade call follows.
+* **Confirmed — the same sequence repeats three times,** restarting from `DirectDrawCreateEx`, with the guest `EnumDevices` callback returning `0x00000001` (`D3DENUMRET_OK`, continue enumerating) on all three.
+* **Confirmed — the access violation site and registers are unchanged since Task 147.** Thread `34048` executes `mov ecx,[eax+0x14]` at `0x00434137` with `EAX=0`, `ECX=0`, referencing `0x00000014`. The frame chain is also the same: callee return `0x00417dc7`, caller return `0x0041a6a4`, outer return `0x00471905`.
+* **Confirmed — the I/O port reads are serviced just before the access violation.** The same run records `in al, dx` at `0x004c3817` for ports `0x0103`, `0x0104`, and `0x0105`, followed by one `re2dj:device:DeviceIoControl` and then the fault.
+* **Inferred — `SetDisplayMode`, `SetCooperativeLevel`, `CreateSurface`, and `CreateDevice` never executed.** All four emit `OutputDebugStringA` on entry, and none appear in the captured stream. This is absence-based reasoning and needs entry-trace confirmation.
+* **Inferred — a modal dialog appears between attempts.** `comctl32` (WinSxS v6), `dui70.dll`, `duser.dll`, `InputSwitch.dll`, `DWrite.dll`, `d3d11.dll`, and `dcomp.dll` load in two bursts. No string evidence exists yet.
+* **Confirmed — the detached product run leaves no graphics HLE evidence.** The DX7 facades use only `OutputDebugStringA`, so nothing is recorded without a debugger, and the `.ddraw.log` named by `graphics_trace` was never created.
+* **Unresolved — the decision point that abandons initialization right after `EnumDevices`.** Whether the abort is guard 2 (`0x00011838`) or the earlier guard 0/1, and whether the rejected input is the display-mode list, the `D3DDEVICEDESC7` caps, or the `deviceGUID`, is not yet established.
+
+```mermaid
+flowchart LR
+    A[DirectDrawCreateEx] --> B[QI IDirectDraw7]
+    B --> C[QI IDirect3D7]
+    C --> D[GetCaps]
+    D --> E[EnumDisplayModes 640x480x16]
+    E --> F[EnumDevices HAL desc]
+    F -- callback 0x00000001 --> G[abort: unresolved decision point]
+    G --> H[retry x3]
+    H --> I[0x00434137 AV EAX=ECX=0]
+```
+
+관련 Task 168 설계와 작업 지시는 [Task 168 설계](../design/20260904-168-ez2dj4th-d3d7-init-abort.md), [Task 168 작업 지시서](../work-orders/20260904-168-ez2dj4th-d3d7-init-abort.md), [Task 168 작업 로그](../work-logs/20260904-168-ez2dj4th-d3d7-init-abort.md)에 둡니다.
+
+The related Task 168 design and work order are [Task 168 design](../design/20260904-168-ez2dj4th-d3d7-init-abort.md) [Task 168 work order](../work-orders/20260904-168-ez2dj4th-d3d7-init-abort.md), and [Task 168 work log](../work-logs/20260904-168-ez2dj4th-d3d7-init-abort.md).
+
+## 2026-09-04 중단 지점이 guard 1로 이동한 것과 열거 데이터 반증
+
+- **확인됨 — `SetDisplayMode`는 도달하지 않습니다.** `20260904-013219-685.jsonl`에서 앵커 `virtual_call_site`(`RVA 0x00010a6f`) hit는 0건입니다. 이전 절의 부재 기반 추정이 실행 증거로 확정되었습니다.
+- **확인됨 — 이탈 guard는 guard 2가 아니라 guard 1입니다.** 같은 실행의 `null_context_entry_trace_boundary`가 `hits=1`, `recorded=1`, `capped=false`이고, 유일한 hit는 `slot2_early_exit_1`(`RVA 0x00011738`, `EIP=0x00411738`, `EAX=0x00000000`, thread `25536`)입니다. guard 0(`0x00011714`)과 guard 2(`0x00011838`)는 hit가 없습니다. Task 163에서 guard 1은 통과하고 guard 2가 실패했으므로, HLE facade 연결로 실패 지점이 한 단계 앞으로 이동했습니다.
+- **확인됨 — 열거 데이터는 중단 원인이 아닙니다.** 디스플레이 모드를 320x240~1024x768 × 16·24·32비트 15개로, Direct3D 장치를 RGB Emulation·Direct3D HAL·Direct3D T&L HAL 3개로 늘리고 `D3DDEVICEDESC7`의 `dpcTriCaps`·`dpcLineCaps`·`dwTextureOpCaps`·블렌드 스테이지를 모두 채웠으나 동작은 그대로입니다. 게스트 콜백은 모든 항목에 `0x00000001`(계속)만 반환하고 `DDENUMRET_CANCEL` / `D3DENUMRET_CANCEL`을 한 번도 반환하지 않습니다.
+- **확인됨 — `EnumDevices` 이후 facade 호출이 없습니다.** `CreateDevice`, `SetCooperativeLevel`, `SetDisplayMode`, `CreateSurface`는 호출 원장에 나타나지 않습니다. 원장은 22개 vtable 메서드를 모두 포함하므로 이 부재는 기록 누락이 아닙니다.
+- **확인됨 — 모달 대화상자는 표시되지 않습니다.** `USER32!MessageBoxA` / `MessageBoxW` 진입점 경계가 `installed:ansi=1:wide=1`로 설치되었으나 포착 건수는 0입니다. 앞 절의 "3회 반복 사이 모달 대화상자" 추정은 반증되었으며, `comctl32`·`dui70`·`duser`·`InputSwitch` 적재의 출처는 미확정입니다.
+- **확인됨 — detached 제품 실행에도 그래픽 증거가 남습니다.** DX7 facade 진단을 `g_re2dj_graphics_trace_path` sink로 옮긴 뒤 `20260904-013337-654.ddraw.log`가 7,893바이트로 생성되었고, 모드 열거 45줄과 장치 열거 9줄이 기록되었습니다. 앞 절의 "detached 실행에는 그래픽 HLE 증거가 남지 않는다"는 상태는 해소되었습니다.
+- **확인됨 — AV 지점은 여전히 같습니다.** thread `25536`이 `0x00434137`에서 `EAX=ECX=0`으로 `0xc0000005`를 냅니다.
+- **미확정 — guard 1의 호출이 실패하는 이유.** guard 1 반환 지점(`RVA 0x0001172a`)의 `EAX` 값과 그 실패 코드의 생성 지점은 아직 관측되지 않았습니다.
+
+* **Confirmed — `SetDisplayMode` is not reached.** In `20260904-013219-685.jsonl` the `virtual_call_site` anchor (`RVA 0x00010a6f`) records zero hits, turning the earlier absence-based inference into execution evidence.
+* **Confirmed — the exiting guard is guard 1, not guard 2.** The same run's `null_context_entry_trace_boundary` reports `hits=1`, `recorded=1`, `capped=false`, and the single hit is `slot2_early_exit_1` (`RVA 0x00011738`, `EIP=0x00411738`, `EAX=0x00000000`, thread `25536`). Guard 0 (`0x00011714`) and guard 2 (`0x00011838`) record no hits. Guard 1 passed in Task 163 while guard 2 failed, so attaching the HLE facades moved the failure one step earlier.
+* **Confirmed — the enumerated data is not the cause.** Display modes were expanded to 15 entries (320x240 through 1024x768 at 16, 24, and 32 bits) and Direct3D devices to three (RGB Emulation, Direct3D HAL, Direct3D T&L HAL) with `D3DDEVICEDESC7`'s `dpcTriCaps`, `dpcLineCaps`, `dwTextureOpCaps`, and blend-stage fields filled, and the behavior is unchanged. The guest callback answers `0x00000001` (continue) for every entry and never returns `DDENUMRET_CANCEL` or `D3DENUMRET_CANCEL`.
+* **Confirmed — no facade call follows `EnumDevices`.** `CreateDevice`, `SetCooperativeLevel`, `SetDisplayMode`, and `CreateSurface` do not appear in the call ledger, and the ledger covers all 22 vtable methods, so this absence is not a recording gap.
+* **Confirmed — no modal dialog is shown.** The `USER32!MessageBoxA` / `MessageBoxW` entry-point boundary installed (`installed:ansi=1:wide=1`) and captured nothing. The earlier "modal dialog between the three attempts" inference is refuted, and the source of the `comctl32`, `dui70`, `duser`, and `InputSwitch` loads is unresolved.
+* **Confirmed — the detached product run now leaves graphics evidence.** After the DX7 facade diagnostics moved to the `g_re2dj_graphics_trace_path` sink, `20260904-013337-654.ddraw.log` was produced at 7,893 bytes with 45 mode-enumeration lines and 9 device-enumeration lines. The earlier "no graphics HLE evidence in a detached run" condition is resolved.
+* **Confirmed — the access violation site is still the same.** Thread `25536` raises `0xc0000005` at `0x00434137` with `EAX=ECX=0`.
+* **Unresolved — why guard 1's call fails.** The `EAX` value at guard 1's return site (`RVA 0x0001172a`) and the origin of that failure code have not been observed yet.
+
+```mermaid
+flowchart LR
+    A[Task 163/164 stock DDRAW] --> B[guard 0 pass]
+    B --> C[guard 1 pass]
+    C --> D[guard 2 fail: SetDisplayMode E_NOTIMPL]
+    E[Task 168 DX7 HLE facades] --> F[guard 0 pass]
+    F --> G[guard 1 FAIL at 0x00011738]
+    G --> H[guard 2 never reached]
+    H --> I[0x00434137 AV unchanged]
+```
+
+관련 Task 168 설계, 작업 지시서, 작업 로그는 [Task 168 설계](../design/20260904-168-ez2dj4th-d3d7-init-abort.md), [Task 168 작업 지시서](../work-orders/20260904-168-ez2dj4th-d3d7-init-abort.md), [Task 168 작업 로그](../work-logs/20260904-168-ez2dj4th-d3d7-init-abort.md)에 둡니다.
+
+The related Task 168 design, work order, and work log are [Task 168 design](../design/20260904-168-ez2dj4th-d3d7-init-abort.md), [Task 168 work order](../work-orders/20260904-168-ez2dj4th-d3d7-init-abort.md), and [Task 168 work log](../work-logs/20260904-168-ez2dj4th-d3d7-init-abort.md).
+
+## 2026-09-04 guard 1 실패 코드와 선택 루틴
+
+- **확인됨 — guard 1 호출의 반환값은 `0x81000004`입니다.** `20260904-014522-290.jsonl`에서 thread `20564`가 네 앵커를 순서대로 한 번씩 히트했고(`hits=4`, `recorded=4`, `capped=false`), `guard0_return`(`RVA 0x00011706`) `EAX=0x00000000`, `guard1_call_site`(`0x00011725`) 진입, `guard1_return`(`0x0001172a`) `EAX=0x81000004`, `slot2_early_exit_1`(`0x00011738`) 순입니다. guard 0은 통과하고 guard 1만 실패합니다.
+- **확인됨 — guard 1의 호출 대상은 `RVA 0x0001010f`입니다.** `20260904-014546-500.jsonl`의 `guard1_thunk`(`0x00003913`) 분기 목록이 guard 2 thunk와 같은 2건 형태이며 첫 항목이 `jmp 0x0001010f`입니다.
+- **확인됨 — `0x81000004`의 생성 지점은 `.text`에서 하나뿐입니다.** `20260904-014712-897.jsonl`의 값 스캔은 5건을 보고하지만, 직전 바이트가 `b8`(`mov eax, imm32`)인 것은 `RVA 0x000102a1` 하나입니다. 나머지는 `mov edx,[ecx+0x4bc]`(`0x0000ffbb`, `0x0000ffd4`), `jmp rel32`(`0x000af9de`), 데이터(`0x0000fc90`) 안에서 같은 4바이트가 우연히 나온 경우입니다. 따라서 생성 명령은 `0x000102a0`의 `mov eax, 0x81000004`이며, guard 1 대상 함수 안에 있습니다.
+- **확인됨 — 실패 조건은 후보 슬롯 4개가 모두 0인 것입니다.** `0x0001024c`부터 우선순위 체인이 `[ebp-0x08]`, `[ebp-0x10]`, `[ebp-0x18]`, `[ebp-0x1c]`를 차례로 검사하고, 0이 아닌 첫 값을 `*[ebp+0x08]`에 써서 0을 반환합니다. 마지막 검사(`0x00010294`의 `je 0x000102a0`)까지 모두 0이면 `0x81000004`로 낙하합니다. 앞의 두 블록은 인자 `[ebp+0x0c]`의 비트 0이 서 있으면 건너뜁니다.
+- **확인됨 — 성공 경로는 `*out` 객체의 `+0x494`에 1을 씁니다.** `0x000102ac`의 `mov dword [eax+0x494], 1` 이후 `xor eax, eax`로 0을 반환합니다.
+- **확인됨 — 결정 앞의 루프는 스트라이드 `0x4d0`(1,232바이트) 배열을 순회합니다.** 인덱스 `[ebp-0x0c]`, base `[ebp-0x14]`, 루프 머리 `0x00010174`, 꼬리 `jmp` `0x00010247`이며, 주소 계산은 `0x00010239`의 `imul edx, edx, 0x4d0`입니다. 루프 안에서 thunk `0x00002595`를 거쳐 helper `0x00012820`을 `0x000101cf`와 `0x00010217` 두 곳에서 호출합니다.
+- **확인됨 — `.text`는 디스크에서 암호화되어 있습니다.** 파일 오프셋이 RVA와 같은 `.text` 영역을 직접 읽으면 guard 주변 바이트가 고엔트로피 블록으로 나옵니다. 이 절의 모든 바이트는 런타임에 언패킹된 `.text`를 읽어 얻은 것이며, 정적 디스어셈블로는 재현되지 않습니다.
+- **확인됨 — 분기 목록에는 오탐이 있습니다.** `ListNearBranches`는 바이트 스캐너이므로 명령 중간의 `0xe8`·`0xe9`를 보고합니다. guard 1 대상에서 `0x00010246`의 `call 0x00002b34`는 실제로 `89 45 e8`(`mov [ebp-0x18], eax`)이고, `0x00002b34`에 thunk가 없다는 점이 이를 뒷받침합니다. `0x00010158`은 다음 명령을 가리키는 형태이며, `0x0001011f`·`0x00010282`·`0x0001028b`·`0x000102e3`은 대상이 이미지 밖입니다.
+- **추정 — `0x0001010f`는 열거 결과에서 장치를 고르는 선택 루틴입니다.** 우선순위 후보 4개, 플래그 비트 0으로 상위 후보 두 개를 건너뛰는 구조, "아무것도 고르지 못했다" 형태의 오류 코드가 모두 이 해석과 맞습니다. 1,232바이트 레코드의 실제 필드는 확인하지 않았습니다.
+- **미확정 — 루프가 0회 도는지, 돌지만 후보를 채우지 못하는지.** `[ebp-0x0c]`의 최종 값, `[ebp-0x14]` 배열의 원소 수, helper `0x00012820`의 반환값은 아직 관측하지 않았습니다.
+
+* **Confirmed — guard 1's call returns `0x81000004`.** In `20260904-014522-290.jsonl` thread `20564` hit the four anchors once each in order (`hits=4`, `recorded=4`, `capped=false`): `guard0_return` (`RVA 0x00011706`) with `EAX=0x00000000`, `guard1_call_site` (`0x00011725`), `guard1_return` (`0x0001172a`) with `EAX=0x81000004`, then `slot2_early_exit_1` (`0x00011738`). Guard 0 passes and only guard 1 fails.
+* **Confirmed — guard 1's call target is `RVA 0x0001010f`.** The `guard1_thunk` (`0x00003913`) branch listing in `20260904-014546-500.jsonl` has the same two-entry shape as the guard 2 thunk, and its first entry is `jmp 0x0001010f`.
+* **Confirmed — `0x81000004` is produced at exactly one site in `.text`.** The value scan in `20260904-014712-897.jsonl` reports five byte matches, but only `RVA 0x000102a1` is preceded by `b8` (`mov eax, imm32`). The others fall inside `mov edx,[ecx+0x4bc]` (`0x0000ffbb`, `0x0000ffd4`), a `jmp rel32` (`0x000af9de`), and data (`0x0000fc90`). The producing instruction is therefore `mov eax, 0x81000004` at `0x000102a0`, inside guard 1's target function.
+* **Confirmed — the failure condition is that all four candidate slots are zero.** From `0x0001024c` a priority chain tests `[ebp-0x08]`, `[ebp-0x10]`, `[ebp-0x18]`, and `[ebp-0x1c]` in turn, writing the first non-zero value to `*[ebp+0x08]` and returning 0. When the last test (`je 0x000102a0` at `0x00010294`) also finds zero, execution falls into `0x81000004`. The first two blocks are skipped when bit 0 of argument `[ebp+0x0c]` is set.
+* **Confirmed — the success path writes 1 to `+0x494` of the `*out` object,** with `mov dword [eax+0x494], 1` at `0x000102ac` before `xor eax, eax`.
+* **Confirmed — the loop before the decision walks an array with a `0x4d0` (1,232-byte) stride.** The index is `[ebp-0x0c]`, the base `[ebp-0x14]`, the loop head `0x00010174`, and the tail `jmp` `0x00010247`, with the address computed by `imul edx, edx, 0x4d0` at `0x00010239`. Inside the loop, helper `0x00012820` is called through thunk `0x00002595` from `0x000101cf` and `0x00010217`.
+* **Confirmed — `.text` is encrypted on disk.** Reading the `.text` region directly from the file, where the raw offset equals the RVA, yields high-entropy blocks around the guards. Every byte in this section comes from the runtime-unpacked `.text` and is not reproducible by static disassembly.
+* **Confirmed — the branch listing contains false positives.** `ListNearBranches` is a byte scanner and reports `0xe8` and `0xe9` bytes inside other instructions. In guard 1's target, the `call 0x00002b34` at `0x00010246` is really the `e8` of `89 45 e8` (`mov [ebp-0x18], eax`), supported by the absence of a thunk at `0x00002b34`; `0x00010158` points at the following instruction; and `0x0001011f`, `0x00010282`, `0x0001028b`, and `0x000102e3` target addresses outside the image.
+* **Inferred — `0x0001010f` is the routine that selects a device from the enumeration result.** Four prioritized candidates, a flag bit that skips the top two, and a "nothing was selected" style error code all fit that reading. The actual fields of the 1,232-byte record were not established.
+* **Unresolved — whether the loop iterates zero times or iterates without filling a candidate.** The final value of `[ebp-0x0c]`, the element count of the `[ebp-0x14]` array, and the return value of helper `0x00012820` have not been observed.
+
+```mermaid
+flowchart TD
+    A[guard 1 call at 0x00011725] --> B[thunk 0x00003913]
+    B --> C[selection routine 0x0001010f]
+    C --> D[loop 0x00010174 to 0x00010247, stride 0x4d0]
+    D --> E{candidate A at ebp-0x08}
+    E -- non-zero --> S[write out, set +0x494, return 0]
+    E -- zero --> F{candidate B at ebp-0x10}
+    F -- non-zero --> S
+    F -- zero --> G{candidate C at ebp-0x18}
+    G -- non-zero --> S
+    G -- zero --> H{candidate D at ebp-0x1c}
+    H -- non-zero --> S
+    H -- zero --> I[0x000102a0 mov eax 0x81000004]
+    I --> J[guard 1 jge fails, exit at 0x00011738]
+```
+
+관련 Task 169 설계, 작업 지시서, 작업 로그는 [Task 169 설계](../design/20260904-169-ez2dj4th-guard1-failure-source.md), [Task 169 작업 지시서](../work-orders/20260904-169-ez2dj4th-guard1-failure-source.md), [Task 169 작업 로그](../work-logs/20260904-169-ez2dj4th-guard1-failure-source.md)에 둡니다.
+
+The related Task 169 design, work order, and work log are [Task 169 design](../design/20260904-169-ez2dj4th-guard1-failure-source.md), [Task 169 work order](../work-orders/20260904-169-ez2dj4th-guard1-failure-source.md), and [Task 169 work log](../work-logs/20260904-169-ez2dj4th-guard1-failure-source.md).
+
+## 2026-09-04 장치 테이블 게이트 `+0x4c8`
+
+- **확인됨 — 선택 루틴은 고정 전역 테이블을 순회합니다.** `RVA 0x0001010f`은 `0x00010147`에서 `0x000100ea`를 불러 배열 base `0x00946d50`(RVA `0x00546d50`)과 원소 수 `[0x0094cd9c]`(RVA `0x0054cd9c`)를 받습니다. 루프 머리는 `0x00010174`, 종료 조건은 `0x00010183`의 `jae 0x0001024c`이며 스트라이드는 `0x4d0`입니다.
+- **확인됨 — 각 반복의 첫 관문은 `cmp dword [record+0x4c8], 0` 뒤의 `je 0x00010247`입니다.** `0x00010195`–`0x0001019d`에 있으며, 0이면 그 레코드를 통째로 건너뜁니다.
+- **확인됨 — 루프는 9회 돌고 GUID 비교에는 한 번도 도달하지 않습니다.** `20260904-020043-391.jsonl`에서 `guard1_loop_head`가 8건 기록되고 `EAX`가 `0`에서 `7`까지 단조 증가하며(EAX가 루프 인덱스), `guard1_decision_start`가 `EAX=0x00000009`로 1건, `guard1_helper_call_0`과 `guard1_helper_call_1`은 0건입니다(`hits=10`, `recorded=9`, `capped=true`).
+- **확인됨 — 게이트 필드가 실제로 0입니다.** `20260904-020434-780.jsonl`의 데이터 창에서 `device_table_count`(`0x0094cd9c`)는 `9`, `device_record_0_gate`(`0x00947218`)와 `device_record_1_gate`(`0x009476e8`)는 모두 `0x00000000`입니다.
+- **확인됨 — 비교 상수는 문자열이 아니라 GUID 테이블입니다.** `0x004e4da0`부터 16바이트씩 `{f5049e78-4861-11d2-a407-00a0c90629a8}`(`IID_IDirect3DTnLHalDevice`), `{8767df22-bacc-11d1-8969-00a0c90629a8}`(`IID_IDirect3DNullDevice`), `{50936643-13e9-11d1-89aa-00a0c9054129}`(`IID_IDirect3DRefDevice`), `{881949a1-d6f3-11d0-89ab-00a0c9054129}`(`IID_IDirect3DMMXDevice`)입니다. 루프가 푸시하는 두 주소는 `0x004e4da0`과 `0x004e4dc0`이므로 비교 대상은 T&L HAL과 Reference입니다. helper `0x00012820`은 2인자 cdecl GUID 비교입니다.
+- **확인됨 — 게스트는 열거 결과를 레코드에 복사합니다.** `device_record_0_head`(`0x00946d50`)는 `+0x00`에 40바이트 인라인 문자열로 `"RGB Emulation"`을, `device_record_1_head`(`0x00947220`)는 `"Direct3D HAL"`을 담고 있습니다. `+0x2c`의 `0x0008af51`은 re2DJ의 `FillDeviceDescription`이 채운 `dwDevCaps`와 같으므로 `D3DDEVICEDESC7`은 `+0x2c`부터 놓입니다. `+0x28`의 `0x009471ec`는 레코드 base + `0x49c`로, 게스트가 GUID를 레코드에 복사하고 그 사본을 가리킵니다.
+- **확인됨 — 열거 문자열의 수명은 원인이 아닙니다.** re2DJ의 `EnumDevices`가 콜백에 스택 지역 버퍼를 넘기지만 게스트가 내용을 복사하므로, 포인터가 무효해지는 문제는 발생하지 않습니다.
+- **확인됨 — `.rdata`와 `.data`도 디스크에서 암호화되어 있습니다.** `.rdata`는 RVA `0x000dd000`에서 시작하고 raw offset이 RVA와 같지만 파일에서 `0x000e4da0`을 읽으면 고엔트로피 바이트가 나옵니다. 이 절의 모든 데이터는 자식 프로세스 메모리에서 읽었습니다.
+- **추정 — 레코드는 DirectX 7 SDK 예제 프레임워크의 열거 구조 계열입니다.** 선두 40바이트 설명 문자열, `+0x28`의 GUID 포인터, `+0x2c`의 `D3DDEVICEDESC7`, `+0x120`에서 관측된 `0x0000017c`(`DDCAPS`의 `dwSize`)가 그 형태와 맞습니다. 전체 필드 배치는 확인하지 않았습니다.
+- **추정 — 여섯 호출이 3회 반복되는 것은 드라이버당 한 벌입니다.** 게스트가 `DirectDrawEnumerateEx`로 드라이버 3개를 얻고 각각에 대해 `DirectDrawCreateEx` → `QueryInterface(IID_IDirect3D7)` → `GetCaps` → `EnumDisplayModes` → `EnumDevices`를 수행하면 드라이버 3 × 장치 3 = 레코드 9가 됩니다. 드라이버 열거는 아직 HLE 경계를 지나지 않아 확인하지 못했습니다.
+- **미확정 — `record + 0x4c8`에 무엇을 쓰는가.** 이 필드를 채우는 코드 경로와 그것이 실행되지 않은 이유는 아직 관측하지 않았습니다.
+
+* **Confirmed — the selection routine walks a fixed global table.** `RVA 0x0001010f` calls `0x000100ea` at `0x00010147` to receive the array base `0x00946d50` (RVA `0x00546d50`) and the element count at `[0x0094cd9c]` (RVA `0x0054cd9c`). The loop head is `0x00010174`, the exit is `jae 0x0001024c` at `0x00010183`, and the stride is `0x4d0`.
+* **Confirmed — each iteration's first gate is `cmp dword [record+0x4c8], 0` followed by `je 0x00010247`** at `0x00010195`–`0x0001019d`, which skips the whole record when the field is zero.
+* **Confirmed — the loop runs nine times and never reaches a GUID comparison.** In `20260904-020043-391.jsonl`, `guard1_loop_head` is recorded eight times with `EAX` rising monotonically from `0` to `7` (EAX is the loop index), `guard1_decision_start` once with `EAX=0x00000009`, and `guard1_helper_call_0` and `guard1_helper_call_1` zero times (`hits=10`, `recorded=9`, `capped=true`).
+* **Confirmed — the gate field really is zero.** The data windows in `20260904-020434-780.jsonl` show `device_table_count` (`0x0094cd9c`) as `9` and both `device_record_0_gate` (`0x00947218`) and `device_record_1_gate` (`0x009476e8`) as `0x00000000`.
+* **Confirmed — the comparison constants are a GUID table, not strings.** From `0x004e4da0` in 16-byte steps they are `{f5049e78-4861-11d2-a407-00a0c90629a8}` (`IID_IDirect3DTnLHalDevice`), `{8767df22-bacc-11d1-8969-00a0c90629a8}` (`IID_IDirect3DNullDevice`), `{50936643-13e9-11d1-89aa-00a0c9054129}` (`IID_IDirect3DRefDevice`), and `{881949a1-d6f3-11d0-89ab-00a0c9054129}` (`IID_IDirect3DMMXDevice`). The loop pushes `0x004e4da0` and `0x004e4dc0`, so it matches against T&L HAL and Reference. Helper `0x00012820` is a two-argument cdecl GUID comparison.
+* **Confirmed — the guest copies the enumeration result into the records.** `device_record_0_head` (`0x00946d50`) holds `"RGB Emulation"` as a 40-byte inline string at `+0x00`, and `device_record_1_head` (`0x00947220`) holds `"Direct3D HAL"`. The `0x0008af51` at `+0x2c` equals the `dwDevCaps` re2DJ's `FillDeviceDescription` publishes, so `D3DDEVICEDESC7` begins at `+0x2c`. The `0x009471ec` at `+0x28` is the record base plus `0x49c`, so the guest copies the GUID into the record and points at its own copy.
+* **Confirmed — the lifetime of the enumeration strings is not the cause.** re2DJ's `EnumDevices` hands the callback stack-local buffers, but the guest copies the text, so no pointer goes stale.
+* **Confirmed — `.rdata` and `.data` are encrypted on disk too.** `.rdata` starts at RVA `0x000dd000` with a raw offset equal to the RVA, yet reading `0x000e4da0` from the file yields high-entropy bytes. Every value in this section was read from the child process.
+* **Inferred — the record follows the DirectX 7 SDK sample framework's enumeration structure.** The leading 40-byte description string, the GUID pointer at `+0x28`, the `D3DDEVICEDESC7` at `+0x2c`, and the `0x0000017c` observed at `+0x120` (a `DDCAPS` `dwSize`) all fit that shape. The full field layout was not established.
+* **Inferred — the six calls repeat once per driver.** If the guest obtains three drivers from `DirectDrawEnumerateEx` and runs `DirectDrawCreateEx` → `QueryInterface(IID_IDirect3D7)` → `GetCaps` → `EnumDisplayModes` → `EnumDevices` for each, three drivers times three devices gives nine records. The driver enumeration does not yet cross an HLE boundary, so this is unconfirmed.
+* **Unresolved — what writes `record + 0x4c8`.** The code path that fills the field, and why it did not run, have not been observed.
+
+```mermaid
+flowchart TD
+    A[array base 0x00946d50, count 9 at 0x0094cd9c] --> B[loop head 0x00010174]
+    B --> C{index < count?}
+    C -- no --> D[decision start 0x0001024c]
+    C -- yes --> E{record+0x4c8 == 0?}
+    E -- yes, all 9 --> F[je 0x00010247: skip record]
+    F --> B
+    E -- no --> G{record+0x118 == 0?}
+    G -- no --> H[compare GUID vs IID_IDirect3DTnLHalDevice]
+    G -- yes --> I[compare GUID vs IID_IDirect3DRefDevice]
+    H --> J[fill a candidate slot]
+    I --> J
+    D --> K[all four slots zero: return 0x81000004]
+```
+
+관련 Task 170 설계, 작업 지시서, 작업 로그는 [Task 170 설계](../design/20260904-170-ez2dj4th-device-selection-inputs.md), [Task 170 작업 지시서](../work-orders/20260904-170-ez2dj4th-device-selection-inputs.md), [Task 170 작업 로그](../work-logs/20260904-170-ez2dj4th-device-selection-inputs.md)에 둡니다.
+
+The related Task 170 design, work order, and work log are [Task 170 design](../design/20260904-170-ez2dj4th-device-selection-inputs.md), [Task 170 work order](../work-orders/20260904-170-ez2dj4th-device-selection-inputs.md), and [Task 170 work log](../work-logs/20260904-170-ez2dj4th-device-selection-inputs.md).
+
+## 2026-09-04 게이트 `+0x4c8`의 출처와 레코드 레이아웃
+
+- **확인됨 — 게이트에 쓰는 명령은 `.text` 전체에서 하나입니다.** `0x000004c8` 바이트 열은 6곳에 있고, 그중 쓰기는 `RVA 0x0000fce7`의 `mov [eax+0x4c8], edx` 하나입니다. 나머지는 `0x0000fce1`(읽기), `0x00010031`(읽기), `0x00010198`(게이트 비교), 그리고 무관한 스택 상수 2건(`0x000502bc`, `0x0009fb7c`)입니다.
+- **확인됨 — `RVA 0x0000fc57`이 `IDirect3D7::EnumDevices` 콜백입니다.** `20260904-135318-201.ddraw.log`가 `callback=0040FC57`을 기록했고 이미지 base는 `0x00400000`입니다. 이 콜백이 `[0x0094cd9c]`의 현재 개수로 `dest = 0x00946d50 + count * 0x4d0`을 만들고 `memset(dest, 0, 0x4d0)` 뒤 필드를 채웁니다.
+- **확인됨 — 게이트는 콜백이 계산하지 않고 컨텍스트에서 복사합니다.** `0x0000fc86`의 `mov ecx, [ebp+0x14]`가 콜백의 네 번째 인자를 받고, `0x0000fce1`–`0x0000fce7`이 `context+0x4c8`을 `record+0x4c8`로 무조건 옮깁니다. 따라서 게이트가 0인 원인은 컨텍스트에 있습니다.
+- **확인됨 — 등록 경로가 게이트를 `+0x494`로 복사하고 개수를 늘립니다.** `0x00010031`–`0x00010046`이 `record+0x494 = record+0x4c8`을 수행한 뒤 `[0x0094cd9c]`를 1 증가시키고 1을 반환합니다. `0x0001009c`–`0x000100d8`은 레코드별 힙 포인터 `+0x4bc`를 해제하고 0으로 되돌립니다.
+- **확인됨 — 레코드 레이아웃입니다.** `+0x000` 40바이트 설명 문자열, `+0x028` `GUID*`(레코드 자신의 `+0x49c`를 가리킴), `+0x02c` `D3DDEVICEDESC7`, `+0x0f0` `deviceGUID`, `+0x118` `bHardware`, `+0x120`과 `+0x29c` 각각 `0x17c` 바이트 `DDCAPS`, `+0x418` 선택된 전체화면 모드, `+0x494` 게이트 사본, `+0x49c` `GUID` 사본, `+0x4bc` 모드 배열 포인터, `+0x4c0` 모드 수, `+0x4c4` 선택된 모드 index, `+0x4c8` 게이트.
+- **확인됨 — Task 170이 GUID 선택자로 본 `+0x118`은 `bHardware`입니다.** 값 `0x00080000`은 `D3DDEVCAPS_HWRASTERIZATION`이며, 루프는 하드웨어 장치면 T&L HAL GUID와, 아니면 Reference GUID와 비교합니다.
+- **확인됨 — re2DJ가 발표한 caps와 모드가 레코드에 그대로 들어 있습니다.** `DDCAPS`의 `dwCaps 0x00400041`과 `ddsCaps 0x6204`는 `Dd7GetCaps`가 채우는 값과 같고, `+0x4c0`의 15는 `Dd7EnumDisplayModes`가 열거하는 모드 수, `+0x4c4`의 index 6은 640x480x16으로 `+0x418`에 저장된 모드와 일치합니다. 게스트는 모드 선택까지 정상적으로 마쳤습니다.
+- **확인됨 — 드라이버 수는 호스트 상태에 따라 달라집니다.** `20260904-135318-201` 실행에서는 `DirectDrawCreateEx` 2회, `EnumDevices` 2회, 모드 열거 30회, `device_table_count` 6이었습니다. Task 170의 실행에서는 3회와 9였습니다.
+- **추정 — `+0x418`의 모드 구조체는 `DDSURFACEDESC2`의 앞 `0x7c` 바이트입니다.** re2DJ는 `dwSize`에 `0x11c`를 쓰지만 레코드에는 `0x7c`가 들어 있고 다음 필드까지의 간격도 `0x7c`와만 맞습니다.
+- **추정 — 컨텍스트는 드라이버 콜백의 스택 지역입니다.** `0x0000f93e`에서 `push 0x4d0; push 0; lea eax, [ebp-0x4d4]`가 관측되므로 드라이버 단계가 `0x4d0` 바이트 지역 구조체를 0으로 밀고 채웁니다. 그 경우 게이트는 `[ebp-0x0c]`로 접근되어 변위 스캔에 잡히지 않습니다.
+- **미확정 — 컨텍스트의 `+0x4c8`을 무엇이 결정하는가.** 드라이버 단계 코드(`RVA 0x0000f700`–`0x0000fd60`)를 아직 읽지 않았습니다.
+- **미확정 — 게이트의 의미.** DirectX 7 SDK 예제 프레임워크의 열거 구조에서 이 위치는 windowed 가능 여부를 담지만, 이 실행 파일에서 확인하지는 않았습니다. `IDirectDraw7::GetDisplayMode`가 한 번도 호출되지 않은 것은 관측된 사실입니다.
+
+* **Confirmed — exactly one instruction writes the gate.** The byte sequence `0x000004c8` appears at six sites; the only write is `mov [eax+0x4c8], edx` at `RVA 0x0000fce7`. The others are reads at `0x0000fce1` and `0x00010031`, the gate comparison at `0x00010198`, and two unrelated stack constants.
+* **Confirmed — `RVA 0x0000fc57` is the `IDirect3D7::EnumDevices` callback.** `20260904-135318-201.ddraw.log` recorded `callback=0040FC57` against an image base of `0x00400000`. The callback forms `dest = 0x00946d50 + count * 0x4d0` from `[0x0094cd9c]`, calls `memset(dest, 0, 0x4d0)`, and then fills fields.
+* **Confirmed — the callback copies the gate rather than computing it.** `mov ecx, [ebp+0x14]` at `0x0000fc86` takes the callback's fourth argument, and `0x0000fce1`–`0x0000fce7` move `context+0x4c8` into `record+0x4c8` unconditionally, so a zero gate originates in the context.
+* **Confirmed — the registration path copies the gate to `+0x494` and increments the count.** `0x00010031`–`0x00010046` performs `record+0x494 = record+0x4c8`, increments `[0x0094cd9c]`, and returns 1. `0x0001009c`–`0x000100d8` frees the per-record heap pointer at `+0x4bc` and clears it.
+* **Confirmed — the record layout** is a 40-byte description string at `+0x000`, a `GUID*` at `+0x028` pointing at the record's own `+0x49c`, `D3DDEVICEDESC7` at `+0x02c`, `deviceGUID` at `+0x0f0`, `bHardware` at `+0x118`, two `0x17c`-byte `DDCAPS` blocks at `+0x120` and `+0x29c`, the selected fullscreen mode at `+0x418`, a gate copy at `+0x494`, a `GUID` copy at `+0x49c`, the mode array pointer at `+0x4bc`, the mode count at `+0x4c0`, the selected mode index at `+0x4c4`, and the gate at `+0x4c8`.
+* **Confirmed — the `+0x118` field Task 170 read as a GUID selector is `bHardware`.** Its value `0x00080000` is `D3DDEVCAPS_HWRASTERIZATION`, so the loop compares hardware devices against the T&L HAL GUID and everything else against the Reference GUID.
+* **Confirmed — the caps and modes re2DJ publishes reach the record intact.** The `DDCAPS` `dwCaps 0x00400041` and `ddsCaps 0x6204` match what `Dd7GetCaps` fills, the `15` at `+0x4c0` matches the mode count `Dd7EnumDisplayModes` enumerates, and index `6` at `+0x4c4` is 640x480x16, the same mode stored at `+0x418`. The guest completed mode selection normally.
+* **Confirmed — the driver count varies with host state.** Run `20260904-135318-201` shows two `DirectDrawCreateEx` calls, two `EnumDevices` callbacks, thirty mode enumerations, and `device_table_count` 6, where the Task 170 run showed three and nine.
+* **Inferred — the mode structure at `+0x418` is the first `0x7c` bytes of a `DDSURFACEDESC2`.** re2DJ writes `0x11c` into `dwSize`, but the record holds `0x7c`, and only `0x7c` fits the gap to the next field.
+* **Inferred — the context is a stack local of the driver callback.** `push 0x4d0; push 0; lea eax, [ebp-0x4d4]` at `0x0000f93e` shows a `0x4d0`-byte local being zeroed, in which case the gate is reached as `[ebp-0x0c]` and is invisible to a displacement scan.
+* **Unresolved — what decides the context's `+0x4c8`.** The driver-stage code at `RVA 0x0000f700`–`0x0000fd60` has not been read.
+* **Unresolved — what the gate means.** The DirectX 7 SDK sample framework holds a windowed-capability flag at this position, but that has not been confirmed in this executable. That `IDirectDraw7::GetDisplayMode` is never called is an observed fact.
+
+```mermaid
+flowchart TD
+    A[driver stage: 0x4d0 byte local at ebp-0x4d4] -->|context| B[EnumDevices callback 0x0000fc57]
+    B --> C["memset(&table[count], 0, 0x4d0)"]
+    C --> D["record+0x4c8 = context+0x4c8 (0x0000fce7)"]
+    D --> E["record+0x494 = record+0x4c8, count++ (0x00010031)"]
+    E --> F{selection loop 0x00010195}
+    F -- gate == 0 --> G[skip record]
+    F -- gate != 0 --> H[GUID compare]
+```
+
+관련 Task 171 문서는 [Task 171 설계](../design/20260904-171-ez2dj4th-device-record-gate-writer.md), [Task 171 작업 지시서](../work-orders/20260904-171-ez2dj4th-device-record-gate-writer.md), [Task 171 작업 로그](../work-logs/20260904-171-ez2dj4th-device-record-gate-writer.md)에 둡니다.
+
+The related Task 171 documents are [Task 171 design](../design/20260904-171-ez2dj4th-device-record-gate-writer.md), [Task 171 work order](../work-orders/20260904-171-ez2dj4th-device-record-gate-writer.md), and [Task 171 work log](../work-logs/20260904-171-ez2dj4th-device-record-gate-writer.md).
+
+## 2026-09-04 게이트 조건: `DDCAPS2_CANRENDERWINDOWED`와 NULL 드라이버 GUID
+
+- **확인됨 — 드라이버 한 개를 처리하는 함수는 `RVA 0x0000f880`입니다.** 인자는 `[ebp+0x08]` 드라이버 GUID 포인터와 `[ebp+0x0c]` 설명 문자열이며, `[ebp-0x4d4]`에 `0x4d0` 바이트 컨텍스트를 두고 `memset`으로 0으로 만든 뒤 `lstrcpynA`로 설명을 복사합니다. 게이트는 `[ebp-0x0c]`, 즉 컨텍스트 `+0x4c8`입니다.
+- **확인됨 — 게이트 조건은 두 항의 AND입니다.** `0x0000f9cd`–`0x0000f9e5`가 driver `DDCAPS.dwCaps2`(`[ebp-0x3ac]`)와 `0x00080000`(`DDCAPS2_CANRENDERWINDOWED`)을 AND한 뒤, 컨텍스트 `+0x11c`의 드라이버 GUID 포인터가 NULL일 때만 `mov dword [ebp-0x0c], 1`을 실행합니다.
+- **확인됨 — `[ebp-0x3b4]`는 `IDirectDraw7::GetCaps`가 채운 driver `DDCAPS`입니다.** `0x0000f96c`가 `dwSize`에 `0x17c`를 넣고 `0x0000f999`의 `call [eax+0x2c]`에 첫 인자로 넘깁니다. HEL `DDCAPS`는 `[ebp-0x238]`입니다.
+- **확인됨 — 컨텍스트 `+0x11c`는 드라이버 GUID 포인터입니다.** `[ebp+0x08]`이 NULL이 아닐 때만 GUID 16바이트를 지역에 복사하고 그 주소를 씁니다.
+- **확인됨 — re2DJ의 `Dd7GetCaps`는 `dwCaps2`를 채우지 않습니다.** `dwSize`, `dwCaps`, `ddsCaps.dwCaps`만 채웁니다. 레코드 `+0x120` `DDCAPS` 블록에서 `dwCaps`(`+0x124`)는 `0x00400041`로 보이지만 `dwCaps2`(`+0x128`)는 0입니다. 따라서 `0x0000f9da`의 `je`가 항상 성립하고 게이트는 모든 드라이버에서 0으로 남습니다. **이것이 guard 1이 `0x81000004`를 반환하는 근본 원인입니다.**
+- **확인됨 — 같은 컨텍스트가 두 열거 콜백에 전달됩니다.** 모드 콜백은 `0x0040fb5e`(`0x0000fa07`의 `EnumDisplayModes`), 장치 콜백은 `0x0040fc57`(`0x0000fa48`의 `EnumDevices`)입니다.
+- **확인됨 — 장치 콜백이 `+0x118`을 `bHardware`로 채웁니다.** `0x0000fcb0`이 `D3DDEVICEDESC7.dwDevCaps`와 `0x00080000`(`D3DDEVCAPS_HWRASTERIZATION`)을 AND해 씁니다.
+- **확인됨 — `IDirectDraw7::GetDisplayMode`는 호출되지 않습니다.** 게이트 조건은 표시 모드 질의와 무관합니다.
+- **확인됨 — 드라이버 열거는 HLE 경계 밖입니다.** `injected_runtime`의 동적 resolver는 `DirectDrawCreate`와 `DirectDrawCreateEx`만 대체하므로 `DirectDrawEnumerateExA`는 호스트의 실제 `ddraw.dll`이 처리합니다. 조건의 두 번째 항은 호스트가 주 표시 드라이버를 NULL GUID로 열거하는 관례에 의존합니다.
+- **미확정 — 이번 실행의 드라이버 중 NULL GUID가 있는지.** `Re2djHleDirectDrawCreateEx`가 받은 `driver_guid`를 아직 기록하지 않습니다.
+
+* **Confirmed — the per-driver function is `RVA 0x0000f880`.** Its arguments are the driver GUID pointer at `[ebp+0x08]` and the description string at `[ebp+0x0c]`. It keeps a `0x4d0`-byte context at `[ebp-0x4d4]`, zeroes it with `memset`, and copies the description with `lstrcpynA`. The gate is `[ebp-0x0c]`, which is context `+0x4c8`.
+* **Confirmed — the gate condition is a conjunction.** `0x0000f9cd`–`0x0000f9e5` ANDs the driver `DDCAPS.dwCaps2` at `[ebp-0x3ac]` with `0x00080000` (`DDCAPS2_CANRENDERWINDOWED`) and then executes `mov dword [ebp-0x0c], 1` only when the driver GUID pointer at context `+0x11c` is NULL.
+* **Confirmed — `[ebp-0x3b4]` is the driver `DDCAPS` filled by `IDirectDraw7::GetCaps`.** `0x0000f96c` writes `0x17c` into its `dwSize` and `0x0000f999` passes it as the first argument of `call [eax+0x2c]`; the HEL `DDCAPS` is `[ebp-0x238]`.
+* **Confirmed — context `+0x11c` is the driver GUID pointer,** written only when `[ebp+0x08]` is non-NULL.
+* **Confirmed — re2DJ's `Dd7GetCaps` never fills `dwCaps2`.** It fills only `dwSize`, `dwCaps`, and `ddsCaps.dwCaps`, which matches the record where `dwCaps` reads `0x00400041` and `dwCaps2` is zero. The `je` at `0x0000f9da` therefore always falls through and the gate stays zero for every driver. **This is the root cause of guard 1 returning `0x81000004`.**
+* **Confirmed — the same context reaches both enumeration callbacks:** the mode callback `0x0040fb5e` via `EnumDisplayModes` at `0x0000fa07`, and the device callback `0x0040fc57` via `EnumDevices` at `0x0000fa48`.
+* **Confirmed — the device callback fills `+0x118` as `bHardware`** by ANDing `D3DDEVICEDESC7.dwDevCaps` with `0x00080000` (`D3DDEVCAPS_HWRASTERIZATION`) at `0x0000fcb0`.
+* **Confirmed — `IDirectDraw7::GetDisplayMode` is never called,** so the gate does not depend on a display-mode query.
+* **Confirmed — driver enumeration is outside the HLE boundary.** The dynamic resolver replaces only `DirectDrawCreate` and `DirectDrawCreateEx`, so `DirectDrawEnumerateExA` is served by the host's real `ddraw.dll`, and the condition's second term relies on the host enumerating the primary display driver with a NULL GUID.
+* **Unresolved — whether either driver in this run had a NULL GUID.** The `driver_guid` handed to `Re2djHleDirectDrawCreateEx` is not recorded yet.
+
+```mermaid
+flowchart TD
+    A["driver callback 0x0000f880"] --> B["GetCaps -> driver DDCAPS at ebp-0x3b4"]
+    B --> C{"dwCaps2 and 0x00080000"}
+    C -- 0 --> F[gate stays 0]
+    C -- set --> D{"context+0x11c == NULL"}
+    D -- no --> F
+    D -- yes --> E["context+0x4c8 = 1"]
+    F --> G["EnumDevices callback copies gate into every record"]
+    E --> G
+    G --> H["selection loop skips records whose gate is 0"]
+```
+
+관련 Task 172 문서는 [Task 172 설계](../design/20260904-172-ez2dj4th-driver-stage-gate-condition.md), [Task 172 작업 지시서](../work-orders/20260904-172-ez2dj4th-driver-stage-gate-condition.md), [Task 172 작업 로그](../work-logs/20260904-172-ez2dj4th-driver-stage-gate-condition.md)에 둡니다.
+
+The related Task 172 documents are [Task 172 design](../design/20260904-172-ez2dj4th-driver-stage-gate-condition.md), [Task 172 work order](../work-orders/20260904-172-ez2dj4th-driver-stage-gate-condition.md), and [Task 172 work log](../work-logs/20260904-172-ez2dj4th-driver-stage-gate-condition.md).
+
+## 2026-09-04 `dwCaps2` 보고 후 게이트 개방과 새 중단 지점
+
+- **확인됨 — `dwCaps2` 누락이 guard 1 실패의 원인이었습니다.** `Dd7GetCaps`가 `DDCAPS2_CERTIFIED | DDCAPS2_NOPAGELOCKREQUIRED | DDCAPS2_WIDESURFACES | DDCAPS2_CANRENDERWINDOWED`(`0x00081801`)을 보고하자 레코드의 `+0x128`과 `+0x2a4`가 그 값으로 채워지고 게이트 `+0x4c8`과 그 사본 `+0x494`가 1이 되었습니다(`20260904-141314-210.jsonl`).
+- **확인됨 — 호스트는 주 표시 드라이버를 NULL GUID로 열거합니다.** `20260904-141410-225.ddraw.log`에 `DirectDrawCreateEx driver=null`이 두 번, `driver={67685559-3106-11d0-b971-00aa00342f9f}`가 한 번 기록되었습니다. 게이트 조건의 두 번째 항이 성립합니다.
+- **확인됨 — 선택 루프가 GUID 비교에 도달합니다.** 진입 추적에서 `guard1_helper_call_0` 4건, `guard1_helper_call_1` 1건이 기록되었고, 비교에 넘어간 포인터 `0x009471ec`, `0x009476bc`, `0x00947b8c`는 레코드 0, 1, 2의 `+0x49c` GUID 사본과 일치합니다. Task 170에서 0건이던 앵커입니다.
+- **확인됨 — D3D7 초기화가 장치 생성 단계를 넘어섭니다.** `SetCooperativeLevel(flags=0x00000813)`, `GetDisplayMode`, `SetDisplayMode 640x480x16`, 기본 surface `CreateSurface(flags=0x21, caps=0x2218)`, `QueryInterface(IID_IDirect3D7)`, `IDirect3D7::CreateDevice`, `EnumZBufferFormats` 2회, z-buffer surface `caps=0x00024000`, 128x128 텍스처 surface가 차례로 호출됩니다.
+- **확인됨 — 새 중단 지점은 트랩되지 않은 I/O out입니다.** `RVA 0x000c384b`의 `out dx, al`(포트 `0x0100`)이 first chance에 처리되지 않아 second chance로 넘어가고 프로세스가 `0xc0000096`으로 종료합니다. 같은 실행에서 `RVA 0x000c3817`의 `in al, dx`는 포트 `0x0101`–`0x0106`에 대해 정상 처리되었습니다.
+- **확인됨 — 원인은 프로필 설정입니다.** `src/target/target_profile.cpp`의 ez2dj4th 항목은 `legacy_io_in_byte_rva = 0x000c3817`만 설정하고 `legacy_io_out_byte_rva`를 비워 둡니다. `LegacyIoTrapPolicy`는 두 RVA를 각각 비교하므로 out helper는 트랩되지 않습니다.
+- **확인됨 — out helper의 배치.** `0x000c384b`의 바이트 `ee c3 66 8b 54 24 04 66 8b 44 24 08 66 ef c3`는 바이트 폭 `out dx, al; ret` 뒤에 워드 폭 out helper가 이어지는 형태입니다.
+
+* **Confirmed — the missing `dwCaps2` was the cause of the guard 1 failure.** With `Dd7GetCaps` reporting `0x00081801`, the record's `+0x128` and `+0x2a4` carry that value and both the gate at `+0x4c8` and its copy at `+0x494` read 1.
+* **Confirmed — the host enumerates the primary display driver with a NULL GUID,** so the gate condition's second term holds: two `driver=null` passes and one `driver={67685559-3106-11d0-b971-00aa00342f9f}`.
+* **Confirmed — the selection loop reaches the GUID comparison.** The entry trace records four `guard1_helper_call_0` hits and one `guard1_helper_call_1` hit, with compared pointers `0x009471ec`, `0x009476bc`, and `0x00947b8c` matching the `+0x49c` GUID copies of records 0, 1, and 2. Task 170 recorded none of these.
+* **Confirmed — D3D7 initialization now passes device creation:** `SetCooperativeLevel(0x00000813)`, `GetDisplayMode`, `SetDisplayMode 640x480x16`, a primary `CreateSurface(0x21, caps 0x2218)`, `QueryInterface(IID_IDirect3D7)`, `IDirect3D7::CreateDevice`, two `EnumZBufferFormats` calls, a z-buffer surface, and a 128x128 texture surface.
+* **Confirmed — the new stopping point is an untrapped I/O write.** The `out dx, al` at `RVA 0x000c384b` (port `0x0100`) is not handled on first chance and the process exits with `0xc0000096`, while the `in al, dx` at `RVA 0x000c3817` is handled for ports `0x0101`–`0x0106` in the same run.
+* **Confirmed — the cause is profile configuration.** The ez2dj4th entry in `src/target/target_profile.cpp` sets `legacy_io_in_byte_rva = 0x000c3817` and leaves `legacy_io_out_byte_rva` unset, and `LegacyIoTrapPolicy` compares each RVA separately.
+* **Confirmed — the out helper layout.** The bytes at `0x000c384b`, `ee c3 66 8b 54 24 04 66 8b 44 24 08 66 ef c3`, are a byte-width `out dx, al; ret` followed by a word-width out helper.
+
+```mermaid
+flowchart LR
+    A["Dd7GetCaps: dwCaps2 = 0x00081801"] --> B["driver stage gate = 1"]
+    B --> C["records +0x4c8 = 1"]
+    C --> D["selection loop reaches GUID compare"]
+    D --> E["SetCooperativeLevel / SetDisplayMode / CreateSurface"]
+    E --> F["IDirect3D7::CreateDevice, EnumZBufferFormats, z-buffer, texture"]
+    F --> G["out dx, al at RVA 0x000c384b: untrapped, exit 0xc0000096"]
+```
+
+관련 Task 173 문서는 [Task 173 설계](../design/20260904-173-ez2dj4th-ddcaps2-windowed.md), [Task 173 작업 지시서](../work-orders/20260904-173-ez2dj4th-ddcaps2-windowed.md), [Task 173 작업 로그](../work-logs/20260904-173-ez2dj4th-ddcaps2-windowed.md)에 둡니다.
+
+The related Task 173 documents are [Task 173 design](../design/20260904-173-ez2dj4th-ddcaps2-windowed.md), [Task 173 work order](../work-orders/20260904-173-ez2dj4th-ddcaps2-windowed.md), and [Task 173 work log](../work-logs/20260904-173-ez2dj4th-ddcaps2-windowed.md).
+
+## 2026-09-04 I/O out helper 트랩과 새 접근 위반
+
+- **확인됨 — ez2dj4th의 바이트 폭 out helper는 `RVA 0x000c384b`입니다.** 프로필에 설정하자 `out dx, al`이 HLE 포트 경로로 처리됩니다. `20260904-141951-723.jsonl`에서 특권 명령 트랩 4,913건 중 `first_chance:false`는 0건입니다. 직전 실행에서는 11건 중 1건이 두 번째 기회로 넘어가 프로세스를 죽였습니다.
+- **확인됨 — 트랩 정책과 주입 런타임은 이미 out 경로를 지원합니다.** 프로필 값과 loader probe 기대값 외의 코드 변경 없이 동작했습니다.
+- **확인됨 — 실행이 텍스처 적재 단계까지 진행합니다.** `CreateSurface` 26회(대부분 `caps=0x10005000` 128x128), `IDirect3D7::CreateDevice` 1회, `EnumZBufferFormats` 2회, `EnumSurfaces`와 `RestoreAllSurfaces` 각 1회가 기록되었습니다.
+- **확인됨 — 새 중단 지점은 `RVA 0x00009701`의 읽기 접근 위반입니다.** faulting 명령은 `mov eax, [eax+8]`이고 `EAX`가 `0xcccccccc`, 접근 주소가 `0xccccccd4`입니다. 이어지는 명령은 `mov [edx+0x0c], eax`입니다.
+- **확인됨 — `0xcccccccc`는 이 실행 파일이 프롤로그에서 지역을 채우는 값입니다.** 드라이버 콜백의 `rep stosd`에서도 같은 값이 쓰입니다. 따라서 초기화되지 않은 지역을 역참조한 것입니다.
+- **확인됨 — faulting 함수는 `RVA 0x00009696`에서 시작하며 `RVA 0x000658d7`의 직접 호출로 진입합니다.** 호출은 incremental link thunk `0x004023d8`을 거칩니다.
+- **미확정 — 비어 있는 값의 출처.** 그 지역을 채워야 할 경로가 우리 facade 응답인지 게스트 내부 상태인지 아직 관측하지 않았습니다.
+
+* **Confirmed — the ez2dj4th byte-width out helper is `RVA 0x000c384b`.** With it named in the profile, the run records 4,913 privileged-instruction traps and zero second-chance ones, where the previous run died on the single untrapped write.
+* **Confirmed — the trap policy and injected runtime already support the out path,** since nothing but the profile value and the loader probe expectation changed.
+* **Confirmed — execution now reaches texture loading:** 26 `CreateSurface` calls, mostly 128x128 with `caps=0x10005000`, one `IDirect3D7::CreateDevice`, two `EnumZBufferFormats`, and one each of `EnumSurfaces` and `RestoreAllSurfaces`.
+* **Confirmed — the new stopping point is a read access violation at `RVA 0x00009701`,** where `mov eax, [eax+8]` runs with `EAX` at `0xcccccccc` and the next instruction is `mov [edx+0x0c], eax`.
+* **Confirmed — `0xcccccccc` is this executable's own uninitialized-local fill,** the same value its prologues write, so an unset local was dereferenced.
+* **Confirmed — the faulting function starts at `RVA 0x00009696` and is entered from a direct call at `RVA 0x000658d7`** through the incremental link thunk at `0x004023d8`.
+* **Unresolved — where the empty value should have come from,** and whether the path that fills it is a facade response or guest-internal state.
+
+관련 Task 174 문서는 [Task 174 설계](../design/20260904-174-ez2dj4th-io-out-helper.md), [Task 174 작업 지시서](../work-orders/20260904-174-ez2dj4th-io-out-helper.md), [Task 174 작업 로그](../work-logs/20260904-174-ez2dj4th-io-out-helper.md)에 둡니다.
+
+The related Task 174 documents are [Task 174 design](../design/20260904-174-ez2dj4th-io-out-helper.md), [Task 174 work order](../work-orders/20260904-174-ez2dj4th-io-out-helper.md), and [Task 174 work log](../work-logs/20260904-174-ez2dj4th-io-out-helper.md).
+
+## 2026-09-04 자원 적재 실패와 상대 경로 해석
+
+- **확인됨 — `RVA 0x00009701`의 접근 위반은 자원 적재 실패의 결과입니다.** `RVA 0x000658a1`이 `%dPLAYERInsertCoin.str`로 이름을 만들고, `0x000658bd`가 싱글턴 loader(`RVA 0x0000827f`, thunk `0x0000185c`)를 `loader(name, &out)`으로 부르며, `0x000658c4`가 반환값을 검사하지 않고 `out`을 다음 호출로 넘깁니다.
+- **확인됨 — loader는 실패 경로에서 `*out`을 쓰지 않습니다.** `0x000082d9`의 캐시 조회가 실패하면 `0x00008311`이 파일을 적재하고, 실패 시 `0x0000831e`가 오류를 출력한 뒤 0을 반환하며 `*out`은 그대로 둡니다. 성공 경로에서만 `*out`을 씁니다.
+- **확인됨 — faulting 함수는 `arg1`이 0일 때만 조기 반환합니다.** `0x000096a4`의 검사는 `0xcccccccc`를 걸러내지 못하고 `0x00009701`의 `mov eax, [eax+8]`이 그대로 실행됩니다.
+- **확인됨 — 실패한 열기는 모두 상대 이름입니다.** `20260904-141951-723.vfs.log`에 실패 34건이 있고 `Credits.abm`, `Credits_0.abm`–`Credits_S10.abm`, `2PLAYERInsertCoin.str`처럼 디렉터리가 없는 이름입니다. 성공한 열기는 게스트가 만든 절대 경로뿐입니다.
+- **확인됨 — 게스트는 `SetCurrentDirectoryA`를 해석해 씁니다.** 동적 resolver 기록에 `SetCurrentDirectoryA`와 `GetCurrentDirectoryA`가 있습니다. re2DJ는 두 API를 대체하지 않고 게스트의 현재 디렉터리도 추적하지 않습니다.
+- **확인됨 — `MapVfsPath`는 상대 이름을 HDD 루트에 붙입니다.** 이름이 구분자로 시작하지 않으면 그대로 접미사로 쓰므로, 요청은 항상 `EZ2DJ/<name>`이 됩니다.
+- **확인됨 — 요청된 자원은 `EZ2DJ` 바로 아래에 없습니다.** `re2dj_chd_probe --list`로 확인한 배치는 `EZ2DJ`(9개: 실행 파일, INI, 폰트 2개, `CACHE.REG`, `CACHE.TXT`, `BG`, `Sound`, `SYSTEM`), `EZ2DJ/SYSTEM`(31개: 모드별 디렉터리와 `WARNING.ABM`), `EZ2DJ/SYSTEM/Common`(67개: `Credits.abm`, `1PLAYER.STR`, `1PLAYERInsertCoin.str`), `EZ2DJ/SYSTEM/Title`(38개: `TITLE.STR`, `INSERTCOIN.str`)입니다.
+- **확인됨 — FAT32 긴 이름 조립에 결함이 있습니다.** 13자를 넘는 이름마다 13번째 문자 뒤에 4바이트가 끼어들고, 그 4바이트는 같은 항목의 짧은 이름 앞 4자입니다. `logo4th_mask.abm`에는 `LOGO`, `INSERTCOIN.str`에는 `INSE`, `SIMBOL_MASK.abm`에는 `SIMB`, `1PLAYERInsertCoin.str`에는 `1PLA`가 들어갑니다. 정확히 13자인 `Credits_0.abm`도 영향을 받습니다.
+- **추정 — 이 결함만으로도 13자를 넘는 자원 조회는 실패합니다.** `Fat32Volume::Find`는 이름 비교로 항목을 찾기 때문입니다. 현재 실패는 디렉터리 해석으로도 설명되므로 두 원인을 분리해 확인하지는 않았습니다.
+
+* **Confirmed — the access violation at `RVA 0x00009701` is the consequence of a failed resource load.** `RVA 0x000658a1` formats a name from `%dPLAYERInsertCoin.str`, `0x000658bd` calls the singleton loader at `RVA 0x0000827f` as `loader(name, &out)`, and `0x000658c4` passes `out` on without checking the return value.
+* **Confirmed — the loader leaves `*out` untouched on its failure path,** printing an error at `0x0000831e` and returning 0; only the cache-hit and load-success paths write it.
+* **Confirmed — the faulting function only early-returns when `arg1` is zero,** so `0xcccccccc` passes the check at `0x000096a4` and is dereferenced.
+* **Confirmed — every failed open is a bare relative name.** The run's VFS log holds 34 failures, all directory-less names, while every success is an absolute path the guest built itself.
+* **Confirmed — the guest resolves and uses `SetCurrentDirectoryA`,** which re2DJ neither replaces nor tracks, and `MapVfsPath` joins relative names straight onto the HDD root, so every such request becomes `EZ2DJ/<name>`.
+* **Confirmed — none of the requested resources sit directly under `EZ2DJ`.** `re2dj_chd_probe --list` shows them under `EZ2DJ/SYSTEM/Common` and `EZ2DJ/SYSTEM/Title`.
+* **Confirmed — the FAT32 long-name assembly is defective:** four extra bytes follow the thirteenth character of every longer name, and they are the entry's own short-name prefix (`LOGO`, `INSE`, `SIMB`, `1PLA`). An exactly thirteen-character name such as `Credits_0.abm` is affected too.
+* **Inferred — that defect alone would fail any lookup of a name longer than thirteen characters,** because `Fat32Volume::Find` matches on the assembled name. The current failure is already explained by directory resolution, so the two causes were not separated.
+
+```mermaid
+flowchart TD
+    A["guest: SetCurrentDirectoryA(resource dir)"] -.->|추적되지 않음| B[re2DJ VFS]
+    C["CreateFileA(\"2PLAYERInsertCoin.str\")"] --> B
+    B --> D["EZ2DJ/2PLAYERInsertCoin.str"]
+    D --> E[CHD lookup fails]
+    E --> F["loader returns 0, *out untouched"]
+    F --> G["caller uses 0xcccccccc"]
+    G --> H["access violation at RVA 0x00009701"]
+    I["real location: EZ2DJ/SYSTEM/Common/"] -.-> E
+```
+
+관련 Task 175 문서는 [Task 175 설계](../design/20260904-175-ez2dj4th-uninitialized-out-parameter.md), [Task 175 작업 지시서](../work-orders/20260904-175-ez2dj4th-uninitialized-out-parameter.md), [Task 175 작업 로그](../work-logs/20260904-175-ez2dj4th-uninitialized-out-parameter.md)에 둡니다.
+
+The related Task 175 documents are [Task 175 design](../design/20260904-175-ez2dj4th-uninitialized-out-parameter.md), [Task 175 work order](../work-orders/20260904-175-ez2dj4th-uninitialized-out-parameter.md), and [Task 175 work log](../work-logs/20260904-175-ez2dj4th-uninitialized-out-parameter.md).
+
+## 2026-09-04 FAT32 긴 이름 조립 수정
+
+- **확인됨 — 결함은 긴 이름 슬롯의 마지막 문자 범위였습니다.** 슬롯의 문자 필드는 `0x01`에서 5문자, `0x0e`에서 6문자, `0x1c`에서 2문자로 모두 13문자입니다. 구현은 마지막 범위를 4문자로 읽어 32바이트 슬롯을 4바이트 넘겼고, 디스크에서 그 자리에 오는 것이 같은 파일의 짧은 이름 항목이라 짧은 이름 앞 4자가 끼어들었습니다.
+- **확인됨 — 수정 후 이름이 정확합니다.** `re2dj_chd_probe --list`로 같은 디렉터리를 다시 읽으면 `Credits_0.abm`, `INSERTCOIN.str`, `logo4th_mask.abm`, `1PLAYERInsertCoin.str`이 온전히 나옵니다.
+- **확인됨 — 요청된 자원이 이미지에 있습니다.** `EZ2DJ/SYSTEM/Common`에 `1PLAYERInsertCoin.str`과 `2PLAYERInsertCoin.str`이 각각 1,556바이트로 있고, `PressStart`와 `Wait` 짝도 있습니다. 수정 전에는 이 이름들이 조립 결함에 가려져 있었습니다.
+- **확인됨 — 이름 해독은 이제 이미지 없이 시험됩니다.** `fat32_directory_name` 단위와 합성 항목 시험이 13자 경계, 두 슬롯 이름, 체크섬 불일치, 슬롯 누락을 다룹니다. 결함 상태로 되돌리면 그중 넷이 실패합니다.
+- **확인됨 — 이 수정만으로는 게스트 적재가 성공하지 않습니다.** VFS가 상대 이름을 `EZ2DJ/<name>`으로 해석하는 문제는 그대로입니다.
+
+* **Confirmed — the defect was the final character range of a long-name slot.** A slot carries five characters at `0x01`, six at `0x0e`, and two at `0x1c`, thirteen in all; reading four from the last field ran four bytes past the 32-byte slot into that file's own short-name entry, which is why the junk was always the short name's first four characters.
+* **Confirmed — names decode correctly after the fix,** as a re-listing of the same directories shows.
+* **Confirmed — the requested resources exist in the image:** `EZ2DJ/SYSTEM/Common` holds `1PLAYERInsertCoin.str` and `2PLAYERInsertCoin.str` at 1,556 bytes each, along with the `PressStart` and `Wait` pairs, all previously hidden by the assembly defect.
+* **Confirmed — name decoding is now testable without an image,** through the `fat32_directory_name` unit and its synthetic-entry test; reverting the range makes four of its checks fail.
+* **Confirmed — the fix alone does not make the guest's load succeed,** because the VFS still resolves bare relative names to `EZ2DJ/<name>`.
+
+관련 Task 176 문서는 [Task 176 설계](../design/20260904-176-fat32-long-name-assembly.md), [Task 176 작업 지시서](../work-orders/20260904-176-fat32-long-name-assembly.md), [Task 176 작업 로그](../work-logs/20260904-176-fat32-long-name-assembly.md)에 둡니다.
+
+The related Task 176 documents are [Task 176 design](../design/20260904-176-fat32-long-name-assembly.md), [Task 176 work order](../work-orders/20260904-176-fat32-long-name-assembly.md), and [Task 176 work log](../work-logs/20260904-176-fat32-long-name-assembly.md).
+
+## 2026-09-04 게스트 현재 디렉터리 추적과 CHD 읽기 경로 개통
+
+- **확인됨 — 게스트는 현재 디렉터리를 바꾼 뒤 상대 이름으로 자원을 엽니다.** `20260904-150114-649.vfs.log`에 `SetCurrentDirectoryA("System\Common")`과 `SetCurrentDirectoryA("System\AmuseLogo")`가 기록되고, 그 사이 상대 이름 열기가 이어집니다. 게스트는 우리가 `GetCurrentDirectoryA`로 돌려준 native 절대 경로도 그대로 다시 넘깁니다.
+- **확인됨 — 현재 디렉터리를 추적하자 자원 적재가 성공합니다.** `2PLAYERInsertCoin.str` 요청이 `chd://EZ2DJ/System/Common/2PLAYERInsertCoin.str`으로 매핑되어 열립니다. Task 175에서 34건이던 실패 열기가 0건이 되었고, 남은 실패는 보호 코드의 `\\.\NTICE` 탐색 두 건뿐입니다.
+- **확인됨 — 그때까지 CHD 읽기 경로는 한 번도 쓰이지 않았습니다.** 이전 실행들의 `stage=chd`는 0건이고 성공한 열기는 모두 staging 디렉터리에 미리 풀려 있던 파일이었습니다. 원인은 런처가 `--chd`를 받은 그대로 런타임에 기록한 것입니다. 런타임은 자식 프로세스 안에서 그 경로를 열고 자식의 작업 디렉터리는 게스트 쪽이라, 상대 경로면 `Fat32Volume::Open`이 조용히 실패합니다. 절대화 후 한 실행에서 `stage=chd` 54건이 성공했습니다.
+- **확인됨 — 실행이 크게 전진했습니다.** 디버그 이벤트 5,233 → 50,035, 특권 명령 트랩 4,913 → 47,343, `IDirectDraw7::CreateSurface` 26 → 236건입니다. `RestoreAllSurfaces`와 `EnumSurfaces`도 각각 3회 나타납니다. 프로세스는 종료되지 않고 진단 idle 경계까지 살아 있었습니다.
+- **확인됨 — 적재되는 자원은 `System\Common`과 `System\AmuseLogo` 아래입니다.** `warning.abm`, `Credits*.abm`, `1PLAYER*`와 `2PLAYER*` 계열, `fontkr.dat`, `fontEn.dat`가 CHD에서 열립니다.
+- **미확정 — `RVA 0x0001290e`의 읽기 접근 위반.** `mov ecx, [edx]` 뒤 `call [ecx+0x0c]`로 가상 호출을 시도하다 발생하며 두 번 기록되었습니다. 프로세스가 종료되지 않았으므로 게스트 예외 처리기가 흡수하는지 여부는 아직 모릅니다.
+
+* **Confirmed — the guest changes its working directory and then opens resources by bare name,** and it also hands back the native absolute path `GetCurrentDirectoryA` returned.
+* **Confirmed — tracking that directory makes the loads succeed:** `2PLAYERInsertCoin.str` now maps to `chd://EZ2DJ/System/Common/2PLAYERInsertCoin.str`, and the 34 failed opens drop to none beyond the protection's `\\.\NTICE` probes.
+* **Confirmed — the CHD read path had never been used before this task.** Earlier runs record zero `chd` stages because the launcher wrote the `--chd` argument verbatim, and a relative path cannot mount inside the child, whose working directory is the guest's. With the path made absolute, one run records 54 CHD-backed opens.
+* **Confirmed — execution advanced substantially:** 5,233 to 50,035 debug events, 4,913 to 47,343 privileged-instruction traps, and 26 to 236 `CreateSurface` calls, with the process surviving to the diagnostic idle boundary instead of exiting.
+* **Unresolved — the read access violation at `RVA 0x0001290e`,** raised while attempting a virtual call through an invalid object pointer; whether the guest absorbs it is not yet known.
+
+```mermaid
+flowchart TD
+    A["SetCurrentDirectoryA(\"System\\Common\")"] --> B[tracked components: System/Common]
+    B --> C["CreateFileA(\"2PLAYERInsertCoin.str\")"]
+    C --> D["EZ2DJ/System/Common/2PLAYERInsertCoin.str"]
+    D --> E{native or overlay copy?}
+    E -- no --> F["CHD read handle (stage=chd)"]
+    E -- yes --> G[native handle]
+```
+
+관련 Task 177 문서는 [Task 177 설계](../design/20260904-177-vfs-guest-working-directory.md), [Task 177 작업 지시서](../work-orders/20260904-177-vfs-guest-working-directory.md), [Task 177 작업 로그](../work-logs/20260904-177-vfs-guest-working-directory.md)에 둡니다.
+
+The related Task 177 documents are [Task 177 design](../design/20260904-177-vfs-guest-working-directory.md), [Task 177 work order](../work-orders/20260904-177-vfs-guest-working-directory.md), and [Task 177 work log](../work-logs/20260904-177-vfs-guest-working-directory.md).
+
+## 2026-09-04 패널 단계 중단: null 정점 버퍼
+
+- **확인됨 — faulting 함수는 `RVA 0x00012875`에서 시작합니다.** 인자 객체를 `memset(arg1, 0, 0x4bc)`로 지운 뒤 지역에 `{0x10, 0, 0x112, 0x79}` 서술자를 만들고, `this->[0x2c]`가 가리키는 인터페이스의 vtable slot 5를 `(desc, &arg1->[0x08], 0)`으로 부릅니다.
+- **확인됨 — 그 호출은 `IDirect3D7::CreateVertexBuffer`입니다.** vtable slot 5가 그 메서드이고, 인자 순서와 서술자 배치(`dwSize 0x10`, `dwCaps 0`, `dwFVF 0x112`, `dwNumVertices 0x79`)가 `D3DVERTEXBUFFERDESC`와 정확히 맞습니다. 같은 실행의 `.ddraw.log` 마지막 줄도 `re2dj:hle:IDirect3D7::CreateVertexBuffer`입니다.
+- **확인됨 — re2DJ가 성공과 함께 null을 돌려줍니다.** `D3d7CreateVertexBuffer`는 서술자와 flags를 버리고 `*vb = nullptr`을 쓴 뒤 `D3D_OK`를 반환합니다.
+- **확인됨 — 게스트는 반환값을 검사하지 않습니다.** `0x00012905`–`0x00012911`이 곧바로 `arg1->[0x08]`을 vtable 있는 객체로 다뤄 slot 3을 부르므로 `0x0001290e`의 `mov ecx, [edx]`에서 접근 위반이 납니다.
+- **확인됨 — 이 예외는 실행을 멈춥니다.** 진단 로그에서 접근 위반 뒤 디버그 이벤트가 없고 idle 경계에 도달합니다.
+- **확인됨 — 중단 시점은 게임 플레이 화면 구성 단계입니다.** 직전 자원은 `System/StreetMix/Panel/`의 `Judgment_Kool.str`–`Judgment_Fail.str`과 `combo0.str`–`combo0000.str`이고, 호스트는 `wdmaud.drv`, `ksuser.dll`, `msacm32.drv`, `midimap.dll`을 적재한 상태입니다.
+- **미확정 — 이 함수의 나머지 두 호출 지점.** `0x000383f8`, `0x0007296e`, `0x0008ff0e` 세 곳에서 불리며 이번에 걸린 것은 첫 번째입니다.
+
+* **Confirmed — the faulting function starts at `RVA 0x00012875`,** clears its argument object with `memset(arg1, 0, 0x4bc)`, builds a local `{0x10, 0, 0x112, 0x79}` descriptor, and calls vtable slot 5 of the interface at `this->[0x2c]` with `(desc, &arg1->[0x08], 0)`.
+* **Confirmed — that call is `IDirect3D7::CreateVertexBuffer`:** slot 5 is that method, and the argument order and descriptor layout match `D3DVERTEXBUFFERDESC` exactly. The run's last graphics trace line is `re2dj:hle:IDirect3D7::CreateVertexBuffer`.
+* **Confirmed — re2DJ returns success with a null buffer,** since `D3d7CreateVertexBuffer` writes `*vb = nullptr` and returns `D3D_OK`.
+* **Confirmed — the guest does not check the return value** and dereferences the null immediately at `0x0001290e`.
+* **Confirmed — the exception stops execution:** no debug event follows it before the idle boundary.
+* **Confirmed — the stop happens during gameplay-screen construction,** after the `System/StreetMix/Panel/` sprites loaded and the host audio driver stack was mapped.
+* **Unresolved — the function's other two call sites** at `0x0007296e` and `0x0008ff0e`.
+
+관련 Task 178 문서는 [Task 178 설계](../design/20260904-178-ez2dj4th-panel-null-object.md), [Task 178 작업 지시서](../work-orders/20260904-178-ez2dj4th-panel-null-object.md), [Task 178 작업 로그](../work-logs/20260904-178-ez2dj4th-panel-null-object.md)에 둡니다.
+
+The related Task 178 documents are [Task 178 design](../design/20260904-178-ez2dj4th-panel-null-object.md), [Task 178 work order](../work-orders/20260904-178-ez2dj4th-panel-null-object.md), and [Task 178 work log](../work-logs/20260904-178-ez2dj4th-panel-null-object.md).
+
+## 2026-09-04 정점 버퍼 facade 이후 실행 상태
+
+- **확인됨 — null 정점 버퍼가 접근 위반의 원인이었습니다.** `IDirect3D7::CreateVertexBuffer`가 실제 `IDirect3DVertexBuffer7`을 돌려주자 `RVA 0x0001290e`의 접근 위반이 사라졌습니다. `20260904-152525-592` 실행의 예외는 모두 우리 진단이 심은 single step(`0x80000004`)뿐입니다.
+- **확인됨 — 게스트의 요청과 사용 방식.** `caps=0`, `fvf=0x112`(`XYZ | NORMAL | TEX1`), `vertices=121`이며 stride 32, 전체 3,872바이트입니다. 생성 직후 `Lock(flags=1, &data, nullptr)`을 부르고 `Unlock`, `Release`까지 마칩니다. 이 주기가 한 실행에서 3회 반복됩니다.
+- **확인됨 — 실행이 배경 애니메이션 단계까지 갑니다.** `IDirectDraw7::CreateSurface`가 1,108회(가장 작은 것은 9x13 글리프), `RestoreAllSurfaces`와 `EnumSurfaces`가 각각 7회이고, 마지막 자원은 `EZ2DJ/BG/aquaris/eye01.str`과 `zoom01.str`입니다. 디버그 이벤트는 156,565건입니다.
+- **확인됨 — 프로세스가 예외 없이 스스로 종료합니다.** `exit_process code 0x00000001`이며 접근 위반은 0건입니다.
+- **추정 — 종료를 결정하는 것은 보호 검사입니다.** 종료 직전 기록이 Hardlock descriptor IOCTL(`code=0x9c40244c`, `answered=0`)입니다.
+- **미확정 — `ExitProcess(1)`을 부르는 코드 지점.**
+
+* **Confirmed — the null vertex buffer was the cause of the access violation.** With a real `IDirect3DVertexBuffer7` returned, the fault at `RVA 0x0001290e` is gone and the run's only exceptions are our own single-step traps.
+* **Confirmed — the guest's request and usage:** `caps=0`, `fvf=0x112` (`XYZ | NORMAL | TEX1`), 121 vertices, stride 32, 3,872 bytes, locked immediately with `Lock(1, &data, nullptr)` and then unlocked and released, three times in one run.
+* **Confirmed — execution reaches background animation loading:** 1,108 `CreateSurface` calls down to 9x13 glyph surfaces, seven `RestoreAllSurfaces` and `EnumSurfaces` calls, and `EZ2DJ/BG/aquaris/eye01.str` and `zoom01.str` as the last resources, across 156,565 debug events.
+* **Confirmed — the process now exits deliberately** with `exit_process code 0x00000001` and no access violation.
+* **Inferred — the protection check decides that exit,** since the last records before it are Hardlock descriptor IOCTLs with `answered=0`.
+* **Unresolved — which code path calls `ExitProcess(1)`.**
+
+관련 Task 179 문서는 [Task 179 설계](../design/20260904-179-direct3d7-vertex-buffer-facade.md), [Task 179 작업 지시서](../work-orders/20260904-179-direct3d7-vertex-buffer-facade.md), [Task 179 작업 로그](../work-logs/20260904-179-direct3d7-vertex-buffer-facade.md)에 둡니다.
+
+The related Task 179 documents are [Task 179 design](../design/20260904-179-direct3d7-vertex-buffer-facade.md), [Task 179 work order](../work-orders/20260904-179-direct3d7-vertex-buffer-facade.md), and [Task 179 work log](../work-logs/20260904-179-direct3d7-vertex-buffer-facade.md).

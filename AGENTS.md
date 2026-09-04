@@ -275,7 +275,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## Git 작업 규칙
 
 * 사용자가 작업을 요청하면 먼저 현재 Git 브랜치명을 확인한다.
-* 현재 브랜치가 `main`이면 사용자가 요청한 작업 내용을 바탕으로 작업용 브랜치를 새로 만든 뒤 작업한다.
+* 현재 브랜치가 `main`일 때만 사용자가 요청한 작업 내용을 바탕으로 작업용 브랜치를 새로 만든 뒤 작업한다.
+* 현재 브랜치가 `main`이 아니면(이미 작업 브랜치에 있으면) 새 브랜치를 생성하지 않고 현재 브랜치를 그대로 유지하며 작업을 이어간다.
 * 작업 단위가 하나 끝날 때마다 관련 변경을 Git 커밋으로 남긴다.
 * 프로젝트 버전은 저장소 루트의 `VERSION` 파일에서 `major.minor.patch` 형식으로 관리한다.
 * 사용자가 머지를 요청하면 `main`에 머지하기 전에 patch 버전을 1 증가시킨다.
@@ -291,7 +292,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## Git Workflow Rules
 
 * When the user requests work, first check the current Git branch name.
-* If the current branch is `main`, create a task branch based on the user's requested work before making changes.
+* Only when the current branch is `main`, create a new task branch based on the user's requested work before making changes.
+* If the current branch is not `main` (already on a task branch), do not create a new branch; continue working on the current branch.
 * Leave a Git commit for the related changes whenever one task unit is complete.
 * Manage the project version in the repository-root `VERSION` file using `major.minor.patch`.
 * When the user requests a merge, increment the patch version by 1 before merging into `main`.

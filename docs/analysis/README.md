@@ -29,6 +29,6 @@
 
 | [ez2dj3rd-hardlock-function-0e.md](ez2dj3rd-hardlock-function-0e.md) | 3rd Hardlock device name, API descriptor, and Function 0x0e boundary | Device/API boundary confirmed; valid 0x0e response unresolved |
 | [ez2dj4th-chd-filesystem.md](ez2dj4th-chd-filesystem.md) | 4th Trax CHD v5, FAT32 geometry, directory and executable layout | Real `4thTrax.chd` read confirmed; cabinet boot sequence unresolved |
-| [ez2dj4th-hardlock-runtime.md](ez2dj4th-hardlock-runtime.md) | 4th Hardlock config, device/IOCTL sequence and validation boundary | Vendor driver framing confirmed; valid response and transform unresolved |
+| [ez2dj4th-hardlock-runtime.md](ez2dj4th-hardlock-runtime.md) | 4th Hardlock config, device/IOCTL sequence, DirectDraw/D3D7 startup, and validation boundary | Vendor driver, raw I/O, DDraw/D3D7 entry confirmed; D3D7 adapter pending |
 
 *Update this table in the same task whenever an analysis document is added or renamed.*

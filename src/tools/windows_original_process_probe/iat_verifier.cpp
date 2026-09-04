@@ -382,4 +382,95 @@ bool FindIatSlotByOrdinal(const exe::PeImageInfo& info,
     return false;
 }
 
+bool ResolveIatSlot(const exe::PeImageInfo& info,
+                    const std::uint8_t* file,
+                    std::size_t file_size,
+                    std::uint32_t slot_rva,
+                    IatSlotResolution* resolution,
+                    std::string* error)
+{
+    if (file == nullptr || resolution == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    *resolution = {};
+    const exe::PeDataDirectory* directory = info.Directory(exe::PeDirectoryIndex::kImport);
+    if (directory == nullptr || directory->virtual_address == 0 || directory->size == 0)
+    {
+        *error = "PE image has no import directory";
+        return false;
+    }
+    for (std::uint32_t offset = 0; offset + kImportDescriptorSize <= directory->size;
+         offset += kImportDescriptorSize)
+    {
+        const std::uint8_t* descriptor = RvaPointer(
+            info, file, file_size, directory->virtual_address + offset, kImportDescriptorSize);
+        if (descriptor == nullptr)
+        {
+            *error = "import descriptor lies outside original file";
+            return false;
+        }
+        const std::uint32_t original_first_thunk = ReadU32(descriptor);
+        const std::uint32_t name_rva = ReadU32(descriptor + 12);
+        const std::uint32_t first_thunk = ReadU32(descriptor + 16);
+        if (original_first_thunk == 0 && ReadU32(descriptor + 4) == 0 &&
+            ReadU32(descriptor + 8) == 0 && name_rva == 0 && first_thunk == 0)
+        {
+            break;
+        }
+        std::string imported_module;
+        if (!ReadCString(info, file, file_size, name_rva, &imported_module))
+        {
+            continue;
+        }
+        const std::uint32_t lookup_rva =
+            original_first_thunk == 0 ? first_thunk : original_first_thunk;
+        for (std::uint32_t index = 0; index <= info.size_of_image / 4; ++index)
+        {
+            const std::uint64_t offset_bytes = static_cast<std::uint64_t>(index) * 4;
+            if (lookup_rva > (std::numeric_limits<std::uint32_t>::max)() - offset_bytes ||
+                first_thunk > (std::numeric_limits<std::uint32_t>::max)() - offset_bytes)
+            {
+                *error = "import thunk RVA overflows";
+                return false;
+            }
+            const std::uint32_t current_slot_rva =
+                first_thunk + static_cast<std::uint32_t>(offset_bytes);
+            const std::uint8_t* thunk = RvaPointer(
+                info, file, file_size, lookup_rva + static_cast<std::uint32_t>(offset_bytes), 4);
+            if (thunk == nullptr)
+            {
+                *error = "import lookup thunk lies outside original file";
+                return false;
+            }
+            const std::uint32_t value = ReadU32(thunk);
+            if (value == 0)
+            {
+                break;
+            }
+            if (current_slot_rva == slot_rva)
+            {
+                resolution->module = imported_module;
+                if ((value & kImportByOrdinalFlag32) != 0)
+                {
+                    resolution->is_ordinal = true;
+                    resolution->ordinal = static_cast<std::uint16_t>(value);
+                }
+                else
+                {
+                    resolution->is_ordinal = false;
+                    if (!ReadCString(info, file, file_size, value + 2, &resolution->function))
+                    {
+                        *error = "import function name is malformed";
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+    }
+    *error = "requested IAT slot was not found in import descriptors";
+    return false;
+}
+
 }  // namespace re2dj::tools::windows_original_process_probe
