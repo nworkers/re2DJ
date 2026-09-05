@@ -82,6 +82,12 @@ The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, 
 
 ---
 
+## 4th Music Select Composition Observation (2026-09-05)
+
+**Confirmed:** Frame 1000 of user run `20260905-174233-086` draws the background, discs, then ONE/ONE header artwork. Bottom/right UI pairs use destination-multiplication masks and additive artwork. The original also requests SRCBLEND=9 / DESTBLEND=6, which the previous HLE rejects. **Unresolved:** Attribution of those rejected draws to the missing header mask requires another run because the old failure-log budget was exhausted. [Detailed analysis](analysis/ez2dj4th-music-select-disc-state.md).
+
+**Confirmed:** Follow-up run `20260905-185621-933` successfully processes the SRCBLEND=9 / DESTBLEND=6 draws for center mask texture 250 and header mask texture 280, and the user confirms the header occlusion now matches the original. The previous missing destination-color blend support dropped the entire mask draw and caused the visual difference.
+
 ## 3. Update rules
 
 * When a new fact is confirmed, update this document and [EXE_DESIGN.ko.md](EXE_DESIGN.ko.md) in the same task.

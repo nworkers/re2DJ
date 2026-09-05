@@ -43,6 +43,18 @@ constexpr DWORD kSurfaceMagic = 0x52325346;
 constexpr DWORD kDeviceMagic = 0x52324456;
 constexpr DWORD kViewportMagic = 0x52325650;
 constexpr DWORD kVertexBufferMagic = 0x52325642;
+// Direct3D 7 defines LIGHTING at render-state index 137. The Direct3D 6
+// headers used by this facade do not expose that later enum name.
+constexpr unsigned kD3dRenderStateLighting = 137;
+// These Direct3D 7 texture-stage/transform constants are absent from the
+// Direct3D 6 headers used by this facade. They are logged without applying
+// them until the original runtime's values are confirmed.
+constexpr unsigned kD3dTextureStageTexcoordIndex = 11;
+constexpr unsigned kD3dTextureStageTransformFlags = 24;
+constexpr unsigned kD3dTextureTransform0 = 16;
+constexpr DWORD kD3dCullNone = 1;
+constexpr DWORD kD3dCullClockwise = 2;
+constexpr DWORD kD3dCullCounterClockwise = 3;
 
 struct RootFacade;
 struct SurfaceFacade;
@@ -429,6 +441,7 @@ struct RootFacade
     std::uint32_t untextured_draw_diagnostic_count = 0;
     std::uint32_t late_draw_diagnostic_count = 0;
     std::uint32_t late_draw_target_diagnostic_count = 0;
+    std::uint32_t music_select_disc_diagnostic_count = 0;
     std::uint32_t transform_diagnostic_count = 0;
     std::uint64_t frame_number = 0;
     LARGE_INTEGER fps_frequency = {};
@@ -494,6 +507,7 @@ struct SurfaceFacade
     bool dc_acquired = false;
     bool has_source_blt_color_key = false;
     bool draw_diagnostic_reported = false;
+    bool draw_failure_diagnostic_reported = false;
     bool content_diagnostic_computed = false;
     std::uint64_t diagnostic_non_key_pixels = 0;
     std::uint64_t diagnostic_nonzero_pixels = 0;
@@ -757,7 +771,8 @@ void ReportDrawDiagnostic(DeviceFacade* device,
                           DWORD vertex_count,
                           DWORD flags,
                           HRESULT result,
-                          const char* reason)
+                          const char* reason,
+                          const re2dj::graphics::LegacyDrawCommand* command = nullptr)
 {
     if (device == nullptr || device->root == nullptr)
     {
@@ -773,7 +788,9 @@ void ReportDrawDiagnostic(DeviceFacade* device,
     }
     constexpr std::uint32_t kMaximumDrawFailureDiagnostics = 64;
     constexpr std::uint32_t kMaximumUntexturedDrawDiagnostics = 16;
-    if (result != DD_OK &&
+    const bool first_texture_failure = result != DD_OK && texture_surface != nullptr &&
+                                       !texture_surface->draw_failure_diagnostic_reported;
+    if (result != DD_OK && !first_texture_failure &&
         ++device->root->draw_failure_diagnostic_count > kMaximumDrawFailureDiagnostics)
     {
         return;
@@ -787,11 +804,31 @@ void ReportDrawDiagnostic(DeviceFacade* device,
     {
         texture_surface->draw_diagnostic_reported = true;
     }
+    if (first_texture_failure)
+    {
+        texture_surface->draw_failure_diagnostic_reported = true;
+    }
+    char bounds[128] = "unavailable";
+    if (command != nullptr && !command->vertices.empty())
+    {
+        float left = command->vertices.front().x;
+        float top = command->vertices.front().y;
+        float right = left;
+        float bottom = top;
+        for (const auto& vertex : command->vertices)
+        {
+            left = (std::min)(left, vertex.x);
+            top = (std::min)(top, vertex.y);
+            right = (std::max)(right, vertex.x);
+            bottom = (std::max)(bottom, vertex.y);
+        }
+        std::snprintf(bounds, sizeof(bounds), "%.3f,%.3f,%.3f,%.3f", left, top, right, bottom);
+    }
     const auto& stage = device->texture_stage_states[0];
-    char detail[512] = {};
+    char detail[1024] = {};
     std::snprintf(detail,
                   sizeof(detail),
-                  "DrawPrimitive:texture=%lu:primitive=%lu:fvf=0x%08lx:vertices=%lu:flags=0x%08lx:result=0x%08lx:reason=%s:colorop=%lu:colorarg1=0x%08lx:colorarg2=0x%08lx:alphatest=%lu:alphafunc=%lu:blend=%lu:srcblend=%lu:dstblend=%lu:minfilter=%lu:magfilter=%lu",
+                  "DrawPrimitive:texture=%lu:primitive=%lu:fvf=0x%08lx:vertices=%lu:flags=0x%08lx:result=0x%08lx:reason=%s:colorop=%lu:colorarg1=0x%08lx:colorarg2=0x%08lx:alphatest=%lu:alphafunc=%lu:blend=%lu:srcblend=%lu:dstblend=%lu:minfilter=%lu:magfilter=%lu:frame=%llu:bounds=%s",
                   texture_surface == nullptr
                       ? 0UL
                       : static_cast<unsigned long>(texture_surface->diagnostic_id),
@@ -812,7 +849,9 @@ void ReportDrawDiagnostic(DeviceFacade* device,
                   static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_SRCBLEND]),
                   static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_DESTBLEND]),
                   static_cast<unsigned long>(stage[D3DTSS_MINFILTER]),
-                  static_cast<unsigned long>(stage[D3DTSS_MAGFILTER]));
+                  static_cast<unsigned long>(stage[D3DTSS_MAGFILTER]),
+                  static_cast<unsigned long long>(device->root->frame_number),
+                  bounds);
     ReportCompositionDiagnostic(device->root, detail);
 }
 
@@ -830,6 +869,91 @@ void ReportLateDrawDiagnostic(
     const SurfaceFacade* texture_surface = device->texture_stage_zero == nullptr
                                                ? nullptr
                                                : SurfaceFromTexture(device->texture_stage_zero);
+    const auto& stage = device->texture_stage_states[0];
+    const bool is_music_select_disc =
+        texture_surface != nullptr &&
+        (texture_surface->diagnostic_id == 279 || texture_surface->diagnostic_id == 387);
+    if (is_music_select_disc)
+    {
+        constexpr std::uint32_t kMaximumMusicSelectDiscDiagnostics = 2048;
+        if (++device->root->music_select_disc_diagnostic_count >
+            kMaximumMusicSelectDiscDiagnostics)
+        {
+            return;
+        }
+
+        std::string vertices;
+        for (std::size_t index = 0; index < command.vertices.size(); ++index)
+        {
+            char vertex[256] = {};
+            const auto& value = command.vertices[index];
+            std::snprintf(vertex,
+                          sizeof(vertex),
+                          "v%zu=%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,0x%08lx",
+                          index,
+                          value.x,
+                          value.y,
+                          value.z,
+                          value.reciprocal_w,
+                          value.texture_u,
+                          value.texture_v,
+                          static_cast<unsigned long>(value.diffuse_argb));
+            if (!vertices.empty())
+            {
+                vertices += ";";
+            }
+            vertices += vertex;
+        }
+
+        const D3DMATRIX& texture_transform =
+            device->transforms[kD3dTextureTransform0];
+        char detail[4096] = {};
+        std::snprintf(
+            detail,
+            sizeof(detail),
+            "MusicSelectDiscDraw:frame=%llu:texture=%lu:fvf=0x%08lx:topology=%u:vertices=%lu:"
+            "cull=%lu:blend=%lu:srcblend=%lu:dstblend=%lu:zenable=%lu:zwrite=%lu:zfunc=%lu:"
+            "texcoordindex=%lu:textransformflags=%lu:texmatrix=%.6f,%.6f,%.6f,%.6f,"
+            "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f:%s",
+            static_cast<unsigned long long>(device->root->frame_number),
+            static_cast<unsigned long>(texture_surface->diagnostic_id),
+            static_cast<unsigned long>(vertex_type),
+            command.topology == re2dj::graphics::PrimitiveTopology::kLineList
+                ? 2U
+                : command.topology == re2dj::graphics::PrimitiveTopology::kTriangleList ? 4U
+                                                                                           : 5U,
+            static_cast<unsigned long>(command.vertices.size()),
+            static_cast<unsigned long>(
+                device->render_states[D3DRENDERSTATE_CULLMODE]),
+            static_cast<unsigned long>(
+                device->render_states[D3DRENDERSTATE_ALPHABLENDENABLE]),
+            static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_SRCBLEND]),
+            static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_DESTBLEND]),
+            static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_ZENABLE]),
+            static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_ZWRITEENABLE]),
+            static_cast<unsigned long>(device->render_states[D3DRENDERSTATE_ZFUNC]),
+            static_cast<unsigned long>(stage[kD3dTextureStageTexcoordIndex]),
+            static_cast<unsigned long>(stage[kD3dTextureStageTransformFlags]),
+            texture_transform._11,
+            texture_transform._12,
+            texture_transform._13,
+            texture_transform._14,
+            texture_transform._21,
+            texture_transform._22,
+            texture_transform._23,
+            texture_transform._24,
+            texture_transform._31,
+            texture_transform._32,
+            texture_transform._33,
+            texture_transform._34,
+            texture_transform._41,
+            texture_transform._42,
+            texture_transform._43,
+            texture_transform._44,
+            vertices.c_str());
+        ReportCompositionDiagnostic(device->root, detail);
+        return;
+    }
     // Keep the trace bounded while retaining the later menu composition after
     // the high-volume attract/demo draws have filled the general budget.
     constexpr std::uint64_t kTargetFrame = 3000;
@@ -941,10 +1065,10 @@ void ReportLateDrawDiagnostic(
         }
         mutable_surface->content_diagnostic_computed = true;
     }
-    char detail[960] = {};
+    char detail[1536] = {};
     std::snprintf(detail,
                   sizeof(detail),
-                  "LateDraw:frame=%llu:fvf=0x%08lx:texture=%lu:topology=%u:vertices=%lu:bounds=%.3f,%.3f,%.3f,%.3f:z=%.6f,%.6f:rhw=%.6f,%.6f:uv=%.6f,%.6f,%.6f,%.6f:diffuse=0x%08lx:flags=0x%08lx:blend=%lu:srcblend=%lu:dstblend=%lu:zenable=%lu:zwrite=%lu:zfunc=%lu:texsize=%lux%lu:key=%u:colorkey=%lu:alphatest=%lu:keylow=0x%04lx:keyhigh=0x%04lx:nonkey=%llu:nonzero=%llu:nonkeybbox=%lu,%lu,%lu,%lu:nonzerobbox=%lu,%lu,%lu,%lu:effectiveblend=%u:effectivesrcblend=%u:effectivedstblend=%u:effectivedepth=%u:%u:%u:fadecompat=%u",
+                  "LateDraw:frame=%llu:fvf=0x%08lx:texture=%lu:topology=%u:vertices=%lu:bounds=%.3f,%.3f,%.3f,%.3f:z=%.6f,%.6f:rhw=%.6f,%.6f:uv=%.6f,%.6f,%.6f,%.6f:diffuse=0x%08lx:flags=0x%08lx:blend=%lu:srcblend=%lu:dstblend=%lu:zenable=%lu:zwrite=%lu:zfunc=%lu:texsize=%lux%lu:key=%u:colorkey=%lu:alphatest=%lu:alpharef=%lu:alphafunc=%lu:alphaop=%lu:alphaarg1=%lu:alphaarg2=%lu:minfilter=%lu:magfilter=%lu:addressu=%lu:addressv=%lu:lighting=%lu:keylow=0x%04lx:keyhigh=0x%04lx:nonkey=%llu:nonzero=%llu:nonkeybbox=%lu,%lu,%lu,%lu:nonzerobbox=%lu,%lu,%lu,%lu:effectiveblend=%u:effectivesrcblend=%u:effectivedstblend=%u:effectivedepth=%u:%u:%u:fadecompat=%u",
                   static_cast<unsigned long long>(device->root->frame_number),
                   static_cast<unsigned long>(vertex_type),
                   texture_surface == nullptr
@@ -990,6 +1114,19 @@ void ReportLateDrawDiagnostic(
                       device->render_states[D3DRENDERSTATE_COLORKEYENABLE]),
                   static_cast<unsigned long>(
                       device->render_states[D3DRENDERSTATE_ALPHATESTENABLE]),
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_ALPHAREF]),
+                  static_cast<unsigned long>(
+                      device->render_states[D3DRENDERSTATE_ALPHAFUNC]),
+                  static_cast<unsigned long>(stage[D3DTSS_ALPHAOP]),
+                  static_cast<unsigned long>(stage[D3DTSS_ALPHAARG1]),
+                  static_cast<unsigned long>(stage[D3DTSS_ALPHAARG2]),
+                  static_cast<unsigned long>(stage[D3DTSS_MINFILTER]),
+                  static_cast<unsigned long>(stage[D3DTSS_MAGFILTER]),
+                  static_cast<unsigned long>(stage[D3DTSS_ADDRESSU]),
+                  static_cast<unsigned long>(stage[D3DTSS_ADDRESSV]),
+                  static_cast<unsigned long>(
+                      device->render_states[kD3dRenderStateLighting]),
                   texture_surface == nullptr
                       ? 0UL
                       : static_cast<unsigned long>(
@@ -1176,6 +1313,21 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
         *error = "unsupported Direct3D3 texture color operation";
         return false;
     }
+    switch (device.render_states[D3DRENDERSTATE_CULLMODE])
+    {
+    case kD3dCullNone:
+        state->cull_mode = re2dj::graphics::CullMode::kNone;
+        break;
+    case kD3dCullClockwise:
+        state->cull_mode = re2dj::graphics::CullMode::kClockwise;
+        break;
+    case kD3dCullCounterClockwise:
+        state->cull_mode = re2dj::graphics::CullMode::kCounterClockwise;
+        break;
+    default:
+        *error = "unsupported Direct3D3 cull mode";
+        return false;
+    }
     state->color_key_enabled =
         device.render_states[D3DRENDERSTATE_COLORKEYENABLE] != 0;
     state->alpha_test_enabled =
@@ -1234,36 +1386,12 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
         return false;
     }
 
-    const auto convert_blend = [](DWORD value,
-                                  re2dj::graphics::BlendFactor* output) {
-        switch (value)
-        {
-            case D3DBLEND_ZERO:
-                *output = re2dj::graphics::BlendFactor::kZero;
-                return true;
-            case D3DBLEND_ONE:
-                *output = re2dj::graphics::BlendFactor::kOne;
-                return true;
-            case D3DBLEND_SRCCOLOR:
-                *output = re2dj::graphics::BlendFactor::kSourceColor;
-                return true;
-            case D3DBLEND_INVSRCCOLOR:
-                *output = re2dj::graphics::BlendFactor::kInverseSourceColor;
-                return true;
-            case D3DBLEND_SRCALPHA:
-                *output = re2dj::graphics::BlendFactor::kSourceAlpha;
-                return true;
-            case D3DBLEND_INVSRCALPHA:
-                *output = re2dj::graphics::BlendFactor::kInverseSourceAlpha;
-                return true;
-            default:
-                return false;
-        }
-    };
     if (state->alpha_blend_enabled &&
-        (!convert_blend(device.render_states[D3DRENDERSTATE_SRCBLEND],
+        (!re2dj::graphics::DecodeLegacyBlendFactor(
+                        device.render_states[D3DRENDERSTATE_SRCBLEND],
                         &state->source_blend) ||
-         !convert_blend(device.render_states[D3DRENDERSTATE_DESTBLEND],
+         !re2dj::graphics::DecodeLegacyBlendFactor(
+                        device.render_states[D3DRENDERSTATE_DESTBLEND],
                         &state->destination_blend)))
     {
         *error = "unsupported Direct3D3 alpha blend factor";
@@ -1288,6 +1416,29 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
         !convert_filter(stage[D3DTSS_MAGFILTER], &state->magnification_filter))
     {
         *error = "unsupported Direct3D3 texture filter";
+        return false;
+    }
+    const auto convert_address = [](DWORD value,
+                                    re2dj::graphics::TextureAddressMode* output) {
+        switch (value)
+        {
+        case D3DTADDRESS_WRAP:
+            *output = re2dj::graphics::TextureAddressMode::kWrap;
+            return true;
+        case D3DTADDRESS_MIRROR:
+            *output = re2dj::graphics::TextureAddressMode::kMirror;
+            return true;
+        case D3DTADDRESS_CLAMP:
+            *output = re2dj::graphics::TextureAddressMode::kClamp;
+            return true;
+        default:
+            return false;
+        }
+    };
+    if (!convert_address(stage[D3DTSS_ADDRESSU], &state->address_u) ||
+        !convert_address(stage[D3DTSS_ADDRESSV], &state->address_v))
+    {
+        *error = "unsupported Direct3D3 texture address mode";
         return false;
     }
     error->clear();
@@ -2088,6 +2239,7 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
     }
     facade->root = RootFromDirect3d(self);
     facade->render_target = target;
+    facade->render_states[D3DRENDERSTATE_CULLMODE] = kD3dCullCounterClockwise;
     facade->render_states[D3DRENDERSTATE_SRCBLEND] = D3DBLEND_ONE;
     facade->render_states[D3DRENDERSTATE_DESTBLEND] = D3DBLEND_ZERO;
     facade->texture_stage_states[0][D3DTSS_COLOROP] = D3DTOP_MODULATE;
@@ -2095,6 +2247,8 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
     facade->texture_stage_states[0][D3DTSS_COLORARG2] = D3DTA_DIFFUSE;
     facade->texture_stage_states[0][D3DTSS_MINFILTER] = D3DTFN_POINT;
     facade->texture_stage_states[0][D3DTSS_MAGFILTER] = D3DTFG_POINT;
+    facade->texture_stage_states[0][D3DTSS_ADDRESSU] = D3DTADDRESS_WRAP;
+    facade->texture_stage_states[0][D3DTSS_ADDRESSV] = D3DTADDRESS_WRAP;
     facade->transforms[D3DTRANSFORMSTATE_WORLD] = IdentityMatrix();
     facade->transforms[D3DTRANSFORMSTATE_VIEW] = IdentityMatrix();
     facade->transforms[D3DTRANSFORMSTATE_PROJECTION] = IdentityMatrix();
@@ -3284,7 +3438,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
                              vertex_count,
                              flags,
                              DDERR_GENERIC,
-                             error.c_str());
+                             error.c_str(),
+                             &command);
         return DDERR_GENERIC;
     }
     if (!device->draw_success_reported)
@@ -3293,7 +3448,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         device->draw_success_reported = true;
     }
     ReportDrawDiagnostic(
-        device, primitive, vertex_type, vertex_count, flags, DD_OK, "success");
+        device, primitive, vertex_type, vertex_count, flags, DD_OK, "success", &command);
     ReportLateDrawDiagnostic(device, command, fixed_function_state, flags, vertex_type);
     return DD_OK;
 }

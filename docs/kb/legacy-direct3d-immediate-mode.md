@@ -45,6 +45,12 @@ RGB565 source color key는 packed low/high의 inclusive 범위다. linear filter
 
 *An RGB565 source color key is an inclusive packed low/high range. With linear filtering, comparing sampled RGB floats after filtering is too late because boundary texels already contain neighboring colors. Convert keyed packed texels into alpha during upload, then filter the RGBA texture. Preserve texture-stage color operations, alpha test, and source/destination blending as one draw-time fixed-function snapshot. A per-texture cache should reupload only when the CPU backing revision or color-key contract changes.*
 
+## 목적지 색상 블렌드와 마스크 / Destination-Color Blending and Masks
+
+`D3DBLEND_DESTCOLOR(9)`는 목적지 RGB를 source factor로 사용하고 OpenGL `GL_DST_COLOR`에 대응합니다. `INVDESTCOLOR(10)`은 각각 `1 - destination`/`GL_ONE_MINUS_DST_COLOR`입니다. 일반 가산 blend 식에서 DESTCOLOR/INVSRCALPHA의 RGB는 `Cs * Cd + Cd * (1 - As)`입니다. source alpha가 1이면 `Cs * Cd`가 되어 검정에 가까운 mask는 목적지를 지우고 white mask는 보존합니다. 뒤에 ONE/ONE 그림을 더하면 불투명 UI를 두 pass로 합성할 수 있습니다. alpha가 1이 아니면 두 번째 항도 유지해야 합니다. [Microsoft D3DBLEND](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dblend), [Khronos glBlendFunc](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBlendFunc.xhtml).
+
+*DESTCOLOR(9) uses destination color as the source factor and maps to GL_DST_COLOR; INVDESTCOLOR(10) maps to one minus destination / GL_ONE_MINUS_DST_COLOR. DESTCOLOR/INVSRCALPHA computes Cs*Cd + Cd*(1-As). With source alpha one it becomes Cs*Cd, allowing a near-black mask to erase and a white mask to preserve the destination before ONE/ONE artwork addition. Preserve the second term for partial alpha. Sources: [Microsoft D3DBLEND](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dblend) and [Khronos glBlendFunc](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBlendFunc.xhtml).*
+
 ## DirectDraw offscreen surface와 2D blit
 
 `DDSCAPS_OFFSCREENPLAIN`은 화면에 직접 표시되는 primary surface가 아니라 메모리 기반 합성 source/destination이다. 구형 프로그램은 `DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT`만 지정해 이를 만들고, `GetDC`로 얻은 DC에 GDI bitmap을 복사한 뒤 `Blt` 또는 `BltFast`로 primary/back surface에 합성할 수 있다. 따라서 HLE가 texture와 flip chain만 만들면 파일 open이 성공해도 이미지 객체 생성은 실패할 수 있다.

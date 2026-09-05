@@ -61,21 +61,50 @@ using TexSubImage2dFunction = void(APIENTRY*)(GLenum, GLint, GLint, GLint, GLsiz
 using TexImage2dFunction = void(APIENTRY*)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum,
                                            GLenum, const void*);
 using EnableFunction = void(APIENTRY*)(GLenum);
+using CullFaceFunction = void(APIENTRY*)(GLenum);
+using FrontFaceFunction = void(APIENTRY*)(GLenum);
 using BlendFuncFunction = void(APIENTRY*)(GLenum, GLenum);
 using DrawArraysFunction = void(APIENTRY*)(GLenum, GLint, GLsizei);
 using GetErrorFunction = GLenum(APIENTRY*)();
+using GenFramebuffersFunction = void(APIENTRY*)(GLsizei, GLuint*);
+using DeleteFramebuffersFunction = void(APIENTRY*)(GLsizei, const GLuint*);
+using BindFramebufferFunction = void(APIENTRY*)(GLenum, GLuint);
+using CheckFramebufferStatusFunction = GLenum(APIENTRY*)(GLenum);
+using FramebufferTexture2dFunction = void(APIENTRY*)(GLenum, GLenum, GLenum, GLuint, GLint);
+using GenRenderbuffersFunction = void(APIENTRY*)(GLsizei, GLuint*);
+using DeleteRenderbuffersFunction = void(APIENTRY*)(GLsizei, const GLuint*);
+using BindRenderbufferFunction = void(APIENTRY*)(GLenum, GLuint);
+using RenderbufferStorageFunction = void(APIENTRY*)(GLenum, GLenum, GLsizei, GLsizei);
+using FramebufferRenderbufferFunction = void(APIENTRY*)(GLenum, GLenum, GLenum, GLuint);
 
 constexpr GLenum kVertexShader = 0x8b31;
 constexpr GLenum kFragmentShader = 0x8b30;
 constexpr GLenum kCompileStatus = 0x8b81;
 constexpr GLenum kLinkStatus = 0x8b82;
 constexpr GLenum kClampToEdge = 0x812f;
+constexpr GLenum kFramebuffer = 0x8d40;
+constexpr GLenum kRenderbuffer = 0x8d41;
+constexpr GLenum kColorAttachment0 = 0x8ce0;
+constexpr GLenum kDepthAttachment = 0x8d00;
+constexpr GLenum kFramebufferComplete = 0x8cd5;
+constexpr GLenum kDepthComponent16 = 0x81a5;
+constexpr GLenum kRgb565 = 0x8d62;
 
 template <typename Function>
 bool LoadGlFunction(const char* name, Function* function)
 {
     *function = reinterpret_cast<Function>(SDL_GL_GetProcAddress(name));
     return *function != nullptr;
+}
+
+template <typename Function>
+bool LoadGlFunction(const char* name, const char* extension_name, Function* function)
+{
+    if (LoadGlFunction(name, function))
+    {
+        return true;
+    }
+    return LoadGlFunction(extension_name, function);
 }
 
 struct GlVertex
@@ -110,10 +139,13 @@ struct Sdl3OpenGlBackend::Impl
     SDL_GLContext context = nullptr;
     bool owns_video_subsystem = false;
     GLuint program = 0;
+    GLuint render_framebuffer = 0;
+    GLuint render_color_texture = 0;
+    GLuint render_depth_renderbuffer = 0;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
     bool frame_started = false;
-    int viewport_width = 0;
-    int viewport_height = 0;
+    std::uint32_t logical_width = 0;
+    std::uint32_t logical_height = 0;
 
     CreateShaderFunction create_shader = nullptr;
     ShaderSourceFunction shader_source = nullptr;
@@ -150,9 +182,21 @@ struct Sdl3OpenGlBackend::Impl
     TexSubImage2dFunction tex_sub_image_2d = nullptr;
     TexImage2dFunction tex_image_2d = nullptr;
     EnableFunction enable = nullptr;
+    CullFaceFunction cull_face = nullptr;
+    FrontFaceFunction front_face = nullptr;
     BlendFuncFunction blend_func = nullptr;
     DrawArraysFunction draw_arrays = nullptr;
     GetErrorFunction get_error = nullptr;
+    GenFramebuffersFunction gen_framebuffers = nullptr;
+    DeleteFramebuffersFunction delete_framebuffers = nullptr;
+    BindFramebufferFunction bind_framebuffer = nullptr;
+    CheckFramebufferStatusFunction check_framebuffer_status = nullptr;
+    FramebufferTexture2dFunction framebuffer_texture_2d = nullptr;
+    GenRenderbuffersFunction gen_renderbuffers = nullptr;
+    DeleteRenderbuffersFunction delete_renderbuffers = nullptr;
+    BindRenderbufferFunction bind_renderbuffer = nullptr;
+    RenderbufferStorageFunction renderbuffer_storage = nullptr;
+    FramebufferRenderbufferFunction framebuffer_renderbuffer = nullptr;
 
     bool MakeCurrent(std::string* error)
     {
@@ -187,6 +231,79 @@ struct Sdl3OpenGlBackend::Impl
         delete_shader(shader);
         *error = std::string("OpenGL shader compilation failed: ") + message.data();
         return 0;
+    }
+
+    void DestroyRenderTarget()
+    {
+        if (render_depth_renderbuffer != 0 && delete_renderbuffers != nullptr)
+        {
+            delete_renderbuffers(1, &render_depth_renderbuffer);
+        }
+        if (render_color_texture != 0 && delete_textures != nullptr)
+        {
+            delete_textures(1, &render_color_texture);
+        }
+        if (render_framebuffer != 0 && delete_framebuffers != nullptr)
+        {
+            delete_framebuffers(1, &render_framebuffer);
+        }
+        render_depth_renderbuffer = 0;
+        render_color_texture = 0;
+        render_framebuffer = 0;
+    }
+
+    bool CreateRenderTarget(std::uint32_t width, std::uint32_t height, std::string* error)
+    {
+        logical_width = width;
+        logical_height = height;
+        gen_textures(1, &render_color_texture);
+        if (render_color_texture == 0)
+        {
+            *error = "cannot create RGB565 OpenGL render-target texture";
+            return false;
+        }
+        bind_texture(GL_TEXTURE_2D, render_color_texture);
+        tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
+        tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
+        tex_image_2d(GL_TEXTURE_2D,
+                     0,
+                     static_cast<GLint>(kRgb565),
+                     static_cast<GLsizei>(width),
+                     static_cast<GLsizei>(height),
+                     0,
+                     GL_RGB,
+                     GL_UNSIGNED_SHORT_5_6_5,
+                     nullptr);
+
+        gen_framebuffers(1, &render_framebuffer);
+        gen_renderbuffers(1, &render_depth_renderbuffer);
+        if (render_framebuffer == 0 || render_depth_renderbuffer == 0)
+        {
+            DestroyRenderTarget();
+            *error = "cannot create OpenGL render-target framebuffer attachments";
+            return false;
+        }
+        bind_framebuffer(kFramebuffer, render_framebuffer);
+        framebuffer_texture_2d(
+            kFramebuffer, kColorAttachment0, GL_TEXTURE_2D, render_color_texture, 0);
+        bind_renderbuffer(kRenderbuffer, render_depth_renderbuffer);
+        renderbuffer_storage(kRenderbuffer,
+                             kDepthComponent16,
+                             static_cast<GLsizei>(width),
+                             static_cast<GLsizei>(height));
+        framebuffer_renderbuffer(
+            kFramebuffer, kDepthAttachment, kRenderbuffer, render_depth_renderbuffer);
+        const GLenum status = check_framebuffer_status(kFramebuffer);
+        bind_framebuffer(kFramebuffer, 0);
+        if (status != kFramebufferComplete)
+        {
+            DestroyRenderTarget();
+            *error = "OpenGL RGB565 render-target framebuffer is incomplete";
+            return false;
+        }
+        return true;
     }
 
     bool CreateProgram(std::string* error)
@@ -289,6 +406,7 @@ Sdl3OpenGlBackend::~Sdl3OpenGlBackend()
     if (impl_->context != nullptr && impl_->window != nullptr &&
         SDL_GL_MakeCurrent(impl_->window, impl_->context))
     {
+        impl_->DestroyRenderTarget();
         for (const auto& [identity, texture] : impl_->textures)
         {
             (void)identity;
@@ -439,15 +557,43 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
         LoadGlFunction("glTexSubImage2D", &impl->tex_sub_image_2d) &&
         LoadGlFunction("glTexImage2D", &impl->tex_image_2d) &&
         LoadGlFunction("glEnable", &impl->enable) &&
+        LoadGlFunction("glCullFace", &impl->cull_face) &&
+        LoadGlFunction("glFrontFace", &impl->front_face) &&
         LoadGlFunction("glBlendFunc", &impl->blend_func) &&
         LoadGlFunction("glDrawArrays", &impl->draw_arrays) &&
-        LoadGlFunction("glGetError", &impl->get_error);
+        LoadGlFunction("glGetError", &impl->get_error) &&
+        LoadGlFunction("glGenFramebuffers", "glGenFramebuffersEXT", &impl->gen_framebuffers) &&
+        LoadGlFunction("glDeleteFramebuffers",
+                       "glDeleteFramebuffersEXT",
+                       &impl->delete_framebuffers) &&
+        LoadGlFunction("glBindFramebuffer", "glBindFramebufferEXT", &impl->bind_framebuffer) &&
+        LoadGlFunction("glCheckFramebufferStatus",
+                       "glCheckFramebufferStatusEXT",
+                       &impl->check_framebuffer_status) &&
+        LoadGlFunction("glFramebufferTexture2D",
+                       "glFramebufferTexture2DEXT",
+                       &impl->framebuffer_texture_2d) &&
+        LoadGlFunction("glGenRenderbuffers", "glGenRenderbuffersEXT", &impl->gen_renderbuffers) &&
+        LoadGlFunction("glDeleteRenderbuffers",
+                       "glDeleteRenderbuffersEXT",
+                       &impl->delete_renderbuffers) &&
+        LoadGlFunction("glBindRenderbuffer", "glBindRenderbufferEXT", &impl->bind_renderbuffer) &&
+        LoadGlFunction("glRenderbufferStorage",
+                       "glRenderbufferStorageEXT",
+                       &impl->renderbuffer_storage) &&
+        LoadGlFunction("glFramebufferRenderbuffer",
+                       "glFramebufferRenderbufferEXT",
+                       &impl->framebuffer_renderbuffer);
     if (!loaded)
     {
         *error = "required OpenGL shader entry points are unavailable";
         return false;
     }
     if (!impl->CreateProgram(error))
+    {
+        return false;
+    }
+    if (!impl->CreateRenderTarget(config.width, config.height, error))
     {
         return false;
     }
@@ -470,24 +616,19 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
     {
         return false;
     }
-    int pixel_width = 0;
-    int pixel_height = 0;
-    if (!SDL_GetWindowSizeInPixels(impl_->window, &pixel_width, &pixel_height) ||
-        pixel_width <= 0 || pixel_height <= 0)
+    if (logical_width != impl_->logical_width || logical_height != impl_->logical_height ||
+        impl_->render_framebuffer == 0)
     {
-        *error = std::string("cannot query the SDL3 OpenGL window size: ") + SDL_GetError();
+        *error = "logical draw size does not match the OpenGL RGB565 render target";
         return false;
     }
-    const bool viewport_changed = pixel_width != impl_->viewport_width ||
-                                  pixel_height != impl_->viewport_height;
-    if (!impl_->frame_started || viewport_changed)
-    {
-        impl_->viewport(0, 0, pixel_width, pixel_height);
-        impl_->viewport_width = pixel_width;
-        impl_->viewport_height = pixel_height;
-    }
+    impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
     if (!impl_->frame_started)
     {
+        impl_->viewport(0,
+                        0,
+                        static_cast<GLsizei>(impl_->logical_width),
+                        static_cast<GLsizei>(impl_->logical_height));
         impl_->depth_mask(GL_TRUE);
         impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
         impl_->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -530,6 +671,18 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
     }
     const bool color_key_active =
         has_texture && state.color_key_enabled && texture_view->source_color_key.enabled;
+    const auto to_gl_address = [](TextureAddressMode mode) -> GLenum {
+        switch (mode)
+        {
+        case TextureAddressMode::kWrap:
+            return GL_REPEAT;
+        case TextureAddressMode::kMirror:
+            return GL_MIRRORED_REPEAT;
+        case TextureAddressMode::kClamp:
+            return kClampToEdge;
+        }
+        return kClampToEdge;
+    };
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture"), 0);
     impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture_enabled"),
                       has_texture ? 1 : 0);
@@ -562,13 +715,15 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
             impl_->bind_texture(GL_TEXTURE_2D, cached.name);
             impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
-            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         }
         else
         {
             impl_->bind_texture(GL_TEXTURE_2D, cached.name);
         }
+        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, to_gl_address(state.address_u));
+        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, to_gl_address(state.address_v));
         Rgb565ColorKey effective_key = texture_view->source_color_key;
         effective_key.enabled = color_key_active;
         const bool key_changed = cached.color_key.enabled != effective_key.enabled ||
@@ -662,6 +817,21 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
     }
     impl_->depth_mask(state.depth_write_enabled ? GL_TRUE : GL_FALSE);
 
+    if (command.topology == PrimitiveTopology::kLineList ||
+        state.cull_mode == CullMode::kNone)
+    {
+        impl_->disable(GL_CULL_FACE);
+    }
+    else
+    {
+        // The vertex shader converts guest top-left screen Y into OpenGL clip
+        // coordinates, so the preserved winding maps to the opposite API
+        // winding.
+        impl_->enable(GL_CULL_FACE);
+        impl_->cull_face(GL_BACK);
+        impl_->front_face(state.cull_mode == CullMode::kClockwise ? GL_CCW : GL_CW);
+    }
+
     if (state.alpha_blend_enabled)
     {
         const auto to_gl_blend = [](BlendFactor factor) {
@@ -679,6 +849,10 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
                 return GL_SRC_ALPHA;
             case BlendFactor::kInverseSourceAlpha:
                 return GL_ONE_MINUS_SRC_ALPHA;
+            case BlendFactor::kDestinationColor:
+                return GL_DST_COLOR;
+            case BlendFactor::kInverseDestinationColor:
+                return GL_ONE_MINUS_DST_COLOR;
             }
             return GL_ONE;
         };
@@ -747,6 +921,99 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     }
     if (!impl_->MakeCurrent(error))
     {
+        return false;
+    }
+    int pixel_width = 0;
+    int pixel_height = 0;
+    if (!SDL_GetWindowSizeInPixels(impl_->window, &pixel_width, &pixel_height) ||
+        pixel_width <= 0 || pixel_height <= 0)
+    {
+        *error = std::string("cannot query the SDL3 OpenGL window size: ") + SDL_GetError();
+        return false;
+    }
+    if (impl_->render_framebuffer == 0 || impl_->render_color_texture == 0)
+    {
+        *error = "OpenGL RGB565 render target is unavailable";
+        return false;
+    }
+    impl_->bind_framebuffer(kFramebuffer, 0);
+    impl_->viewport(0, 0, pixel_width, pixel_height);
+    impl_->disable(GL_BLEND);
+    impl_->disable(GL_DEPTH_TEST);
+    impl_->disable(GL_CULL_FACE);
+    impl_->depth_mask(GL_FALSE);
+    impl_->use_program(impl_->program);
+    impl_->uniform_2f(impl_->get_uniform_location(impl_->program, "u_viewport"),
+                      static_cast<float>(impl_->logical_width),
+                      static_cast<float>(impl_->logical_height));
+    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture"), 0);
+    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture_enabled"), 1);
+    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_color_key_enabled"), 0);
+    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_alpha_test_enabled"), 0);
+    const GLint alpha_reference = impl_->get_uniform_location(impl_->program, "u_alpha_reference");
+    if (alpha_reference >= 0)
+    {
+        impl_->uniform_1f(alpha_reference, 0.0f);
+    }
+    impl_->bind_texture(GL_TEXTURE_2D, impl_->render_color_texture);
+    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
+    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
+    std::array<GlVertex, 4> vertices = {};
+    const std::array<float, 4> white = {1.0f, 1.0f, 1.0f, 1.0f};
+    const auto set_vertex = [&vertices, &white](std::size_t index,
+                                                float x,
+                                                float y,
+                                                float u,
+                                                float v) {
+        vertices[index].position[0] = x;
+        vertices[index].position[1] = y;
+        vertices[index].position[2] = 0.0f;
+        vertices[index].position[3] = 1.0f;
+        for (std::size_t component = 0; component < white.size(); ++component)
+        {
+            vertices[index].color[component] = white[component];
+        }
+        vertices[index].texture[0] = u;
+        vertices[index].texture[1] = v;
+    };
+    const float logical_width = static_cast<float>(impl_->logical_width);
+    const float logical_height = static_cast<float>(impl_->logical_height);
+    // The FBO texture uses OpenGL's lower-left origin, while the guest's
+    // logical screen coordinates use a top-left origin.
+    set_vertex(0, 0.0f, 0.0f, 0.0f, 1.0f);
+    set_vertex(1, logical_width, 0.0f, 1.0f, 1.0f);
+    set_vertex(2, 0.0f, logical_height, 0.0f, 0.0f);
+    set_vertex(3, logical_width, logical_height, 1.0f, 0.0f);
+    impl_->enable_vertex_attrib_array(0);
+    impl_->enable_vertex_attrib_array(1);
+    impl_->enable_vertex_attrib_array(2);
+    impl_->vertex_attrib_pointer(0,
+                                 4,
+                                 GL_FLOAT,
+                                 GL_FALSE,
+                                 static_cast<GLsizei>(sizeof(GlVertex)),
+                                 vertices.data()->position);
+    impl_->vertex_attrib_pointer(1,
+                                 4,
+                                 GL_FLOAT,
+                                 GL_FALSE,
+                                 static_cast<GLsizei>(sizeof(GlVertex)),
+                                 vertices.data()->color);
+    impl_->vertex_attrib_pointer(2,
+                                 2,
+                                 GL_FLOAT,
+                                 GL_FALSE,
+                                 static_cast<GLsizei>(sizeof(GlVertex)),
+                                 vertices.data()->texture);
+    impl_->draw_arrays(GL_TRIANGLE_STRIP, 0, static_cast<GLsizei>(vertices.size()));
+    impl_->disable_vertex_attrib_array(2);
+    impl_->disable_vertex_attrib_array(1);
+    impl_->disable_vertex_attrib_array(0);
+    if (impl_->get_error() != GL_NO_ERROR)
+    {
+        *error = "OpenGL RGB565 render-target presentation failed";
         return false;
     }
     if (!SDL_GL_SwapWindow(impl_->window))

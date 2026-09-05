@@ -477,4 +477,12 @@ if(RE2DJ_BUILD_TESTS)
     target_include_directories(re2dj_unit_tests PRIVATE tests/unit)
     target_link_libraries(re2dj_unit_tests PRIVATE re2dj_core re2dj_warnings)
     add_test(NAME re2dj_unit_tests COMMAND re2dj_unit_tests)
+
+    # Run explicitly on a desktop with an OpenGL driver, not in headless CTest.
+    if(TARGET re2dj_sdl3_opengl_backend AND NOT EMSCRIPTEN)
+        add_executable(re2dj_opengl_blend_probe tests/graphics/opengl_blend_probe.cpp)
+        target_link_libraries(re2dj_opengl_blend_probe
+            PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_warnings
+        )
+    endif()
 endif()

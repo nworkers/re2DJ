@@ -138,6 +138,88 @@ Task 187에서 전역 인스턴스 `0x00aca5b0`과 vtable 계통, 그리고 초�
 
 ---
 
+### 5.5 Music Select 후보 draw의 텍스처 알파·블렌드 상태 (Task 191에서 부분 확인)
+
+**확인됨 — `ez2dj4th` 실행에서 Music Select와 일치하는 draw 패턴의 alpha stage는 `MODULATE(TEXTURE, DIFFUSE)`였다.** bounded trace는 중앙 artwork 후보 draw(`texture=63`)와 양쪽 원판 후보 draw(`texture=62`) 모두에서 `alphaop=4`, `alphaarg1=2`, `alphaarg2=0`을 기록했다. 이는 각각 `D3DTOP_MODULATE`, `D3DTA_TEXTURE`, `D3DTA_DIFFUSE`에 해당한다. 다만 이 실행에는 `--io-config`가 없었으므로 F3 코인과 Enter 입력을 전달하지 못했고, 사용자가 코인을 넣어 진입한 Music Select 상태라는 점은 확인하지 못했다.
+
+**확인됨 — 중앙 artwork는 additive blend를 요청했다.** `texture=63`은 알파 테스트가 꺼져 있고 컬러키가 켜진 상태에서 `srcblend=2`, `dstblend=2`(`ONE`, `ONE`)을 사용했다. 양쪽 원판 `texture=62`는 같은 alpha stage를 사용하면서 `srcblend=1`, `dstblend=3`(`ZERO`, `SRCCOLOR`)을 사용했다. 관측된 값은 현재 OpenGL backend의 지원 변환 범위 안이다.
+
+**확인됨 — 현재 셰이더의 알파 계산은 관측된 draw 상태와 일치한다.** backend는 `texel * v_color`를 계산하고 있으며, 위 alpha stage의 의미도 텍스처 알파와 diffuse 알파의 곱이다. 알파 테스트는 관측된 후보 draw에서 꺼져 있었다. 초기 몇 프레임의 배경 draw에는 아직 stage 기본값 `0`이 남았지만, 이후 관측된 draw에는 위 `MODULATE` 상태가 설정되어 있었다.
+
+**판단 — 관측된 draw에 한해서는 “alpha stage를 적용하지 않아 중앙 artwork가 밝아졌다”는 가설이 지지되지 않는다.** 다만 코인 투입 후 동일한 화면에 진입했다는 전제는 별도 입력 로그로 확인해야 한다. 색상 키 텍스처를 선형 필터링한 뒤 discard하는 현재 방식과, 중앙 artwork가 요청한 additive blend의 시각적 영향도 별도 검증 대상으로 남긴다. 이 기록은 동일한 4th Trax 실행 경로에 대한 것이며, 다른 게임 버전이나 다른 draw 상태까지 일반화하지 않는다.
+
+*Confirmed in part by Task 191: A draw pattern consistent with `ez2dj4th` Music Select recorded the alpha stage as `MODULATE(TEXTURE, DIFFUSE)`. The center-artwork candidate (`texture=63`) and side-disc candidate (`texture=62`) both recorded `alphaop=4`, `alphaarg1=2`, and `alphaarg2=0`, corresponding to `D3DTOP_MODULATE`, `D3DTA_TEXTURE`, and `D3DTA_DIFFUSE`. The run did not provide an I/O configuration, so coin-driven entry into Music Select was not confirmed.*
+
+*Confirmed: The center artwork requested additive blending with `srcblend=2` and `dstblend=2` (`ONE`, `ONE`), while the side discs used `srcblend=1` and `dstblend=3` (`ZERO`, `SRCCOLOR`). These observed factors are within the current OpenGL backend's supported conversion range.*
+
+*Confirmed: The current shader's `texel * v_color` alpha calculation matches the observed draw state. The alpha-test state was disabled on the candidate draws. The initial background draws retained the stage default `0` for a few frames, but later draws used the observed `MODULATE` state.*
+
+*Assessment: The hypothesis that an unapplied alpha stage makes the center artwork brighter is not supported by the observed candidate draw records. Player-driven entry into this screen remains unconfirmed until a run with the I/O configuration and an explicit coin/start sequence is captured. The visual effect of linear filtering followed by color-key discard, and of the center artwork's additive blend request, remain separate follow-up checks. This observation is not generalized to other game versions or draw states.*
+
+### 5.6 사용자 확인 실행의 중앙 artwork draw (Follow-up Run Confirmed by User)
+
+**확인됨 — 사용자가 `20260905-104129-239` 실행에서 직접 Music Select까지 진입했다고 확인했다.** 해당 실행의 JSONL에는 `io_port_runtime` 준비 이벤트가 있고, DDraw 로그에는 실제 화면의 마지막 관측 frame `1005`와 중앙 artwork로 판단되는 `texture=387` draw가 있다. 따라서 이 실행은 Music Select의 alpha/blend 상태를 분석하는 유효한 로그로 취급한다. 입력 키를 누른 순간 자체는 별도 이벤트로 기록되지 않지만, 이는 화면 진입 사실을 부정하는 근거가 아니다.
+
+- 중앙 artwork 후보: `texture=387`, bounds `127,96`–`383,352`, `texsize=256x256`.
+- Alpha stage: `alphaop=4`, `alphaarg1=2`, `alphaarg2=0` (`MODULATE(TEXTURE, DIFFUSE)`).
+- Blend: `srcblend=2`, `dstblend=2` (`ONE`, `ONE`).
+- Color key / alpha test: `key=1`, `colorkey=1`, `alphatest=0`.
+
+**판단 — 이번 사용자 확인 실행에서도 alpha stage 자체는 현재 셰이더의 `texel * v_color`와 일치한다.** 따라서 다음 분석은 alpha stage 누락보다 컬러키 텍스처의 선형 필터 경계와 additive blend 결과를 우선 대상으로 한다.
+
+*Confirmed: The user stated that the `20260905-104129-239` run was manually driven into Music Select. Its JSONL contains the prepared `io_port_runtime` event, and its DDraw log contains the last observed frame `1005` with center-artwork candidate `texture=387`. This run is therefore valid evidence for Music Select alpha/blend analysis. The individual keypress moments are not emitted as separate events, but that absence does not invalidate the user's confirmed screen state.*
+
+- Center-artwork candidate: `texture=387`, bounds `127,96`–`383,352`, `texsize=256x256`.
+- Alpha stage: `alphaop=4`, `alphaarg1=2`, `alphaarg2=0` (`MODULATE(TEXTURE, DIFFUSE)`).
+- Blend: `srcblend=2`, `dstblend=2` (`ONE`, `ONE`).
+- Color key / alpha test: `key=1`, `colorkey=1`, `alphatest=0`.
+
+*Assessment: In this user-confirmed run, the alpha stage still matches the current shader's `texel * v_color`. The next analysis should prioritize the color-key texture's linear-filter boundary and the result of additive blending rather than a missing alpha-stage operation.*
+
+### 5.7 필터·주소 모드 구현 차이 후보 (Filter and Address-Mode Candidate)
+
+**확인됨 — 사용자 실행의 중앙 artwork와 선택 링은 선형 필터를 사용했다.** `20260905-104129-239.ddraw.log`의 `DrawPrimitive` 기록에서 `texture=387`과 `texture=279` 모두 `minfilter=2`, `magfilter=2`였다. 중앙 artwork `texture=387`은 `colorkey=1`, `srcblend=2`, `dstblend=2`였다.
+
+**확인됨 — 현재 backend는 texture 생성 시 주소 모드를 `GL_CLAMP_TO_EDGE`로 고정하며, 진단 전 공용 draw state에는 Direct3D `ADDRESSU/V`가 없었다.** 후속 실행 `20260905-111600-576`의 frame `1040`에서 중앙 artwork `texture=387`과 선택 링 `texture=279` 모두 `minfilter=2`, `magfilter=2`, `addressu=1`, `addressv=1`을 기록했다. 따라서 게스트의 `D3DTADDRESS_WRAP` 요청과 backend sampler의 clamp가 실제로 다르다. 이번 단계에서 `LateDraw` 기록과 facade 기본값을 보정했지만, 실제 sampler 의미는 아직 변경하지 않았다.
+
+**판단 — 주소 모드 누락은 실제 구현 차이로 확인되었고 후속 수정 대상으로 승격한다.** 다만 현재 관측된 UV가 0–1 범위이므로 이 차이가 화면 전체 밝기 차이의 원인이라고 아직 확정하지 않는다. 컬러키의 선형 필터 경계 동작은 주소 모드와 별도 후보로 유지한다.
+
+*Confirmed: The user's center artwork and selection ring used linear filtering. In `DrawPrimitive` records from `20260905-104129-239.ddraw.log`, both `texture=387` and `texture=279` used `minfilter=2` and `magfilter=2`. Center artwork `texture=387` used `colorkey=1`, `srcblend=2`, and `dstblend=2`.*
+
+*Confirmed: The current backend fixes texture addressing to `GL_CLAMP_TO_EDGE` when creating textures, while the common draw state previously had no Direct3D `ADDRESSU/V` fields. In follow-up run `20260905-111600-576`, frame `1040` recorded `minfilter=2`, `magfilter=2`, `addressu=1`, and `addressv=1` for both center artwork `texture=387` and selection ring `texture=279`. The guest's `D3DTADDRESS_WRAP` request therefore differs from the backend sampler. This phase adds the original stage values to `LateDraw` and initializes the facade's stage-0 default U/V values to `D3DTADDRESS_WRAP`; sampler semantics are not changed yet.*
+
+*Assessment: Missing address-mode forwarding is a confirmed implementation difference and is promoted to a follow-up fix. It cannot yet be classified as the cause of the overall brightness mismatch merely because the observed UV range is 0–1. Linear filtering at color-key boundaries remains a separate candidate.*
+
+### 5.8 주소 모드 전달 구현 (Texture Address Forwarding Implementation)
+
+**구현됨 — 게스트 주소 모드를 backend sampler에 전달한다.** `LegacyFixedFunctionState`에 `WRAP`, `MIRROR`, `CLAMP`를 표현하는 enum과 U/V 필드를 추가했고, Direct3D facade의 stage-0 값을 변환한 뒤 OpenGL draw마다 `GL_TEXTURE_WRAP_S/T`에 적용한다. `BORDER`와 `MIRRORONCE`는 정확한 공용 변환이 없어 unsupported로 남겼다. alpha stage, 컬러키 discard, 필터, blend 계산은 변경하지 않았다.
+
+**미확정 — 주소 모드 전달이 사용자 화면의 밝기 차이를 해소하는지 여부.** 변경 후 동일 Music Select 화면의 사용자 비교가 필요하다.
+
+*Implemented: Guest address modes are now forwarded to the backend sampler. `LegacyFixedFunctionState` has U/V fields for `WRAP`, `MIRROR`, and `CLAMP`; the Direct3D facade converts stage-0 values and the OpenGL backend applies them to `GL_TEXTURE_WRAP_S/T` on each draw. `BORDER` and `MIRRORONCE` remain unsupported because no exact common conversion is available. Alpha-stage, color-key discard, filtering, and blend calculations were not changed.*
+
+*Unresolved: Whether forwarding address modes removes the brightness difference in the user's screen. The same Music Select screen must be compared after this change.*
+
+### 5.9 RGB565 논리 렌더 대상과 host 해상도 분리 (Task 195)
+
+**확인됨:** 사용자가 주소 모드 전달본을 비교한 뒤에도 Music Select의 출력 차이가 남는다고 확인했다. `20260905-112440-703.ddraw.log`의 중앙 artwork(`texture=387`)와 selection ring(`texture=279`)은 640×480 논리 좌표, RGB565 texture, linear filter, source color key, additive blend를 사용한다. 초기 render state 기록에는 `D3DRENDERSTATE_DITHERENABLE=1`도 있다.
+
+**확인됨:** 기존 OpenGL backend는 guest의 논리 좌표를 사용하면서도 native window의 실제 pixel viewport에 직접 rasterize했다. 따라서 1280×960 host client에서는 guest texture filtering과 blend accumulation도 1280×960 default framebuffer에서 발생했다. 이 경로는 원본이 요청한 640×480 RGB565 primary/back target과 다르다.
+
+**구현됨, 방향 보정 후 사용자 화면 검증 대기:** backend는 logical-size RGB565 framebuffer와 depth16 attachment에 guest draw/clear를 수행하고, `Present`에서만 nearest copy로 host window에 확대한다. 첫 사용자 실행에서 presentation V 원점 차이로 화면 전체가 상하 반전된 것이 확인되어, copy quad의 V를 반전해 보정했다. 이 변경은 host-resolution rasterization과 target write precision의 차이를 제거하지만, 원본 화면과의 최종 일치는 사용자의 재실행 비교 전까지 미확정이다.
+
+*Confirmed: The user reported that the Music Select difference remained after address-mode forwarding. The `20260905-112440-703.ddraw.log` center artwork (`texture=387`) and selection ring (`texture=279`) use 640×480 logical coordinates, RGB565 textures, linear filtering, a source color key, and additive blending. The initial render-state trace also contains `D3DRENDERSTATE_DITHERENABLE=1`.*
+
+*Confirmed: The previous OpenGL backend used guest logical coordinates but rasterized directly into the native window's pixel viewport. A 1280×960 host client therefore performed guest texture filtering and blend accumulation in its 1280×960 default framebuffer, unlike the requested 640×480 RGB565 primary/back target.*
+
+*Implemented; orientation-corrected user-visible verification pending: The backend now draws and clears to a logical-size RGB565 framebuffer with a depth16 attachment, then enlarges only at `Present` using a nearest copy. The first user run confirmed a vertically flipped presentation due to the different V origins, so the copy quad now reverses V. This eliminates host-resolution rasterization and target-write precision as differences, but final agreement with the original screen remains unresolved until the user reruns the comparison.*
+
+### 5.10 Music Select 헤더 가림 후속 분석 / Music Select Header Occlusion Follow-up
+
+**확정됨:** 사용자는 culling 적용 후에도 상단 헤더 뒤 디스크가 보였지만, Task 198의 DESTCOLOR/INVSRCALPHA 지원 후 실행 `20260905-185621-933`에서는 정상으로 돌아왔다고 확인했습니다. 해당 로그는 중앙 mask `texture=250`과 상단 header mask `texture=280`을 `srcblend=9`, `dstblend=6`, `reason=success`로 기록하고, header artwork `texture=281`을 이어서 성공 처리합니다. 오류와 unsupported blend 기록은 0건입니다. 따라서 누락된 목적지 색상 mask draw가 디스크와 광선을 가리지 못하게 한 직접 원인으로 확정합니다. 상세 근거는 [원판 상태 분석](ez2dj4th-music-select-disc-state.md)에 둡니다.
+
+*Confirmed: The user reported a disc behind the header after culling, then confirmed that the screen returned to normal after Task 198 added DESTCOLOR/INVSRCALPHA support. Run `20260905-185621-933` records center mask texture 250 and header mask texture 280 with `srcblend=9`, `dstblend=6`, and `reason=success`, followed by successful additive header artwork texture 281. It has zero unsupported-blend and draw-failure records. The missing destination-color mask draw is therefore confirmed as the direct cause; see [disc-state analysis](ez2dj4th-music-select-disc-state.md).*
+
 ## 6. 아직 확인하지 못한 것 (미확정) (Unresolved)
 
 - **미확정 — 오디오 시스템과의 상호작용.** DirectSound 등 사운드 초기화 및 배경음/효과음 재생 연동 상태.
@@ -152,6 +234,6 @@ Task 187에서 전역 인스턴스 `0x00aca5b0`과 vtable 계통, 그리고 초�
 - [Task 186 작업 로그](../work-logs/20260905-186-guest-code-window.md)
 - [Task 187 작업 로그](../work-logs/20260905-187-derived-input-vtable-analysis.md)
 - [Task 188 작업 로그](../work-logs/20260905-188-directinput7-hle-facade.md)
+- [Task 191 alpha stage 진단 작업 로그](../work-logs/20260905-191-alpha-stage-state-diagnostics.md)
 - [4th Hardlock 런타임 분석](ez2dj4th-hardlock-runtime.md)
 - [4th CHD 파일 시스템 분석](ez2dj4th-chd-filesystem.md)
-

@@ -28,4 +28,6 @@
 
 새 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 
+| [direct3d-cull-winding.md](direct3d-cull-winding.md) | Direct3D/OpenGL cull mode와 winding 변환 | Microsoft Direct3D 문서 기반 |
+
 *Update this table in the same task whenever a document is added or renamed.*

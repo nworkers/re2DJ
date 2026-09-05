@@ -37,6 +37,44 @@ bool AreLegacyDrawFlagsSupported(std::uint32_t flags)
     return (flags & ~kLegacyDrawWaitFlag) == 0;
 }
 
+bool DecodeLegacyBlendFactor(std::uint32_t value, BlendFactor* factor)
+{
+    if (factor == nullptr)
+    {
+        return false;
+    }
+    // D3DBLEND ABI values; keep host DirectX headers out of the shared core.
+    switch (value)
+    {
+    case 1:
+        *factor = BlendFactor::kZero;
+        return true;
+    case 2:
+        *factor = BlendFactor::kOne;
+        return true;
+    case 3:
+        *factor = BlendFactor::kSourceColor;
+        return true;
+    case 4:
+        *factor = BlendFactor::kInverseSourceColor;
+        return true;
+    case 5:
+        *factor = BlendFactor::kSourceAlpha;
+        return true;
+    case 6:
+        *factor = BlendFactor::kInverseSourceAlpha;
+        return true;
+    case 9:
+        *factor = BlendFactor::kDestinationColor;
+        return true;
+    case 10:
+        *factor = BlendFactor::kInverseDestinationColor;
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool DecodeTransformedLitVertices(std::span<const std::byte> source,
                                   std::size_t vertex_count,
                                   PrimitiveTopology topology,

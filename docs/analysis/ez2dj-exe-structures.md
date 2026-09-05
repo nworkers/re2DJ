@@ -682,3 +682,25 @@ The earlier zero-slot fault is therefore confirmed as an **observation
 perturbation condition** from broad API-breakpoint tracing rather than the
 normal result of the current HLE path. Which individual watch or breakpoint
 handling detail changes the branch remains **unresolved**.*
+
+### 1st SE 코인 입력 직후 종료와 directory-backed `FindFirstFileA` 회귀 / 1st SE exit after coin insertion and directory-backed `FindFirstFileA` regression
+
+#### 확인됨 (Confirmed)
+
+사용자 실행 `logs/windows_x86_launcher_probe/ez2dj1stse/20260906-000419-856.jsonl`의 VFS trace는 `SetCurrentDirectoryA("System\\Title")` 성공 직후 `find-first-fallback:name=*.*:success=1`을 기록하고, 이어서 `SetCurrentDirectoryA("logs")`를 `System/Title/logs`로 해석해 실패한다. `System\\Title`에는 실제 제목 화면 자산이 있고 root에는 별도의 `logs` 디렉터리가 있으므로, directory-backed VFS가 상대 검색 패턴을 호스트 작업 디렉터리 `ez2dj`에 그대로 넘긴 현재 동작은 잘못된 root 항목을 반환할 수 있다. 같은 실행의 DDraw trace에는 종료 직전 `DrawPrimitive` 실패나 unsupported blend 기록이 없다.
+
+*Confirmed: The user run `logs/windows_x86_launcher_probe/ez2dj1stse/20260906-000419-856.jsonl` records `SetCurrentDirectoryA("System\\Title")` success, then `find-first-fallback:name=*.*:success=1`, followed by a `SetCurrentDirectoryA("logs")` request resolved as `System/Title/logs` and rejected. The actual `System\\Title` directory contains title-screen assets while the root contains a separate `logs` directory, so passing the relative search pattern unchanged to the host working directory `ez2dj` can return the wrong root entries. The same run has no DDraw `DrawPrimitive` failure or unsupported-blend record before it stops.*
+
+#### 수정 및 판단 (Fix and assessment)
+
+`FindFirstFileA`의 directory-backed 경로는 검색 패턴의 마지막 구성요소를 wildcard로 보존하고, 디렉터리 부분만 기존 게스트 경로 해석기와 HDD root에 통과시킨 뒤 native `FindFirstFileA`에 전달하도록 수정했다. `FindNextFileA`와 `FindClose`의 native handle 전달 및 CHD 합성 열거는 유지했다. 이 수정은 관측된 잘못된 root 열거를 **확인된 코드 결함**으로 확정하지만, 코인 입력 이후 게임이 계속 진행하는지 여부는 사용자 재실행 전까지 **미확정**이다.
+
+*The directory-backed `FindFirstFileA` path now preserves the final wildcard component, resolves only the directory portion through the existing guest path resolver and HDD root, and passes the resulting native pattern to Win32 `FindFirstFileA`. Native `FindNextFileA`/`FindClose` forwarding and CHD synthetic enumeration remain unchanged. This confirms the wrong-root enumeration as a **code defect**, while whether it is the only condition needed for the game to continue after coin insertion remains **unresolved** until the user reruns the product.*
+
+#### 미확정 (Unresolved)
+
+- 새 빌드에서 `ez2dj1stse`가 코인 입력 후 Music Select까지 계속 진행하는지.
+- overlay와 HDD 디렉터리 항목을 함께 열거해야 하는지.
+- directory enumeration 회귀를 제거한 뒤에도 남는 보호 장치 또는 종료 경계가 있는지.
+
+*Whether the new build reaches Music Select after coin insertion, whether overlay and HDD directory entries must be merged, and whether another protection or termination boundary remains after removing this enumeration regression are unresolved.*

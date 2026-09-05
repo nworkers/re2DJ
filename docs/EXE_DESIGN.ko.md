@@ -82,6 +82,12 @@ EZ2DJ The 1st Tracks Special Edition과 3rd Trax 덤프 두 개를 확인했다.
 
 ---
 
+## 4th Music Select 합성 관측 (2026-09-05)
+
+**확인됨:** 사용자 실행 `20260905-174233-086` frame 1000은 배경, 디스크, ONE/ONE 헤더 그림 순으로 그립니다. 하단·우측 UI는 목적지 곱셈 mask와 가산 그림의 두 pass를 사용합니다. 같은 실행에서 원본이 SRCBLEND=9 / DESTBLEND=6을 요청하지만 기존 HLE가 draw를 거절합니다. **미확정:** 이 거절이 상단 헤더의 빠진 mask에 해당하는지는 실패 로그 상한 때문에 다음 실행으로 확인해야 합니다. [세부 분석](analysis/ez2dj4th-music-select-disc-state.md).
+
+**확정됨:** 후속 실행 `20260905-185621-933`에서는 중앙 mask `texture=250`과 상단 mask `texture=280`의 SRCBLEND=9 / DESTBLEND=6 draw가 성공했고, 사용자 화면에서도 원본과 같은 헤더 가림이 확인되었습니다. 기존 목적지 색상 blend 미지원이 mask draw 전체를 생략한 것이 화면 차이의 원인입니다.
+
 ## 3. 갱신 규칙
 
 * 새 사실을 확인하면 같은 작업에서 이 문서와 [EXE_DESIGN.en.md](EXE_DESIGN.en.md)를 함께 갱신한다.

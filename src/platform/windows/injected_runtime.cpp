@@ -1324,6 +1324,33 @@ bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[M
     return true;
 }
 
+bool MapVfsSearchPath(const char* name, char path[MAX_PATH])
+{
+    if (name == nullptr || path == nullptr)
+    {
+        return false;
+    }
+
+    const std::string name_string(name);
+    const std::size_t last_slash = name_string.find_last_of("\\/");
+    const std::string directory = last_slash == std::string::npos
+                                      ? "."
+                                      : name_string.substr(0, last_slash);
+    const std::string pattern = name_string.substr(
+        last_slash == std::string::npos ? 0 : last_slash + 1);
+    if (pattern.empty())
+    {
+        return false;
+    }
+
+    char mapped_directory[MAX_PATH] = {};
+    if (!MapVfsPath(directory.c_str(), false, mapped_directory, nullptr))
+    {
+        return false;
+    }
+    return JoinRoot(mapped_directory, pattern.c_str(), path);
+}
+
 HANDLE OpenChdReadFile(const char* name, DWORD disposition)
 {
     if (!IsChdConfigured() || disposition == CREATE_NEW || disposition == CREATE_ALWAYS ||
@@ -2102,6 +2129,37 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsFindFirstFileA(
             SetLastError(ERROR_SUCCESS);
             return handle;
         }
+    }
+
+    if (!IsChdConfigured())
+    {
+        char mapped_path[MAX_PATH] = {};
+        if (!MapVfsSearchPath(name, mapped_path))
+        {
+            char message[768] = {};
+            std::snprintf(message,
+                          sizeof(message),
+                          "re2dj:vfs:find-first:native:name=%.255s:mapped=:success=0:error=%lu\r\n",
+                          name,
+                          static_cast<unsigned long>(ERROR_INVALID_NAME));
+            AppendVfsTraceMessage(message);
+            SetLastError(ERROR_INVALID_NAME);
+            return INVALID_HANDLE_VALUE;
+        }
+
+        const HANDLE host_handle = FindFirstFileA(mapped_path, data);
+        const DWORD host_error = host_handle == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+        char message[768] = {};
+        std::snprintf(message,
+                      sizeof(message),
+                      "re2dj:vfs:find-first:native:name=%.255s:mapped=%.383s:success=%u:error=%lu\r\n",
+                      name,
+                      mapped_path,
+                      host_handle != INVALID_HANDLE_VALUE ? 1U : 0U,
+                      static_cast<unsigned long>(host_error));
+        AppendVfsTraceMessage(message);
+        SetLastError(host_error);
+        return host_handle;
     }
 
     const HANDLE host_handle = FindFirstFileA(name, data);

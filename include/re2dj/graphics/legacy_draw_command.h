@@ -25,6 +25,15 @@ enum class BlendFactor
     kInverseSourceColor,
     kSourceAlpha,
     kInverseSourceAlpha,
+    kDestinationColor,
+    kInverseDestinationColor,
+};
+
+enum class CullMode
+{
+    kNone,
+    kClockwise,
+    kCounterClockwise,
 };
 
 enum class CompareFunction
@@ -45,6 +54,13 @@ enum class TextureFilter
     kLinear,
 };
 
+enum class TextureAddressMode
+{
+    kWrap,
+    kMirror,
+    kClamp,
+};
+
 struct LegacyFixedFunctionState
 {
     bool color_key_enabled = false;
@@ -54,12 +70,15 @@ struct LegacyFixedFunctionState
     bool alpha_blend_enabled = false;
     BlendFactor source_blend = BlendFactor::kOne;
     BlendFactor destination_blend = BlendFactor::kZero;
+    CullMode cull_mode = CullMode::kNone;
     bool depth_test_enabled = false;
     bool depth_write_enabled = false;
     CompareFunction depth_function = CompareFunction::kLessEqual;
     bool fade_compatibility_applied = false;
     TextureFilter minification_filter = TextureFilter::kNearest;
     TextureFilter magnification_filter = TextureFilter::kNearest;
+    TextureAddressMode address_u = TextureAddressMode::kWrap;
+    TextureAddressMode address_v = TextureAddressMode::kWrap;
 };
 
 struct TransformedLitVertex
@@ -84,6 +103,8 @@ inline constexpr std::size_t kTransformedLitVertexStride = 32;
 inline constexpr std::uint32_t kLegacyDrawWaitFlag = 0x00000001;
 
 bool AreLegacyDrawFlagsSupported(std::uint32_t flags);
+
+bool DecodeLegacyBlendFactor(std::uint32_t value, BlendFactor* factor);
 
 bool DecodeTransformedLitVertices(std::span<const std::byte> source,
                                   std::size_t vertex_count,

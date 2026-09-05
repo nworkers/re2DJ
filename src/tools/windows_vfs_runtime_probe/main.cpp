@@ -19,6 +19,8 @@
 
 extern "C" __declspec(dllimport) char g_re2dj_vfs_hdd_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_overlay_root[MAX_PATH];
+extern "C" __declspec(dllimport) char g_re2dj_vfs_chd_path[MAX_PATH];
+extern "C" __declspec(dllimport) volatile DWORD g_re2dj_vfs_dynamic_resolver;
 extern "C" __declspec(dllimport) char g_re2dj_hle_windows_directory[MAX_PATH];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_device_mock;
 extern "C" __declspec(dllimport) char g_re2dj_device_mock_path_prefix[MAX_PATH];
@@ -43,6 +45,12 @@ extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsReadFile(
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsWriteFile(
     HANDLE handle, LPCVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped);
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle);
+extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsSetCurrentDirectoryA(LPCSTR name);
+extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsFindFirstFileA(
+    LPCSTR name, LPWIN32_FIND_DATAA data);
+extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsFindNextFileA(
+    HANDLE handle, LPWIN32_FIND_DATAA data);
+extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsFindClose(HANDLE handle);
 extern "C" __declspec(dllimport) DWORD WINAPI Re2djVfsSetFilePointer(
     HANDLE handle, LONG distance, PLONG distance_high, DWORD method);
 extern "C" __declspec(dllimport) DWORD WINAPI Re2djVfsGetFileSize(HANDLE handle, LPDWORD high);
@@ -334,6 +342,8 @@ int main()
     {
         return RunAudioExitChild();
     }
+    const bool enumeration_only =
+        std::strstr(GetCommandLineA(), "--vfs-enumeration-only") != nullptr;
     if (!Check(RunWindowCloseExitProbe(), "window close did not exit the child process"))
     {
         return 1;
@@ -354,9 +364,15 @@ int main()
     const std::filesystem::path hdd = root / "hdd";
     const std::filesystem::path overlay = root / "overlay";
     std::filesystem::create_directories(hdd / "DATA");
+    std::filesystem::create_directories(hdd / "System" / "Title");
+    std::filesystem::create_directories(hdd / "logs");
     {
         std::ofstream original(hdd / "DATA" / "ORIGINAL.TXT", std::ios::binary);
         original << "original";
+    }
+    {
+        std::ofstream title_entry(hdd / "System" / "Title" / "TITLE.BMP", std::ios::binary);
+        title_entry << "title";
     }
     {
         std::ofstream absolute(hdd / "DATA" / "ABSOLUTE.TXT", std::ios::binary);
@@ -403,6 +419,10 @@ int main()
     if (!Check(strcpy_s(g_re2dj_vfs_hdd_root, hdd.string().c_str()) == 0, "cannot configure HDD root") ||
         !Check(strcpy_s(g_re2dj_vfs_overlay_root, overlay.string().c_str()) == 0,
                "cannot configure overlay root") ||
+        !Check(strcpy_s(g_re2dj_vfs_chd_path, "") == 0,
+               "cannot clear CHD path") ||
+        !Check((g_re2dj_vfs_dynamic_resolver = 1) != 0,
+               "cannot enable dynamic VFS resolver") ||
         !Check(strcpy_s(g_re2dj_hle_windows_directory, windows.string().c_str()) == 0,
                "cannot configure HLE Windows root") ||
         !Check(strcpy_s(g_re2dj_vfs_trace_path, trace.string().c_str()) == 0,
@@ -443,6 +463,52 @@ int main()
               "cannot read original through VFS") &&
         Check(std::string(contents, read) == "original", "VFS read returned wrong original data") &&
         Check(Re2djVfsCloseHandle(handle) != FALSE, "cannot close original VFS handle");
+
+    WIN32_FIND_DATAA find_data = {};
+    HANDLE file_search = INVALID_HANDLE_VALUE;
+    passed = Check(Re2djVfsSetCurrentDirectoryA("System\\Title") != FALSE,
+                   "cannot set guest current directory for enumeration") &&
+             passed;
+    if (passed)
+    {
+        file_search = Re2djVfsFindFirstFileA("*.*", &find_data);
+        bool title_entry_found = file_search != INVALID_HANDLE_VALUE &&
+                                 std::strcmp(find_data.cFileName, "TITLE.BMP") == 0;
+        bool root_entry_found = file_search != INVALID_HANDLE_VALUE &&
+                                std::strcmp(find_data.cFileName, "logs") == 0;
+        passed = Check(file_search != INVALID_HANDLE_VALUE,
+                       "guest-relative directory enumeration failed") &&
+                 passed;
+        if (file_search != INVALID_HANDLE_VALUE)
+        {
+            WIN32_FIND_DATAA next_data = {};
+            while (Re2djVfsFindNextFileA(file_search, &next_data) != FALSE)
+            {
+                title_entry_found = title_entry_found ||
+                                     std::strcmp(next_data.cFileName, "TITLE.BMP") == 0;
+                root_entry_found = root_entry_found ||
+                                   std::strcmp(next_data.cFileName, "logs") == 0;
+            }
+            passed = Check(GetLastError() == ERROR_NO_MORE_FILES,
+                           "directory enumeration returned the wrong end error") &&
+                     Check(title_entry_found,
+                           "directory enumeration did not return the guest directory entry") &&
+                     Check(!root_entry_found,
+                           "directory enumeration used the host working directory") &&
+                     passed;
+            passed = Check(Re2djVfsFindClose(file_search) != FALSE,
+                           "cannot close guest-relative directory enumeration") &&
+                     passed;
+        }
+    }
+    passed = Check(Re2djVfsSetCurrentDirectoryA("D:\\ez2dj") != FALSE,
+                   "cannot restore guest root after enumeration") &&
+             passed;
+    if (enumeration_only)
+    {
+        std::filesystem::remove_all(root);
+        return passed ? 0 : 1;
+    }
 
     const std::string absolute_path = (hdd / "DATA" / "ABSOLUTE.TXT").generic_string();
     handle = Re2djVfsCreateFileA(absolute_path.c_str(),
@@ -545,21 +611,24 @@ int main()
              Check(Re2djVfsCloseHandle(unbuffered) != FALSE,
                    "cannot close unbuffered script VFS handle");
 
-    // A rooted guest path has no mapping, and the bounded trace this request
-    // also produces must not overwrite the error the guest reads back.
-    SetLastError(ERROR_SUCCESS);
-    const HANDLE rejected = Re2djVfsCreateFileA("\\System\\CompanyLogo\\logo.str",
-                                                GENERIC_READ,
-                                                FILE_SHARE_READ,
-                                                nullptr,
-                                                OPEN_EXISTING,
-                                                FILE_ATTRIBUTE_NORMAL,
-                                                nullptr);
-    const DWORD rejected_error = GetLastError();
+    HANDLE rooted_script = Re2djVfsCreateFileA("\\System\\CompanyLogo\\logo.str",
+                                               GENERIC_READ,
+                                               FILE_SHARE_READ,
+                                               nullptr,
+                                               OPEN_EXISTING,
+                                               FILE_ATTRIBUTE_NORMAL,
+                                               nullptr);
+    std::memset(contents, 0, sizeof(contents));
+    read = 0;
     passed = passed &&
-             Check(rejected == INVALID_HANDLE_VALUE, "unmapped script path was not rejected") &&
-             Check(rejected_error == ERROR_INVALID_NAME,
-                   "rejected script path reported the wrong Win32 error");
+             Check(rooted_script != INVALID_HANDLE_VALUE,
+                   "root-relative script path was not mapped to the HDD root") &&
+             Check(Re2djVfsReadFile(rooted_script, contents, sizeof(contents), &read, nullptr) != FALSE,
+                   "root-relative script path could not be read") &&
+             Check(std::string(contents, read) == "logostr",
+                   "root-relative script path returned wrong data") &&
+             Check(Re2djVfsCloseHandle(rooted_script) != FALSE,
+                   "cannot close root-relative script handle");
 
     SetLastError(ERROR_SUCCESS);
     const HANDLE hardlock = Re2djVfsCreateFileA("\\\\.\\Hardlock",
