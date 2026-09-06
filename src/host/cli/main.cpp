@@ -362,7 +362,9 @@ bool ParseOptions(int argc, char** argv, Options* options)
             {
                 return false;
             }
-            options->io_config = std::filesystem::path(value);
+            std::error_code ec;
+            const auto absolute_path = std::filesystem::absolute(value, ec);
+            options->io_config = ec ? std::filesystem::path(value) : absolute_path;
         }
         else if (argument == "--target")
         {

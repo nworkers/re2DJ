@@ -127,7 +127,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -2817,6 +2817,7 @@ struct LegacyIoTrapPolicy
 {
     std::uintptr_t in_byte_rva = 0;
     std::uintptr_t out_byte_rva = 0;
+    bool port_range_fallback = false;
 };
 
 enum class IoPortTrapResult
@@ -2841,26 +2842,34 @@ IoPortTrapResult HandleLegacyIoPortTrap(
         return IoPortTrapResult::kNotHandled;
     }
 
-    const std::uintptr_t address =
-        reinterpret_cast<std::uintptr_t>(exception.ExceptionAddress);
-    const bool is_read = policy.in_byte_rva != 0 &&
-                         address == image_base + policy.in_byte_rva;
-    const bool is_write = policy.out_byte_rva != 0 &&
-                          address == image_base + policy.out_byte_rva;
-    if (!is_read && !is_write)
-    {
-        return IoPortTrapResult::kNotHandled;
-    }
-
     std::uint8_t opcode = 0;
     SIZE_T copied = 0;
-    const std::uint8_t expected_opcode = is_read ? 0xec : 0xee;
     if (ReadProcessMemory(process,
                           exception.ExceptionAddress,
                           &opcode,
                           sizeof(opcode),
                           &copied) == FALSE ||
-        copied != sizeof(opcode) || opcode != expected_opcode)
+        copied != sizeof(opcode))
+    {
+        *error = "legacy I/O port trap opcode does not match target profile";
+        return IoPortTrapResult::kError;
+    }
+    const std::uintptr_t address =
+        reinterpret_cast<std::uintptr_t>(exception.ExceptionAddress);
+    const bool configured_read = policy.in_byte_rva != 0 &&
+                                 address == image_base + policy.in_byte_rva;
+    const bool configured_write = policy.out_byte_rva != 0 &&
+                                  address == image_base + policy.out_byte_rva;
+    const bool is_read = configured_read ||
+                         (!configured_write && policy.port_range_fallback && opcode == 0xec);
+    const bool is_write = configured_write ||
+                          (!configured_read && policy.port_range_fallback && opcode == 0xee);
+    if (!is_read && !is_write)
+    {
+        return IoPortTrapResult::kNotHandled;
+    }
+    if ((configured_read || configured_write) &&
+        opcode != (configured_read ? 0xec : 0xee))
     {
         *error = "legacy I/O port trap opcode does not match target profile";
         return IoPortTrapResult::kError;
@@ -8599,6 +8608,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool demo_volume_set = false;
     bool audio_volume_trace = false;
     bool hle_io_ports = false;
+    bool hle_io_port_range_fallback = false;
     std::filesystem::path io_config_path;
     bool run_detached = false;
     bool hle_message_box = false;
@@ -8823,9 +8833,18 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             break_exit_process = true;
             software_breakpoint = true;
         }
+        else if (option == "--hle-io-port-range")
+        {
+            hle_io_ports = true;
+            hle_io_port_range_fallback = true;
+            break_exit_process = true;
+            software_breakpoint = true;
+        }
         else if (option == "--io-config" && index + 1 < argc)
         {
-            io_config_path = argv[++index];
+            std::error_code ec;
+            const auto absolute_path = std::filesystem::absolute(argv[++index], ec);
+            io_config_path = ec ? std::filesystem::path(argv[index]) : absolute_path;
             hle_io_ports = true;
             inject_runtime = true;
             break_exit_process = true;
@@ -9622,7 +9641,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     }
     const LegacyIoTrapPolicy io_policy = {
         static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_in_byte_rva),
-        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_out_byte_rva)};
+        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_out_byte_rva),
+        hle_io_port_range_fallback};
     if (device_mock_lptdi && !target->run_defaults.lptdi.device_mock_enabled)
     {
         std::fprintf(stderr, "{\"error\":\"LPTDI device mock is not configured for this target\"}\\n");
@@ -10791,10 +10811,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                              &error);
         if (io_runtime_prepared)
         {
-            RecordDiagnostic("{\"event\":\"io_port_runtime\",\"image_base\":\"0x%08x\",\"in_rva\":\"0x%08x\",\"out_rva\":\"0x%08x\",\"status\":\"prepared\"}",
+            RecordDiagnostic("{\"event\":\"io_port_runtime\",\"image_base\":\"0x%08x\",\"in_rva\":\"0x%08x\",\"out_rva\":\"0x%08x\",\"port_range_fallback\":%s,\"status\":\"prepared\"}",
                              static_cast<unsigned>(main_image_base),
                              static_cast<unsigned>(io_policy.in_byte_rva),
-                             static_cast<unsigned>(io_policy.out_byte_rva));
+                             static_cast<unsigned>(io_policy.out_byte_rva),
+                             io_policy.port_range_fallback ? "true" : "false");
         }
     }
     bool message_box_prepared = !hle_message_box;
@@ -10860,7 +10881,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 &exit_break_slot_rva,
                 &error);
         if (!exit_import_present &&
-            (target->id == "ez2dj4th" ||
+            (target->id == "ez2dj4th" || target->id == "ez2dj3rd" ||
              lptdi_post_ioctl_trace_steps != 0 || api_trace || slot_writer_trace ||
              null_context_object_source_trace ||
              null_context_field_writer_trace || null_context_field_access_trace ||

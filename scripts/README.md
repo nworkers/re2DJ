@@ -25,3 +25,14 @@ Windows command prompt에서는 `scripts\build_win32.bat`를 어느 작업 디�
 PowerShell script 실행이 시스템 policy로 제한된 환경에서는 `powershell -ExecutionPolicy Bypass -File scripts/<script>.ps1`로 현재 process에만 예외를 적용하거나, 표에 대응하는 CMake preset 명령을 직접 실행합니다.
 
 *If system policy blocks PowerShell scripts, use `powershell -ExecutionPolicy Bypass -File scripts/<script>.ps1` for a process-local exception, or invoke the corresponding CMake preset commands directly.*
+
+## Windows x86 Release
+
+`scripts\build_release.ps1`는 `windows-x86-debug` preset을 configure에 재사용하면서 `Release` configuration으로 빌드하고, 기본적으로 Release CTest를 실행합니다. 테스트 없이 빌드하려면 `-SkipTests`를 지정합니다. 결과물은 `build\windows-x86\bin\Release`에 생성됩니다. Windows command prompt에서는 `scripts\build_release.bat`를 사용합니다.
+
+*`scripts\build_release.ps1` reuses the `windows-x86-debug` preset for configuration, builds the `Release` configuration, and runs Release CTest by default. Pass `-SkipTests` to build without tests. Outputs are written to `build\windows-x86\bin\Release`. Use `scripts\build_release.bat` from Windows command prompt.*
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_release.ps1
+powershell -ExecutionPolicy Bypass -File scripts/build_release.ps1 -SkipTests
+```

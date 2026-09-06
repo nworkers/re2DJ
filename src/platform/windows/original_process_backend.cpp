@@ -47,7 +47,8 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     }
     if (options.profile_defaults.lptdi.legacy_io_ports &&
         options.profile_defaults.lptdi.legacy_io_in_byte_rva == 0 &&
-        options.profile_defaults.lptdi.legacy_io_out_byte_rva == 0)
+        options.profile_defaults.lptdi.legacy_io_out_byte_rva == 0 &&
+        !options.profile_defaults.lptdi.legacy_io_port_range_fallback)
     {
         *error = "profile enables legacy I/O without a confirmed helper RVA";
         return false;
@@ -171,6 +172,10 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     if (defaults.lptdi.legacy_io_ports_default)
     {
         arguments->push_back("--hle-io-ports");
+    }
+    if (defaults.lptdi.legacy_io_port_range_fallback)
+    {
+        arguments->push_back("--hle-io-port-range");
     }
     if (defaults.run_detached)
     {

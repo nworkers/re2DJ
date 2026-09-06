@@ -473,12 +473,19 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, OpenAndBuild(tree, &profiles));
         RE2DJ_CHECK_EQ(context, profiles.size(), std::size_t{1});
 
-        const re2dj::target::TargetProfile* third = Find(profiles, "ez2dj3rd");
+        // The 3rd profile is image-backed now, so an extracted directory is
+        // detected separately rather than claimed by the CHD shortcut.
+        RE2DJ_CHECK(context, Find(profiles, "ez2dj3rd") == nullptr);
+        RE2DJ_CHECK(context, Find(profiles, "ez2dj") != nullptr);
+        const re2dj::target::BuiltInTargetProfile* third_builtin =
+            re2dj::target::FindBuiltInTargetProfileById("ez2dj3rd");
+        const re2dj::target::TargetProfile* third =
+            third_builtin == nullptr ? nullptr : &third_builtin->profile;
         RE2DJ_CHECK(context, third != nullptr);
         if (third != nullptr)
         {
             RE2DJ_CHECK_EQ(context, third->executable_relative_path,
-                           std::string("EZ2DJ.EXE"));
+                           std::string("EZ2DJ/EZ2DJ.EXE"));
             RE2DJ_CHECK(context, !third->detected);
             // This dump has no System.ini, so the guest path stays unknown
             // rather than being copied from the 1st SE profile.
@@ -486,6 +493,12 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, third->guest_directory.empty());
             RE2DJ_CHECK_EQ(context,
                            third->run_defaults.default_hdd_directory_relative_path,
+                           std::string("roms/ez2dj3rd"));
+            RE2DJ_CHECK_EQ(context,
+                           third->run_defaults.hdd_input_kind,
+                           re2dj::target::HddInputKind::kMameChd);
+            RE2DJ_CHECK_EQ(context,
+                           third->run_defaults.default_hdd_image_relative_path,
                            std::string("roms/ez2dj3rd"));
             RE2DJ_CHECK_EQ(context, third->hle_profile_id, std::string("ez2dj3rd"));
             RE2DJ_CHECK(context, third->run_defaults.hle_vfs);
@@ -501,8 +514,17 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, !third->run_defaults.fullscreen);
             RE2DJ_CHECK(context, !third->run_defaults.hle_command_line);
             RE2DJ_CHECK(context, !third->run_defaults.hle_windows_directory);
-            RE2DJ_CHECK(context, !third->run_defaults.hle_d3d3);
-            RE2DJ_CHECK(context, !third->run_defaults.lptdi.legacy_io_ports);
+            RE2DJ_CHECK(context, third->run_defaults.hle_d3d3);
+            RE2DJ_CHECK(context, third->run_defaults.lptdi.legacy_io_ports);
+            RE2DJ_CHECK(context, third->run_defaults.lptdi.legacy_io_ports_default);
+            RE2DJ_CHECK_EQ(context,
+                           third->run_defaults.lptdi.legacy_io_in_byte_rva,
+                           0x000a9887u);
+            RE2DJ_CHECK_EQ(context,
+                           third->run_defaults.lptdi.legacy_io_out_byte_rva,
+                           0x000a98bbu);
+            RE2DJ_CHECK(context,
+                        !third->run_defaults.lptdi.legacy_io_port_range_fallback);
             RE2DJ_CHECK(context, third->run_defaults.lptdi.device_mock_enabled);
             RE2DJ_CHECK_EQ(context,
                            third->run_defaults.lptdi.device_mock_path_prefix,
@@ -591,7 +613,8 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         WriteThirdLayout(tree, "");
         std::vector<re2dj::target::TargetProfile> profiles;
         RE2DJ_CHECK(context, OpenAndBuild(tree, &profiles));
-        RE2DJ_CHECK(context, Find(profiles, "EZ2DJ3RD") != nullptr);
+        RE2DJ_CHECK(context,
+                    re2dj::target::FindBuiltInTargetProfileById("EZ2DJ3RD") != nullptr);
         RE2DJ_CHECK(context, Find(profiles, "missing") == nullptr);
     }
 }

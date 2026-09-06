@@ -805,8 +805,60 @@ backend for these paths rather than treating them as VFS files.*
 
 The raw-I/O policy in `run_defaults.lptdi` is split into capability, product-default activation, and executable-specific helper RVAs. `LegacyIoPortBus` and `Ez2DjIoBoard` remain shared; 1st defaults to `0x00038987`/`0x000389ab`. 4th permits explicit diagnostic opt-in only for confirmed byte-read RVA `0x000c3817`, with no write RVA and no product default. The 4th diagnostic handled this read and advanced to an access violation at `0x00434137`; the response is not yet identified as a physical board response.
 
+## 2026-09-06 ez2dj3rd legacy-I/O fallback
+
+`ez2dj3rd`는 공용 legacy-I/O capability와 제품 기본 옵션을 활성화하지만, 3rd helper 주소가 확인되지 않았으므로 실행 파일별 helper RVA는 모두 0으로 유지한다. `legacy_io_port_range_fallback`은 launcher/runtime에 제한된 경로를 추가한다. byte `IN AL,DX`와 `OUT DX,AL`만 후보이며, 포트 지원 여부는 계속 `LegacyIoPortBus`가 결정한다. 지원되지 않는 포트와 opcode는 원래 예외 경로를 그대로 사용한다. 따라서 제품 backend가 `--io-config`를 더 이상 무시하지 않으면서도 3rd cabinet의 실제 raw-I/O 호출 지점이나 배선을 확정하지 않는다.
+
+## 2026-09-06 ez2dj3rd legacy-I/O fallback
+
+`ez2dj3rd` enables the shared legacy-I/O capability and product default, but keeps both executable-specific helper RVAs at zero because no 3rd helper address has been confirmed. Its `legacy_io_port_range_fallback` adds a narrow launcher/runtime path: only byte `IN AL,DX` and `OUT DX,AL` instructions are eligible, and `LegacyIoPortBus` still decides whether the port is supported. The original exception path remains unchanged for unsupported ports and opcodes. The product backend therefore no longer ignores `--io-config`, while the profile still makes no claim about the 3rd cabinet's actual raw-I/O call site or wiring.
+
 ## 2026-09-06 ez2dj2nd execution policy
 
 `ez2dj2nd`는 실행 중 fault로 확인된 실행 파일별 raw-I/O helper RVA `0x000782d7`(`IN AL,DX`)와 `0x0007832b`(`OUT DX,AL`)를 사용합니다. 정적 IAT에 `GetPrivateProfileIntA`가 없으므로 `demo_volume` 기본값은 unset입니다. Windows x86 launcher는 일반 타깃의 `DirectDrawCreateEx`를 주입 runtime HLE thunk로 연결하고, packer 보존이 필요한 `ez2dj4th`에만 patch 생략 예외를 둡니다. handoff 전에 `preparation_status` 진단 이벤트를 기록하고, 앞선 선택적 조회가 오류 문자열을 지운 경우 이름이 있는 fallback 오류를 생성합니다. 이 구조는 실행 파일별 가정을 프로파일/launcher 경계에 두며 Hardlock `id_ref`/`id_verify`는 현재 정책에 포함하지 않습니다.
 
 `ez2dj2nd` now carries executable-specific raw-I/O helper RVAs `0x000782d7` for `IN AL,DX` and `0x0007832b` for `OUT DX,AL`, both confirmed by attached runtime faults. Its `demo_volume` default is unset because its static IAT has no `GetPrivateProfileIntA`. The Windows x86 launcher patches `DirectDrawCreateEx` into the injected HLE runtime for ordinary targets, while retaining the no-write packer exception only for `ez2dj4th`. Before handoff, the launcher records a `preparation_status` event and derives a named fallback error if an earlier optional lookup erased the error text. This keeps per-executable assumptions at the profile/launcher boundary and leaves Hardlock `id_ref`/`id_verify` outside the current policy.*
+
+## 2026-09-06 VFS 파일 읽기 bounded 진단
+
+Windows injected VFS는 VFS trace 경로가 설정된 경우 bounded `ReadFile` 진입/결과 이벤트를 기록합니다. 각 이벤트에는 핸들, 요청 크기, overlapped 여부, 반환값, 전송 바이트 수, 마지막 오류 코드만 포함하며 파일 내용과 Hardlock 자료는 제외합니다. native, CHD-backed, device-mock 경로는 같은 진단 경계를 사용합니다. 진입 이벤트 뒤 결과 이벤트가 없으면 실제 파일 읽기 경계 내부 대기로 분류할 수 있고, 결과 이벤트가 있으면 다음 HLE 경계로 조사를 이동할 수 있습니다. 이 계측은 관찰 전용이며 guest 파일 바이트나 프로파일 동작을 변경하지 않습니다.
+
+## 2026-09-06 bounded VFS file-read diagnostics
+
+The Windows injected VFS now records bounded `ReadFile` entry and result
+events when a VFS trace path is configured. Each event includes only the
+handle, request size, overlapped flag, result, transferred-byte count, and
+last-error value; file contents and Hardlock material are excluded. Native,
+CHD-backed, and device-mock paths use the same diagnostic boundary. A missing
+result after an entry event identifies a wait inside the underlying file-read
+boundary, while a returned result moves the investigation to the next HLE
+boundary. The instrumentation is observational and does not alter the guest
+file bytes or profile behavior.
+
+## 2026-09-06 처리되지 않은 privileged-instruction 진단
+
+legacy I/O handler가 처리하지 못한 첫 `EXCEPTION_PRIV_INSTRUCTION`은 기존 crash-context 형식으로 기록할 수 있습니다. 이 경로는 예외를 복구하지 않고 `EXCEPTION_CONTINUE_SEARCH`를 유지하므로 port 값을 만들거나 `EIP`를 변경하지 않습니다. 따라서 profile에서 legacy I/O가 꺼진 실행에서도 raw-I/O fault가 injected exception handler까지 전달되었는지 관찰할 수 있습니다. 후속 `ez2dj3rd` 실행에서는 이 예외 기록이 없었고, guest가 `ExitProcess` import에 `0xc0000096`을 전달한 기록만 확인되었습니다.
+
+## 2026-09-06 unhandled privileged-instruction diagnostics
+
+The first unhandled `EXCEPTION_PRIV_INSTRUCTION` can now be recorded using
+the existing crash-context format. The path preserves
+`EXCEPTION_CONTINUE_SEARCH`, so it does not synthesize a port value or modify
+`EIP`. This lets a profile with legacy I/O disabled reveal whether a raw-I/O
+fault reached the injected exception handler. The follow-up `ez2dj3rd` run
+recorded no such exception and instead only showed the guest passing
+`0xc0000096` to the `ExitProcess` import.
+
+## 2026-09-06 ez2dj3rd CHD 입력 정책
+
+`ez2dj3rd`는 이제 MAME CHD 입력 형식을 사용하고 기본 이미지 경로 `roms/ez2dj3rd` 아래에서 CHD를 검색합니다. 내장 프로파일은 확인된 내부 실행 파일 `EZ2DJ/EZ2DJ.EXE`를 사용하며, `RunChdTarget`이 `EZ2DJ` 작업 디렉터리를 계산하고 CHD와 staging 경로를 Windows original-process backend에 전달합니다. 기존 3rd VFS, dynamic resolver, DirectSound, active-console, Hardlock 설정, detached 실행 정책은 유지됩니다. 이는 저장소 입력 소스 변경이며 새로운 Hardlock 또는 그래픽 호환성 주장이 아닙니다.
+
+## 2026-09-06 ez2dj3rd CHD input policy
+
+`ez2dj3rd` now uses the MAME CHD input kind and searches `roms/ez2dj3rd`
+for its default image. The built-in profile names the confirmed internal
+executable `EZ2DJ/EZ2DJ.EXE`; `RunChdTarget` derives the `EZ2DJ` working
+directory and passes the CHD plus staging path to the Windows original-process
+backend. The existing 3rd VFS, dynamic resolver, DirectSound, active-console,
+Hardlock configuration, and detached-run policy remain unchanged. This is a
+storage-source change, not a new Hardlock or graphics compatibility claim.

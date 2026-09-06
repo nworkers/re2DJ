@@ -246,14 +246,22 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
         {
             BuiltInTargetProfile entry;
             entry.profile.id = "ez2dj3rd";
-            entry.profile.display_name = "EZ2DJ 3rd Trax";
+            entry.profile.display_name = "EZ2DJ 3rd Trax (MAME CHD HDD)";
             entry.profile.hle_profile_id = "ez2dj3rd";
             entry.profile.run_defaults.default_hdd_directory_relative_path =
+                "roms/ez2dj3rd";
+            entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
+            entry.profile.run_defaults.default_hdd_image_relative_path =
                 "roms/ez2dj3rd";
             entry.profile.run_defaults.audio_gain_db = 0.0f;
             entry.profile.run_defaults.demo_volume.reset();
             entry.profile.run_defaults.hle_vfs = true;
+            entry.profile.run_defaults.hle_d3d3 = true;
             entry.profile.run_defaults.hle_directsound = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
+            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000a9887;
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000a98bb;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             // This zero-state probe is separate from 1st SE and is not a
@@ -270,12 +278,14 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // the console's shell.
             entry.profile.run_defaults.hle_wts_active_console = true;
             entry.profile.run_defaults.run_detached = true;
+            entry.profile.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
             // This dump carries no System.ini, so the drive letter and guest
             // directory stay empty rather than being copied from 1st SE.
             entry.profile.note =
-                "The executable is protected: its entry point sits in .protect. "
-                "The dump has no System.ini, so the guest drive letter and "
-                "directory are not known.";
+                "The supplied 3rd CHD exposes EZ2DJ/EZ2DJ.EXE through a FAT32 "
+                "volume. The raw-I/O helper RVAs are confirmed at 0x000a9887 (in) "
+                "and 0x000a98bb (out); its version-specific protection response "
+                "remains unresolved.";
             entry.fingerprint.executable_name = "EZ2DJ.EXE";
             entry.fingerprint.required_siblings = {
                 "EZ2DJ.INI", "FONTKR.DAT", "BG", "Sound", "system"};

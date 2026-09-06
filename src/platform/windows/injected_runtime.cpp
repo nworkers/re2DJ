@@ -101,6 +101,7 @@ volatile LONG g_vfs_image_trace_count = 0;
 volatile LONG g_vfs_script_trace_count = 0;
 volatile LONG g_vfs_device_trace_count = 0;
 volatile LONG g_vfs_open_trace_count = 0;
+volatile LONG g_vfs_file_trace_count = 0;
 volatile LONG g_dynamic_resolver_trace_count = 0;
 volatile LONG g_dynamic_resolver_caller_trace_count = 0;
 volatile LONG g_wts_query_trace_count = 0;
@@ -184,6 +185,13 @@ bool ClaimVfsOpenTraceBudget()
     return InterlockedIncrement(&g_vfs_open_trace_count) <= kMaximumOpenDiagnostics;
 }
 
+LONG ClaimVfsFileTraceBudget()
+{
+    constexpr LONG kMaximumFileDiagnostics = 1024;
+    const LONG event = InterlockedIncrement(&g_vfs_file_trace_count);
+    return event <= kMaximumFileDiagnostics ? event : 0;
+}
+
 bool ClaimDynamicResolverTraceBudget()
 {
     constexpr LONG kMaximumResolverDiagnostics = 128;
@@ -234,6 +242,55 @@ void AppendDiagnosticFile(const char* path, const char* message)
 void AppendVfsTraceMessage(const char* message)
 {
     AppendDiagnosticFile(g_re2dj_vfs_trace_path, message);
+}
+
+void ReportVfsReadFileEnter(
+    const char* kind, HANDLE handle, DWORD size, LPOVERLAPPED overlapped)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0')
+    {
+        return;
+    }
+    const LONG event = ClaimVfsFileTraceBudget();
+    if (event == 0)
+    {
+        return;
+    }
+    char message[256] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:read-file-enter:event=%ld:kind=%.15s:handle=0x%08x:size=%u:overlapped=%u\r\n",
+                  event,
+                  kind == nullptr ? "unknown" : kind,
+                  static_cast<unsigned>(reinterpret_cast<ULONG_PTR>(handle)),
+                  static_cast<unsigned>(size),
+                  overlapped != nullptr ? 1U : 0U);
+    AppendVfsTraceMessage(message);
+}
+
+void ReportVfsReadFileResult(
+    const char* kind, HANDLE handle, BOOL result, DWORD transferred, DWORD error)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0')
+    {
+        return;
+    }
+    const LONG event = ClaimVfsFileTraceBudget();
+    if (event == 0)
+    {
+        return;
+    }
+    char message[256] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:read-file-result:event=%ld:kind=%.15s:handle=0x%08x:ok=%u:transferred=%u:error=%u\r\n",
+                  event,
+                  kind == nullptr ? "unknown" : kind,
+                  static_cast<unsigned>(reinterpret_cast<ULONG_PTR>(handle)),
+                  result != FALSE ? 1U : 0U,
+                  static_cast<unsigned>(transferred),
+                  static_cast<unsigned>(error));
+    AppendVfsTraceMessage(message);
 }
 
 void EnsureDiagnosticBoundariesInstalled()
@@ -1158,22 +1215,39 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
         exception->ContextRecord == nullptr ||
         exception->ExceptionRecord->ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
     {
+        if (exception != nullptr && exception->ExceptionRecord != nullptr &&
+            exception->ExceptionRecord->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION)
+        {
+            ReportCrashException(exception);
+        }
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
     const DWORD address = static_cast<DWORD>(
         reinterpret_cast<std::uintptr_t>(exception->ExceptionRecord->ExceptionAddress));
-    const bool is_read = g_re2dj_io_in_byte_rva != 0 &&
-                         address == g_re2dj_io_image_base + g_re2dj_io_in_byte_rva;
-    const bool is_write = g_re2dj_io_out_byte_rva != 0 &&
-                          address == g_re2dj_io_image_base + g_re2dj_io_out_byte_rva;
+    const unsigned char opcode = *reinterpret_cast<const unsigned char*>(address);
+    const bool configured_read = g_re2dj_io_in_byte_rva != 0 &&
+                                 address == g_re2dj_io_image_base +
+                                                g_re2dj_io_in_byte_rva;
+    const bool configured_write = g_re2dj_io_out_byte_rva != 0 &&
+                                  address == g_re2dj_io_image_base +
+                                                g_re2dj_io_out_byte_rva;
+    const bool range_fallback = g_re2dj_hle_io_ports != 0 &&
+                                g_re2dj_io_in_byte_rva == 0 &&
+                                g_re2dj_io_out_byte_rva == 0;
+    const bool is_read = configured_read ||
+                         (!configured_write && range_fallback && opcode == 0xec);
+    const bool is_write = configured_write ||
+                          (!configured_read && range_fallback && opcode == 0xee);
     if (!is_read && !is_write)
     {
+        ReportCrashException(exception);
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    const unsigned char opcode = *reinterpret_cast<const unsigned char*>(address);
-    if (opcode != (is_read ? 0xec : 0xee))
+    if ((configured_read || configured_write) &&
+        opcode != (configured_read ? 0xec : 0xee))
     {
+        ReportCrashException(exception);
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
@@ -1205,6 +1279,7 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
                                  : g_legacy_io_port_bus.WriteByte(port, value);
     if (!handled)
     {
+        ReportCrashException(exception);
         return EXCEPTION_CONTINUE_SEARCH;
     }
     if (is_read)
@@ -2058,6 +2133,11 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
     HANDLE handle, LPVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped)
 {
     OutputDebugStringA(kFileApiMessage);
+    ChdFileHandle* chd_handle = LookupChdFileHandle(handle);
+    const char* kind = IsDeviceMockHandle(handle)
+                           ? "device"
+                           : chd_handle != nullptr ? "chd" : "native";
+    ReportVfsReadFileEnter(kind, handle, size, overlapped);
     if (IsDeviceMockHandle(handle))
     {
         if (transferred != nullptr)
@@ -2065,12 +2145,16 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
             *transferred = 0;
         }
         SetLastError(ERROR_SUCCESS);
+        ReportVfsReadFileResult(kind, handle, TRUE, 0, ERROR_SUCCESS);
+        SetLastError(ERROR_SUCCESS);
         return TRUE;
     }
-    if (ChdFileHandle* chd_handle = LookupChdFileHandle(handle); chd_handle != nullptr)
+    if (chd_handle != nullptr)
     {
         if (overlapped != nullptr || (buffer == nullptr && size != 0))
         {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            ReportVfsReadFileResult(kind, handle, FALSE, 0, ERROR_INVALID_PARAMETER);
             SetLastError(ERROR_INVALID_PARAMETER);
             return FALSE;
         }
@@ -2084,6 +2168,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
         if (count != 0 && !EnsureChdMounted())
         {
             SetLastError(ERROR_INVALID_DATA);
+            ReportVfsReadFileResult(kind, handle, FALSE, 0, ERROR_INVALID_DATA);
+            SetLastError(ERROR_INVALID_DATA);
             return FALSE;
         }
         if (count != 0 && !g_chd_volume->ReadFileRange(chd_handle->relative_path,
@@ -2093,6 +2179,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
                                                         &error))
         {
             SetLastError(ERROR_READ_FAULT);
+            ReportVfsReadFileResult(kind, handle, FALSE, 0, ERROR_READ_FAULT);
+            SetLastError(ERROR_READ_FAULT);
             return FALSE;
         }
         chd_handle->position += count;
@@ -2101,9 +2189,16 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
             *transferred = static_cast<DWORD>(count);
         }
         SetLastError(ERROR_SUCCESS);
+        ReportVfsReadFileResult(kind, handle, TRUE, static_cast<DWORD>(count), ERROR_SUCCESS);
+        SetLastError(ERROR_SUCCESS);
         return TRUE;
     }
-    return ReadFile(handle, buffer, size, transferred, overlapped);
+    const BOOL result = ReadFile(handle, buffer, size, transferred, overlapped);
+    const DWORD error = result != FALSE ? ERROR_SUCCESS : GetLastError();
+    const DWORD bytes = result != FALSE && transferred != nullptr ? *transferred : 0;
+    ReportVfsReadFileResult(kind, handle, result, bytes, error);
+    SetLastError(error);
+    return result;
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsWriteFile(

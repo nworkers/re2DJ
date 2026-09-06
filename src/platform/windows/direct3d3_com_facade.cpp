@@ -1185,6 +1185,18 @@ bool BuildSurfaceRectangle(const SurfaceFacade& surface,
     {
         return false;
     }
+    if ((surface.capabilities & DDSCAPS_PRIMARYSURFACE) != 0 && input != nullptr)
+    {
+        if (input->right <= input->left || input->bottom <= input->top)
+        {
+            return false;
+        }
+        output->x = 0;
+        output->y = 0;
+        output->width = static_cast<std::uint32_t>(input->right - input->left);
+        output->height = static_cast<std::uint32_t>(input->bottom - input->top);
+        return true;
+    }
     const RECT rectangle = input != nullptr
                                ? *input
                                : RECT{0,
@@ -2037,13 +2049,14 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
         return finish(DD_OK, offscreen);
     }
     if ((descriptor->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) == 0 ||
-        descriptor->dwBackBufferCount != 1)
+        (descriptor->dwBackBufferCount != 0 && descriptor->dwBackBufferCount != 1))
     {
         return finish(DDERR_UNSUPPORTED);
     }
+    const bool has_back_buffer = descriptor->dwBackBufferCount == 1;
     auto* const primary = new (std::nothrow) SurfaceFacade;
-    auto* const back = new (std::nothrow) SurfaceFacade;
-    if (primary == nullptr || back == nullptr)
+    auto* const back = has_back_buffer ? new (std::nothrow) SurfaceFacade : nullptr;
+    if (primary == nullptr || (has_back_buffer && back == nullptr))
     {
         delete primary;
         delete back;
@@ -2056,29 +2069,38 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
     // The guest may ask for the primary itself to be the 3D render target, as
     // the 4th does. Carrying that request through means CreateDevice accepts
     // the surface the guest hands it either way.
-    primary->capabilities = DDSCAPS_PRIMARYSURFACE | DDSCAPS_COMPLEX | DDSCAPS_FLIP |
+    primary->capabilities = DDSCAPS_PRIMARYSURFACE |
+                            (has_back_buffer ? (DDSCAPS_COMPLEX | DDSCAPS_FLIP) : 0) |
                             (descriptor->ddsCaps.dwCaps & DDSCAPS_3DDEVICE);
     primary->diagnostic_id = AllocateSurfaceDiagnosticId(root);
     primary->texture_identity = AllocateSurfaceIdentity(root);
     primary->attached_back_buffer = back;
-    back->root = root;
-    back->width = root->width;
-    back->height = root->height;
-    back->bits_per_pixel = root->bits_per_pixel;
-    back->capabilities = DDSCAPS_BACKBUFFER | DDSCAPS_3DDEVICE;
-    back->diagnostic_id = AllocateSurfaceDiagnosticId(root);
-    back->texture_identity = AllocateSurfaceIdentity(root);
-    if (!CreateRgb565GdiBacking(primary) || !CreateRgb565GdiBacking(back))
+    if (!CreateRgb565GdiBacking(primary))
     {
-        DestroyGdiBacking(primary);
-        DestroyGdiBacking(back);
         delete primary;
         delete back;
         return finish(DDERR_OUTOFMEMORY);
     }
+    if (has_back_buffer)
+    {
+        back->root = root;
+        back->width = root->width;
+        back->height = root->height;
+        back->bits_per_pixel = root->bits_per_pixel;
+        back->capabilities = DDSCAPS_BACKBUFFER | DDSCAPS_3DDEVICE;
+        back->diagnostic_id = AllocateSurfaceDiagnosticId(root);
+        back->texture_identity = AllocateSurfaceIdentity(root);
+        if (!CreateRgb565GdiBacking(back))
+        {
+            DestroyGdiBacking(primary);
+            delete primary;
+            delete back;
+            return finish(DDERR_OUTOFMEMORY);
+        }
+        InstallSurfaceVtable(root, back);
+        AddRootReference(root);
+    }
     InstallSurfaceVtable(root, primary);
-    InstallSurfaceVtable(root, back);
-    AddRootReference(root);
     AddRootReference(root);
     *surface = &primary->interface_value;
     return finish(DD_OK, primary);
@@ -2426,6 +2448,27 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         {
             return finish(DDERR_INVALIDRECT);
         }
+        if ((surface->capabilities & DDSCAPS_PRIMARYSURFACE) != 0)
+        {
+            if (surface->root->render_backend != nullptr)
+            {
+                std::string error;
+                const bool presented = surface->root->render_backend->Present(&error);
+                Re2djExitIfWindowClosed(surface->root->window);
+                if (!presented)
+                {
+                    OutputDebugStringA(kOpenGlFailureMessage);
+                    return finish(DDERR_GENERIC);
+                }
+            }
+            else
+            {
+                Re2djExitIfWindowClosed(surface->root->window);
+            }
+            ++surface->root->frame_number;
+            RecordPresentedFrame(surface->root);
+            return finish(DD_OK);
+        }
         return finish(CopySurfaceRectangle(surface,
                                            destination_region,
                                            source_surface,
@@ -2507,6 +2550,27 @@ HRESULT WINAPI SurfaceBltFast(IDirectDrawSurface4* self,
         static_cast<LONG>(destination_x + source_region.width);
     destination_rectangle.bottom =
         static_cast<LONG>(destination_y + source_region.height);
+    if ((destination_surface->capabilities & DDSCAPS_PRIMARYSURFACE) != 0)
+    {
+        if (destination_surface->root->render_backend != nullptr)
+        {
+            std::string error;
+            const bool presented = destination_surface->root->render_backend->Present(&error);
+            Re2djExitIfWindowClosed(destination_surface->root->window);
+            if (!presented)
+            {
+                OutputDebugStringA(kOpenGlFailureMessage);
+                return finish(DDERR_GENERIC);
+            }
+        }
+        else
+        {
+            Re2djExitIfWindowClosed(destination_surface->root->window);
+        }
+        ++destination_surface->root->frame_number;
+        RecordPresentedFrame(destination_surface->root);
+        return finish(DD_OK);
+    }
     return finish(CopySurfaceRectangle(destination_surface,
                                        destination_region,
                                        source_surface,

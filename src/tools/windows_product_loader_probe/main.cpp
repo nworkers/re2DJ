@@ -287,16 +287,27 @@ int main()
             has_lptdi_state = has_lptdi_state ||
                               argument == "--device-mock-lptdi-target-state";
         }
-        return arguments.size() == 16 && arguments[5] == "--hle-vfs" &&
-               arguments[6] == "--hle-directsound" && arguments[9] == "--run-detached" &&
-               arguments[10] == "--device-mock-lptdi" &&
-               arguments[11] == "--device-mock-lptdi-path-prefix" &&
-               arguments[12] == "\\\\.\\FEnteDev" &&
-               arguments[13] == "--device-mock-wts-console-session" &&
-               arguments[14] == "--device-mock-lptdi-target-state" &&
-               arguments[15] == "0000000000000000" &&
-               !has_demo_volume && !has_io_ports && has_lptdi_path && has_lptdi_state &&
-               !third_profile->profile.run_defaults.lptdi.legacy_io_ports &&
+        bool has_io_port_range = false;
+        for (const std::string& argument : arguments)
+        {
+            has_io_port_range = has_io_port_range || argument == "--hle-io-port-range";
+        }
+        return arguments.size() == 18 && arguments[5] == "--hle-vfs" &&
+               arguments[6] == "--hle-d3d3" &&
+               arguments[7] == "--hle-directsound" && arguments[10] == "--hle-io-ports" &&
+               arguments[11] == "--run-detached" &&
+               arguments[12] == "--device-mock-lptdi" &&
+               arguments[13] == "--device-mock-lptdi-path-prefix" &&
+               arguments[14] == "\\\\.\\FEnteDev" &&
+               arguments[15] == "--device-mock-wts-console-session" &&
+               arguments[16] == "--device-mock-lptdi-target-state" &&
+               arguments[17] == "0000000000000000" &&
+               !has_demo_volume && has_io_ports && !has_io_port_range && has_lptdi_path &&
+               has_lptdi_state && third_profile->profile.run_defaults.lptdi.legacy_io_ports &&
+               third_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
+               third_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x000a9887 &&
+               third_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0x000a98bb &&
+               !third_profile->profile.run_defaults.lptdi.legacy_io_port_range_fallback &&
                third_profile->profile.run_defaults.lptdi.device_mock_enabled &&
                third_profile->profile.run_defaults.lptdi.device_mock_path_prefix ==
                    "\\\\.\\FEnteDev" &&

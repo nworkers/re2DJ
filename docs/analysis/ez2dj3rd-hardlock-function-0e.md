@@ -248,3 +248,41 @@ transform loop 이후 게스트가 장치를 다시 열고 자신의 설정 파�
 *Confirmed — synthetic-tail causality. The default-off `--device-mock-hardlock-44c-tail` option writes a user-supplied 16-bit word only to the final two output bytes of an exact-size Function-0 `0x9c40244c`. Run `20260901-004347-276`, combining the Task 109 replay with synthetic `tail=0x0001`, recorded the first Function-0 request with `tail_word=0x0000`, then reached thirty Function-6 `0x44c` calls and thirty Function-`0x0e` `0x458` calls. A nonzero byte at `+0xfe` is therefore causal for selecting the handle-retention branch and opening the next descriptor boundary.*
 
 *Unresolved — physical response semantics. Value `0x0001` is inferred solely to test causality in the original consumer branch; it was not observed from a physical Hardlock driver or dongle. Historical stale-runtime logs only preserved request-side buffers and provide no physical-response evidence. This result reconstructs only the condition for reaching `0x458`; the valid final eight output bytes for each 264-byte Function-`0x0e` call and the physical three seeds remain unresolved.*
+
+## 2026-09-06 파일 읽기 경계와 3rd 종료 지점
+
+**확인됨.** 새 bounded VFS 계측 실행 `20260906-202402-449`에서 `EZ2DJ.ini` 525바이트, `fontkr.dat` 75,200바이트, `fontEn.dat` 2,048바이트와 512바이트의 모든 `ReadFile` 진입에 대응하는 성공 결과가 기록되었습니다. 각 결과는 `ok=1`, `error=0`이며, 반환하지 않은 파일 읽기 진입은 없습니다. 따라서 이 실행에서 초기 파일 읽기 내부 대기는 확인되지 않았습니다.
+
+**확인됨.** 같은 실행은 Hardlock initialize 1회, handshake 4회, descriptor 35회, transform 32회로 진행되었고, 설정된 28개 transform map 항목은 모두 `mapped=1`, `unmapped=0`으로 처리되었습니다. 마지막에는 descriptor function `0x0001` 요청 뒤 종료 코드 `0xc0000096`이 기록되었습니다. launcher JSONL에도 `hle_io_ports=false`와 `runtime_detached_exit=0xc0000096`이 남았습니다.
+
+**미확정.** `0xc0000096`은 `STATUS_PRIVILEGED_INSTRUCTION` 값과 일치하지만, 이 실행만으로 원본이 raw I/O 명령을 실행했는지, descriptor function `0x0001`의 실제 driver 응답이 부족했는지, 또는 두 경계가 연쇄된 것인지는 확정할 수 없습니다. 3rd profile의 legacy I/O를 이번 작업에서 활성화하거나 Hardlock 응답을 추정하지 않았습니다. 다음 분석은 function `0x0001` 직후의 원본 예외/종료 원인을 raw I/O 실행 증거와 분리해 확인해야 합니다.
+
+## 2026-09-06 file-read boundary and 3rd exit point
+
+**Confirmed.** In bounded VFS run `20260906-202402-449`, every `ReadFile` entry for `EZ2DJ.ini` (525 bytes), `fontkr.dat` (75,200 bytes), and `fontEn.dat` (2,048 bytes and 512 bytes) had a matching successful result. Each result reported `ok=1` and `error=0`; no file-read entry was left without a return. An internal wait in the initial file-read boundary is therefore not observed in this run.
+
+**Confirmed.** The same run reached one Hardlock initialize, four handshakes, 35 descriptors, and 32 transforms. All 28 configured transform-map entries were reported as `mapped=1` with `unmapped=0`. The process then recorded exit code `0xc0000096` after a descriptor request with function `0x0001`. The launcher JSONL also records `hle_io_ports=false` and `runtime_detached_exit=0xc0000096`.
+
+**Unresolved.** `0xc0000096` matches `STATUS_PRIVILEGED_INSTRUCTION`, but this run alone does not establish whether the original executed a raw-I/O instruction, whether the real driver response for descriptor function `0x0001` is missing, or whether the two boundaries are chained. That earlier run did not enable 3rd legacy I/O or guess a Hardlock response. The next analysis must separate raw-I/O execution evidence from the original termination cause immediately after function `0x0001`.
+
+**확인됨.** 후속 실행 `20260906-203411-416`에서도 `ReadFile` 4회가 모두 성공했고, 같은 Hardlock request counts와 `mapped=1` 28회를 재현했습니다. 새 privileged-instruction 계측에는 `crash-exception` 또는 `crash-context`가 기록되지 않았습니다. 대신 기존 `exit-process` 기록은 guest image 내부 return address `0x00a76d1a`와 그 직전의 `ff 15 7c 81 a7 00` 호출 바이트를 남겼습니다. 이는 원본 경로가 `ExitProcess` import를 직접 호출하면서 `0xc0000096` 값을 전달한 관찰과 일치합니다.
+
+**미확정.** 위 결과는 injected exception handler까지 전달된 unhandled privileged-instruction이 이번 실행의 직접 원인이 아님을 보여주지만, 원본 자체의 보호 예외 처리기가 같은 상태 코드를 선택했을 가능성까지 제거하지는 않습니다. function `0x0001` 응답과 원본 보호 분기의 의미는 여전히 확인되지 않았습니다.
+
+**Confirmed.** Follow-up run `20260906-203411-416` again completed all four `ReadFile` calls, reproduced the same Hardlock request counts, and mapped all 28 configured transform entries. The new privileged-instruction instrumentation recorded no `crash-exception` or `crash-context` event. Instead, the existing `exit-process` record captured guest return address `0x00a76d1a` and the preceding call bytes `ff 15 7c 81 a7 00`. This is consistent with the original path directly calling the `ExitProcess` import with value `0xc0000096`.
+
+**Unresolved.** This shows that an unhandled privileged instruction reaching the injected exception handler was not the direct cause in this run, but it does not rule out the original protection handler choosing the same status code. The meaning of the function `0x0001` response and the original protection branch remains unresolved.
+
+## 2026-09-06 ez2dj3rd legacy I/O HLE boundary
+
+**확인됨.** `ez2dj3rd` 프로파일은 이제 `legacy_io_ports`와 제품 기본 I/O 옵션을 활성화하고, `--io-config`를 Windows original-process backend로 전달합니다. 실행 준비 진단에는 `io_port_runtime` 이벤트와 `port_range_fallback=true`가 기록되므로, runtime이 I/O HLE 설정을 실제로 받았는지 확인할 수 있습니다.
+
+**확인됨.** 3rd 전용 fallback은 확인되지 않은 명령어 주소를 가정하지 않습니다. injected runtime과 debugger trap은 byte `IN AL,DX`(`0xec`) 및 byte `OUT DX,AL`(`0xee`)만 후보로 보고, `LegacyIoPortBus`가 허용하는 포트와 결합될 때만 처리합니다. 지원되지 않는 포트·opcode는 원래 예외 경로로 남습니다.
+
+**미확정.** 이번 변경은 3rd 실행 파일의 실제 raw-I/O helper RVA, cabinet 배선, 물리 I/O 보드 응답을 확인한 결과가 아닙니다. helper RVA 필드는 계속 0이며, fallback은 `--io-config`가 무시되지 않도록 하고 다음 관찰을 가능하게 하는 제한된 진단 경계입니다. 따라서 실제 raw-I/O trap 발생이나 3rd Hardlock 이후 진행을 이 변경만으로 확정하지 않습니다.
+
+*Confirmed. The `ez2dj3rd` profile now enables the legacy-I/O capability and product-default I/O option, and the Windows original-process backend forwards `--io-config`. Preparation diagnostics include an `io_port_runtime` event with `port_range_fallback=true`, making it possible to verify that the runtime received the I/O HLE policy.*
+
+*Confirmed. The 3rd-specific fallback does not assume an unconfirmed instruction address. The injected runtime and debugger trap consider only byte `IN AL,DX` (`0xec`) and byte `OUT DX,AL` (`0xee`), and handle them only when `LegacyIoPortBus` accepts the port. Unsupported ports and opcodes remain on the original exception path.*
+
+*Unresolved. This change does not confirm the 3rd executable's actual raw-I/O helper RVA, cabinet wiring, or physical I/O-board response. The helper RVA fields remain zero. The fallback is a bounded diagnostic boundary that prevents `--io-config` from being ignored and enables the next observation; it is not evidence that a raw-I/O trap occurred or that 3rd progressed past Hardlock.*

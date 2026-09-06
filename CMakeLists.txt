@@ -365,6 +365,20 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         set_tests_properties(re2dj_windows_vfs_runtime_probe PROPERTIES
             ENVIRONMENT "SDL_AUDIODRIVER=dummy"
         )
+
+        add_executable(re2dj_ez2dj_keyboard_input_test
+            tests/unit/ez2dj_keyboard_input_test.cpp
+            src/platform/windows/ez2dj_keyboard_input.cpp
+            tests/unit/temporary_tree.cpp
+        )
+        target_include_directories(re2dj_ez2dj_keyboard_input_test PRIVATE include tests/unit .)
+        target_compile_definitions(re2dj_ez2dj_keyboard_input_test PRIVATE
+            RE2DJ_VERSION="${RE2DJ_VERSION}"
+        )
+        target_link_libraries(re2dj_ez2dj_keyboard_input_test
+            PRIVATE re2dj_core re2dj_warnings
+        )
+        add_test(NAME re2dj_ez2dj_keyboard_input_test COMMAND re2dj_ez2dj_keyboard_input_test)
     endif()
     add_library(re2dj_windows_original_process_backend STATIC
         src/tools/windows_original_process_probe/iat_verifier.cpp

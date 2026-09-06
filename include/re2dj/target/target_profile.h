@@ -32,6 +32,9 @@ struct TargetLptdiPolicy
     bool legacy_io_ports = false;
     // Adds raw I/O HLE to the product facade's normal arguments.
     bool legacy_io_ports_default = false;
+    // Allows byte I/O trapping at supported board ports when this executable's
+    // exact helper RVA has not yet been confirmed.
+    bool legacy_io_port_range_fallback = false;
     // Main-image RVA of the confirmed byte-input helper. Zero means unknown.
     std::uint32_t legacy_io_in_byte_rva = 0;
     // Main-image RVA of the confirmed byte-output helper. Zero means unknown.

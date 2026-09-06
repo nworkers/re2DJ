@@ -28,6 +28,7 @@
 | [graphics-transition-depth.md](graphics-transition-depth.md) | 장면 전환 fade 후보와 Direct3D/OpenGL 깊이 상태 경계 | 작업 096 ddraw trace와 Win32 실행으로 확인 |
 
 | [ez2dj3rd-hardlock-function-0e.md](ez2dj3rd-hardlock-function-0e.md) | 3rd Hardlock device name, API descriptor, and Function 0x0e boundary | Device/API boundary confirmed; valid 0x0e response unresolved |
+| [ez2dj3rd-chd-filesystem.md](ez2dj3rd-chd-filesystem.md) | 3rd Trax CHD v5, FAT32 geometry, and internal executable path | User-supplied CHD read confirmed; full protection-contract identity remains unresolved |
 | [ez2dj4th-chd-filesystem.md](ez2dj4th-chd-filesystem.md) | 4th Trax CHD v5, FAT32 geometry, directory and executable layout | Real `4thTrax.chd` read confirmed; cabinet boot sequence unresolved |
 | [ez2dj5th-6th-chd-filesystem.md](ez2dj5th-6th-chd-filesystem.md) | 5th/6th CHD geometry and executable/filesystem observations | 6th FAT32 path confirmed; 5th filesystem unresolved |
 | [ez2dj4th-hardlock-runtime.md](ez2dj4th-hardlock-runtime.md) | 4th Hardlock config, device/IOCTL sequence, DirectDraw/D3D7 startup, and validation boundary | Vendor driver, raw I/O, DDraw/D3D7 entry confirmed; D3D7 adapter pending |

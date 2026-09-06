@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "directdraw7_com_facade.h"
 #include "direct3d7_com_facade.h"
@@ -581,14 +582,132 @@ HRESULT WINAPI Dd7Compact(IDirectDraw7*)
     RE2DJ_DIRECTDRAW7_UNIMPLEMENTED("Compact");
     return DD_OK;
 }
-HRESULT WINAPI Dd7CreateClipper(IDirectDraw7*, DWORD, LPDIRECTDRAWCLIPPER* clipper, IUnknown*)
+constexpr GUID kIidDirectDrawClipper = {
+    0x6c14db85, 0xa733, 0x11ce, {0xa5, 0x21, 0x00, 0x20, 0xaf, 0x0b, 0xe5, 0x60}};
+
+struct ClipperFacade;
+
+IDirectDrawClipperVtbl* ClipperVtable();
+
+struct ClipperFacade
 {
-    RE2DJ_DIRECTDRAW7_UNIMPLEMENTED("CreateClipper");
-    if (clipper != nullptr)
+    IDirectDrawClipper interface_value = {ClipperVtable()};
+    volatile LONG references = 1;
+    HWND window = nullptr;
+};
+
+HRESULT WINAPI ClipperQueryInterface(IDirectDrawClipper* self, REFIID riid, void** object)
+{
+    if (object == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    *object = nullptr;
+    if (std::memcmp(&riid, &IID_IUnknown, sizeof(GUID)) == 0 ||
+        std::memcmp(&riid, &kIidDirectDrawClipper, sizeof(GUID)) == 0)
+    {
+        auto* const facade = reinterpret_cast<ClipperFacade*>(self);
+        InterlockedIncrement(&facade->references);
+        *object = self;
+        return S_OK;
+    }
+    return E_NOINTERFACE;
+}
+
+ULONG WINAPI ClipperAddRef(IDirectDrawClipper* self)
+{
+    auto* const facade = reinterpret_cast<ClipperFacade*>(self);
+    return static_cast<ULONG>(InterlockedIncrement(&facade->references));
+}
+
+ULONG WINAPI ClipperRelease(IDirectDrawClipper* self)
+{
+    auto* const facade = reinterpret_cast<ClipperFacade*>(self);
+    const LONG ref = InterlockedDecrement(&facade->references);
+    if (ref <= 0)
+    {
+        delete facade;
+        return 0;
+    }
+    return static_cast<ULONG>(ref);
+}
+
+HRESULT WINAPI ClipperGetClipList(IDirectDrawClipper*, LPRECT, LPRGNDATA, LPDWORD)
+{
+    return DDERR_NOCLIPLIST;
+}
+
+HRESULT WINAPI ClipperGetHWnd(IDirectDrawClipper* self, HWND* window)
+{
+    if (window == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    auto* const facade = reinterpret_cast<ClipperFacade*>(self);
+    *window = facade->window;
+    return DD_OK;
+}
+
+HRESULT WINAPI ClipperInitialize(IDirectDrawClipper*, LPDIRECTDRAW, DWORD)
+{
+    return DD_OK;
+}
+
+HRESULT WINAPI ClipperIsClipListChanged(IDirectDrawClipper*, BOOL* changed)
+{
+    if (changed != nullptr)
+    {
+        *changed = FALSE;
+    }
+    return DD_OK;
+}
+
+HRESULT WINAPI ClipperSetClipList(IDirectDrawClipper*, LPRGNDATA, DWORD)
+{
+    return DD_OK;
+}
+
+HRESULT WINAPI ClipperSetHWnd(IDirectDrawClipper* self, DWORD, HWND window)
+{
+    auto* const facade = reinterpret_cast<ClipperFacade*>(self);
+    facade->window = window;
+    return DD_OK;
+}
+
+IDirectDrawClipperVtbl* ClipperVtable()
+{
+    static IDirectDrawClipperVtbl table = {};
+    static bool initialized = false;
+    if (!initialized)
+    {
+        table.QueryInterface = ClipperQueryInterface;
+        table.AddRef = ClipperAddRef;
+        table.Release = ClipperRelease;
+        table.GetClipList = ClipperGetClipList;
+        table.GetHWnd = ClipperGetHWnd;
+        table.Initialize = ClipperInitialize;
+        table.IsClipListChanged = ClipperIsClipListChanged;
+        table.SetClipList = ClipperSetClipList;
+        table.SetHWnd = ClipperSetHWnd;
+        initialized = true;
+    }
+    return &table;
+}
+
+HRESULT WINAPI Dd7CreateClipper(IDirectDraw7*, DWORD, LPDIRECTDRAWCLIPPER* clipper, IUnknown* outer)
+{
+    if (clipper == nullptr || outer != nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    auto* const facade = new (std::nothrow) ClipperFacade;
+    if (facade == nullptr)
     {
         *clipper = nullptr;
+        return DDERR_OUTOFMEMORY;
     }
-    return DDERR_UNSUPPORTED;
+    *clipper = &facade->interface_value;
+    return DD_OK;
 }
 HRESULT WINAPI Dd7CreatePalette(IDirectDraw7*, DWORD, LPPALETTEENTRY, LPDIRECTDRAWPALETTE* palette, IUnknown*)
 {
