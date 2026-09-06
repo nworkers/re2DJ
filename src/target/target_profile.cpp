@@ -53,9 +53,20 @@ std::string JoinRelative(std::string_view directory, std::string_view name)
 
 bool FingerprintMatches(const hdd::HddRoot& root,
                         const TargetFingerprint& fingerprint,
-                        std::string_view executable_relative_path)
+                        const hdd::ExecutableEntry& executable)
 {
-    const std::string_view directory = ParentDirectory(executable_relative_path);
+    if (fingerprint.entry_point_rva.has_value() &&
+        executable.pe_info.entry_point_rva != *fingerprint.entry_point_rva)
+    {
+        return false;
+    }
+    if (fingerprint.size_of_image.has_value() &&
+        executable.pe_info.size_of_image != *fingerprint.size_of_image)
+    {
+        return false;
+    }
+
+    const std::string_view directory = ParentDirectory(executable.relative_path);
     for (const std::string_view sibling : fingerprint.required_siblings)
     {
         std::filesystem::path resolved;
@@ -67,6 +78,41 @@ bool FingerprintMatches(const hdd::HddRoot& root,
     return true;
 }
 
+BuiltInTargetProfile MakeChdCompatibilityProfile(std::string_view id,
+                                                  std::string_view display_name,
+                                                  std::string_view image_path,
+                                                  std::string_view executable_path,
+                                                  std::string_view note)
+{
+    BuiltInTargetProfile entry;
+    entry.profile.id = std::string(id);
+    entry.profile.display_name = std::string(display_name);
+    entry.profile.hle_profile_id = std::string(id);
+    entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
+    entry.profile.run_defaults.hle_vfs = true;
+    entry.profile.run_defaults.hle_dynamic_vfs = true;
+    entry.profile.run_defaults.hle_d3d3 = true;
+    entry.profile.run_defaults.hle_directsound = true;
+    entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+    entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
+    entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000c3817;
+    entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000c384b;
+    entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+    entry.profile.run_defaults.lptdi.device_mock_path_prefix =
+        "\\\\.\\FEnteDev";
+    entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
+    entry.profile.run_defaults.hle_wts_active_console = true;
+    entry.profile.run_defaults.run_detached = true;
+    entry.profile.run_defaults.default_hdd_image_relative_path =
+        std::string(image_path);
+    entry.profile.executable_relative_path = std::string(executable_path);
+    entry.profile.note = std::string(note);
+    entry.fingerprint.executable_name = "EZ2DJ.EXE";
+    entry.fingerprint.required_siblings = {
+        "EZ2DJ.INI", "FONTKR.DAT", "FONTEN.DAT", "BG", "SOUND", "SYSTEM"};
+    return entry;
+}
+
 }  // namespace
 
 const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
@@ -76,6 +122,87 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
     // later be cited as fact. See docs/analysis/ez2dj-hdd-layout.md.
     static const std::vector<BuiltInTargetProfile> profiles = [] {
         std::vector<BuiltInTargetProfile> table;
+
+        {
+            BuiltInTargetProfile entry;
+            entry.profile.id = "ez2dj1st";
+            entry.profile.display_name = "EZ2DJ The 1st Tracks";
+            entry.profile.hle_profile_id = "ez2dj1st";
+            entry.profile.run_defaults.default_hdd_directory_relative_path =
+                "roms/ez2dj1st";
+            entry.profile.run_defaults.audio_gain_db = 0.0f;
+            entry.profile.run_defaults.demo_volume = 3;
+            entry.profile.run_defaults.hle_command_line = true;
+            entry.profile.run_defaults.hle_windows_directory = true;
+            entry.profile.run_defaults.hle_vfs = true;
+            entry.profile.run_defaults.hle_d3d3 = true;
+            entry.profile.run_defaults.hle_directsound = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
+            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x00038987;
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000389ab;
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\LPTDI";
+            entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            entry.profile.run_defaults.run_detached = true;
+            entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
+                "0900000000000000";
+            // The user-prepared Ez2DJ.exe is the only HDD entry used for profile
+            // identification. Its parent directory becomes the VFS source root
+            // after matching.
+            entry.profile.note =
+                "Uses the user-provided Ez2DJ.exe representative executable. The "
+                "1st SE HLE execution defaults are reused as a compatibility "
+                "baseline; the guest drive and protection contract are not "
+                "independently confirmed for this binary.";
+            entry.fingerprint.executable_name = "Ez2DJ.exe";
+            entry.fingerprint.entry_point_rva = 0x0199b240;
+            entry.fingerprint.size_of_image = 0x019b6000;
+            table.push_back(std::move(entry));
+        }
+
+        {
+            BuiltInTargetProfile entry;
+            entry.profile.id = "ez2dj2nd";
+            entry.profile.display_name = "EZ2DJ 2nd Trax";
+            entry.profile.hle_profile_id = "ez2dj2nd";
+            entry.profile.run_defaults.default_hdd_directory_relative_path =
+                "roms/ez2dj2nd";
+            entry.profile.run_defaults.audio_gain_db = 0.0f;
+            // The 2nd import table has no GetPrivateProfileIntA slot, so the
+            // 1st SE demo-volume injection is not applicable here.
+            entry.profile.run_defaults.demo_volume.reset();
+            // These defaults mirror 1st SE where runtime evidence has not yet
+            // established a different 2nd executable contract.
+            entry.profile.run_defaults.hle_command_line = true;
+            entry.profile.run_defaults.hle_windows_directory = true;
+            entry.profile.run_defaults.hle_vfs = true;
+            entry.profile.run_defaults.hle_d3d3 = true;
+            entry.profile.run_defaults.hle_directsound = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
+            // Confirmed by the first 2nd runtime privileged-instruction fault.
+            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000782d7;
+            // Confirmed by the follow-up 2nd runtime privileged-instruction
+            // fault at the OUT DX,AL helper.
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x0007832b;
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\LPTDI";
+            entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            entry.profile.run_defaults.run_detached = true;
+            entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
+                "0900000000000000";
+            // No System.ini was found in the 2nd dump, so the guest boot path
+            // remains unset until it is confirmed from runtime evidence.
+            entry.profile.note =
+                "The 1st SE HLE execution defaults are reused as a compatibility "
+                "baseline. The 2nd executable's Hardlock, legacy I/O, and guest "
+                "boot contracts are not independently confirmed.";
+            entry.fingerprint.executable_name = "EZ2DJ.exe";
+            entry.fingerprint.entry_point_rva = 0x00079550;
+            entry.fingerprint.size_of_image = 0x0047d000;
+            entry.fingerprint.required_siblings = {
+                "EZ2DJ.ini", "bg", "sound", "system"};
+            table.push_back(std::move(entry));
+        }
 
         {
             BuiltInTargetProfile entry;
@@ -113,27 +240,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.fingerprint.executable_name = "ez2dj.exe";
             entry.fingerprint.required_siblings = {
                 "ez2dj1.exe", "ez2dj.ini", "System.ini", "Songs", "System"};
-            table.push_back(std::move(entry));
-        }
-
-        {
-            BuiltInTargetProfile entry;
-            entry.profile.id = "ez2dj1stse_unpacked";
-            entry.profile.display_name =
-                "EZ2DJ The 1st Tracks Special Edition (unprotected build)";
-            entry.profile.run_defaults.default_hdd_directory_relative_path =
-                "roms/ez2dj1stse";
-            entry.profile.guest_drive_letter = 'D';
-            entry.profile.guest_directory = "\\ez2dj";
-            entry.profile.bring_up_target = true;
-            entry.profile.note =
-                "Not what the cabinet ran. This 1999-12-24 build is unprotected "
-                "and shares its first five sections with ez2dj.exe, which makes "
-                "it the loader bring-up target. Behavior observed through it is "
-                "not automatically original behavior.";
-            entry.fingerprint.executable_name = "ez2dj1.exe";
-            entry.fingerprint.required_siblings = {
-                "ez2dj.exe", "ez2dj.ini", "Songs", "System"};
             table.push_back(std::move(entry));
         }
 
@@ -207,6 +313,7 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.run_detached = true;
             entry.profile.run_defaults.default_hdd_image_relative_path =
                 "roms/ez2dj4th";
+            entry.profile.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
             entry.profile.note =
                 "The real 4thTrax CHD contains a FAT32-LBA volume. The confirmed "
                 "game executable is EZ2DJ/EZ2DJ.EXE; CHD-backed reads stay "
@@ -214,6 +321,35 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.fingerprint.executable_name = "EZ2DJ.EXE";
             entry.fingerprint.required_siblings = {
                 "EZ2DJ.INI", "FONTKR.DAT", "FONTEN.DAT", "BG", "SOUND", "SYSTEM"};
+            table.push_back(std::move(entry));
+        }
+
+        table.push_back(MakeChdCompatibilityProfile(
+            "ez2dj5th",
+            "EZ2DJ 5th Trax",
+            "roms/ez2dj5th",
+            "EZ2DJ/EZ2DJ.EXE",
+            "The 5th CHD is registered against the 4th compatibility baseline. "
+            "Its filesystem and version-specific execution contract are not "
+            "independently confirmed by the current FAT32 reader."));
+
+        {
+            BuiltInTargetProfile entry = MakeChdCompatibilityProfile(
+                "ez2dj6th",
+                "EZ2DJ 6th Trax",
+                "roms/ez2dj6th",
+                "EZ2DJ/EZ2DJ.EXE",
+                "The supplied 6th CHD uses EZ2DJ/EZ2DJ.EXE as a bootstrap and "
+                "EZ2DJ/EZ2DJ6th.EXE as the game executable. The shared CHD, "
+                "VFS, graphics, audio, and device boundaries remain a 4th-based "
+                "compatibility baseline; 6th raw-I/O helper RVAs and Hardlock "
+                "responses are not confirmed.");
+            entry.profile.run_defaults.follow_child_process = true;
+            entry.profile.run_defaults.run_detached = false;
+            entry.profile.run_defaults.lptdi.legacy_io_ports = false;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = false;
+            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0;
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0;
             table.push_back(std::move(entry));
         }
 
@@ -290,7 +426,7 @@ std::vector<TargetProfile> MatchBuiltInTargetProfiles(const hdd::HddRoot& root,
             {
                 continue;
             }
-            if (!FingerprintMatches(root, candidate.fingerprint, entry.relative_path))
+            if (!FingerprintMatches(root, candidate.fingerprint, entry))
             {
                 continue;
             }

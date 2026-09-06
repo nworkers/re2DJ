@@ -18,9 +18,9 @@
 
 ## 공통 특성 / Common traits
 
-**확인됨.** 다섯 실행 파일 전부 `PE32 / i386 / Windows GUI (subsystem 2, 버전 4.0)`, image base `0x00400000`, section alignment `0x00001000`, file alignment `0x00001000`, size of headers `0x00001000`, `dll flags 0x0000`이다. `dll flags 0`은 `DYNAMIC_BASE`(ASLR)와 `NX_COMPAT`(DEP) 어느 쪽도 선호하지 않는다는 뜻이다.
+**확인됨.** 여섯 실행 파일 전부 `PE32 / i386 / Windows GUI (subsystem 2, 버전 4.0)`, image base `0x00400000`, section alignment `0x00001000`, file alignment `0x00001000`, size of headers `0x00001000`, `dll flags 0x0000`이다. `dll flags 0`은 `DYNAMIC_BASE`(ASLR)와 `NX_COMPAT`(DEP) 어느 쪽도 선호하지 않는다는 뜻이다.
 
-*Confirmed. All five executables are PE32 / i386 / Windows GUI (subsystem 2, version 4.0) at image base 0x00400000 with 0x1000 section/file alignment, 0x1000 header size, and dll flags 0x0000 — meaning no ASLR (`DYNAMIC_BASE`) and no DEP opt-in (`NX_COMPAT`).* 
+*Confirmed. All six executables are PE32 / i386 / Windows GUI (subsystem 2, version 4.0) at image base 0x00400000 with 0x1000 section/file alignment, 0x1000 header size, and dll flags 0x0000 — meaning no ASLR (`DYNAMIC_BASE`) and no DEP opt-in (`NX_COMPAT`).*
 
 **확인됨.** `ez2dj1.exe`와 `ez2dj.exe`의 PE TimeDateStamp가 `0x3862df27`로 동일하다. 보호 처리가 타임스탬프를 보존했을 가능성과 함께, 두 파일이 같은 원본 빌드의 관계라는 기존 결론([HDD 레이아웃](ez2dj-hdd-layout.md) 3절)을 뒷받침한다.
 
@@ -32,6 +32,7 @@
 | `ez2dj.exe` | `0x3862df27` | 1st SE |
 | `Test.exe` | `0x38607297` | 1st SE |
 | `PlzPowerOff.exe` | `0x3700321a` | 1st SE |
+| `EZ2DJ.exe` | `0x40fa7af9` | 2nd |
 | `EZ2DJ.EXE` | `0x3baea943` | 3rd |
 
 ---
@@ -364,9 +365,37 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 ---
 
-## 3. `EZ2DJ.EXE` — 3rd Trax 정식 실행 파일 (보호됨)
+## 3. `EZ2DJ.exe` — 2nd Trax 대표 실행 파일 (보호 여부 미확정)
 
 ### 3.1 헤더와 섹션 — 확인됨
+
+`roms/ez2dj2nd/ez2dj/EZ2DJ.exe`를 `re2dj_pe_analyzer`로 확인했다. entry point RVA `0x00079550`은 `.text` 안에 있고, SizeOfImage는 `0x0047d000`이다. import directory는 `.idata`(RVA `0x00473000`, 크기 `0x0000162e`)에 있고, base relocation directory는 `.reloc`(RVA `0x00475000`, 크기 `0x00007ed4`)에 있다.
+
+*Verified `roms/ez2dj2nd/ez2dj/EZ2DJ.exe` with `re2dj_pe_analyzer`. The entry RVA `0x00079550` is in `.text`; SizeOfImage is `0x0047d000`; the import directory is in `.idata` (RVA `0x00473000`, size `0x0000162e`); and the base-relocation directory is in `.reloc` (RVA `0x00475000`, size `0x00007ed4`).*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x000db680` | `0x00001000` | `0x000dc000` | code, exec, read |
+| `.rdata` | `0x000dd000` | `0x0000c0fa` | `0x000dd000` | `0x0000d000` | data, read |
+| `.data` | `0x000ea000` | `0x00388538` | `0x000ea000` | `0x00007000` | data, read, write |
+| `.idata` | `0x00473000` | `0x0000162e` | `0x000f1000` | `0x00002000` | data, read, write |
+| `.reloc` | `0x00475000` | `0x00007ed4` | `0x000f3000` | `0x00008000` | discardable |
+
+**미확정.** entry point가 `.text`에 있다는 것은 1st SE의 `.gtide`와 같은 보호 전용 진입 섹션이 없다는 뜻이지만, Hardlock이나 다른 런타임 보호 계층의 존재를 부정하지는 않는다. 이를 확인하려면 2nd 실행 중 장치/API 경계와 자기 수정 여부를 별도로 관찰해야 한다.
+
+*Unresolved. An entry point in `.text` means there is no protection-specific entry section like 1st SE's `.gtide`, but it does not rule out Hardlock or another runtime protection layer. Confirming that requires separate observation of the 2nd run's device/API boundary and self-modification behavior.*
+
+### 3.2 HDD sibling과 실행 경로 — 부분 확인
+
+같은 `ez2dj` 디렉터리에는 `EZ2DJ.ini`, `bg`, `sound`, `system`이 있고 `System.ini`는 없다. `ez2dj2nd` target profile은 이 네 항목과 PE header를 fingerprint로 사용한다. 1st SE HLE 기본값을 복제한 것은 사용자의 요청에 따른 호환성 기준이며, 2nd 전용 legacy I/O 주소와 Hardlock 응답은 아직 확인되지 않았다.
+
+*The same `ez2dj` directory contains `EZ2DJ.ini`, `bg`, `sound`, and `system`, but no `System.ini`. The `ez2dj2nd` target profile uses those four entries and the PE header as its fingerprint. Copying the 1st SE HLE defaults follows the user's request as a compatibility baseline; 2nd-specific legacy-I/O addresses and Hardlock responses remain unconfirmed.*
+
+---
+
+## 4. `EZ2DJ.EXE` — 3rd Trax 정식 실행 파일 (보호됨)
+
+### 4.1 헤더와 섹션 — 확인됨
 
 entry point RVA `0x00642240`은 `.protect` 섹션 안에 있고, SizeOfImage는 `0x0067c000`이다. import directory RVA `0x0067af90`과 base relocation directory RVA `0x00643000`이 **모두 `.protect` 가상 범위 안**(`0x00642000` + `0x00039251`)에 있다. 즉 import와 reloc까지 패커 섹션이 소유한다.
 
@@ -389,7 +418,7 @@ entry point RVA `0x00642240`은 `.protect` 섹션 안에 있고, SizeOfImage는 
 
 *Inferred: `.data` is 84 KB raw against 5.5 MB virtual — the same zero-filled static-buffer pattern as 1st SE.*
 
-### 3.2 import와 런타임 — 부분 확인
+### 4.2 import와 런타임 — 부분 확인
 
 정적 import table을 `dumpbin /imports`로 확인하면 KERNEL32의 기본 파일 API(`CreateFileA`, `ReadFile`, `WriteFile`, `CloseHandle`, `GetFileSize` 등), `USER32!MessageBoxA`/`UpdateWindow`, `WINMM!mixerGetLineControlsA`, `DSOUND` ordinal `#1`, `DINPUT!DirectInputCreateA`, `DDRAW!DirectDrawCreateEx`, `AVIFIL32!AVIStreamInfoA`, `WS2_32` ordinal `#9`가 있다. 반면 현재 launcher가 제공하는 `DirectDrawCreate`, `ChangeDisplaySettingsExA`, `LoadImageA`, `GetPrivateProfileIntA`, `GetCommandLineA`, `GetWindowsDirectoryA`, `GetFileType` import는 3rd 정적 IAT에 없다. VFS의 선택적 import 처리는 이 차이를 허용하지만, 3rd 기본 정책에는 DirectDraw/display·command-line/Windows-directory·DemoVolume·legacy I/O hook을 넣지 않는다.
 
@@ -437,15 +466,15 @@ entry point RVA `0x00642240`은 `.protect` 섹션 안에 있고, SizeOfImage는 
 
 ---
 
-## 4. 보조 도구 / Auxiliary tools (1st SE)
+## 5. 보조 도구 / Auxiliary tools (1st SE)
 
-### 4.1 `Test.exe` — 서비스·테스트 도구 — 확인됨
+### 5.1 `Test.exe` — 서비스·테스트 도구 — 확인됨
 
 entry RVA `0x0001ada0`(`.text`), SizeOfImage `0x001de000`, 섹션 여섯 개(`.text .rdata .data .idata .rsrc .reloc`). resource directory(`0x001c9000`)와 **비어 있지 않은** base relocation directory(`0x001ce000`, 크기 `0x0000c8d0`)가 있다. 즉 이 실행 파일은 재배치 가능하다. 캐비닛이 부팅에 쓰지 않는 서비스 도구다([HDD 레이아웃](ez2dj-hdd-layout.md) 5절).
 
 *Entry 0x0001ada0 in `.text`, SizeOfImage 0x001de000, six sections including `.rsrc`, and a non-empty base-relocation directory — this service tool is relocatable and is not the cabinet's boot target.*
 
-### 4.2 `PlzPowerOff.exe` — 종료 화면 — 확인됨
+### 5.2 `PlzPowerOff.exe` — 종료 화면 — 확인됨
 
 entry RVA `0x00001e6e`(`.text`), SizeOfImage `0x0001b000`, 섹션 네 개(`.text .rdata .data .rsrc`). characteristics가 `0x010f`로 다른 실행 파일(`0x010e`)과 다르다. 전원 종료 화면 표시용 소형 도구다.
 
@@ -453,7 +482,7 @@ entry RVA `0x00001e6e`(`.text`), SizeOfImage `0x0001b000`, 섹션 네 개(`.text
 
 ---
 
-## 5. 새 실행 파일 추가 절차 / Procedure for a new executable
+## 6. 새 실행 파일 추가 절차 / Procedure for a new executable
 
 1. `re2dj_pe_analyzer <file>`로 헤더·섹션·데이터 디렉터리를 확보하고 이 문서에 섹션을 추가한다. 골격은 1~4절 중 보호 여부에 맞는 것을 따른다.
 2. 보호 섹션이 보이면 import directory의 위치(원본 `.idata` 유지 여부, 패커 섹션 이동 여부)를 확인하고, 필요하면 슬롯 VA까지 해석해 [import 표면 분석](ez2dj-import-surface.md)에 기록한다.
@@ -704,3 +733,27 @@ handling detail changes the branch remains **unresolved**.*
 - directory enumeration 회귀를 제거한 뒤에도 남는 보호 장치 또는 종료 경계가 있는지.
 
 *Whether the new build reaches Music Select after coin insertion, whether overlay and HDD directory entries must be merged, and whether another protection or termination boundary remains after removing this enumeration regression are unresolved.*
+
+---
+
+## 2026-09-06 ez2dj2nd execution-boundary observations
+
+### 확인됨 (Confirmed)
+
+2nd의 첫 제품 실행 로그 `logs/windows_x86_launcher_probe/ez2dj2nd/20260906-020151-651.jsonl`에서는 1st SE용 `--demo-volume` 준비가 2nd 정적 IAT에 없는 `KERNEL32!GetPrivateProfileIntA`를 요구하여 handoff가 관찰되지 않았습니다. 후속 수정 후 로그 `20260906-022550-689.jsonl`에서 `DirectDrawCreateEx` HLE 준비와 `runtime_detached`가 확인됐지만, output helper가 아직 비어 있어 child가 `0xc0000096`으로 종료했습니다.
+
+Attached diagnostic `20260906-022613-342.jsonl`에서 2nd의 실제 byte I/O helper는 input VA `0x004782d7` (RVA `0x000782d7`, `in al,dx`)와 output VA `0x0047832b` (RVA `0x0007832b`, `out dx,al`)로 확인됐습니다. 후속 attached run `20260906-022933-169.jsonl`은 두 주소의 privileged events를 처리했고 2,643개가 모두 first chance였으며 second chance는 0개였습니다. 이는 두 helper 주소가 현재 debugger/runtime 경계에서 처리되고 있음을 확인하지만, port의 물리적 의미나 2nd 전용 Hardlock 계약을 확정하지는 않습니다.
+
+같은 실행의 DDraw trace는 `has_create_ex=true`, `create_ex_patched=true`와 실제 `DirectDrawCreateEx` HLE 호출을 기록했습니다. `preparation_status`의 준비 항목은 모두 true였습니다. product detached 실행은 child가 계속 실행되는 단계까지 도달했으며, 화면과 coin 이후 게임 진행 여부는 사용자의 실제 확인이 필요합니다.
+
+### 미확정 (Unresolved)
+
+- 2nd의 `id_ref`, `id_verify`, Hardlock device path와 응답 계약
+- 2nd의 port별 물리 배선과 입력 의미
+- detached product run이 coin 이후 Music Select까지 도달하는지
+
+*Confirmed: `20260906-020151-651.jsonl` stopped before handoff because the 1st SE demo-volume preparation required a `KERNEL32!GetPrivateProfileIntA` import absent from the 2nd static IAT. After the profile correction, `20260906-022550-689.jsonl` prepared the `DirectDrawCreateEx` HLE and recorded `runtime_detached`, but the child exited with `0xc0000096` while the output helper was still unset.*
+
+*The attached diagnostic `20260906-022613-342.jsonl` identifies the actual 2nd byte-I/O helpers as input VA `0x004782d7` (RVA `0x000782d7`, `in al,dx`) and output VA `0x0047832b` (RVA `0x0007832b`, `out dx,al`). The follow-up attached run `20260906-022933-169.jsonl` handled privileged events at both addresses: all 2,643 recorded events were first chance and none were second chance. This confirms the helper addresses for the current debugger/runtime boundary, but does not establish physical port meanings or the 2nd Hardlock contract.*
+
+*The same run records `has_create_ex=true`, `create_ex_patched=true`, and actual `DirectDrawCreateEx` HLE calls. Every preparation item in `preparation_status` is true. The product detached run reached a continuously running child; whether coin insertion reaches Music Select still requires the user's visual confirmation.*

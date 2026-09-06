@@ -87,7 +87,7 @@ int main(int argc, char** argv)
 {
     std::filesystem::path hdd_path;
     std::filesystem::path helper_path;
-    std::string target_id = "ez2dj1stse_unpacked";
+    std::string target_id = "ez2dj1";
     for (int index = 1; index < argc; ++index)
     {
         const std::string option = argv[index];
@@ -132,9 +132,9 @@ int main(int argc, char** argv)
         re2dj::target::BuildTargetProfiles(root, scan);
     const re2dj::target::TargetProfile* target =
         re2dj::target::FindTargetProfileById(profiles, target_id);
-    if (target == nullptr || !target->bring_up_target)
+    if (target == nullptr)
     {
-        std::fprintf(stderr, "{\"error\":\"bring-up target not found\"}\n");
+        std::fprintf(stderr, "{\"error\":\"target not found\"}\n");
         return 2;
     }
     std::filesystem::path executable;
@@ -142,7 +142,7 @@ int main(int argc, char** argv)
     if (!root.ResolveFile(target->executable_relative_path, &executable) ||
         !ReadFile(executable, &bytes, &error))
     {
-        std::fprintf(stderr, "{\"error\":\"cannot resolve or read bring-up target\"}\n");
+        std::fprintf(stderr, "{\"error\":\"cannot resolve or read target\"}\n");
         return 2;
     }
     re2dj::exe::PeImageInfo info;
@@ -150,7 +150,7 @@ int main(int argc, char** argv)
         !re2dj::exe::IsGuestExecutable(info) ||
         info.image_base > (std::numeric_limits<std::uint32_t>::max)())
     {
-        std::fprintf(stderr, "{\"error\":\"invalid PE32 bring-up target\"}\n");
+        std::fprintf(stderr, "{\"error\":\"invalid PE32 target\"}\n");
         return 2;
     }
     re2dj::platform::windows::NativeHelperBackend backend(helper_path);

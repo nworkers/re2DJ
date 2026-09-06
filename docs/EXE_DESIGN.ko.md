@@ -16,7 +16,7 @@
 
 ## 1. 현재 상태
 
-EZ2DJ The 1st Tracks Special Edition과 3rd Trax 덤프 두 개를 확인했다. 정적 분석으로 확인할 수 있는 항목은 대부분 채워졌고, 실행해야 알 수 있는 항목이 남아 있다.
+EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax 덤프 세 개를 확인했다. 정적 분석으로 확인할 수 있는 항목은 대부분 채워졌고, 실행해야 알 수 있는 항목이 남아 있다.
 
 상세 근거는 [HDD 레이아웃 분석](analysis/ez2dj-hdd-layout.md), [실행 파일 구조 분석](analysis/ez2dj-exe-structures.md), [import 표면 분석](analysis/ez2dj-import-surface.md)에 있다. 실행 파일별 PE 구조·보호 계층 해부·데이터 인벤토리는 구조 문서가 담당하며, 새 실행 파일이 확인될 때마다 그 문서에 섹션이 추가된다. 여기에는 결론만 둔다.
 
@@ -30,14 +30,16 @@ EZ2DJ The 1st Tracks Special Edition과 3rd Trax 덤프 두 개를 확인했다.
 | --- | --- |
 | 1st SE 게임 실행 파일 | **`ez2dj.exe`** — `System.ini`의 `shell=` 항목이 가리키는 것 (보호됨) |
 | 1st SE bring-up 빌드 | `ez2dj1.exe` (보호되지 않음). 캐비닛이 실행한 것은 아니다 |
+| 1st Tracks 대표 실행 파일 | **`Ez2DJ.exe`** — 사용자가 지정한 대표 파일 (`.protect`, 보호됨) |
+| 2nd Tracks 대표 실행 파일 | **`EZ2DJ.exe`** — 사용자가 제공한 대표 파일 (PE entry point는 `.text`, 보호 여부 미확정) |
 | 3rd 게임 실행 파일 | `EZ2DJ.EXE` (보호됨) |
 | PE magic | PE32 (`0x10B`) — 전부 |
 | machine | i386 (`0x014C`) — 전부 |
 | image base | `0x00400000` — 전부 |
 | subsystem | Windows GUI (2) — 전부 |
 | `.reloc` | 섹션은 있으나 `ez2dj1.exe`의 base relocation data directory는 비어 있음 — 선호 주소 고정 |
-| 빌드 시각 | `ez2dj1.exe` 1999-12-24, `ez2dj.exe` 2000-01-01, `EZ2DJ.EXE` 2001-09-24 |
-| 보호 여부 | `ez2dj1.exe`만 보호되지 않음. 나머지는 진입점이 `.gtide` / `.protect` 섹션에 있다 |
+| 빌드 시각 | `ez2dj1.exe` 1999-12-24, `ez2dj.exe` 2000-01-01, 2nd `EZ2DJ.exe` 2004-10-01, `EZ2DJ.EXE` 2001-09-24 |
+| 보호 여부 | `ez2dj1.exe`만 보호되지 않음. 1st SE와 3rd는 진입점이 `.gtide` / `.protect`에 있고, 2nd는 `.text`에 있어 보호 여부가 미확정이다 |
 
 **`ez2dj1.exe`가 Stage 2·3의 첫 실행 대상이다.** 보호 계층을 실행하지 않고 진짜 게임 코드에 도달할 수 있는 유일한 빌드다.
 
@@ -69,7 +71,9 @@ EZ2DJ The 1st Tracks Special Edition과 3rd Trax 덤프 두 개를 확인했다.
 | 점수 저장 | **확인됨** — `rank_0.dat` ~ `rank_2.dat` (각 400 B) |
 | 게스트 작업 디렉터리 | **확인됨(1st SE)** — `\ez2dj`. `System.ini`의 `shell=d:\ez2dj\ez2dj.exe`. 다만 `SetCurrentDirectoryA`를 부르므로 실행 중에 바뀔 수 있다 |
 | 드라이브 문자 | **확인됨(1st SE)** — `D:`. 같은 근거 |
+| 1st Tracks 게스트 경로 | **미확정** — 입력에 `System.ini`가 없음 |
 | 3rd의 게스트 경로 | **미확정** — 3rd 덤프에는 `System.ini`가 없다 |
+| 2nd의 게스트 경로 | **미확정** — 2nd 덤프에는 `System.ini`가 없다 |
 | 자산 파일 형식 | **미확정** — `Songs/` 아래 파일 구조는 아직 열어 보지 않았다 |
 
 ### 2.4 하드웨어 경계 — 미확정
@@ -93,3 +97,6 @@ EZ2DJ The 1st Tracks Special Edition과 3rd Trax 덤프 두 개를 확인했다.
 * 새 사실을 확인하면 같은 작업에서 이 문서와 [EXE_DESIGN.en.md](EXE_DESIGN.en.md)를 함께 갱신한다.
 * 주제별 상세 근거는 `docs/analysis/` 아래 문서에 두고 여기서는 결론과 링크만 남긴다.
 * 바이트 열 전체를 옮겨 적지 않는다. 구조, 오프셋, 관찰된 동작만 기록한다.
+## 2026-09-06 2nd 실행 경계 보정
+
+2nd 실행 로그에서 `GetPrivateProfileIntA` import 부재, legacy I/O helper RVA `0x000782d7`/`0x0007832b`, 그리고 `DirectDrawCreateEx` HLE 연결을 확인했습니다. 따라서 2nd 프로파일은 demo-volume 주입을 사용하지 않으며, D3D IAT 예외는 packer를 보존해야 하는 4th에만 적용합니다. 상세 실행 증거는 [실행 파일 구조 분석](analysis/ez2dj-exe-structures.md)과 [I/O port map](analysis/ez2dj-io-map.md)에 기록합니다.

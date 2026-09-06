@@ -373,6 +373,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/runtime_export_locator.cpp
         src/tools/windows_x86_launcher_probe/remote_module_exports.cpp
         src/tools/windows_x86_launcher_probe/null_context_object_state.cpp
+        src/tools/windows_x86_launcher_probe/child_process_handoff.cpp
         src/tools/windows_x86_launcher_probe/main.cpp
     )
     target_include_directories(re2dj_windows_original_process_backend PUBLIC include)

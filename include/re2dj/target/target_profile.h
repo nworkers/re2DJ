@@ -76,6 +76,9 @@ struct TargetRunDefaults
     // is rewritten; other queries and failures are preserved.
     bool hle_wts_active_console = false;
     TargetLptdiPolicy lptdi;
+    // Starts a known bootstrap executable and follows its version-specific
+    // game child before applying the HLE boundary.
+    bool follow_child_process = false;
     bool run_detached = false;
 };
 
@@ -83,11 +86,16 @@ struct TargetRunDefaults
 //
 // File size and content hashes were rejected as the matching key: both vary per
 // revision and per dump, so either would reject a legitimate dump. A name plus
-// the entries that must sit beside it stays stable across revisions.
+// the entries that must sit beside it stays stable across revisions. Some
+// executable-only profiles also carry optional PE header constraints when a
+// case-insensitive name would otherwise collide with another built-in profile.
 struct TargetFingerprint
 {
     // File name only, matched case-insensitively against the scan.
     std::string_view executable_name;
+    // Optional PE32 header identity, matched against the named executable.
+    std::optional<std::uint32_t> entry_point_rva;
+    std::optional<std::uint32_t> size_of_image;
     // Entries that must resolve in the executable's own directory. These make
     // two profiles distinguishable even when their executables differ only in
     // case, which case-insensitive resolution would otherwise hide.
@@ -101,8 +109,9 @@ struct TargetProfile
     // Short identifier chosen on the command line.
     std::string id;
     std::string display_name;
-    // '/'-separated, relative to the HDD root. Filled in when a fingerprint
-    // matches, so it reflects where the executable actually sits.
+    // '/'-separated, relative to the HDD root. Directory profiles fill this
+    // when a fingerprint matches; CHD profiles set their confirmed internal
+    // executable path directly because they are selected by image shortcut.
     std::string executable_relative_path;
     // Host-side working directory, '/'-separated and relative to the HDD root.
     // Empty means the root itself.

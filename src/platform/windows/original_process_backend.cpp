@@ -14,6 +14,7 @@ bool HasExecutionPolicy(const re2dj::target::TargetRunDefaults& defaults)
            defaults.hle_d3d3 || defaults.hle_directsound ||
            defaults.hle_wts_active_console ||
            defaults.lptdi.legacy_io_ports || defaults.lptdi.device_mock_enabled ||
+           defaults.follow_child_process ||
            defaults.run_detached;
 }
 
@@ -90,6 +91,12 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         *error = "profile expects Hardlock material without a device policy";
         return false;
     }
+    if (options.profile_defaults.follow_child_process &&
+        options.profile_defaults.run_detached)
+    {
+        *error = "profile cannot follow a child process and detach at the same time";
+        return false;
+    }
     // The launcher option that reports an active console also turns on the
     // synthetic device boundary, so a profile cannot request one without the
     // other.
@@ -126,6 +133,11 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         }
     }
     const re2dj::target::TargetRunDefaults& defaults = options.profile_defaults;
+    if (!options.io_config.empty() && !defaults.lptdi.legacy_io_ports)
+    {
+        *error = "I/O configuration requires a profile with legacy I/O ports";
+        return false;
+    }
     if (defaults.hle_command_line)
     {
         arguments->push_back("--hle-command-line");
@@ -173,6 +185,10 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     if (defaults.hle_wts_active_console)
     {
         arguments->push_back("--device-mock-wts-console-session");
+    }
+    if (defaults.follow_child_process)
+    {
+        arguments->push_back("--follow-child");
     }
     if (!defaults.lptdi.device_mock_target_state_hex.empty())
     {

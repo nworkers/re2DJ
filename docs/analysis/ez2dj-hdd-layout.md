@@ -4,16 +4,17 @@
 
 *Topic: the directory structure of a user-supplied HDD dump, which file is the game executable, and that executable's PE characteristics.*
 
-측정 대상 덤프 두 개:
+측정 대상 덤프 세 개:
 
 | 식별자 | 내용 | 파일 수 |
 | --- | --- | --- |
 | 1st SE | EZ2DJ The 1st Tracks Special Edition | 245 디렉터리 / 16,613 파일 |
+| 2nd | EZ2DJ 2nd Trax | 150 디렉터리 / 16,382 파일 |
 | 3rd | EZ2DJ 3rd Trax | 199 디렉터리 / 25,054 파일 |
 
 측정 방법: `re2dj_hdd_probe <dir>`, `re2dj_pe_analyzer <file>`, 그리고 import 테이블 확인용 일회성 스크립트.
 
-*Two dumps were measured with `re2dj_hdd_probe`, `re2dj_pe_analyzer`, and a one-off script for the import tables.*
+*Three dumps were measured with `re2dj_hdd_probe`, `re2dj_pe_analyzer`, and a one-off script for the import tables.*
 
 ---
 
@@ -23,9 +24,9 @@
 
 *Verified `re2dj_pe_analyzer` against Microsoft `dumpbin /headers` on a real 32-bit PE32 GUI executable; every compared field matched.*
 
-두 덤프 모두 `truncated : no`로 완주했고, 발견한 실행 파일 다섯 개 전부 PE 헤더를 읽어냈다.
+세 덤프 모두 `truncated : no`로 완주했고, 발견한 실행 파일 여섯 개 전부 PE 헤더를 읽어냈다.
 
-*Both dumps were walked to completion and all five executables found had readable PE headers.*
+*All three dumps were walked to completion and all six executables found had readable PE headers.*
 
 ---
 
@@ -71,7 +72,37 @@
 
 ---
 
-## 3. 확인됨: 실행 파일 PE 특성 / Confirmed: executable PE characteristics
+## 3. 확인됨: 대표 실행 파일 추가 분석 / Confirmed: additional representative executables
+
+### 3.1 1st Tracks 대표 실행 파일 / 1st Tracks representative executable
+
+사용자가 제공한 새 입력에서 `roms/ez2dj1st/ez2dj/Ez2DJ.exe`를 대표 실행 파일로 확인했다. `re2dj_pe_analyzer` 결과는 PE32, i386, image base `0x00400000`, entry point RVA `0x0199b240`, `SizeOfImage 0x019b6000`, 6개 섹션이며 진입점은 `.protect`에 있다. 따라서 보호된 1st Tracks 실행 파일이라는 분류는 **확인됨**이다.
+
+*The user-provided input identifies `roms/ez2dj1st/ez2dj/Ez2DJ.exe` as the representative executable. `re2dj_pe_analyzer` reports PE32, i386, image base `0x00400000`, entry point RVA `0x0199b240`, `SizeOfImage 0x019b6000`, six sections, and an entry point in `.protect`. The classification as a protected 1st Tracks executable is therefore **confirmed**.*
+
+이 입력에는 `System.ini`가 확인되지 않아 게스트 드라이브 문자와 부팅 shell 경로는 **미확정**으로 둔다. `ez2dj1st` built-in profile은 사용자가 지정한 `Ez2DJ.exe` 자체의 이름과 PE header만 fingerprint로 사용하며, 다른 실행 파일이나 보조 항목을 식별 근거로 사용하지 않는다. PE header 조건은 대소문자 무시 이름 비교에서 기존 `ez2dj.exe` 프로파일과 충돌하는 것을 막는다. `ez2dj1stse`의 HLE 기본값을 복제한 것은 실행을 위한 **호환성 가정**이며, 이 바이너리의 독립 실행으로 아직 확정하지 않았다. [Task 200 설계](../design/20260906-200-ez2dj1st-target-profile.md)와 [작업 로그](../work-logs/20260906-200-ez2dj1st-target-profile.md)에 이 구분을 기록한다.
+
+*No `System.ini` was found in this input, so its guest drive letter and boot-shell path remain **unresolved**. The `ez2dj1st` built-in profile uses only the user-specified `Ez2DJ.exe` name and that executable's PE header as its fingerprint; it does not use another executable or auxiliary entry as identification evidence. The PE header constraints avoid a case-insensitive collision with the existing `ez2dj.exe` profile. Copying the `ez2dj1stse` HLE defaults is a **compatibility assumption** for execution, not a fact independently confirmed by running this binary. The distinction is recorded in the [Task 200 design](../design/20260906-200-ez2dj1st-target-profile.md) and [work log](../work-logs/20260906-200-ez2dj1st-target-profile.md).*
+
+---
+
+### 3.2 2nd Trax 대표 실행 파일 / 2nd Trax representative executable
+
+**확인됨.** 사용자가 제공한 `roms/ez2dj2nd/ez2dj/EZ2DJ.exe`는 PE32, i386, Windows GUI이며 image base `0x00400000`, entry point RVA `0x00079550`, `SizeOfImage 0x0047d000`, 5개 섹션을 가진다. entry point는 `.text` 섹션 안에 있다. 이는 1st SE처럼 entry point가 보호 전용 섹션에 있는 구조라는 근거가 아니다.
+
+*Confirmed. The user-provided `roms/ez2dj2nd/ez2dj/EZ2DJ.exe` is PE32, i386, and Windows GUI with image base `0x00400000`, entry RVA `0x00079550`, `SizeOfImage 0x0047d000`, and five sections. Its entry point is in `.text`; this does not establish a protection-section layout like 1st SE.*
+
+**확인됨.** 2nd 덤프의 대표 실행 파일 옆에는 `EZ2DJ.ini`, `bg`, `sound`, `system`이 있고 `System.ini`는 발견되지 않았다. 따라서 `ez2dj2nd` built-in fingerprint는 이 네 sibling과 PE header를 함께 사용하며, 게스트 드라이브 문자와 부트 디렉터리는 **미확정**으로 둔다.
+
+*Confirmed. The 2nd dump places `EZ2DJ.ini`, `bg`, `sound`, and `system` beside the representative executable, and no `System.ini` was found. The `ez2dj2nd` built-in fingerprint therefore uses these four siblings together with the PE header; the guest drive letter and boot directory remain **unresolved**.*
+
+**추정.** 사용자의 요청에 따라 1st SE HLE·실행 기본값을 2nd 프로파일의 호환성 기준으로 복제했다. 2nd 전용 Hardlock, legacy I/O 주소, 게스트 부트 계약은 별도 실행·정적 분석으로 확인해야 하며, 현재 프로파일 값은 그 사실을 증명하지 않는다.
+
+*Inferred. At the user's request, the 1st SE HLE and execution defaults were copied as the 2nd profile's compatibility baseline. The 2nd-specific Hardlock, legacy-I/O addresses, and guest boot contract require separate runtime or static analysis; the current profile values do not prove them.*
+
+---
+
+## 4. 확인됨: 실행 파일 PE 특성 / Confirmed: executable PE characteristics
 
 모든 실행 파일이 `PE32 / i386 / Windows GUI / ImageBase 0x00400000`이다.
 
@@ -81,6 +112,7 @@
 | --- | --- | --- | --- | --- |
 | `ez2dj1.exe` (1st SE) | `0x0003a640` | `.text` | `0x01ad1000` | **없음** |
 | `ez2dj.exe` (1st SE) | `0x01ad23cf` | `.gtide` | `0x01ada000` | **있음** |
+| `EZ2DJ.exe` (2nd) | `0x00079550` | `.text` | `0x0047d000` | **미확정** |
 | `EZ2DJ.EXE` (3rd) | `0x00642240` | `.protect` | `0x0067c000` | **있음** |
 | `Test.exe` (1st SE) | `0x0001ada0` | `.text` | — | 없음 |
 | `PlzPowerOff.exe` (1st SE) | `0x00001e6e` | `.text` | — | 없음 |
@@ -316,9 +348,9 @@ Windows 9x는 `[boot]`의 `shell=` 항목이 가리키는 프로그램을 Explor
 
 **해결됨 — 기본 타깃 선택.** `re2dj --hdd <1st SE dump>`가 기본 타깃으로 `Test.exe`를 골랐다. 후보 순위가 파일 크기 내림차순이라 서비스 도구(1.86 MB)가 게임(561 KB)보다 먼저 왔기 때문이다.
 
-크기는 "어느 것이 게임인가"의 근거가 못 된다. 순위 휴리스틱을 손보는 대신 **내장 타깃 프로파일**을 추가해 해결했다. 지금은 두 덤프 모두 정확한 기본 타깃(`ez2dj1stse` → `ez2dj.exe`, `ez2dj3rd` → `EZ2DJ.EXE`)을 고른다. 설계는 [20260822-005](../design/20260822-005-built-in-target-profiles.md)에 있다.
+크기는 "어느 것이 게임인가"의 근거가 못 된다. 순위 휴리스틱을 손보는 대신 **내장 타깃 프로파일**을 추가해 해결했다. 지금은 확인된 세 덤프가 각각 정확한 기본 타깃(`ez2dj1stse` → `ez2dj.exe`, `ez2dj2nd` → `ez2dj/EZ2DJ.exe`, `ez2dj3rd` → `EZ2DJ.EXE`)을 고른다. 설계는 [20260822-005](../design/20260822-005-built-in-target-profiles.md)에 있다.
 
-*Resolved: the default target used to be `Test.exe` for the 1st SE dump, because ranking broke ties by descending file size. Size is not evidence of which file is the game, so the fix was built-in target profiles rather than a better heuristic. Both dumps now select correctly.*
+*Resolved: the default target used to be `Test.exe` for the 1st SE dump, because ranking broke ties by descending file size. Size is not evidence of which file is the game, so the fix was built-in target profiles rather than a better heuristic. The three inspected dumps now select correctly.*
 
 **미해결 — 비ASCII 경로 출력.** `re2dj_hdd_probe`가 비ASCII 문자가 든 디렉터리 경로를 콘솔에 깨진 형태로 출력한다. 해석 자체는 정상이고 출력만 깨진다. `std::filesystem::path::string()`이 Windows에서 활성 ANSI 코드 페이지로 변환하기 때문이다.
 

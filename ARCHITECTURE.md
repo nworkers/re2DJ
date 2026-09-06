@@ -54,7 +54,7 @@ flowchart LR
 | 게스트 현재 디렉터리 | `src/platform/windows/injected_runtime.cpp` | `SetCurrentDirectoryA`/`GetCurrentDirectoryA` HLE와 상대 이름 해석. 호스트 프로세스 작업 디렉터리는 바꾸지 않는다 | **[구현됨]** |
 | 게스트 디렉터리 검색 | `src/platform/windows/injected_runtime.cpp` | `FindFirstFileA`/`FindNextFileA`/`FindClose` HLE 및 wildcard(*, ?) 매칭. directory-backed HDD는 게스트 CWD 기준 native 검색 패턴을 사용하고, CHD는 합성 handle을 사용한다 | **[구현됨]** |
 | 실행 파일 분석 | `include/re2dj/exe/`, `src/exe/` | PE32 헤더·섹션·디렉터리 판독 | **[구현됨]** (헤더·섹션), **[계획]** (import/reloc) |
-| 타깃 프로파일 | `include/re2dj/target/`, `src/target/` | 버전별 실행 파일 경로, 작업 디렉터리, HLE 프로파일 ID | **[구현됨]** (자료구조·감지), **[계획]** (버전별 항목) |
+| 타깃 프로파일 | `include/re2dj/target/`, `src/target/` | 버전별 실행 파일 경로, 작업 디렉터리, HLE 프로파일 ID | **[구현됨]** (자료구조·감지·1st/2nd/3rd/4th/5th/6th 프로파일) |
 | 런타임 | `include/re2dj/runtime/`, `src/runtime/` | 게스트 주소 공간, 레지스터 컨텍스트, 실행 backend 인터페이스 | **[계획]** |
 | HLE | `include/re2dj/hle/`, `src/hle/` | kernel32/user32/gdi32/ddraw/dsound/dinput 모듈 테이블과 구현 | **[계획]** |
 | HLE — Hardlock | `include/re2dj/hle/hardlock/`, `src/hle/hardlock/` | Hardlock 장치 경계. 네 IOCTL 응답, descriptor 판독, 응답 매핑 적용 | **[구현됨]** |
@@ -352,30 +352,51 @@ HDD 스캔은 이 판독기를 사용해 각 실행 파일을 분류한다. `mac
 
 *Version-specific differences live in `re2dj::target::TargetProfile`.*
 
-프로파일의 `run_defaults`는 shortcut 기본 HDD 경로와 해당 원본 빌드에 대해 확인된 Windows HLE·detached 실행 정책을 소유한다. 감지 전용 프로파일은 이 값을 비워 검증되지 않은 실행 정책을 상속하지 않는다. CLI의 `--hdd`, `--target`, `--fullscreen`/`--windowed`, 오디오 값과 I/O 설정은 프로파일 기본값을 덮어쓴다.
+프로파일의 `run_defaults`는 shortcut 기본 HDD 경로와 해당 원본 빌드에 대해 확인되었거나 명시적인 호환성 기준으로 지정된 Windows HLE·detached 실행 정책을 소유한다. 감지 전용 프로파일은 이 값을 비워 검증되지 않은 실행 정책을 상속하지 않는다. CLI의 `--hdd`, `--target`, `--fullscreen`/`--windowed`, 오디오 값과 I/O 설정은 프로파일 기본값을 덮어쓴다.
 
-*`run_defaults` owns the shortcut HDD path and the Windows HLE/detached execution policy confirmed for that original build. Detection-only profiles keep it empty, so they cannot inherit an unverified execution policy. CLI `--hdd`, `--target`, `--fullscreen`/`--windowed`, audio values, and I/O settings override the profile defaults.*
+*`run_defaults` owns the shortcut HDD path and the Windows HLE/detached execution policy confirmed for that original build or explicitly designated as a compatibility baseline. Detection-only profiles keep it empty, so they cannot inherit an unverified execution policy. CLI `--hdd`, `--target`, `--fullscreen`/`--windowed`, audio values, and I/O settings override the profile defaults.*
 
-`run_defaults.hdd_input_kind`는 추출 디렉터리와 MAME CHD를 구분하고, CHD profile은 `default_hdd_image_relative_path`에 `roms/ez2dj4th`를 저장한다. 실제 4th CHD의 FAT32 경로와 PE32를 `re2dj_chd_probe`와 `Fat32Volume`으로 확인하며, `re2dj ez2dj4th --run`은 Windows x86에서 executable staging과 CHD-backed VFS 경계를 사용한다.
+`run_defaults.hdd_input_kind`는 추출 디렉터리와 MAME CHD를 구분하고, CHD profile은 `default_hdd_image_relative_path`에 각 버전의 이미지 경로를, `executable_relative_path`에 확인된 CHD 내부 실행파일 경로를 저장한다. Windows x86 CHD 실행은 선택한 실행파일 하나만 profile별 임시 경로에 staging하고 나머지 파일은 CHD-backed VFS에서 지연 읽기한다. 6th는 bootstrap `EZ2DJ.EXE`를 선택하고 `follow_child_process`로 `EZ2DJ6th.EXE` 생성 이벤트를 추적한 뒤 실제 게임 child에 HLE를 주입한다. 5th는 현재 FAT32 reader가 인식하지 못한다.
 
-*`run_defaults.hdd_input_kind` distinguishes extracted directories from MAME CHDs, and the CHD profile stores `roms/ez2dj4th` in `default_hdd_image_relative_path`. The real 4th CHD FAT32 path and PE32 are confirmed by `re2dj_chd_probe` and `Fat32Volume`; `re2dj ez2dj4th --run` uses executable staging and the CHD-backed VFS boundary on Windows x86.*
+*`run_defaults.hdd_input_kind` distinguishes extracted directories from MAME CHDs. CHD profiles store the image shortcut in `default_hdd_image_relative_path` and the confirmed internal executable in `executable_relative_path`. Windows x86 stages only that executable under a profile-specific temporary root and leaves all other files to lazy CHD-backed VFS reads. The 6th profile selects the `EZ2DJ.EXE` bootstrap, follows its `EZ2DJ6th.EXE` child through `DEBUG_PROCESS`, and injects the HLE boundary into the actual game child. The current FAT32 reader still does not recognise the 5th image.*
+
+Windows x86의 공용 32-bit IAT writer는 먼저 `WriteProcessMemory`를 시도하고, 읽기 전용 PE section 때문에 실패하면 child가 suspended인 동안 해당 4-byte 범위만 임시 `PAGE_READWRITE`로 전환하여 다시 쓴 뒤 원래 보호 속성을 복원한다.
+
+*The shared Windows x86 IAT writer first tries `WriteProcessMemory`. If a read-only PE section rejects the write, it temporarily changes only the four-byte range to `PAGE_READWRITE` while the child is suspended, retries the write, and restores the original protection.*
+
+4th에서 확인한 raw-I/O helper RVA는 명령어 trap 위치이므로 다른 버전에 자동 상속하지 않는다. 6th는 공용 CHD/VFS/DirectX/device 경계만 호환성 기준으로 사용하고, 자체 helper 주소가 확인될 때까지 raw-I/O trap을 비활성화한다.
+
+*Raw-I/O helper RVAs confirmed for 4th are instruction-trap locations and are not inherited automatically by another version. The 6th profile reuses only the shared CHD, VFS, DirectX, and device boundaries as a compatibility baseline, leaving raw-I/O traps disabled until its own helper addresses are confirmed.*
+
+프로파일의 `legacy_io_ports`가 꺼진 실행 경로에서는 제품 CLI가 `--io-config`를
+launcher에 전달하지 않는다. 따라서 6th처럼 bootstrap child-follow를 사용하는
+프로파일에 1st/4th용 설정 파일을 함께 지정해도 launcher의 detached-only 검증에
+걸리지 않으며, 해당 옵션은 무시되었다는 안내만 남긴다.
+
+*When a profile disables `legacy_io_ports`, the product CLI does not forward
+`--io-config` to the launcher. A shared command may therefore retain the 1st/4th
+configuration option for a 6th bootstrap child-follow run without triggering the
+launcher's detached-only validation; the CLI reports that the option was ignored.*
 
 ### 지문으로 덤프를 식별한다 / Dumps are identified by fingerprint
 
-내장 프로파일은 **실행 파일 이름 + 그 옆에 반드시 있어야 하는 항목 목록**으로 덤프를 식별한다. 파일 크기나 해시는 리비전마다 달라져 정상 덤프를 거부하므로 쓰지 않는다.
+내장 프로파일은 기본적으로 **실행 파일 이름 + 그 옆에 반드시 있어야 하는 항목 목록**으로 덤프를 식별한다. 파일 크기나 해시는 리비전마다 달라져 정상 덤프를 거부하므로 쓰지 않는다. 다만 다른 프로파일과 이름이 충돌하는 실행 파일 전용 프로파일은 해당 실행 파일의 PE header 조건을 추가할 수 있다.
 
-*A built-in profile identifies a dump by an **executable name plus the entries that must sit beside it**. File size and hashes are rejected as keys because they vary per revision and would reject a legitimate dump.*
+*A built-in profile normally identifies a dump by an **executable name plus the entries that must sit beside it**. File size and hashes are rejected as keys because they vary per revision and would reject a legitimate dump. An executable-only profile may add PE header constraints when its case-insensitive name collides with another profile.*
 
 | 프로파일 | 실행 파일 | 필수 형제 항목 |
 | --- | --- | --- |
 | `ez2dj1stse` | `ez2dj.exe` | `ez2dj1.exe`, `ez2dj.ini`, `System.ini`, `Songs`, `System` |
-| `ez2dj1stse_unpacked` | `ez2dj1.exe` | `ez2dj.exe`, `ez2dj.ini`, `Songs`, `System` |
+| `ez2dj1st` | `Ez2DJ.exe` | executable name + entry RVA `0x0199b240` + SizeOfImage `0x019b6000` |
+| `ez2dj2nd` | `EZ2DJ.exe` | `EZ2DJ.ini`, `bg`, `sound`, `system` + entry RVA `0x00079550` + SizeOfImage `0x0047d000` |
 | `ez2dj3rd` | `EZ2DJ.EXE` | `EZ2DJ.INI`, `FONTKR.DAT`, `BG`, `Sound`, `system` |
 | `ez2dj4th` | `EZ2DJ/EZ2DJ.EXE` inside FAT32 CHD | `EZ2DJ.INI`, `FONTKR.DAT`, `FONTEN.DAT`, `BG`, `SOUND`, `SYSTEM` |
+| `ez2dj5th` | `EZ2DJ/EZ2DJ.EXE` inside CHD shortcut | 4th-based compatibility profile; filesystem not yet recognised |
+| `ez2dj6th` | `EZ2DJ/EZ2DJ6th.EXE` inside FAT32 CHD | `EZ2DJ.EXE` is a bootstrap; remaining contracts are under runtime verification |
 
-형제 항목이 필요한 이유는 경로 해석이 대소문자를 무시하기 때문이다. 3rd의 `EZ2DJ.EXE`라는 이름만으로는 1st SE의 `ez2dj.exe`와 구별되지 않는다. 두 지문은 서로소라서 오인이 일어나지 않는다.
+기본적으로 형제 항목은 경로 해석이 대소문자를 무시하는 환경에서 프로파일을 구별하기 위해 사용한다. `ez2dj1st`는 사용자가 지정한 대표 실행 파일 자체의 이름과 PE header만 식별 근거로 사용하고, `ez2dj2nd`는 sibling과 PE header를 함께 사용한다. CHD profile은 image shortcut으로 선택되므로 extracted-directory fingerprint 매칭 대상이 아니다. 이 매칭 정책은 프로파일 선택을 위한 것이며, 버전별 보호·legacy I/O·게스트 부트 계약을 자동으로 확정하지 않는다.
 
-*The siblings are required because path resolution is case-insensitive, so the name `EZ2DJ.EXE` alone does not distinguish 3rd from 1st SE. The two fingerprints are disjoint, so neither dump matches the other.*
+*Normally siblings distinguish profiles when path resolution is case-insensitive. `ez2dj1st` uses only the user-designated representative executable's name and PE header, while `ez2dj2nd` uses siblings and PE headers together. CHD profiles are selected through image shortcuts rather than extracted-directory fingerprint matching. This policy selects a profile; it does not automatically confirm version-specific protection, legacy-I/O, or guest-boot contracts.*
 
 실행 파일을 스캔 결과에서 찾으므로 사용자가 상위 디렉터리를 지정해도 걸린다. 형제 항목은 그 실행 파일의 디렉터리를 기준으로 확인한다.
 
@@ -431,6 +452,10 @@ flowchart TD
 플랫폼 중립 `hardlock_api_descriptor` parser는 packed 32-bit `HL_API`의 52바이트 고정 prefix를 raw byte view에서 복사하며 guest `Data` pointer를 역참조하지 않는다. Windows injected runtime은 synthetic `0x9c40244c`/`0x9c402458`에 한해서만 기존 bounded device trace budget 안에 scalar와 `ID_Ref[8]`/`ID_Verify[8]`를 기록한 뒤 기존 response policy를 그대로 실행한다. reserved bytes, block payload와 전체 descriptor는 기록하지 않는다. 두 번의 독립 원본 실행으로 nonzero 3rd ID 필드가 안정적으로 일치함을 확인했으며, 이 값은 식별된 seed나 유효 Function `0x0e` 응답이 아니라 solver 입력으로 유지한다.
 
 *The platform-neutral `hardlock_api_descriptor` parser copies the 52-byte fixed prefix of the packed 32-bit `HL_API` from a raw byte view without dereferencing the guest `Data` pointer. For synthetic `0x9c40244c` and `0x9c402458` only, the Windows injected runtime records scalars plus `ID_Ref[8]` and `ID_Verify[8]` within the existing bounded device-trace budget, then runs the existing response policy unchanged. It records no reserved bytes, block payload, or complete descriptor. Two independent original runs now confirm stable nonzero 3rd ID fields; they remain solver inputs rather than identified seeds or valid Function `0x0e` responses.*
+
+Task 205는 descriptor 분석을 프로파일 제작 때 반복할 수 있도록 launcher 전용 `--hardlock-descriptor-dump <path>`를 추가했습니다. 옵션은 injected runtime의 export에 Git-ignored 로컬 출력 경로와 선택 프로파일 ID를 전달하고, 첫 번째 유효한 256바이트 descriptor에서 `module_address`, `id_ref`, `id_verify`를 한 번 기록합니다. 일반 VFS trace에는 헤더 scalar와 64-bit FNV-1a 해시만 남으며, raw ID는 사용자가 명시한 로컬 파일 외에는 기록하지 않습니다.
+
+*Task 205 adds the launcher-only `--hardlock-descriptor-dump <path>` option so descriptor analysis can be repeated while creating profiles. The option passes a Git-ignored local output path and the selected profile ID to injected-runtime exports, then writes `module_address`, `id_ref`, and `id_verify` once from the first valid 256-byte descriptor. Normal VFS traces retain only header scalars and 64-bit FNV-1a digests; raw IDs are written nowhere except the explicitly selected local file.*
 
 Task 107의 오프라인 SMT 분석은 두 ID 사이의 유일한 5-byte 중간 control 값을 확인했지만, 세 16-bit seed 제약에는 최소 11개의 서로 다른 검증 해가 존재했습니다. 따라서 runtime profile에는 seed 후보를 넣지 않으며, 두 번째 독립 challenge/response 또는 원본 Function `0x0e` 판별 oracle이 확보될 때까지 synthetic response policy를 실제 Hardlock emulation으로 승격하지 않습니다.
 
@@ -779,3 +804,9 @@ backend for these paths rather than treating them as VFS files.*
 `run_defaults.lptdi`의 raw I/O 정책을 capability, 제품 기본 활성화, executable별 helper RVA로 세분화했다. `LegacyIoPortBus`와 `Ez2DjIoBoard`는 공용으로 유지하며, 1st는 `0x00038987`/`0x000389ab`를 기본 활성화한다. 4th는 확인된 byte read `0x000c3817`만 explicit diagnostic opt-in으로 허용하고 write RVA와 제품 기본 활성화는 비워 둔다. 4th 진단은 이 read를 처리한 뒤 `0x00434137` access violation까지 진행했으며, 응답값은 아직 물리 보드 응답으로 확정하지 않았다.
 
 The raw-I/O policy in `run_defaults.lptdi` is split into capability, product-default activation, and executable-specific helper RVAs. `LegacyIoPortBus` and `Ez2DjIoBoard` remain shared; 1st defaults to `0x00038987`/`0x000389ab`. 4th permits explicit diagnostic opt-in only for confirmed byte-read RVA `0x000c3817`, with no write RVA and no product default. The 4th diagnostic handled this read and advanced to an access violation at `0x00434137`; the response is not yet identified as a physical board response.
+
+## 2026-09-06 ez2dj2nd execution policy
+
+`ez2dj2nd`는 실행 중 fault로 확인된 실행 파일별 raw-I/O helper RVA `0x000782d7`(`IN AL,DX`)와 `0x0007832b`(`OUT DX,AL`)를 사용합니다. 정적 IAT에 `GetPrivateProfileIntA`가 없으므로 `demo_volume` 기본값은 unset입니다. Windows x86 launcher는 일반 타깃의 `DirectDrawCreateEx`를 주입 runtime HLE thunk로 연결하고, packer 보존이 필요한 `ez2dj4th`에만 patch 생략 예외를 둡니다. handoff 전에 `preparation_status` 진단 이벤트를 기록하고, 앞선 선택적 조회가 오류 문자열을 지운 경우 이름이 있는 fallback 오류를 생성합니다. 이 구조는 실행 파일별 가정을 프로파일/launcher 경계에 두며 Hardlock `id_ref`/`id_verify`는 현재 정책에 포함하지 않습니다.
+
+`ez2dj2nd` now carries executable-specific raw-I/O helper RVAs `0x000782d7` for `IN AL,DX` and `0x0007832b` for `OUT DX,AL`, both confirmed by attached runtime faults. Its `demo_volume` default is unset because its static IAT has no `GetPrivateProfileIntA`. The Windows x86 launcher patches `DirectDrawCreateEx` into the injected HLE runtime for ordinary targets, while retaining the no-write packer exception only for `ez2dj4th`. Before handoff, the launcher records a `preparation_status` event and derives a named fallback error if an earlier optional lookup erased the error text. This keeps per-executable assumptions at the profile/launcher boundary and leaves Hardlock `id_ref`/`id_verify` outside the current policy.*

@@ -147,21 +147,21 @@ build/linux-x64-debug/bin/re2dj --hdd /path/to/ez2dj_hdd
 
 *It selects a launch target from the scan and prints a summary. Use `--target <id>` to choose a different candidate and `--list-targets` to list candidates only.*
 
-확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 것은 EZ2DJ The 1st Tracks Special Edition과 3rd Trax이며, 그 밖의 덤프도 스캔으로 감지됩니다.
+확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 것은 EZ2DJ The 1st Tracks, 2nd Trax, 3rd Trax와 4th·5th·6th CHD shortcut입니다. 그 밖의 덤프도 스캔으로 감지됩니다.
 
-*A recognised dump is matched by a built-in profile. EZ2DJ The 1st Tracks Special Edition and 3rd Trax are built in today; anything else is still found by scanning.*
+*A recognised dump is matched by a built-in profile. EZ2DJ The 1st Tracks, 2nd Trax, 3rd Trax, and the 4th/5th/6th CHD shortcuts are built in today; anything else is still found by scanning.*
 
 ```text
 targets:
   * ez2dj1stse             ez2dj.exe                built-in
-    ez2dj1stse_unpacked    ez2dj1.exe               built-in, bring-up only
+    ez2dj1                  ez2dj1.exe               detected
     test                   Test.exe                 detected
     plzpoweroff            PlzPowerOff.exe          detected
 ```
 
-`bring-up only`는 캐비닛이 실행한 것이 아니라 보호되지 않아 로더 개발에 쓰는 빌드라는 뜻입니다. 그것으로 관찰한 동작을 원본 동작으로 인용하면 안 됩니다.
+`ez2dj1.exe`는 더 이상 별도 built-in 프로파일이 아니며, 1st SE 덤프에 존재할 때 일반 detected 항목으로만 표시됩니다. 따라서 이 파일에서 관찰한 동작은 정식 캐비닛 실행 파일의 동작으로 자동 인용하지 않습니다.
 
-*`bring-up only` marks a build the cabinet never ran — it is unprotected and therefore useful for loader development, so behavior observed through it is not original behavior.*
+*`ez2dj1.exe` is no longer a separate built-in profile. When present in a 1st SE dump it appears only as a normal detected entry, so behavior observed through it is not automatically cited as the canonical cabinet behavior.*
 
 ### 6. 경로 해석 확인 / Check path resolution
 

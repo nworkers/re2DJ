@@ -74,19 +74,22 @@ re2dj --hdd /path/to/ez2dj_hdd
 
 *With several candidates, list them with `--list-targets` and select one with `--target <id>`. A duplicate executable name in a backup folder gets a `_2`-style suffix on the later entry.*
 
-확인된 덤프는 **내장 프로파일**이 자동으로 잡습니다. 프로파일은 실행 파일 이름과 그 옆에 반드시 있어야 하는 항목들로 덤프를 식별하므로, 상위 디렉터리를 지정해도 걸립니다.
+확인된 덤프는 **내장 프로파일**이 자동으로 잡습니다. 프로파일은 실행 파일 이름과 그 옆에 반드시 있어야 하는 항목들로 덤프를 식별하고, 4th·5th·6th는 CHD shortcut으로 선택하므로 상위 디렉터리를 지정해도 걸립니다.
 
-*A recognised dump is matched automatically by a **built-in profile**, which identifies it by the executable name plus the entries that must sit beside it, so pointing at a parent directory still works.*
+*A recognised dump is matched automatically by a **built-in profile**. Directory-backed profiles use the executable name plus required siblings, while 4th/5th/6th use CHD shortcuts; pointing at a parent directory still works.*
 
 | 프로파일 | 실행 파일 | 비고 |
 | --- | --- | --- |
 | `ez2dj1stse` | `ez2dj.exe` | 캐비닛이 실제로 실행한 것. 보호되어 있음 |
-| `ez2dj1stse_unpacked` | `ez2dj1.exe` | **캐비닛이 실행한 것이 아님.** 보호되지 않아 로더 개발용 |
+| `ez2dj2nd` | `ez2dj/EZ2DJ.exe` | 보호 계약은 별도 확인 필요 |
 | `ez2dj3rd` | `EZ2DJ.EXE` | 보호되어 있음 |
+| `ez2dj4th` | `EZ2DJ/EZ2DJ.EXE` | FAT32 CHD shortcut |
+| `ez2dj5th` | `EZ2DJ/EZ2DJ.EXE` | 4th 기반 shortcut; 현재 reader가 파일시스템을 인식하지 못함 |
+| `ez2dj6th` | `EZ2DJ/EZ2DJ6th.EXE` | FAT32 CHD shortcut; `EZ2DJ.EXE`는 bootstrap |
 
-목록의 `built-in` 표시는 확인된 덤프, `detected` 표시는 스캔으로만 찾은 실행 파일입니다. `bring-up only`가 붙은 항목은 원본 동작의 근거로 삼으면 안 됩니다.
+목록의 `built-in` 표시는 확인된 덤프, `detected` 표시는 스캔으로만 찾은 실행 파일입니다. 1st SE의 `ez2dj1.exe`는 별도 built-in이 아니라 detected 항목이며, 원본 캐비닛 실행 파일의 동작으로 자동 간주하지 않습니다.
 
-*In the list, `built-in` marks a recognised dump and `detected` marks an executable found only by scanning. An entry flagged `bring-up only` must not be treated as evidence of original behavior.*
+*In the list, `built-in` marks a recognised dump and `detected` marks an executable found only by scanning. The 1st SE `ez2dj1.exe` is detected rather than a separate built-in profile and must not be treated as canonical cabinet behavior automatically.*
 
 프로파일에 기본 HDD 경로가 있으면 저장소 root에서 profile ID만으로 실행할 수 있다. 3rd 덤프를 `roms/ez2dj3rd`에 둔 경우 Windows에서는 다음 명령이 `ez2dj/EZ2DJ.EXE`를 선택하고 실행한다. 다른 위치의 HDD는 `--hdd`로 shortcut 경로를 덮어쓴다.
 

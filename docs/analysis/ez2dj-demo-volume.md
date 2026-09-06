@@ -99,6 +99,12 @@ This document records the 1st SE title/demo `DemoVolume` setting, the original D
 - The actual meaning of adjacent table `[0, 36, 78, 121]`
 - Cabinet sound-pressure levels for profiles 1 and 2 and their perceived balance against all gameplay effects
 
+### 2026-09-06 2nd profile boundary
+
+**확인됨:** `ez2dj2nd`의 정적 import에는 `KERNEL32!GetPrivateProfileIntA`가 없습니다. 따라서 1st SE용 `demo_volume=3` 기본 주입은 2nd의 실행 계약으로 일반화할 수 없으며, 2nd built-in profile은 `demo_volume`을 unset으로 둡니다. 사용자가 2nd에 `--demo-volume`을 명시하면 launcher는 지원 import가 없다는 준비 오류를 반환해야 합니다. 이는 2nd가 `DemoVolume`을 전혀 사용하지 않는다는 뜻이 아니라, 현재 HLE 경계로 해당 호출을 주입할 정적 IAT가 없다는 뜻입니다.
+
+*Confirmed: the static import table of `ez2dj2nd` has no `KERNEL32!GetPrivateProfileIntA`. The 1st SE default `demo_volume=3` therefore cannot be generalized as the 2nd execution contract, and the 2nd built-in profile leaves `demo_volume` unset. If a user explicitly requests `--demo-volume` for 2nd, the launcher should report that the required import is absent. This does not prove that 2nd never uses a `DemoVolume` value; it records that the current HLE boundary has no static IAT through which to inject that call.*
+
 ## 관련 문서 / Related documents
 
 - [DirectSound 데모 음량 설정 HLE 설계](../design/20260829-086-directsound-volume-transition.md)

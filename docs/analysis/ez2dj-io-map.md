@@ -60,3 +60,13 @@ Task 087 implements a stable eight-bit counter initialized to `0x00`, incremente
 ### Unresolved
 
 The exact 1st SE cabinet wiring, the meaning of `OUT 0x106`, hardware power-on turntable position, and physical lamp timing remain unresolved.
+
+### 2026-09-06 2nd Trax helper addresses
+
+**확인됨:** `ez2dj2nd` attached diagnostic `logs/windows_x86_launcher_probe/ez2dj2nd/20260906-022613-342.jsonl`에서 input helper는 VA `0x004782d7` (RVA `0x000782d7`, `IN AL,DX`)로, output helper는 VA `0x0047832b` (RVA `0x0007832b`, `OUT DX,AL`)로 확인됐다. 첫 fault의 port는 `0x0103`이고, output 관찰에는 `0x0100`~`0x0103`이 포함됐다. 후속 run은 두 helper를 현재 `LegacyIoPortBus`로 처리했으며 second-chance privileged fault가 없었다.
+
+이 주소들은 2nd 실행 파일의 helper 위치에 대한 **확인됨** 값이다. port별 장치 의미는 1st SE에서 교차 확인된 표를 2nd에 자동으로 확정하는 근거가 없으므로 **미확정**으로 남긴다. `id_ref`/`id_verify`와 Hardlock 응답은 이 raw port 주소 관찰과 별개의 경계다.
+
+*Confirmed: the attached 2nd diagnostic `logs/windows_x86_launcher_probe/ez2dj2nd/20260906-022613-342.jsonl` identifies the input helper at VA `0x004782d7` (RVA `0x000782d7`, `IN AL,DX`) and the output helper at VA `0x0047832b` (RVA `0x0007832b`, `OUT DX,AL`). The first fault used port `0x0103`, and output observations included `0x0100` through `0x0103`. A follow-up run handled both helpers through the current `LegacyIoPortBus` without a second-chance privileged fault.*
+
+*These are **confirmed** helper locations in the 2nd executable. Per-port device meanings remain **unresolved**, because the 1st SE cross-check does not automatically establish the 2nd wiring. `id_ref`/`id_verify` and the Hardlock response are separate boundaries from these raw-port observations.*

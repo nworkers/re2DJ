@@ -14,8 +14,8 @@
 
 | 문서 | 내용 | 현재 상태 |
 | --- | --- | --- |
-| [ez2dj-hdd-layout.md](ez2dj-hdd-layout.md) | HDD 덤프의 디렉터리 구조와 실행 파일 식별 | 1st SE / 3rd 덤프로 확인됨 |
-| [ez2dj-exe-structures.md](ez2dj-exe-structures.md) | 실행 파일별 PE 구조, 보호 계층 해부, 데이터 인벤토리, 런타임 흐름 | 1st SE 두 파일·3rd 헤더로 확인됨, 런타임은 `ez2dj.exe`만 |
+| [ez2dj-hdd-layout.md](ez2dj-hdd-layout.md) | HDD 덤프의 디렉터리 구조와 실행 파일 식별 | 1st Tracks 대표 실행 파일 / 1st SE / 2nd / 3rd로 확인됨 |
+| [ez2dj-exe-structures.md](ez2dj-exe-structures.md) | 실행 파일별 PE 구조, 보호 계층 해부, 데이터 인벤토리, 런타임 흐름 | 1st SE 두 파일·2nd/3rd 헤더로 확인됨, 런타임은 `ez2dj.exe`만 |
 | [ez2dj-import-surface.md](ez2dj-import-surface.md) | 원본이 실제로 호출하는 Win32 API 집합과 HLE 우선순위 | `ez2dj1.exe`·보호 빌드 `.gidata`로 확인됨 |
 | [ez2dj-asset-loading-path.md](ez2dj-asset-loading-path.md) | 자산 검색 경로 테이블, BMP `LoadImageA` 경계, `.str` 스크립트 참조, 이중 IAT 구조 | 1st SE `ez2dj.exe` 정적 분석과 detached 실행 로그로 확인됨 |
 | [windows-original-process-loader.md](windows-original-process-loader.md) | Windows loader가 원본 EXE를 주 이미지로 배치한 관찰 | `ez2dj1.exe` suspended process로 확인됨 |
@@ -29,7 +29,9 @@
 
 | [ez2dj3rd-hardlock-function-0e.md](ez2dj3rd-hardlock-function-0e.md) | 3rd Hardlock device name, API descriptor, and Function 0x0e boundary | Device/API boundary confirmed; valid 0x0e response unresolved |
 | [ez2dj4th-chd-filesystem.md](ez2dj4th-chd-filesystem.md) | 4th Trax CHD v5, FAT32 geometry, directory and executable layout | Real `4thTrax.chd` read confirmed; cabinet boot sequence unresolved |
+| [ez2dj5th-6th-chd-filesystem.md](ez2dj5th-6th-chd-filesystem.md) | 5th/6th CHD geometry and executable/filesystem observations | 6th FAT32 path confirmed; 5th filesystem unresolved |
 | [ez2dj4th-hardlock-runtime.md](ez2dj4th-hardlock-runtime.md) | 4th Hardlock config, device/IOCTL sequence, DirectDraw/D3D7 startup, and validation boundary | Vendor driver, raw I/O, DDraw/D3D7 entry confirmed; D3D7 adapter pending |
+| [ez2dj6th-hardlock.md](ez2dj6th-hardlock.md) | 6th Hardlock transform input boundary and unresolved Function `0x0011` response | Runtime 7-input maps fully match, but no candidate reaches accepted post-transform execution |
 | [ez2dj4th-music-select-disc-state.md](ez2dj4th-music-select-disc-state.md) | Music Select 원판 draw의 cull, blend, UV, texture-transform 진단 | cull 직접 원인 제외; focused runtime trace 대기 |
 | [ez2dj4th-graphics-path.md](ez2dj4th-graphics-path.md) | 4th가 DirectX 7 경계에 요구하는 인터페이스·표면·디바이스와 현재 차단 지점 | 표면 형식과 디바이스 요구는 실행으로 확인됨, present와 종료 원인은 미확정 |
 

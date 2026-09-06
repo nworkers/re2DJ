@@ -121,10 +121,14 @@ int main()
 {
     const re2dj::target::BuiltInTargetProfile* first_profile =
         re2dj::target::FindBuiltInTargetProfileById("ez2dj1stse");
+    const re2dj::target::BuiltInTargetProfile* second_profile =
+        re2dj::target::FindBuiltInTargetProfileById("ez2dj2nd");
     const re2dj::target::BuiltInTargetProfile* third_profile =
         re2dj::target::FindBuiltInTargetProfileById("ez2dj3rd");
     const re2dj::target::BuiltInTargetProfile* fourth_profile =
         re2dj::target::FindBuiltInTargetProfileById("ez2dj4th");
+    const re2dj::target::BuiltInTargetProfile* sixth_profile =
+        re2dj::target::FindBuiltInTargetProfileById("ez2dj6th");
     re2dj::platform::windows::OriginalProcessOptions options;
     options.hdd_directory = "asset-free-hdd";
     options.target_id = "ez2dj1stse";
@@ -170,6 +174,48 @@ int main()
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
         arguments[13] == "2";
+
+    const bool second_defaults = [&]() {
+        if (second_profile == nullptr)
+        {
+            return false;
+        }
+        options.target_id = "ez2dj2nd";
+        options.hle_profile_id = second_profile->profile.hle_profile_id;
+        options.profile_defaults = second_profile->profile.run_defaults;
+        options.audio_volume_trace = false;
+        options.io_config.clear();
+        options.chd_image.clear();
+        options.executable_relative_path.clear();
+        if (!re2dj::platform::windows::BuildOriginalProcessArguments(
+                options, &arguments, &error))
+        {
+            return false;
+        }
+        bool has_demo_volume = false;
+        for (const std::string& argument : arguments)
+        {
+            has_demo_volume = has_demo_volume || argument == "--demo-volume";
+        }
+        return arguments.size() == 19 && arguments[3] == "--target" &&
+               arguments[4] == "ez2dj2nd" && !has_demo_volume &&
+               second_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva ==
+                   0x000782d7 &&
+               second_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva ==
+                   0x0007832b &&
+               !second_profile->profile.run_defaults.demo_volume.has_value();
+    }();
+
+    // Restore the 1st SE state for the following argument-contract checks.
+    options.target_id = "ez2dj1stse";
+    options.hle_profile_id = first_profile == nullptr
+                                 ? ""
+                                 : first_profile->profile.hle_profile_id;
+    options.profile_defaults = first_profile == nullptr
+                                   ? re2dj::target::TargetRunDefaults{}
+                                   : first_profile->profile.run_defaults;
+    options.profile_defaults.audio_gain_db = 12.0f;
+    options.profile_defaults.demo_volume = 2;
 
     options.audio_volume_trace = true;
     const bool audio_trace =
@@ -273,22 +319,68 @@ int main()
         fourth_profile->profile.run_defaults.hle_dynamic_vfs &&
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments.size() == 17 && arguments[1] == "--hdd" &&
+        arguments.size() == 18 && arguments[1] == "--hdd" &&
         arguments[2] == "staged-chd" && arguments[3] == "--target" &&
         arguments[4] == "ez2dj4th" && arguments[5] == "--chd" &&
         arguments[6] == "4thTrax.chd" && arguments[7] == "--target-executable" &&
         arguments[8] == "EZ2DJ/EZ2DJ.EXE" && arguments[9] == "--hle-vfs" &&
         arguments[10] == "--hle-d3d3" &&
-        arguments[11] == "--hle-io-ports" &&
-        arguments[12] == "--run-detached" &&
-        arguments[13] == "--device-mock-lptdi" &&
-        arguments[14] == "--device-mock-lptdi-path-prefix" &&
-        arguments[15] == "\\\\.\\FEnteDev" &&
-        arguments[16] == "--device-mock-wts-console-session" &&
+        arguments[11] == "--hle-directsound" &&
+        arguments[12] == "--hle-io-ports" &&
+        arguments[13] == "--run-detached" &&
+        arguments[14] == "--device-mock-lptdi" &&
+        arguments[15] == "--device-mock-lptdi-path-prefix" &&
+        arguments[16] == "\\\\.\\FEnteDev" &&
+        arguments[17] == "--device-mock-wts-console-session" &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_ports &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x000c3817 &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0x000c384b;
+
+    const bool sixth_io_config_omitted = [&]() {
+        if (sixth_profile == nullptr)
+        {
+            return false;
+        }
+        options.target_id = "ez2dj6th";
+        options.hle_profile_id = sixth_profile->profile.hle_profile_id;
+        options.profile_defaults = sixth_profile->profile.run_defaults;
+        options.hdd_directory = "staged-6th-chd";
+        options.chd_image = "6th.chd";
+        options.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
+        options.io_config = "keyboard.ini";
+        const bool rejects_unsupported_io_config =
+            !re2dj::platform::windows::BuildOriginalProcessArguments(
+                options, &arguments, &error) &&
+            error.find("requires a profile with legacy I/O ports") != std::string::npos;
+        options.io_config.clear();
+        if (!re2dj::platform::windows::BuildOriginalProcessArguments(
+                options, &arguments, &error))
+        {
+            return false;
+        }
+        bool has_io_config = false;
+        bool follows_child = false;
+        for (const std::string& argument : arguments)
+        {
+            has_io_config = has_io_config || argument == "--io-config";
+            follows_child = follows_child || argument == "--follow-child";
+        }
+        return rejects_unsupported_io_config && !has_io_config && follows_child &&
+               !sixth_profile->profile.run_defaults.lptdi.legacy_io_ports;
+    }();
+
+    options.target_id = "ez2dj4th";
+    options.hle_profile_id = fourth_profile == nullptr
+                                 ? ""
+                                 : fourth_profile->profile.hle_profile_id;
+    options.profile_defaults = fourth_profile == nullptr
+                                   ? re2dj::target::TargetRunDefaults{}
+                                   : fourth_profile->profile.run_defaults;
+    options.hdd_directory = "staged-chd";
+    options.chd_image = "4thTrax.chd";
+    options.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
+    options.io_config.clear();
 
     // Hardlock material is resolved inside the launcher from cfg, so no
     // Hardlock option may appear on the product command line.
@@ -350,8 +442,8 @@ int main()
                error.find("Hardlock material without a device policy") != std::string::npos;
     }();
 
-    options.target_id = "ez2dj1stse_unpacked";
-    options.hle_profile_id = "ez2dj1stse_unpacked";
+    options.target_id = "removed-profile";
+    options.hle_profile_id = "removed-profile";
     options.profile_defaults = {};
     options.chd_image.clear();
     options.executable_relative_path.clear();
@@ -360,18 +452,19 @@ int main()
             options, &arguments, &error) &&
         error.find("invalid Windows original-process options") != std::string::npos;
     const bool resolve_iat_slot = TestResolveIatSlot();
-    if (!canonical || !custom_gain || !custom_demo_volume || !audio_trace || !fullscreen ||
+    if (!canonical || !custom_gain || !custom_demo_volume || !second_defaults || !audio_trace || !fullscreen ||
         !invalid_gain || !invalid_demo_volume || !io_config || !invalid_lptdi_policy ||
-        !third_defaults || !chd_handoff || !no_diagnostic_options ||
+        !third_defaults || !chd_handoff || !sixth_io_config_omitted || !no_diagnostic_options ||
         !invalid_console_policy || !invalid_material_policy || !rejected || !resolve_iat_slot)
     {
         // Naming the failed checks keeps a policy change from producing an
         // error message that describes only the last call made.
         std::fprintf(stderr,
-                     "windows-product-loader-probe: failed%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s (last error: %s)\n",
+                     "windows-product-loader-probe: failed%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s (last error: %s)\n",
                      canonical ? "" : " canonical",
                      custom_gain ? "" : " custom-gain",
                      custom_demo_volume ? "" : " custom-demo-volume",
+                     second_defaults ? "" : " second-defaults",
                      audio_trace ? "" : " audio-trace",
                      fullscreen ? "" : " fullscreen",
                      invalid_gain ? "" : " invalid-gain",
@@ -380,6 +473,7 @@ int main()
                      invalid_lptdi_policy ? "" : " invalid-lptdi-policy",
                      third_defaults ? "" : " third-defaults",
                      chd_handoff ? "" : " chd-handoff",
+                     sixth_io_config_omitted ? "" : " sixth-io-config-omitted",
                      no_diagnostic_options ? "" : " no-diagnostic-options",
                      invalid_console_policy ? "" : " invalid-console-policy",
                      invalid_material_policy ? "" : " invalid-material-policy",
@@ -388,6 +482,6 @@ int main()
                      error.c_str());
         return 1;
     }
-    std::printf("windows-product-loader-probe: profile-defaults=ok unsupported-target=ok resolve-iat-slot=ok\n");
+    std::printf("windows-product-loader-probe: profile-defaults=ok second-defaults=ok unsupported-target=ok resolve-iat-slot=ok\n");
     return 0;
 }

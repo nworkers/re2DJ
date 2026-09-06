@@ -257,7 +257,7 @@ bool WaitForEntryBreakpoint(std::uint32_t entry,
 int main(int argc, char** argv)
 {
     std::filesystem::path hdd_path;
-    std::string target_id = "ez2dj1stse_unpacked";
+    std::string target_id = "ez2dj1";
     bool verify_iat = false;
     bool initial_breakpoint = false;
     bool entry_breakpoint = false;
@@ -333,13 +333,13 @@ int main(int argc, char** argv)
         re2dj::target::FindTargetProfileById(profiles, target_id);
     std::filesystem::path executable;
     re2dj::exe::PeImageInfo info;
-    if (target == nullptr || !target->bring_up_target ||
+    if (target == nullptr ||
         !root.ResolveFile(target->executable_relative_path, &executable) ||
         !re2dj::exe::ReadPeImageInfo(executable, &info, &error) ||
         !re2dj::exe::IsGuestExecutable(info) ||
         info.image_base > (std::numeric_limits<std::uint32_t>::max)())
     {
-        std::fprintf(stderr, "{\"error\":\"cannot resolve valid bring-up target\"}\n");
+        std::fprintf(stderr, "{\"error\":\"cannot resolve valid target\"}\n");
         return 2;
     }
     std::vector<std::uint8_t> file;

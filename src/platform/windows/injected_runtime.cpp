@@ -64,6 +64,16 @@ extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_device_enabled 
 // re2DJ never derives these values; it only applies what it is given.
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_transform_response_count = 0;
 extern "C" __declspec(dllexport) unsigned char g_re2dj_hardlock_transform_responses[4096] = {};
+// Diagnostic-only flag: record hashes of incoming transform blocks without
+// exposing the block or response bytes.
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_transform_input_trace = 0;
+// Explicit one-shot diagnostic output for transform input blocks. The
+// launcher supplies a user-selected temporary path; this is never enabled by
+// default and does not contain response bytes.
+extern "C" __declspec(dllexport) char g_re2dj_hardlock_transform_input_dump[MAX_PATH] = {};
+extern "C" __declspec(dllexport) char g_re2dj_hardlock_descriptor_output[MAX_PATH] = {};
+extern "C" __declspec(dllexport) char g_re2dj_hardlock_descriptor_profile[MAX_PATH] = {};
+extern "C" __declspec(dllexport) volatile LONG g_re2dj_hardlock_descriptor_written = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_wts_console_session_mock = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_io_ports = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_image_base = 0;
@@ -195,13 +205,13 @@ bool ClaimWtsQueryTraceBudget()
            kMaximumWtsQueryDiagnostics;
 }
 
-void AppendVfsTraceMessage(const char* message)
+void AppendDiagnosticFile(const char* path, const char* message)
 {
-    if (g_re2dj_vfs_trace_path[0] == '\0' || message == nullptr)
+    if (path == nullptr || path[0] == '\0' || message == nullptr)
     {
         return;
     }
-    HANDLE trace = CreateFileA(g_re2dj_vfs_trace_path,
+    HANDLE trace = CreateFileA(path,
                                FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr,
@@ -219,6 +229,11 @@ void AppendVfsTraceMessage(const char* message)
               &written,
               nullptr);
     CloseHandle(trace);
+}
+
+void AppendVfsTraceMessage(const char* message)
+{
+    AppendDiagnosticFile(g_re2dj_vfs_trace_path, message);
 }
 
 void EnsureDiagnosticBoundariesInstalled()
@@ -680,21 +695,305 @@ void ReportVfsCreateFileResult(const char* stage,
     AppendVfsTraceMessage(message);
 }
 
+std::uint64_t HashHardlockField(std::span<const std::uint8_t> bytes)
+{
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const std::uint8_t value : bytes)
+    {
+        hash ^= value;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+void RecordHardlockTransformInputHashes(DWORD control_code,
+                                        const void* input,
+                                        DWORD input_size)
+{
+    if (g_re2dj_hardlock_transform_input_trace == 0 ||
+        control_code != re2dj::hle::hardlock::kHardlockIoctlTransform ||
+        input == nullptr ||
+        input_size < re2dj::hle::hardlock::kHardlockApiDescriptorSize)
+    {
+        return;
+    }
+    const auto* const bytes = static_cast<const std::uint8_t*>(input);
+    re2dj::hle::hardlock::HardlockApiDescriptorHeader header;
+    const bool header_valid =
+        re2dj::hle::hardlock::ParseHardlockApiDescriptorHeader(
+            std::span<const std::uint8_t>(bytes, input_size), &header);
+    if (!header_valid)
+    {
+        AppendVfsTraceMessage(
+            "re2dj:vfs:hardlock-transform-inputs:header_valid=0\r\n");
+        return;
+    }
+    const std::size_t payload_size =
+        input_size - re2dj::hle::hardlock::kHardlockApiDescriptorSize;
+    const std::size_t available_blocks =
+        payload_size / re2dj::hle::hardlock::kHardlockTransformBlockSize;
+    const std::size_t block_count =
+        (std::min)(static_cast<std::size_t>(header.block_count), available_blocks);
+    char hashes[768] = {};
+    std::size_t cursor = 0;
+    for (std::size_t index = 0; index < block_count; ++index)
+    {
+        const auto block = std::span<const std::uint8_t>(
+            bytes + re2dj::hle::hardlock::kHardlockApiDescriptorSize +
+                index * re2dj::hle::hardlock::kHardlockTransformBlockSize,
+            re2dj::hle::hardlock::kHardlockTransformBlockSize);
+        const int written = std::snprintf(
+            hashes + cursor,
+            sizeof(hashes) - cursor,
+            "%s%016llx",
+            index == 0 ? "" : ",",
+            static_cast<unsigned long long>(HashHardlockField(block)));
+        if (written < 0 || static_cast<std::size_t>(written) >= sizeof(hashes) - cursor)
+        {
+            break;
+        }
+        cursor += static_cast<std::size_t>(written);
+    }
+    char message[960] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:hardlock-transform-inputs:header_valid=1:function=0x%04x:input_size=%u:block_count=%u:hashes=%s\r\n",
+                  static_cast<unsigned>(header.function),
+                  static_cast<unsigned>(input_size),
+                  static_cast<unsigned>(block_count),
+                  hashes);
+    AppendVfsTraceMessage(message);
+
+    if (g_re2dj_hardlock_transform_input_dump[0] != '\0')
+    {
+        char header_message[128] = {};
+        std::snprintf(header_message,
+                      sizeof(header_message),
+                      "# function=0x%04x block_count=%u\r\n",
+                      static_cast<unsigned>(header.function),
+                      static_cast<unsigned>(block_count));
+        AppendDiagnosticFile(g_re2dj_hardlock_transform_input_dump,
+                             header_message);
+        for (std::size_t index = 0; index < block_count; ++index)
+        {
+            const auto block = std::span<const std::uint8_t>(
+                bytes + re2dj::hle::hardlock::kHardlockApiDescriptorSize +
+                    index * re2dj::hle::hardlock::kHardlockTransformBlockSize,
+                re2dj::hle::hardlock::kHardlockTransformBlockSize);
+            char block_hex[17] = {};
+            for (std::size_t byte_index = 0; byte_index < block.size(); ++byte_index)
+            {
+                std::snprintf(block_hex + byte_index * 2,
+                              sizeof(block_hex) - byte_index * 2,
+                              "%02x",
+                              static_cast<unsigned>(block[byte_index]));
+            }
+            AppendDiagnosticFile(g_re2dj_hardlock_transform_input_dump, block_hex);
+            AppendDiagnosticFile(g_re2dj_hardlock_transform_input_dump, "\r\n");
+        }
+    }
+}
+
+void WriteHardlockDescriptorReference(
+    const re2dj::hle::hardlock::HardlockApiDescriptorHeader& header)
+{
+    if (g_re2dj_hardlock_descriptor_output[0] == '\0' ||
+        InterlockedCompareExchange(&g_re2dj_hardlock_descriptor_written, 1, 0) != 0)
+    {
+        return;
+    }
+    char id_reference_hex[17] = {};
+    char id_verify_hex[17] = {};
+    for (std::size_t index = 0; index < header.id_reference.size(); ++index)
+    {
+        std::snprintf(id_reference_hex + index * 2,
+                      3,
+                      "%02x",
+                      header.id_reference[index]);
+        std::snprintf(id_verify_hex + index * 2,
+                      3,
+                      "%02x",
+                      header.id_verify[index]);
+    }
+    char contents[512] = {};
+    const int content_size = std::snprintf(
+        contents,
+        sizeof(contents),
+        "; Generated by --hardlock-descriptor-dump.\r\n"
+        "; Keep this file local; it is not an HLE response map.\r\n\r\n"
+        "[%s]\r\nmodule_address=0x%04x\r\n"
+        "id_ref=%s\r\nid_verify=%s\r\n",
+        g_re2dj_hardlock_descriptor_profile[0] == '\0'
+            ? "unknown"
+            : g_re2dj_hardlock_descriptor_profile,
+        static_cast<unsigned>(header.module_address),
+        id_reference_hex,
+        id_verify_hex);
+    if (content_size <= 0 || static_cast<std::size_t>(content_size) >= sizeof(contents))
+    {
+        InterlockedExchange(&g_re2dj_hardlock_descriptor_written, 0);
+        return;
+    }
+    HANDLE file = CreateFileA(g_re2dj_hardlock_descriptor_output,
+                              GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ,
+                              nullptr,
+                              OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        InterlockedExchange(&g_re2dj_hardlock_descriptor_written, 0);
+        return;
+    }
+    LARGE_INTEGER existing_size = {};
+    if (GetFileSizeEx(file, &existing_size) == FALSE || existing_size.QuadPart > 64 * 1024)
+    {
+        CloseHandle(file);
+        InterlockedExchange(&g_re2dj_hardlock_descriptor_written, 0);
+        return;
+    }
+    std::string existing(static_cast<std::size_t>(existing_size.QuadPart), '\0');
+    DWORD bytes_read = 0;
+    if (!existing.empty() &&
+        (ReadFile(file,
+                  existing.data(),
+                  static_cast<DWORD>(existing.size()),
+                  &bytes_read,
+                  nullptr) == FALSE ||
+         bytes_read != static_cast<DWORD>(existing.size())))
+    {
+        CloseHandle(file);
+        InterlockedExchange(&g_re2dj_hardlock_descriptor_written, 0);
+        return;
+    }
+    const std::string profile_name = g_re2dj_hardlock_descriptor_profile[0] == '\0'
+                                         ? "unknown"
+                                         : g_re2dj_hardlock_descriptor_profile;
+    const std::string section_header = "[" + profile_name + "]";
+    std::string merged = existing;
+    std::size_t section_start = merged.find(section_header);
+    while (section_start != std::string::npos && section_start != 0 &&
+           merged[section_start - 1] != '\n')
+    {
+        section_start = merged.find(section_header, section_start + 1);
+    }
+    if (section_start != std::string::npos)
+    {
+        const std::size_t next_section_marker = merged.find("\n[", section_start + 1);
+        const std::size_t section_end = next_section_marker == std::string::npos
+                                            ? merged.size()
+                                            : next_section_marker + 1;
+        merged.replace(section_start,
+                       section_end - section_start,
+                       contents,
+                       static_cast<std::size_t>(content_size));
+    }
+    else
+    {
+        if (!merged.empty() && merged.back() != '\n')
+        {
+            merged.push_back('\n');
+        }
+        merged.append(contents, static_cast<std::size_t>(content_size));
+    }
+    LARGE_INTEGER beginning = {};
+    const BOOL seek_ok = SetFilePointerEx(file, beginning, nullptr, FILE_BEGIN);
+    DWORD bytes_written = 0;
+    const BOOL write_ok = seek_ok &&
+                          WriteFile(file,
+                                    merged.data(),
+                                    static_cast<DWORD>(merged.size()),
+                                    &bytes_written,
+                                    nullptr);
+    const BOOL truncate_ok = write_ok && SetEndOfFile(file);
+    CloseHandle(file);
+    if (truncate_ok == FALSE || bytes_written != static_cast<DWORD>(merged.size()))
+    {
+        InterlockedExchange(&g_re2dj_hardlock_descriptor_written, 0);
+    }
+}
+
 void ReportDeviceIoControlCode(DWORD control_code,
+                               const void* input,
                                DWORD input_size,
                                DWORD output_size)
 {
+    const auto* const input_bytes = static_cast<const std::uint8_t*>(input);
+    const std::span<const std::uint8_t> input_span =
+        input_bytes == nullptr ? std::span<const std::uint8_t>()
+                               : std::span<const std::uint8_t>(input_bytes, input_size);
+    const bool is_descriptor =
+        control_code == re2dj::hle::hardlock::kHardlockIoctlDescriptor;
+    re2dj::hle::hardlock::HardlockApiDescriptorHeader header;
+    bool header_valid = false;
+    std::uint64_t id_reference_hash = 0;
+    std::uint64_t id_verify_hash = 0;
+    bool id_reference_nonzero = false;
+    bool id_verify_nonzero = false;
+    if (is_descriptor)
+    {
+        header_valid =
+            re2dj::hle::hardlock::ParseHardlockApiDescriptorHeader(input_span, &header) &&
+            input_span.size() == re2dj::hle::hardlock::kHardlockApiDescriptorSize;
+        id_reference_hash = header_valid ? HashHardlockField(header.id_reference) : 0;
+        id_verify_hash = header_valid ? HashHardlockField(header.id_verify) : 0;
+        id_reference_nonzero =
+            header_valid && std::any_of(header.id_reference.begin(),
+                                        header.id_reference.end(),
+                                        [](std::uint8_t value) { return value != 0; });
+        id_verify_nonzero =
+            header_valid && std::any_of(header.id_verify.begin(),
+                                        header.id_verify.end(),
+                                        [](std::uint8_t value) { return value != 0; });
+        if (header_valid)
+        {
+            WriteHardlockDescriptorReference(header);
+        }
+    }
     if (!ClaimVfsDeviceTraceBudget())
     {
         return;
     }
-    char message[160] = {};
-    std::snprintf(message,
-                  sizeof(message),
-                  "re2dj:vfs:device-ioctl-entry:code=0x%08lx:input_size=%lu:output_size=%lu\r\n",
-                  static_cast<unsigned long>(control_code),
-                  static_cast<unsigned long>(input_size),
-                  static_cast<unsigned long>(output_size));
+    char message[768] = {};
+    if (is_descriptor)
+    {
+        std::snprintf(
+            message,
+            sizeof(message),
+            "re2dj:vfs:device-ioctl-entry:code=0x%08lx:input_size=%lu:output_size=%lu:"
+            "header_valid=%u:module_id=0x%04x:module_address=0x%04x:data_address=0x%08lx:"
+            "block_count=%u:function=0x%04x:status=0x%04x:remote=0x%04x:port=0x%04x:"
+            "speed=0x%04x:network_users=0x%04x:id_ref_nonzero=%u:id_ref_hash=0x%016llx:"
+            "id_verify_nonzero=%u:id_verify_hash=0x%016llx\r\n",
+            static_cast<unsigned long>(control_code),
+            static_cast<unsigned long>(input_size),
+            static_cast<unsigned long>(output_size),
+            header_valid ? 1u : 0u,
+            header_valid ? static_cast<unsigned>(header.module_id) : 0u,
+            header_valid ? static_cast<unsigned>(header.module_address) : 0u,
+            header_valid ? static_cast<unsigned long>(header.data_address) : 0UL,
+            header_valid ? static_cast<unsigned>(header.block_count) : 0u,
+            header_valid ? static_cast<unsigned>(header.function) : 0u,
+            header_valid ? static_cast<unsigned>(header.status) : 0u,
+            header_valid ? static_cast<unsigned>(header.remote) : 0u,
+            header_valid ? static_cast<unsigned>(header.port) : 0u,
+            header_valid ? static_cast<unsigned>(header.speed) : 0u,
+            header_valid ? static_cast<unsigned>(header.network_users) : 0u,
+            id_reference_nonzero ? 1u : 0u,
+            static_cast<unsigned long long>(id_reference_hash),
+            id_verify_nonzero ? 1u : 0u,
+            static_cast<unsigned long long>(id_verify_hash));
+    }
+    else
+    {
+        std::snprintf(message,
+                      sizeof(message),
+                      "re2dj:vfs:device-ioctl-entry:code=0x%08lx:input_size=%lu:output_size=%lu\r\n",
+                      static_cast<unsigned long>(control_code),
+                      static_cast<unsigned long>(input_size),
+                      static_cast<unsigned long>(output_size));
+    }
     AppendVfsTraceMessage(message);
 }
 
@@ -2220,7 +2519,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djDeviceIoControlMock(
     OutputDebugStringA(kDeviceIoControlMessage);
     if (IsDeviceMockHandle(handle))
     {
-        ReportDeviceIoControlCode(control_code, input_size, output_size);
+        ReportDeviceIoControlCode(control_code, input, input_size, output_size);
+        RecordHardlockTransformInputHashes(control_code, input, input_size);
         BOOL device_result = FALSE;
         if (CompleteHardlockRequest(control_code,
                                    input,

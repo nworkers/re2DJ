@@ -130,6 +130,7 @@ bool FindChdImage(const std::filesystem::path& input,
 }
 
 bool PrepareChdStaging(const re2dj::storage::Fat32Volume& volume,
+                       std::string_view profile_id,
                        const std::string& executable_relative_path,
                        std::filesystem::path* staging_root,
                        std::string* error)
@@ -149,27 +150,26 @@ bool PrepareChdStaging(const re2dj::storage::Fat32Volume& volume,
         *error = "cannot determine temporary directory for CHD staging";
         return false;
     }
-    const std::filesystem::path root = base / "re2dj" / "chd" / "ez2dj4th";
-    std::filesystem::create_directories(root / "EZ2DJ" / "BG", code);
-    std::filesystem::create_directories(root / "EZ2DJ" / "SOUND", code);
-    std::filesystem::create_directories(root / "EZ2DJ" / "SYSTEM", code);
-    if (code)
+    const std::filesystem::path root = base / "re2dj" / "chd" / profile_id;
+    re2dj::storage::GuestPath parsed;
+    if (!re2dj::storage::ParseGuestPath(executable_relative_path, &parsed) ||
+        parsed.kind != re2dj::storage::GuestPathKind::kRelative ||
+        !re2dj::storage::NormalizeGuestPath(&parsed) || parsed.components.empty())
     {
-        *error = "cannot create CHD staging directory: " + code.message();
+        *error = "invalid CHD executable path: " + executable_relative_path;
         return false;
     }
-    const std::vector<std::pair<std::string, std::filesystem::path>> files = {
-        {executable_relative_path, root / "EZ2DJ" / "EZ2DJ.EXE"},
-        {"EZ2DJ/EZ2DJ.INI", root / "EZ2DJ" / "EZ2DJ.INI"},
-        {"EZ2DJ/FONTKR.DAT", root / "EZ2DJ" / "FONTKR.DAT"},
-        {"EZ2DJ/FONTEN.DAT", root / "EZ2DJ" / "FONTEN.DAT"},
-    };
-    for (const auto& [source, destination] : files)
+    std::filesystem::path executable_output = root;
+    for (const std::string& component : parsed.components)
     {
-        if (!volume.MaterializeFile(source, destination, error))
-        {
-            return false;
-        }
+        executable_output /= component;
+    }
+    std::string materialize_error;
+    if (!volume.MaterializeFile(
+            executable_relative_path, executable_output, &materialize_error))
+    {
+        *error = executable_relative_path + ": " + materialize_error;
+        return false;
     }
     *staging_root = root;
     return true;
@@ -412,6 +412,22 @@ void PrintProfile(const re2dj::target::TargetProfile& profile, bool selected)
                 profile.bring_up_target ? ", bring-up only" : "");
 }
 
+std::filesystem::path NormalizeIoConfigForProfile(
+    const std::filesystem::path& io_config,
+    const re2dj::target::TargetRunDefaults& defaults,
+    std::string_view profile_id)
+{
+    if (!io_config.empty() && !defaults.lptdi.legacy_io_ports)
+    {
+        std::fprintf(stderr,
+                     "\nnote: --io-config is ignored for profile '%.*s' because legacy I/O is disabled.\n",
+                     static_cast<int>(profile_id.size()),
+                     profile_id.data());
+        return {};
+    }
+    return io_config;
+}
+
 int ResolveOnePath(const re2dj::hdd::HddRoot& root, const std::string& text)
 {
     re2dj::storage::GuestPath parsed;
@@ -455,22 +471,27 @@ int RunChdTarget(const Options& options,
         std::fprintf(stderr, "error: %s\n", error.c_str());
         return kExitHddError;
     }
-    constexpr std::string_view kExecutablePath = "EZ2DJ/EZ2DJ.EXE";
+    const std::string_view executable_path = built_in.profile.executable_relative_path;
+    if (executable_path.empty())
+    {
+        std::fprintf(stderr, "error: CHD profile has no executable path\n");
+        return kExitHddError;
+    }
     re2dj::storage::Fat32Entry executable_entry;
-    if (!volume->Find(kExecutablePath, &executable_entry, &error) || executable_entry.directory)
+    if (!volume->Find(executable_path, &executable_entry, &error) || executable_entry.directory)
     {
         std::fprintf(stderr, "error: CHD does not contain %.*s: %s\n",
-                     static_cast<int>(kExecutablePath.size()),
-                     kExecutablePath.data(),
+                     static_cast<int>(executable_path.size()),
+                     executable_path.data(),
                      error.c_str());
         return kExitHddError;
     }
     std::vector<std::uint8_t> executable_bytes;
-    if (!volume->ReadFile(kExecutablePath, &executable_bytes, &error))
+    if (!volume->ReadFile(executable_path, &executable_bytes, &error))
     {
         std::fprintf(stderr, "error: cannot read %.*s from CHD: %s\n",
-                     static_cast<int>(kExecutablePath.size()),
-                     kExecutablePath.data(),
+                     static_cast<int>(executable_path.size()),
+                     executable_path.data(),
                      error.c_str());
         return kExitHddError;
     }
@@ -487,8 +508,8 @@ int RunChdTarget(const Options& options,
     }
 
     re2dj::target::TargetProfile profile = built_in.profile;
-    profile.executable_relative_path = std::string(kExecutablePath);
-    profile.working_directory_relative_path = "EZ2DJ";
+    profile.working_directory_relative_path =
+        std::filesystem::path(profile.executable_relative_path).parent_path().generic_string();
     profile.detected = false;
 
     std::printf("chd image   : %s\n", chd_path.string().c_str());
@@ -545,7 +566,8 @@ int RunChdTarget(const Options& options,
 
 #if defined(_WIN32)
     std::filesystem::path staging_root;
-    if (!PrepareChdStaging(*volume, profile.executable_relative_path, &staging_root, &error))
+    if (!PrepareChdStaging(
+            *volume, profile.id, profile.executable_relative_path, &staging_root, &error))
     {
         std::fprintf(stderr, "error: cannot stage CHD executable: %s\n", error.c_str());
         return kExitHddError;
@@ -570,7 +592,8 @@ int RunChdTarget(const Options& options,
         run_options.profile_defaults.fullscreen = options.fullscreen;
     }
     run_options.audio_volume_trace = options.audio_volume_trace;
-    run_options.io_config = options.io_config;
+    run_options.io_config = NormalizeIoConfigForProfile(
+        options.io_config, run_options.profile_defaults, profile.id);
     const int result = re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (result < 0)
     {
@@ -873,13 +896,6 @@ int main(int argc, char** argv)
                      selected->id.c_str());
         return kExitNotImplemented;
     }
-    if (!options.io_config.empty() && !selected->run_defaults.lptdi.legacy_io_ports)
-    {
-        std::fprintf(stderr,
-                     "\nerror: --io-config is not supported by profile '%s'.\n",
-                     selected->id.c_str());
-        return kExitNotImplemented;
-    }
     re2dj::platform::windows::OriginalProcessOptions run_options;
     run_options.hdd_directory = root.root();
     run_options.target_id = selected->id;
@@ -898,7 +914,8 @@ int main(int argc, char** argv)
         run_options.profile_defaults.fullscreen = options.fullscreen;
     }
     run_options.audio_volume_trace = options.audio_volume_trace;
-    run_options.io_config = options.io_config;
+    run_options.io_config = NormalizeIoConfigForProfile(
+        options.io_config, run_options.profile_defaults, selected->id);
     const int run_result =
         re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (run_result < 0)
