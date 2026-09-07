@@ -127,7 +127,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -8613,6 +8613,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool run_detached = false;
     bool hle_message_box = false;
     bool d3d_init_trace = false;
+    // Turns on the diagnostics that live inside the per-draw path. They scan
+    // whole texture surfaces and format long records, so the product path
+    // leaves them off and only a draw-level investigation asks for them.
+    bool graphics_draw_diagnostics = false;
     bool ksnd_load_trace = false;
     bool device_mock_lptdi = false;
     bool device_mock_lptdi_ioctl_success = false;
@@ -8865,6 +8869,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             d3d_init_trace = true;
             break_exit_process = true;
             software_breakpoint = true;
+        }
+        else if (option == "--graphics-draw-diagnostics")
+        {
+            graphics_draw_diagnostics = true;
         }
         else if (option == "--ksnd-load-trace")
         {
@@ -9738,7 +9746,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"hle_message_box\":%s,\"run_detached\":%s,\"follow_child\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"hle_message_box\":%s,\"run_detached\":%s,\"follow_child\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u,\"graphics_draw_diagnostics\":%s}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      chd_path.generic_string().c_str(),
@@ -9772,7 +9780,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      device_mock_lptdi_target_state_hex.empty() ? "false" : "true",
                      lptdi_post_ioctl_trace_steps,
                      lptdi_post_ioctl_trace_code,
-                     diagnostic_idle_timeout_ms);
+                     diagnostic_idle_timeout_ms,
+                     graphics_draw_diagnostics ? "true" : "false");
     if (hardlock_cfg_replay || hardlock_cfg_tail || hardlock_cfg_map)
     {
         // Records which material a profile default applied, never its values.
@@ -10052,6 +10061,25 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                 reinterpret_cast<const std::uint8_t*>(&fullscreen_value),
                                 sizeof(fullscreen_value),
                                 &error);
+
+            // The runtime defaults this to zero, so nothing is written unless
+            // the option asked for the draw-path diagnostics.
+            if (d3d3_prepared && graphics_draw_diagnostics)
+            {
+                std::uint32_t draw_diagnostics_rva = 0;
+                const DWORD draw_diagnostics_value = TRUE;
+                d3d3_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                    runtime_path,
+                                    "g_re2dj_graphics_draw_diagnostics",
+                                    &draw_diagnostics_rva,
+                                    &error) &&
+                                WriteRemoteBytes(
+                                    child.hProcess,
+                                    runtime_base + draw_diagnostics_rva,
+                                    reinterpret_cast<const std::uint8_t*>(&draw_diagnostics_value),
+                                    sizeof(draw_diagnostics_value),
+                                    &error);
+            }
 
             if (d3d3_prepared && has_create)
             {

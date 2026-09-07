@@ -34,6 +34,7 @@ int main()
     RunLegacyAudioBufferTests(context);
     RunMameChdTests(context);
     RunFat32ChdTests(context);
+    RunChdHunkCacheTests(context);
     RunFat32DirectoryNameTests(context);
 
     std::printf("checks: %d, failures: %d\n", context.checks, context.failures);

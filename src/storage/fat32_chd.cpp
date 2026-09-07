@@ -85,6 +85,34 @@ bool IsSafeRelativePath(std::string_view path)
     return path.empty() || (path.front() != '/' && path.front() != '\\');
 }
 
+// FAT name matching is case-insensitive and accepts either separator, so the
+// lookup key folds ASCII case and normalizes separators. Two spellings of the
+// same path then share one cache entry.
+std::string MakeLookupKey(std::string_view path)
+{
+    std::string key;
+    key.reserve(path.size());
+    for (const char value : path)
+    {
+        if (value == '\\')
+        {
+            key.push_back('/');
+            continue;
+        }
+        key.push_back(value >= 'A' && value <= 'Z'
+                          ? static_cast<char>(value - 'A' + 'a')
+                          : value);
+    }
+    return key;
+}
+
+// Cache bounds. A guest that probes many distinct paths must not be able to
+// grow these without limit, and clearing wholesale is acceptable because every
+// entry can be rebuilt from the read-only image.
+constexpr std::size_t kDirectoryCacheEntries = 512;
+constexpr std::size_t kPathCacheEntries = 4096;
+constexpr std::size_t kChainCacheEntries = 256;
+
 }  // namespace
 
 bool Fat32Volume::Open(const std::filesystem::path& chd_path,
@@ -249,13 +277,17 @@ bool Fat32Volume::ReadFatEntry(std::uint32_t cluster,
         return false;
     }
     const std::uint64_t byte_offset = static_cast<std::uint64_t>(cluster) * 4;
-    const std::uint64_t lba = info_.partition_lba + info_.reserved_sectors + byte_offset / 512;
-    std::vector<std::uint8_t> sector;
-    if (!ReadSector(lba, &sector, error))
+    // The FAT entry is read directly rather than through a whole sector: the
+    // image layer already serves the containing hunk from its cache, so the
+    // intermediate sector buffer would only add an allocation per chain hop.
+    const std::uint64_t address =
+        (info_.partition_lba + info_.reserved_sectors) * 512 + byte_offset;
+    std::array<std::uint8_t, 4> entry = {};
+    if (!image_->Read(address, entry.data(), entry.size(), error))
     {
         return false;
     }
-    *value = ReadU32(sector.data(), static_cast<std::size_t>(byte_offset % 512)) & 0x0fffffff;
+    *value = ReadU32(entry.data(), 0) & 0x0fffffff;
     return true;
 }
 
@@ -360,12 +392,54 @@ bool Fat32Volume::ReadDirectoryClusterChain(std::uint32_t first_cluster,
     return false;
 }
 
+void Fat32Volume::StoreLookupLocked(const std::string& key,
+                                    std::optional<Fat32Entry> entry) const
+{
+    if (path_cache_.size() >= kPathCacheEntries)
+    {
+        path_cache_.clear();
+    }
+    path_cache_[key] = std::move(entry);
+}
+
+bool Fat32Volume::DirectoryEntriesLocked(std::uint32_t first_cluster,
+                                         const std::vector<Fat32Entry>** entries,
+                                         std::string* error) const
+{
+    const auto cached = directory_cache_.find(first_cluster);
+    if (cached != directory_cache_.end())
+    {
+        *entries = &cached->second;
+        return true;
+    }
+    std::vector<Fat32Entry> parsed;
+    if (!ReadDirectoryClusterChain(first_cluster, &parsed, error))
+    {
+        return false;
+    }
+    if (directory_cache_.size() >= kDirectoryCacheEntries)
+    {
+        directory_cache_.clear();
+    }
+    *entries = &directory_cache_.emplace(first_cluster, std::move(parsed)).first->second;
+    return true;
+}
+
 bool Fat32Volume::ReadDirectory(std::string_view relative_path,
                                 std::vector<Fat32Entry>* entries,
                                 std::string* error) const
 {
+    if (entries == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "FAT32 directory output is null";
+        }
+        return false;
+    }
+    const std::lock_guard<std::mutex> guard(lock_);
     Fat32Entry directory;
-    if (!Find(relative_path, &directory, error))
+    if (!FindLocked(relative_path, &directory, error))
     {
         return false;
     }
@@ -377,12 +451,26 @@ bool Fat32Volume::ReadDirectory(std::string_view relative_path,
         }
         return false;
     }
-    return ReadDirectoryClusterChain(directory.first_cluster, entries, error);
+    const std::vector<Fat32Entry>* cached = nullptr;
+    if (!DirectoryEntriesLocked(directory.first_cluster, &cached, error))
+    {
+        return false;
+    }
+    *entries = *cached;
+    return true;
 }
 
 bool Fat32Volume::Find(std::string_view relative_path,
                        Fat32Entry* out,
                        std::string* error) const
+{
+    const std::lock_guard<std::mutex> guard(lock_);
+    return FindLocked(relative_path, out, error);
+}
+
+bool Fat32Volume::FindLocked(std::string_view relative_path,
+                             Fat32Entry* out,
+                             std::string* error) const
 {
     if (out == nullptr || !IsSafeRelativePath(relative_path))
     {
@@ -392,6 +480,23 @@ bool Fat32Volume::Find(std::string_view relative_path,
         }
         return false;
     }
+    // FAT name matching is case-insensitive, so the cache key folds case and
+    // normalizes the separator. Two spellings of one path share an entry.
+    const std::string key = MakeLookupKey(relative_path);
+    const auto cached = path_cache_.find(key);
+    if (cached != path_cache_.end())
+    {
+        if (!cached->second.has_value())
+        {
+            if (error != nullptr)
+            {
+                *error = "FAT32 path was not found: " + std::string(relative_path);
+            }
+            return false;
+        }
+        *out = *cached->second;
+        return true;
+    }
     Fat32Entry current;
     current.name = "/";
     current.directory = true;
@@ -400,16 +505,19 @@ bool Fat32Volume::Find(std::string_view relative_path,
     for (std::size_t index = 0; index < components.size(); ++index)
     {
         const std::string& component = components[index];
-        std::vector<Fat32Entry> entries;
-        if (!ReadDirectoryClusterChain(current.first_cluster, &entries, error))
+        const std::vector<Fat32Entry>* entries = nullptr;
+        if (!DirectoryEntriesLocked(current.first_cluster, &entries, error))
         {
             return false;
         }
         const auto found = std::find_if(
-            entries.begin(), entries.end(), [&component](const Fat32Entry& entry)
+            entries->begin(), entries->end(), [&component](const Fat32Entry& entry)
             { return EqualsIgnoreAsciiCase(entry.name, component); });
-        if (found == entries.end())
+        if (found == entries->end())
         {
+            // A guest that probes for optional files repeats the same failing
+            // lookup, so the negative result is remembered too.
+            StoreLookupLocked(key, std::nullopt);
             if (error != nullptr)
             {
                 *error = "FAT32 path was not found: " + std::string(relative_path);
@@ -426,7 +534,63 @@ bool Fat32Volume::Find(std::string_view relative_path,
             return false;
         }
     }
+    StoreLookupLocked(key, current);
     *out = std::move(current);
+    return true;
+}
+
+bool Fat32Volume::ClusterAtIndexLocked(std::uint32_t first_cluster,
+                                       std::uint64_t index,
+                                       std::uint32_t* cluster,
+                                       std::string* error) const
+{
+    if (cluster == nullptr || first_cluster < 2 || first_cluster > info_.maximum_cluster)
+    {
+        if (error != nullptr)
+        {
+            *error = "FAT32 file has an invalid first cluster";
+        }
+        return false;
+    }
+    auto cached = chain_cache_.find(first_cluster);
+    if (cached == chain_cache_.end())
+    {
+        if (chain_cache_.size() >= kChainCacheEntries)
+        {
+            chain_cache_.clear();
+        }
+        cached = chain_cache_.emplace(first_cluster, std::vector<std::uint32_t>{first_cluster})
+                     .first;
+    }
+    std::vector<std::uint32_t>& chain = cached->second;
+    // The chain is extended only as far as the requested index, so opening a
+    // large file and reading its first bytes never walks the whole chain.
+    while (chain.size() <= index)
+    {
+        if (chain.size() > info_.cluster_count)
+        {
+            if (error != nullptr)
+            {
+                *error = "FAT32 file chain exceeded the cluster limit";
+            }
+            return false;
+        }
+        std::uint32_t next = 0;
+        if (!ReadFatEntry(chain.back(), &next, error))
+        {
+            return false;
+        }
+        if (next < 2 || next > info_.maximum_cluster || next >= kFat32EndOfChain)
+        {
+            if (error != nullptr)
+            {
+                *error = "FAT32 file chain ended before the requested offset";
+            }
+            return false;
+        }
+        chain.push_back(next);
+    }
+    *cluster = chain[static_cast<std::size_t>(index)];
     return true;
 }
 
@@ -436,8 +600,18 @@ bool Fat32Volume::ReadFileRange(std::string_view relative_path,
                                 std::size_t length,
                                 std::string* error) const
 {
+    const std::lock_guard<std::mutex> guard(lock_);
+    return ReadFileRangeLocked(relative_path, offset, destination, length, error);
+}
+
+bool Fat32Volume::ReadFileRangeLocked(std::string_view relative_path,
+                                      std::uint64_t offset,
+                                      void* destination,
+                                      std::size_t length,
+                                      std::string* error) const
+{
     Fat32Entry file;
-    if (!Find(relative_path, &file, error))
+    if (!FindLocked(relative_path, &file, error))
     {
         return false;
     }
@@ -463,8 +637,15 @@ bool Fat32Volume::ReadFileRange(std::string_view relative_path,
     }
     const std::uint64_t cluster_bytes =
         static_cast<std::uint64_t>(info_.sectors_per_cluster) * info_.bytes_per_sector;
-    std::uint32_t cluster = file.first_cluster;
-    if (file.size != 0 && (cluster < 2 || cluster > info_.maximum_cluster))
+    if (cluster_bytes == 0)
+    {
+        if (error != nullptr)
+        {
+            *error = "FAT32 cluster size is zero";
+        }
+        return false;
+    }
+    if (file.first_cluster < 2 || file.first_cluster > info_.maximum_cluster)
     {
         if (error != nullptr)
         {
@@ -472,67 +653,46 @@ bool Fat32Volume::ReadFileRange(std::string_view relative_path,
         }
         return false;
     }
-    std::uint64_t skip = offset / cluster_bytes;
-    for (std::uint32_t count = 0; count < skip; ++count)
-    {
-        std::uint32_t next = 0;
-        if (!ReadFatEntry(cluster, &next, error) || next < 2 || next > info_.maximum_cluster ||
-            next >= kFat32EndOfChain)
-        {
-            if (error != nullptr && error->empty())
-            {
-                *error = "FAT32 file chain ended before the requested offset";
-            }
-            return false;
-        }
-        cluster = next;
-    }
 
     auto* output = static_cast<std::uint8_t*>(destination);
     std::size_t remaining = length;
+    std::uint64_t index = offset / cluster_bytes;
     std::size_t within = static_cast<std::size_t>(offset % cluster_bytes);
-    for (std::uint32_t count = 0; remaining != 0 && count <= info_.cluster_count; ++count)
+    while (remaining != 0)
     {
-        std::vector<std::uint8_t> cluster_bytes_buffer;
-        if (!ReadCluster(cluster, &cluster_bytes_buffer, error))
+        std::uint32_t cluster = 0;
+        if (!ClusterAtIndexLocked(file.first_cluster, index, &cluster, error))
         {
             return false;
         }
-        const std::size_t available = cluster_bytes_buffer.size() - within;
-        const std::size_t copy_count = std::min(remaining, available);
-        std::memcpy(output, cluster_bytes_buffer.data() + within, copy_count);
-        output += copy_count;
-        remaining -= copy_count;
+        // The cluster payload is read straight into the caller's buffer. The
+        // image layer serves it from its hunk cache, so an intermediate
+        // cluster buffer would only add a copy and an allocation.
+        const std::uint64_t address =
+            (info_.data_lba + static_cast<std::uint64_t>(cluster - 2) * info_.sectors_per_cluster) *
+                512 +
+            within;
+        const std::size_t count =
+            std::min(remaining, static_cast<std::size_t>(cluster_bytes) - within);
+        if (!image_->Read(address, output, count, error))
+        {
+            return false;
+        }
+        output += count;
+        remaining -= count;
         within = 0;
-        if (remaining == 0)
-        {
-            return true;
-        }
-        std::uint32_t next = 0;
-        if (!ReadFatEntry(cluster, &next, error) || next < 2 || next > info_.maximum_cluster ||
-            next >= kFat32EndOfChain)
-        {
-            if (error != nullptr && error->empty())
-            {
-                *error = "FAT32 file chain ended before the requested range";
-            }
-            return false;
-        }
-        cluster = next;
+        ++index;
     }
-    if (error != nullptr)
-    {
-        *error = "FAT32 file chain exceeded the cluster limit";
-    }
-    return false;
+    return true;
 }
 
 bool Fat32Volume::ReadFile(std::string_view relative_path,
                            std::vector<std::uint8_t>* bytes,
                            std::string* error) const
 {
+    const std::lock_guard<std::mutex> guard(lock_);
     Fat32Entry file;
-    if (bytes == nullptr || !Find(relative_path, &file, error))
+    if (bytes == nullptr || !FindLocked(relative_path, &file, error))
     {
         return false;
     }
@@ -553,15 +713,16 @@ bool Fat32Volume::ReadFile(std::string_view relative_path,
         return false;
     }
     bytes->assign(file.size, 0);
-    return ReadFileRange(relative_path, 0, bytes->data(), bytes->size(), error);
+    return ReadFileRangeLocked(relative_path, 0, bytes->data(), bytes->size(), error);
 }
 
 bool Fat32Volume::MaterializeFile(std::string_view relative_path,
                                   const std::filesystem::path& output,
                                   std::string* error) const
 {
+    const std::lock_guard<std::mutex> guard(lock_);
     Fat32Entry file;
-    if (!Find(relative_path, &file, error))
+    if (!FindLocked(relative_path, &file, error))
     {
         return false;
     }
@@ -604,7 +765,7 @@ bool Fat32Volume::MaterializeFile(std::string_view relative_path,
     {
         const std::size_t count = static_cast<std::size_t>(
             std::min<std::uint64_t>(buffer.size(), file.size - offset));
-        if (!ReadFileRange(relative_path, offset, buffer.data(), count, error))
+        if (!ReadFileRangeLocked(relative_path, offset, buffer.data(), count, error))
         {
             return false;
         }

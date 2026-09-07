@@ -85,7 +85,11 @@ std::string MameChdCodecName(MameChdCodec codec)
 }
 
 MameChdImage::MameChdImage(std::filesystem::path path, void* handle, MameChdInfo info)
-    : path_(std::move(path)), handle_(handle), info_(std::move(info))
+    : path_(std::move(path)),
+      handle_(handle),
+      info_(std::move(info)),
+      hunk_cache_(info_.hunk_bytes),
+      hunk_scratch_(info_.hunk_bytes)
 {
 }
 
@@ -206,10 +210,10 @@ bool MameChdImage::Read(std::uint64_t offset,
         }
         return false;
     }
+    const std::lock_guard<std::mutex> guard(lock_);
     auto* output = static_cast<std::uint8_t*>(destination);
     std::size_t remaining = length;
     std::uint64_t current_offset = offset;
-    std::vector<std::uint8_t> hunk(info_.hunk_bytes);
     while (remaining != 0)
     {
         const std::uint64_t hunk_number = current_offset / info_.hunk_bytes;
@@ -225,22 +229,44 @@ bool MameChdImage::Read(std::uint64_t offset,
             static_cast<std::size_t>(current_offset % info_.hunk_bytes);
         const std::size_t count = std::min(
             remaining, static_cast<std::size_t>(info_.hunk_bytes) - within);
-        const chd_error read_error =
-            chd_read(static_cast<chd_file*>(handle_), static_cast<std::uint32_t>(hunk_number), hunk.data());
-        if (read_error != CHDERR_NONE)
+        const std::uint8_t* payload = nullptr;
+        if (!ReadHunkLocked(static_cast<std::uint32_t>(hunk_number), &payload, error))
         {
-            if (error != nullptr)
-            {
-                *error = "cannot read CHD hunk " + std::to_string(hunk_number) + ": " +
-                         ChdError(read_error);
-            }
             return false;
         }
-        std::copy_n(hunk.begin() + static_cast<std::ptrdiff_t>(within), count, output);
+        std::copy_n(payload + within, count, output);
         output += count;
         current_offset += count;
         remaining -= count;
     }
+    return true;
+}
+
+bool MameChdImage::ReadHunkLocked(std::uint32_t hunk,
+                                  const std::uint8_t** payload,
+                                  std::string* error)
+{
+    if (const std::uint8_t* cached = hunk_cache_.Lookup(hunk); cached != nullptr)
+    {
+        *payload = cached;
+        return true;
+    }
+    const chd_error read_error =
+        chd_read(static_cast<chd_file*>(handle_), hunk, hunk_scratch_.data());
+    if (read_error != CHDERR_NONE)
+    {
+        if (error != nullptr)
+        {
+            *error = "cannot read CHD hunk " + std::to_string(hunk) + ": " + ChdError(read_error);
+        }
+        return false;
+    }
+    hunk_cache_.Insert(hunk, hunk_scratch_.data(), hunk_scratch_.size());
+    // Lookup returns the cached copy so a later hit and a miss hand back the
+    // same kind of pointer. A cache with no capacity falls back to the scratch
+    // buffer, which stays valid until the next call under the same lock.
+    const std::uint8_t* cached = hunk_cache_.Lookup(hunk);
+    *payload = cached != nullptr ? cached : hunk_scratch_.data();
     return true;
 }
 

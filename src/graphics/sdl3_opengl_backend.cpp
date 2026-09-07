@@ -133,12 +133,31 @@ struct Sdl3OpenGlBackend::Impl
         std::uint32_t height = 0;
         std::uint64_t revision = 0;
         Rgb565ColorKey color_key;
+        // Last values actually handed to glTexParameteri for this texture, so a
+        // draw that keeps the same sampler state issues no parameter calls.
+        GLenum minification_filter = 0;
+        GLenum magnification_filter = 0;
+        GLenum address_u = 0;
+        GLenum address_v = 0;
+    };
+
+    // Uniform locations are fixed once the program links, so they are resolved
+    // there instead of being looked up by name on every draw.
+    struct UniformLocations
+    {
+        GLint viewport = -1;
+        GLint texture = -1;
+        GLint texture_enabled = -1;
+        GLint color_key_enabled = -1;
+        GLint alpha_test_enabled = -1;
+        GLint alpha_reference = -1;
     };
 
     SDL_Window* window = nullptr;
     SDL_GLContext context = nullptr;
     bool owns_video_subsystem = false;
     GLuint program = 0;
+    UniformLocations uniforms;
     GLuint render_framebuffer = 0;
     GLuint render_color_texture = 0;
     GLuint render_depth_renderbuffer = 0;
@@ -146,6 +165,13 @@ struct Sdl3OpenGlBackend::Impl
     bool frame_started = false;
     std::uint32_t logical_width = 0;
     std::uint32_t logical_height = 0;
+    // This backend is the only OpenGL consumer in the process, so once the
+    // context is current it stays current and the per-draw call is redundant.
+    bool context_current = false;
+    // Reused across draws so building the vertex payload allocates nothing.
+    std::vector<GlVertex> vertex_scratch;
+    bool draw_diagnostics = false;
+    std::uint64_t draws_error_checked = 0;
 
     CreateShaderFunction create_shader = nullptr;
     ShaderSourceFunction shader_source = nullptr;
@@ -200,11 +226,34 @@ struct Sdl3OpenGlBackend::Impl
 
     bool MakeCurrent(std::string* error)
     {
+        if (context_current)
+        {
+            return true;
+        }
         if (!SDL_GL_MakeCurrent(window, context))
         {
             *error = std::string("cannot make the SDL3 OpenGL context current: ") + SDL_GetError();
             return false;
         }
+        context_current = true;
+        return true;
+    }
+
+    // Per-draw error checking is a pipeline synchronization point in some
+    // drivers. It stays on for the first draws, which is where a broken state
+    // setup shows up, and afterwards only while diagnostics are enabled.
+    bool ShouldCheckDrawError()
+    {
+        constexpr std::uint64_t kInitialCheckedDraws = 256;
+        if (draw_diagnostics)
+        {
+            return true;
+        }
+        if (draws_error_checked >= kInitialCheckedDraws)
+        {
+            return false;
+        }
+        ++draws_error_checked;
         return true;
     }
 
@@ -382,6 +431,12 @@ struct Sdl3OpenGlBackend::Impl
         get_program_iv(program, kLinkStatus, &status);
         if (status == GL_TRUE)
         {
+            uniforms.viewport = get_uniform_location(program, "u_viewport");
+            uniforms.texture = get_uniform_location(program, "u_texture");
+            uniforms.texture_enabled = get_uniform_location(program, "u_texture_enabled");
+            uniforms.color_key_enabled = get_uniform_location(program, "u_color_key_enabled");
+            uniforms.alpha_test_enabled = get_uniform_location(program, "u_alpha_test_enabled");
+            uniforms.alpha_reference = get_uniform_location(program, "u_alpha_reference");
             return true;
         }
         std::array<char, 512> message = {};
@@ -597,6 +652,13 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
     {
         return false;
     }
+    // Every draw in this backend uses the same three attributes with the same
+    // layout, and there is no vertex array object in this profile, so the
+    // enable state is global and only has to be established once.
+    impl->enable_vertex_attrib_array(0);
+    impl->enable_vertex_attrib_array(1);
+    impl->enable_vertex_attrib_array(2);
+    impl->draw_diagnostics = config.draw_diagnostics;
     error->clear();
     return true;
 }
@@ -635,7 +697,8 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
         impl_->frame_started = true;
     }
 
-    std::vector<GlVertex> vertices;
+    std::vector<GlVertex>& vertices = impl_->vertex_scratch;
+    vertices.clear();
     vertices.reserve(command.vertices.size());
     for (const TransformedLitVertex& input : command.vertices)
     {
@@ -658,7 +721,7 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
     }
 
     impl_->use_program(impl_->program);
-    impl_->uniform_2f(impl_->get_uniform_location(impl_->program, "u_viewport"),
+    impl_->uniform_2f(impl_->uniforms.viewport,
                       static_cast<float>(logical_width), static_cast<float>(logical_height));
     const bool has_texture = texture_view != nullptr && texture_view->pixels != nullptr &&
                              texture_view->width != 0 && texture_view->height != 0;
@@ -683,17 +746,14 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
         }
         return kClampToEdge;
     };
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture"), 0);
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture_enabled"),
-                      has_texture ? 1 : 0);
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_color_key_enabled"),
-                      color_key_active ? 1 : 0);
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_alpha_test_enabled"),
-                      state.alpha_test_enabled ? 1 : 0);
-    const GLint alpha_reference = impl_->get_uniform_location(impl_->program, "u_alpha_reference");
-    if (alpha_reference >= 0)
+    impl_->uniform_1i(impl_->uniforms.texture, 0);
+    impl_->uniform_1i(impl_->uniforms.texture_enabled, has_texture ? 1 : 0);
+    impl_->uniform_1i(impl_->uniforms.color_key_enabled, color_key_active ? 1 : 0);
+    impl_->uniform_1i(impl_->uniforms.alpha_test_enabled, state.alpha_test_enabled ? 1 : 0);
+    if (impl_->uniforms.alpha_reference >= 0)
     {
-        impl_->uniform_1f(alpha_reference, static_cast<float>(state.alpha_reference) / 255.0f);
+        impl_->uniform_1f(impl_->uniforms.alpha_reference,
+                          static_cast<float>(state.alpha_reference) / 255.0f);
     }
     if (has_texture)
     {
@@ -717,13 +777,29 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
             impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
             impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            cached.minification_filter = GL_NEAREST;
+            cached.magnification_filter = GL_NEAREST;
+            cached.address_u = GL_REPEAT;
+            cached.address_v = GL_REPEAT;
         }
         else
         {
             impl_->bind_texture(GL_TEXTURE_2D, cached.name);
         }
-        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, to_gl_address(state.address_u));
-        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, to_gl_address(state.address_v));
+        // Sampler state lives on the texture object, so the values already
+        // applied to this texture do not have to be re-sent every draw.
+        const GLenum address_u = to_gl_address(state.address_u);
+        if (cached.address_u != address_u)
+        {
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, address_u);
+            cached.address_u = address_u;
+        }
+        const GLenum address_v = to_gl_address(state.address_v);
+        if (cached.address_v != address_v)
+        {
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, address_v);
+            cached.address_v = address_v;
+        }
         Rgb565ColorKey effective_key = texture_view->source_color_key;
         effective_key.enabled = color_key_active;
         const bool key_changed = cached.color_key.enabled != effective_key.enabled ||
@@ -776,12 +852,20 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
             cached.revision = texture_view->revision;
             cached.color_key = effective_key;
         }
-        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                               state.minification_filter == TextureFilter::kLinear ? GL_LINEAR
-                                                                                   : GL_NEAREST);
-        impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
-                               state.magnification_filter == TextureFilter::kLinear ? GL_LINEAR
-                                                                                    : GL_NEAREST);
+        const GLenum minification_filter =
+            state.minification_filter == TextureFilter::kLinear ? GL_LINEAR : GL_NEAREST;
+        if (cached.minification_filter != minification_filter)
+        {
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minification_filter);
+            cached.minification_filter = minification_filter;
+        }
+        const GLenum magnification_filter =
+            state.magnification_filter == TextureFilter::kLinear ? GL_LINEAR : GL_NEAREST;
+        if (cached.magnification_filter != magnification_filter)
+        {
+            impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magnification_filter);
+            cached.magnification_filter = magnification_filter;
+        }
     }
 
     if (state.depth_test_enabled)
@@ -865,9 +949,6 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
     }
 
     const GLsizei stride = sizeof(GlVertex);
-    impl_->enable_vertex_attrib_array(0);
-    impl_->enable_vertex_attrib_array(1);
-    impl_->enable_vertex_attrib_array(2);
     impl_->vertex_attrib_pointer(0, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].position);
     impl_->vertex_attrib_pointer(1, 4, GL_FLOAT, GL_FALSE, stride, &vertices[0].color);
     impl_->vertex_attrib_pointer(2, 2, GL_FLOAT, GL_FALSE, stride, &vertices[0].texture);
@@ -877,11 +958,7 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
                                             ? GL_TRIANGLES
                                             : GL_TRIANGLE_STRIP;
     impl_->draw_arrays(primitive_mode, 0, static_cast<GLsizei>(vertices.size()));
-    impl_->disable_vertex_attrib_array(2);
-    impl_->disable_vertex_attrib_array(1);
-    impl_->disable_vertex_attrib_array(0);
-    impl_->use_program(0);
-    if (impl_->get_error() != GL_NO_ERROR)
+    if (impl_->ShouldCheckDrawError() && impl_->get_error() != GL_NO_ERROR)
     {
         *error = "OpenGL rejected the Direct3D3 draw command";
         return false;
@@ -943,17 +1020,16 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     impl_->disable(GL_CULL_FACE);
     impl_->depth_mask(GL_FALSE);
     impl_->use_program(impl_->program);
-    impl_->uniform_2f(impl_->get_uniform_location(impl_->program, "u_viewport"),
+    impl_->uniform_2f(impl_->uniforms.viewport,
                       static_cast<float>(impl_->logical_width),
                       static_cast<float>(impl_->logical_height));
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture"), 0);
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_texture_enabled"), 1);
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_color_key_enabled"), 0);
-    impl_->uniform_1i(impl_->get_uniform_location(impl_->program, "u_alpha_test_enabled"), 0);
-    const GLint alpha_reference = impl_->get_uniform_location(impl_->program, "u_alpha_reference");
-    if (alpha_reference >= 0)
+    impl_->uniform_1i(impl_->uniforms.texture, 0);
+    impl_->uniform_1i(impl_->uniforms.texture_enabled, 1);
+    impl_->uniform_1i(impl_->uniforms.color_key_enabled, 0);
+    impl_->uniform_1i(impl_->uniforms.alpha_test_enabled, 0);
+    if (impl_->uniforms.alpha_reference >= 0)
     {
-        impl_->uniform_1f(alpha_reference, 0.0f);
+        impl_->uniform_1f(impl_->uniforms.alpha_reference, 0.0f);
     }
     impl_->bind_texture(GL_TEXTURE_2D, impl_->render_color_texture);
     impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -986,9 +1062,6 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     set_vertex(1, logical_width, 0.0f, 1.0f, 1.0f);
     set_vertex(2, 0.0f, logical_height, 0.0f, 0.0f);
     set_vertex(3, logical_width, logical_height, 1.0f, 0.0f);
-    impl_->enable_vertex_attrib_array(0);
-    impl_->enable_vertex_attrib_array(1);
-    impl_->enable_vertex_attrib_array(2);
     impl_->vertex_attrib_pointer(0,
                                  4,
                                  GL_FLOAT,
@@ -1008,9 +1081,9 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
                                  static_cast<GLsizei>(sizeof(GlVertex)),
                                  vertices.data()->texture);
     impl_->draw_arrays(GL_TRIANGLE_STRIP, 0, static_cast<GLsizei>(vertices.size()));
-    impl_->disable_vertex_attrib_array(2);
-    impl_->disable_vertex_attrib_array(1);
-    impl_->disable_vertex_attrib_array(0);
+    // Presentation runs once per frame, so this check stays unconditional and
+    // keeps catching a persistently broken GL state even when the per-draw
+    // check in Draw is off.
     if (impl_->get_error() != GL_NO_ERROR)
     {
         *error = "OpenGL RGB565 render-target presentation failed";

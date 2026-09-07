@@ -5,8 +5,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+
+#include "re2dj/storage/chd_hunk_cache.h"
 
 namespace re2dj::storage
 {
@@ -85,9 +88,18 @@ public:
 private:
     MameChdImage(std::filesystem::path path, void* handle, MameChdInfo info);
 
+    // Caller must hold `lock_`. Returns a pointer to the decompressed hunk,
+    // which stays valid until the next call on this image.
+    bool ReadHunkLocked(std::uint32_t hunk, const std::uint8_t** payload, std::string* error);
+
     std::filesystem::path path_;
     void* handle_ = nullptr;
     MameChdInfo info_;
+    // libchdr keeps shared decompression buffers, so every path into it is
+    // serialized together with the cache it fills.
+    mutable std::mutex lock_;
+    ChdHunkCache hunk_cache_;
+    std::vector<std::uint8_t> hunk_scratch_;
 };
 
 std::string MameChdCodecName(MameChdCodec codec);

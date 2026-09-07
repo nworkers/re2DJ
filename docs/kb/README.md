@@ -13,6 +13,7 @@
 | 문서 | 내용 |
 | --- | --- |
 | [pe32-executable-format.md](pe32-executable-format.md) | PE32 실행 형식: 헤더 배치, 섹션, 재배치, import |
+| [mame-chd-hunk-decompression.md](mame-chd-hunk-decompression.md) | MAME CHD의 hunk/unit 판독 단위, libchdr에 hunk 캐시가 없다는 점과 그로 인한 판독 비용 |
 | [win32-hle-boundary.md](win32-hle-boundary.md) | Win32 API를 HLE 경계로 삼는 방식과 호출 규약 |
 | [x86-32-guest-on-64-bit-host.md](x86-32-guest-on-64-bit-host.md) | 32비트 게스트를 64비트·WebAssembly 호스트에서 실행하는 선택지 |
 | [web-x86-execution-engines.md](web-x86-execution-engines.md) | Web용 x86 실행 엔진 후보, 라이선스와 제한된 검증 결정 |

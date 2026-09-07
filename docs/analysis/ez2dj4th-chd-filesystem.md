@@ -4,9 +4,10 @@
 
 ### 분석 대상과 상태
 
-이 문서는 사용자가 제공한 `roms/ez2dj4th/4thTrax.chd`를 원본 자산 경로에서 읽어 확인한 구조를 기록한다. 원본 CHD, IMG, 압축 파일과 실행 파일은 저장소에 추가하지 않는다.
+이 문서는 사용자가 제공한 4th CHD를 원본 자산 경로에서 읽어 확인한 구조를 기록한다. 원본 CHD, IMG, 압축 파일과 실행 파일은 저장소에 추가하지 않는다. 아래 값은 처음 `4thTrax.chd`라는 이름으로 확인했고, 2026-09-07에 같은 이미지를 `ez2dj4th.chd`로 두고 다시 확인해 동일했다. CHD 파일 이름은 인식 조건이 아니다. `roms/ez2dj4th/` 안의 `.chd` 하나를 자동으로 찾는다.
 
 * **확인됨**: CHD v5 header는 `libchdr`를 통해 logical bytes 20,060,135,424, hunk bytes 4,096, unit bytes 512를 보고한다.
+* **확인됨 — 2026-09-07**: 이 이미지의 codec 목록은 `lzma,zlib,huff,flac`이고 hunk 수는 4,897,494다. hunk 4,096바이트 / unit 512바이트 조합이므로 512바이트 sector 하나를 읽을 때마다 4,096바이트 hunk 하나를 압축 해제해야 한다. 배경은 [MAME CHD hunk 압축 해제와 판독 비용](../kb/mame-chd-hunk-decompression.md)에 둔다.
 * **확인됨**: GDDD metadata는 `CYLS:38869,HEADS:16,SECS:63,BPS:512`다.
 * **확인됨**: LBA 0의 MBR signature는 `55aa`이고 partition 0은 type `0x0c` FAT32 LBA, start LBA 63, length 39,166,407 sectors다.
 * **확인됨**: partition boot sector는 512 bytes/sector, 32 sectors/cluster, reserved 32 sectors, FAT 2개, 9,558 sectors/FAT, root cluster 2, FAT32 type string을 선언한다. 계산된 data LBA는 19,211이다.
@@ -27,9 +28,10 @@
 
 ### Scope and status
 
-This document records structure observed by reading the user-supplied `roms/ez2dj4th/4thTrax.chd`. No original CHD, IMG, compressed image, or executable is added to the repository.
+This document records structure observed by reading the user-supplied 4th CHD. No original CHD, IMG, compressed image, or executable is added to the repository. The values below were first confirmed under the name `4thTrax.chd` and re-confirmed unchanged on 2026-09-07 with the same image named `ez2dj4th.chd`; the CHD file name is not part of recognition, since the single `.chd` under `roms/ez2dj4th/` is discovered automatically.
 
 * **Confirmed**: libchdr reports CHD v5, 20,060,135,424 logical bytes, 4,096-byte hunks, and 512-byte units.
+* **Confirmed — 2026-09-07**: the codec set is `lzma,zlib,huff,flac` across 4,897,494 hunks. With 4,096-byte hunks over 512-byte units, reading one sector decompresses a whole 4,096-byte hunk; the background is in [MAME CHD hunk decompression and read cost](../kb/mame-chd-hunk-decompression.md).
 * **Confirmed**: GDDD metadata is `CYLS:38869,HEADS:16,SECS:63,BPS:512`.
 * **Confirmed**: the MBR signature is `55aa`; partition 0 is FAT32 LBA type `0x0c`, starting at LBA 63 for 39,166,407 sectors.
 * **Confirmed**: the partition BPB declares 512-byte sectors, 32 sectors/cluster, 32 reserved sectors, two FATs, 9,558 sectors/FAT, root cluster 2, and FAT32. The computed data LBA is 19,211.

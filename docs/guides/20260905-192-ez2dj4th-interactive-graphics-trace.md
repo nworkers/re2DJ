@@ -23,11 +23,17 @@ Run the original `ez2dj4th` far enough to insert a coin and enter Music Select, 
 
 프로젝트 루트의 PowerShell에서 아래를 실행한다. `--run-detached`는 launcher probe가 입력 설정을 전달할 때 필요한 모드이며, 게임 창이 닫힐 때까지 명령이 대기한다.
 
-Run this from a PowerShell at the project root. `--run-detached` is required by the launcher probe when passing the input configuration, and the command waits until the game window exits.
+`--graphics-draw-diagnostics`가 없으면 `.ddraw.log`에 `LateDraw`와 `DrawPrimitive` 항목이 남지 않는다. 이 진단은 draw 경로 안에서 실행되어 프레임 비용을 크게 늘리므로 제품 실행 경로에서는 꺼져 있다. 이 가이드처럼 draw 단위 증거가 필요할 때만 옵션으로 켠다. 근거: [작업 로그 221](../work-logs/20260907-221-draw-path-diagnostic-gate.md).
+
+Without `--graphics-draw-diagnostics` the `.ddraw.log` carries no `LateDraw` or `DrawPrimitive` entries. Those diagnostics run inside the draw path and add real frame cost, so they are off on the product execution path and are turned on by this option only when draw-level evidence is needed, as in this guide. See [work log 221](../work-logs/20260907-221-draw-path-diagnostic-gate.md).
+
+CHD 파일 이름은 고정되어 있지 않다. `roms\ez2dj4th\` 안의 `.chd` 파일 이름에 맞춰 아래 경로를 바꾼다.
+
+*The CHD file name is not fixed; adjust the path below to match the `.chd` file in `roms\ez2dj4th\`.*
 
 ```powershell
 $hdd = "$env:TEMP\re2dj\chd\ez2dj4th"
-$chd = (Resolve-Path 'roms\ez2dj4th\4thTrax.chd').Path
+$chd = (Get-ChildItem 'roms\ez2dj4th\*.chd' | Select-Object -First 1).FullName
 $io = (Resolve-Path 'config\ez2dj-io.example.ini').Path
 $args = @(
   '--hdd', $hdd,
@@ -43,6 +49,7 @@ $args = @(
   '--device-mock-lptdi',
   '--device-mock-lptdi-path-prefix', '\\.\FEnteDev',
   '--device-mock-wts-console-session',
+  '--graphics-draw-diagnostics',
   '--diagnostic-idle-timeout', '600000',
   '--run-detached'
 )

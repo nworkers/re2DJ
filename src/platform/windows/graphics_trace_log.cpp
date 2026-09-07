@@ -13,6 +13,11 @@
 // name because the launcher looks it up by name.
 extern "C" __declspec(dllexport) char g_re2dj_graphics_trace_path[MAX_PATH] = {};
 
+// The launcher resolves this export by name and writes a nonzero value only
+// when its draw-diagnostics option was passed. It stays zero on the product
+// path, and it keeps this exact name for the same reason as the path above.
+extern "C" __declspec(dllexport) unsigned long g_re2dj_graphics_draw_diagnostics = 0;
+
 namespace re2dj::platform::windows
 {
 namespace
@@ -82,6 +87,11 @@ void WriteGraphicsTraceFormat(const char* format, ...)
         return;
     }
     WriteGraphicsTraceLine(message);
+}
+
+bool AreGraphicsDrawDiagnosticsEnabled()
+{
+    return g_re2dj_graphics_draw_diagnostics != 0;
 }
 
 void ReportUnimplementedGraphicsCall(const char* interface_name,

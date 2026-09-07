@@ -35,4 +35,14 @@ struct GraphicsCallLedger
 void ReportUnimplementedGraphicsCall(const char* interface_name,
                                      GraphicsCallLedger* ledger);
 
+// Whether the diagnostics that run inside the per-draw path are enabled.
+//
+// Those diagnostics scan whole texture surfaces and format long records, so
+// they cost real frame time even though each one is budgeted. The product path
+// leaves them off; the launcher turns them on through its own option when a
+// draw-level investigation needs them. This is deliberately separate from the
+// graphics trace path, which the launcher always fills and which therefore
+// cannot act as a switch.
+bool AreGraphicsDrawDiagnosticsEnabled();
+
 }  // namespace re2dj::platform::windows

@@ -182,6 +182,7 @@ target_include_directories(re2dj_storage_common PUBLIC include)
 target_link_libraries(re2dj_storage_common PRIVATE re2dj_warnings)
 
 add_library(re2dj_chd_storage STATIC
+    src/storage/chd_hunk_cache.cpp
     src/storage/fat32_chd.cpp
     src/storage/fat32_directory_name.cpp
     src/storage/mame_chd.cpp
@@ -481,6 +482,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/legacy_audio_buffer_test.cpp
         tests/unit/mame_chd_test.cpp
         tests/unit/fat32_chd_test.cpp
+        tests/unit/chd_hunk_cache_test.cpp
         tests/unit/fat32_directory_name_test.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/pe_loader_test.cpp

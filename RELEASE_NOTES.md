@@ -1,5 +1,65 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.31 (2026-09-07)
+
+### 한국어
+
+런타임 핫 경로 성능 개선: CHD/FAT32 판독 캐시, OpenGL draw 경계 고정 비용 제거, draw 경로 진단 게이트
+
+게스트가 관찰하는 바이트, 픽셀, 상태는 바뀌지 않습니다. 성능 특성만 바뀝니다.
+
+#### 1. CHD/FAT32 판독 캐시 (작업 219)
+- **CHD hunk 캐시 추가**: 압축 해제된 hunk의 LRU 캐시 `re2dj::storage::ChdHunkCache`를 저장소 계층의 독립 구성요소로 추가했습니다. `libchdr`의 `chd_read`는 호출마다 다시 압축을 풀기 때문에, 512바이트 sector 하나를 읽을 때마다 4,096바이트 hunk 전체를 LZMA 해제하던 비용을 이 계층이 흡수합니다.
+- **FAT32 조회 캐시 추가**: `Fat32Volume`에 디렉터리 항목, 해석된 경로, 파일 클러스터 체인 캐시를 넣었습니다. `ReadFileRange`가 호출마다 경로를 다시 해석하고 FAT 체인을 첫 클러스터부터 다시 걷던 제곱 동작을 제거했고, 중간 클러스터 버퍼 없이 목적지 버퍼로 직접 판독합니다.
+- **판독 경로 직렬화**: 게스트가 여러 스레드에서 파일 API를 호출하므로 공개 판독 API를 `std::mutex`로 직렬화했습니다. 이전에는 잠금이 없었고 `libchdr`의 내부 버퍼가 공유 상태였습니다.
+- 실제 4th CHD에 대한 `re2dj_chd_probe` 출력이 변경 전후 바이트 단위로 동일함을 확인했습니다.
+
+#### 2. OpenGL draw 경계 고정 비용 제거 (작업 220)
+- draw 1회마다 반복되던 `SDL_GL_MakeCurrent` 1회, `glGetUniformLocation` 5회, 정점 속성 배열 활성/비활성 6회, `glTexParameteri` 4회, `std::vector` 힙 할당 1회를 제거했습니다.
+- uniform location은 프로그램 링크 직후 한 번만 조회하고, 정점 변환 버퍼는 재사용하며, 텍스처 샘플러 상태는 값이 실제로 바뀔 때만 설정합니다.
+- draw별 `glGetError`는 초기 256 draw와 진단 실행으로 한정합니다. `Present`의 프레임 단위 검사는 그대로 유지하므로 지속적인 GL 실패는 계속 검출됩니다.
+
+#### 3. draw 경로 진단 게이트 (작업 221)
+- **`--graphics-draw-diagnostics` 옵션 추가**: draw 경로 안에서 실행되던 `ReportDrawDiagnostic`, `ReportLateDrawDiagnostic`, `ReportTransformDiagnostic`을 새 스위치 뒤로 옮겼습니다. 기본값은 꺼짐이며 제품 실행 경로는 이 비용을 지불하지 않습니다.
+- 실제 4th CHD 실행에서 `.ddraw.log`가 21,117줄에서 631줄로 줄었고, 텍스처 전 픽셀 스캔과 긴 레코드 포맷팅을 유발하던 draw 단위 항목 20,480건이 사라졌습니다. 초기화 진단은 그대로 기록됩니다.
+- draw 단위 증거가 필요한 조사에서는 이 옵션을 명시적으로 켭니다. 관련 가이드와 분석 문서를 함께 갱신했습니다.
+
+#### 4. 문서
+- [런타임 핫 경로 성능 설계](docs/design/20260907-219-runtime-performance-hot-paths.md), 작업 지시 3건, 작업 로그 3건을 추가했습니다.
+- `libchdr`에 hunk 캐시가 없다는 일반 기술 배경을 [docs/kb/mame-chd-hunk-decompression.md](docs/kb/mame-chd-hunk-decompression.md)에 정리했습니다.
+- 4th CHD의 codec 목록과 hunk 수를 분석 문서에 반영하고, CHD 파일 이름이 인식 조건이 아니라는 점을 명시했습니다.
+
+---
+
+### English
+
+Runtime hot-path performance: CHD/FAT32 read caches, per-draw fixed cost removal in the OpenGL boundary, and a gate for the draw-path diagnostics.
+
+The bytes, pixels, and state the guest observes are unchanged; only performance characteristics change.
+
+#### 1. CHD/FAT32 Read Caches (Task 219)
+- **CHD hunk cache**: Added `re2dj::storage::ChdHunkCache`, an LRU of decompressed hunks, as its own component in the storage layer. `libchdr`'s `chd_read` decompresses on every call, so reading one 512-byte sector fully decompressed a 4,096-byte LZMA hunk; that cost is now absorbed here.
+- **FAT32 lookup caches**: Added directory-entry, resolved-path, and cluster-chain caches to `Fat32Volume`. This removes the quadratic behavior where `ReadFileRange` re-resolved the path and re-walked the FAT chain from the first cluster on every call, and reads now go straight into the caller's destination without an intermediate cluster buffer.
+- **Serialized read path**: The public read API is now guarded by a `std::mutex`, since the guest calls the file APIs from several threads; previously there was no lock and `libchdr`'s internal buffers were shared state.
+- Verified that `re2dj_chd_probe` output on the real 4th CHD is byte-identical before and after.
+
+#### 2. OpenGL Draw Boundary Fixed Cost (Task 220)
+- Removed the per-draw `SDL_GL_MakeCurrent`, five `glGetUniformLocation` lookups, six vertex-attribute-array toggles, four `glTexParameteri` calls, and one vector allocation.
+- Uniform locations are resolved once after link, the vertex conversion buffer is reused, and texture sampler state is applied only when a value actually changes.
+- The per-draw `glGetError` now runs for the first 256 draws and during diagnostic runs; `Present` keeps its unconditional per-frame check, so a persistently broken GL state is still detected.
+
+#### 3. Draw-Path Diagnostic Gate (Task 221)
+- **Added `--graphics-draw-diagnostics`**: `ReportDrawDiagnostic`, `ReportLateDrawDiagnostic`, and `ReportTransformDiagnostic` now sit behind a switch that defaults to off, so the product execution path does not pay for them.
+- On the real 4th CHD the `.ddraw.log` dropped from 21,117 lines to 631, removing the 20,480 per-draw entries that drove whole-surface texel scans and long record formatting. Initialization diagnostics still record.
+- Investigations that need draw-level evidence turn the option on explicitly; the related guides and analysis documents were updated accordingly.
+
+#### 4. Documentation
+- Added the [runtime hot-path performance design](docs/design/20260907-219-runtime-performance-hot-paths.md), three work orders, and three work logs.
+- Recorded the absence of a hunk cache in `libchdr` as general background in [docs/kb/mame-chd-hunk-decompression.md](docs/kb/mame-chd-hunk-decompression.md).
+- Recorded the 4th CHD codec set and hunk count in the analysis document, and noted that the CHD file name is not part of recognition.
+
+---
+
 ## v0.0.30 (2026-09-06)
 
 ### 한국어

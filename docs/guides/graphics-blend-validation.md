@@ -25,6 +25,10 @@ Win32 Debug build 후 저장소 루트의 PowerShell에서 실행합니다. Open
 
 *Launch with the previously verified user HDD/CHD and I/O settings, then enter Music Select through coin/start input. Check whether the black header occludes the small disc and whether background rays remain excessively visible through the center artwork. Close the game and inspect the `.ddraw.log` alongside the reported `diagnostic_log`.*
 
+launcher probe 명령에 `--graphics-draw-diagnostics`를 반드시 포함합니다. 이 옵션이 없으면 아래에서 찾는 `DrawPrimitive` 항목이 로그에 남지 않습니다. draw 경로 진단은 제품 실행 경로에서 꺼져 있습니다. 근거: [작업 로그 221](../work-logs/20260907-221-draw-path-diagnostic-gate.md).
+
+*Include `--graphics-draw-diagnostics` in the launcher probe command. Without it the `DrawPrimitive` entries searched for below are not written, because the draw-path diagnostics are off on the product execution path. See [work log 221](../work-logs/20260907-221-draw-path-diagnostic-gate.md).*
+
 최신 실행에서 목적지 색상 draw와 실패를 추리는 한 줄 명령입니다. 이전 실행을 분석할 때는 `$blendLog`에 해당 로그의 경로를 직접 지정합니다.
 
 *This one-line command extracts destination-color draws and failures from the latest run. For an older run, set `$blendLog` to that log explicitly.*

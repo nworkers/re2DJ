@@ -5,6 +5,10 @@ EZ2DJ 4th Trax가 DirectX 7 경계에서 무엇을 요구하는지, 실제 실�
 
 *What EZ2DJ 4th Trax asks of the DirectX 7 boundary, as verified in real runs.*
 
+> **draw 트레이스를 얻으려면 `--graphics-draw-diagnostics`가 필요하다 (2026-09-07부터).** 이 문서의 `LateDraw`, `DrawPrimitive`, `MusicSelectDiscDraw` 근거는 모두 draw 경로 안에서 만들어지며, 그 진단은 이제 기본으로 꺼져 있다. 옵션 없이 실행하면 `.ddraw.log`에는 초기화 항목만 남는다. 근거: [작업 로그 221](../work-logs/20260907-221-draw-path-diagnostic-gate.md).
+>
+> ***The draw trace requires `--graphics-draw-diagnostics` as of 2026-09-07.** Every `LateDraw`, `DrawPrimitive`, and `MusicSelectDiscDraw` observation in this document is produced inside the draw path, and those diagnostics now default to off; without the option the `.ddraw.log` carries initialization entries only. See [work log 221](../work-logs/20260907-221-draw-path-diagnostic-gate.md).*
+
 ---
 
 ## 1. 인터페이스 선택 (확인됨) (Interface Selection — Confirmed)

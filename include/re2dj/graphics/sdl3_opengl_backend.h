@@ -16,6 +16,11 @@ struct Sdl3OpenGlWindowConfig
     std::uint32_t width = 640;
     std::uint32_t height = 480;
     const char* title = "re2DJ";
+    // Keeps the per-draw OpenGL error check on for the whole session. It is a
+    // pipeline synchronization point in some drivers, so the product path
+    // leaves it off and relies on the initial draws and the per-frame check
+    // in Present. The host decides; this layer stays platform-neutral.
+    bool draw_diagnostics = false;
 };
 
 class Sdl3OpenGlBackend

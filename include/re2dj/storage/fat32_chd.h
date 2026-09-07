@@ -5,8 +5,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "re2dj/storage/mame_chd.h"
@@ -96,6 +99,9 @@ private:
     {
     }
 
+    // Guest file APIs can arrive on several threads, and the caches below are
+    // shared mutable state, so the public read API is serialized. Every helper
+    // named *Locked requires `lock_` to be held.
     bool ReadSector(std::uint64_t lba,
                     std::vector<std::uint8_t>* sector,
                     std::string* error) const;
@@ -109,8 +115,36 @@ private:
                                    std::vector<Fat32Entry>* entries,
                                    std::string* error) const;
 
+    bool FindLocked(std::string_view relative_path, Fat32Entry* out, std::string* error) const;
+    void StoreLookupLocked(const std::string& key, std::optional<Fat32Entry> entry) const;
+    bool ReadFileRangeLocked(std::string_view relative_path,
+                             std::uint64_t offset,
+                             void* destination,
+                             std::size_t length,
+                             std::string* error) const;
+    // Returns the cached entry list for one directory, reading and parsing the
+    // directory cluster chain only on the first request.
+    bool DirectoryEntriesLocked(std::uint32_t first_cluster,
+                                const std::vector<Fat32Entry>** entries,
+                                std::string* error) const;
+    // Resolves the cluster holding `index` within a chain, extending the cached
+    // chain only as far as that index.
+    bool ClusterAtIndexLocked(std::uint32_t first_cluster,
+                              std::uint64_t index,
+                              std::uint32_t* cluster,
+                              std::string* error) const;
+
     std::unique_ptr<MameChdImage> image_;
     Fat32VolumeInfo info_;
+
+    // The volume is opened read-only and the source image is never modified,
+    // so a cached lookup stays valid for the life of the volume and none of
+    // these caches needs an invalidation path. Each is capped so that a guest
+    // probing many distinct paths cannot grow them without bound.
+    mutable std::mutex lock_;
+    mutable std::unordered_map<std::uint32_t, std::vector<Fat32Entry>> directory_cache_;
+    mutable std::unordered_map<std::string, std::optional<Fat32Entry>> path_cache_;
+    mutable std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> chain_cache_;
 };
 
 }  // namespace re2dj::storage

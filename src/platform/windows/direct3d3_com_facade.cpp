@@ -774,6 +774,12 @@ void ReportDrawDiagnostic(DeviceFacade* device,
                           const char* reason,
                           const re2dj::graphics::LegacyDrawCommand* command = nullptr)
 {
+    // This runs on the draw path, so it is off unless a draw-level
+    // investigation asked for it. See graphics_trace_log.h.
+    if (!re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled())
+    {
+        return;
+    }
     if (device == nullptr || device->root == nullptr)
     {
         return;
@@ -862,6 +868,12 @@ void ReportLateDrawDiagnostic(
     DWORD flags,
     DWORD vertex_type)
 {
+    // Runs on the draw path and scans the whole texture surface when it is
+    // dirty, so it is off unless diagnostics were requested.
+    if (!re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled())
+    {
+        return;
+    }
     if (device == nullptr || device->root == nullptr || command.vertices.empty())
     {
         return;
@@ -1588,6 +1600,12 @@ void ReportTransformDiagnostic(const DeviceFacade& device,
                                std::size_t vertex_count,
                                const re2dj::graphics::LegacyDrawCommand& command)
 {
+    // Also on the draw path: it walks the untransformed vertex block before
+    // formatting, so it follows the same switch.
+    if (!re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled())
+    {
+        return;
+    }
     if (device.root == nullptr || ++device.root->transform_diagnostic_count > 128)
     {
         return;
@@ -3426,7 +3444,11 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     {
         auto* const backend = new (std::nothrow) re2dj::graphics::Sdl3OpenGlBackend;
         const re2dj::graphics::Sdl3OpenGlWindowConfig window_config = {
-            root->window, root->width, root->height, "re2DJ"};
+            root->window,
+            root->width,
+            root->height,
+            "re2DJ",
+            re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled()};
         if (backend == nullptr || !backend->Initialize(window_config, &error) ||
             !ApplyRe2djWindowMode(root->window, root->width, root->height))
         {
