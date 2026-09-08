@@ -161,6 +161,13 @@ struct Sdl3OpenGlBackend::Impl
     GLuint render_framebuffer = 0;
     GLuint render_color_texture = 0;
     GLuint render_depth_renderbuffer = 0;
+    // Set when the guest presents by flipping. The colour buffer then carries
+    // over from one frame to the next instead of being cleared. One buffer is
+    // kept rather than one per buffer in the guest's chain: rotating two would
+    // reproduce the age of a real back buffer, but a guest that redraws only
+    // part of the screen then alternates between two diverging images, which
+    // reads as a 30 Hz flicker the original does not have.
+    bool retain_between_frames = false;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
     bool frame_started = false;
     std::uint32_t logical_width = 0;
@@ -345,6 +352,15 @@ struct Sdl3OpenGlBackend::Impl
         framebuffer_renderbuffer(
             kFramebuffer, kDepthAttachment, kRenderbuffer, render_depth_renderbuffer);
         const GLenum status = check_framebuffer_status(kFramebuffer);
+        if (status == kFramebufferComplete)
+        {
+            // A retained target is never cleared implicitly again, so the
+            // undefined contents glTexImage2D leaves behind have to go now.
+            viewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+            depth_mask(GL_TRUE);
+            clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+            clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        }
         bind_framebuffer(kFramebuffer, 0);
         if (status != kFramebufferComplete)
         {
@@ -652,6 +668,7 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
     {
         return false;
     }
+    impl->retain_between_frames = config.retain_between_frames;
     // Every draw in this backend uses the same three attributes with the same
     // layout, and there is no vertex array object in this profile, so the
     // enable state is global and only has to be established once.
@@ -679,7 +696,7 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
         return false;
     }
     if (logical_width != impl_->logical_width || logical_height != impl_->logical_height ||
-        impl_->render_framebuffer == 0)
+        impl_->render_framebuffer == 0 || impl_->render_color_texture == 0)
     {
         *error = "logical draw size does not match the OpenGL RGB565 render target";
         return false;
@@ -692,8 +709,17 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
                         static_cast<GLsizei>(impl_->logical_width),
                         static_cast<GLsizei>(impl_->logical_height));
         impl_->depth_mask(GL_TRUE);
-        impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-        impl_->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        // Depth is scratch that nothing reads across frames, so it always goes.
+        // Colour stays when the guest presents by flipping: it keeps drawing
+        // into buffers it owns, and a frame in which it redraws only part of
+        // the screen needs the rest still there.
+        GLbitfield mask = GL_DEPTH_BUFFER_BIT;
+        if (!impl_->retain_between_frames)
+        {
+            impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+            mask |= GL_COLOR_BUFFER_BIT;
+        }
+        impl_->clear(mask);
         impl_->frame_started = true;
     }
 
@@ -984,6 +1010,39 @@ void Sdl3OpenGlBackend::DiscardTexture(std::uint64_t identity)
         impl_->delete_textures(1, &found->second.name);
         impl_->textures.erase(found);
     }
+}
+
+bool Sdl3OpenGlBackend::ClearRenderTarget(std::uint16_t rgb565_color, std::string* error)
+{
+    if (impl_ == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    if (!impl_->MakeCurrent(error))
+    {
+        return false;
+    }
+    if (impl_->render_framebuffer == 0 || impl_->render_color_texture == 0)
+    {
+        *error = "OpenGL RGB565 render target is unavailable";
+        return false;
+    }
+    impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
+    impl_->viewport(0,
+                    0,
+                    static_cast<GLsizei>(impl_->logical_width),
+                    static_cast<GLsizei>(impl_->logical_height));
+    const float red = static_cast<float>((rgb565_color >> 11) & 0x1f) / 31.0f;
+    const float green = static_cast<float>((rgb565_color >> 5) & 0x3f) / 63.0f;
+    const float blue = static_cast<float>(rgb565_color & 0x1f) / 31.0f;
+    impl_->depth_mask(GL_TRUE);
+    impl_->clear_color(red, green, blue, 1.0f);
+    impl_->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // The frame owns its depth clear from here, so a later first draw does not
+    // wipe what this just put down.
+    impl_->frame_started = true;
+    error->clear();
+    return true;
 }
 
 bool Sdl3OpenGlBackend::Present(std::string* error)

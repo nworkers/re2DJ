@@ -450,6 +450,10 @@ struct RootFacade
     std::uint32_t frame_draw_vertices = 0;
     std::uint32_t frame_textured_draw_calls = 0;
     std::uint32_t frame_draw_summary_count = 0;
+    // The counter reading at the previous presented frame, so each summary can
+    // say how long the frame before it stayed on screen. A guest that stalls
+    // without presenting shows up here and nowhere else.
+    LARGE_INTEGER frame_summary_previous_counter = {};
     // The first transformed vertex's diffuse colour of the frame. A guest that
     // fades a full-screen quad does it by modulating this, so the sequence of
     // these values is the fade curve it actually asked for.
@@ -459,6 +463,16 @@ struct RootFacade
     // recorded alongside the first one.
     std::uint32_t frame_last_diffuse = 0;
     std::uint64_t frame_number = 0;
+    // Set when the guest made a flipping primary. It then presents by handing
+    // buffers it owns to the display, so a frame in which it redraws only part
+    // of the screen needs the rest still there and the render target must not
+    // be cleared between frames. A guest that presents by copying a whole
+    // surface onto the primary overwrites the screen every time and starts
+    // from nothing.
+    bool presentation_retains_frames = false;
+    // The surface the guest presents from. A colour fill aimed at it is a
+    // request to clear what is about to be shown, not just its memory copy.
+    SurfaceFacade* presentation_surface = nullptr;
     LARGE_INTEGER fps_frequency = {};
     LARGE_INTEGER fps_interval_start = {};
     std::uint32_t fps_interval_frames = 0;
@@ -2006,6 +2020,16 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
         static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwGBitMask),
         static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwBBitMask),
         static_cast<unsigned long>(descriptor->ddpfPixelFormat.dwRGBAlphaBitMask));
+    // How the guest presents is decided by the primary it creates, and it is
+    // read here rather than at device creation because the render backend is
+    // built on the first draw, which comes later. 3rd Trax makes a primary
+    // without DDSCAPS_FLIP and copies one offscreen surface onto it; ez2dj1stse
+    // and 4th make a flipping one.
+    if (root != nullptr && (descriptor->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) != 0 &&
+        (descriptor->ddsCaps.dwCaps & DDSCAPS_FLIP) != 0)
+    {
+        root->presentation_retains_frames = true;
+    }
     if ((descriptor->ddsCaps.dwCaps & DDSCAPS_ZBUFFER) != 0)
     {
         // The depth buffer belongs to the render backend, which owns its own
@@ -2306,6 +2330,10 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
     }
     facade->root = RootFromDirect3d(self);
     facade->render_target = target;
+    if (facade->root != nullptr)
+    {
+        facade->root->presentation_surface = target;
+    }
     facade->render_states[D3DRENDERSTATE_CULLMODE] = kD3dCullCounterClockwise;
     facade->render_states[D3DRENDERSTATE_SRCBLEND] = D3DBLEND_ONE;
     facade->render_states[D3DRENDERSTATE_DESTBLEND] = D3DBLEND_ZERO;
@@ -2552,6 +2580,23 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         std::fill(row + rectangle.left, row + rectangle.right, color);
     }
     MarkSurfaceDirty(surface);
+    // Filling the surface the guest presents from is how it clears the screen;
+    // nothing else clears the render target, so the fill has to reach it. Only
+    // a fill of the whole surface maps onto a target clear - a partial one is
+    // a region update, and the memory copy above already carries it.
+    RootFacade* const root = surface->root;
+    if (root != nullptr && root->render_backend != nullptr &&
+        surface == root->presentation_surface && rectangle.left == full.left &&
+        rectangle.top == full.top && rectangle.right == full.right &&
+        rectangle.bottom == full.bottom)
+    {
+        std::string clear_error;
+        if (!root->render_backend->ClearRenderTarget(color, &clear_error))
+        {
+            OutputDebugStringA(kOpenGlFailureMessage);
+            return finish(DDERR_GENERIC);
+        }
+    }
     return finish(DD_OK);
 }
 
@@ -2638,12 +2683,29 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
         if (root->frame_draw_summary_count < kMaximumFrameDrawSummaries)
         {
             ++root->frame_draw_summary_count;
-            char detail[160] = {};
+            LARGE_INTEGER now = {};
+            LARGE_INTEGER frequency = {};
+            double milliseconds = 0.0;
+            if (QueryPerformanceCounter(&now) != FALSE &&
+                QueryPerformanceFrequency(&frequency) != FALSE && frequency.QuadPart > 0)
+            {
+                if (root->frame_summary_previous_counter.QuadPart != 0)
+                {
+                    milliseconds =
+                        1000.0 *
+                        static_cast<double>(now.QuadPart -
+                                            root->frame_summary_previous_counter.QuadPart) /
+                        static_cast<double>(frequency.QuadPart);
+                }
+                root->frame_summary_previous_counter = now;
+            }
+            char detail[192] = {};
             std::snprintf(detail,
                           sizeof(detail),
-                          "FrameDraws:frame=%llu:draws=%u:vertices=%u:textured=%u"
+                          "FrameDraws:frame=%llu:ms=%.2f:draws=%u:vertices=%u:textured=%u"
                           ":diffuse=0x%08x:last=0x%08x",
                           static_cast<unsigned long long>(root->frame_number),
+                          milliseconds,
                           root->frame_draw_calls,
                           root->frame_draw_vertices,
                           root->frame_textured_draw_calls,
@@ -3544,7 +3606,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
             root->width,
             root->height,
             "re2DJ",
-            re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled()};
+            re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled(),
+            root->presentation_retains_frames};
         if (backend == nullptr || !backend->Initialize(window_config, &error) ||
             !ApplyRe2djWindowMode(root->window, root->width, root->height))
         {
@@ -3820,6 +3883,10 @@ HRESULT WINAPI DeviceSetRenderTarget(IDirect3DDevice3* self,
         SurfaceRelease(&device->render_target->interface_value);
     }
     device->render_target = target;
+    if (device->root != nullptr)
+    {
+        device->root->presentation_surface = target;
+    }
     return DD_OK;
 }
 
