@@ -24,6 +24,7 @@
 #include "directdraw7_com_facade.h"
 #include "display_mode_boundary.h"
 #include "ez2dj_keyboard_input.h"
+#include "ini_profile_hle.h"
 #include "message_box_boundary.h"
 #include "directinput7_com_facade.h"
 #include "directsound_com_facade.h"
@@ -32,6 +33,12 @@ extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_hle_windows_directory[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_hdd_root[MAX_PATH] = {};
+// The one name by which the guest calls its own root, taken from the profile's
+// guest drive letter and directory. The drive letter is a property of the dump,
+// not of the product: 1st SE's CHD boots from C:\ez2dj while the dumps this
+// runtime was first written against used D:\ez2dj, which stays the default for
+// profiles that record no guest path.
+extern "C" __declspec(dllexport) char g_re2dj_vfs_guest_root[MAX_PATH] = "D:\\ez2dj";
 extern "C" __declspec(dllexport) char g_re2dj_vfs_overlay_root[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_chd_path[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_trace_path[MAX_PATH] = {};
@@ -181,7 +188,11 @@ bool ClaimVfsDeviceTraceBudget()
 
 bool ClaimVfsOpenTraceBudget()
 {
-    constexpr LONG kMaximumOpenDiagnostics = 128;
+    // Raised from 128 once a diagnosis needed the whole open sequence: a
+    // title screen probes about 60 sprite files before drawing, and the old
+    // budget truncated the log mid-pass and made an absent read look like a
+    // missing trace. This matches the file-event budget below.
+    constexpr LONG kMaximumOpenDiagnostics = 1024;
     return InterlockedIncrement(&g_vfs_open_trace_count) <= kMaximumOpenDiagnostics;
 }
 
@@ -242,6 +253,32 @@ void AppendDiagnosticFile(const char* path, const char* message)
 void AppendVfsTraceMessage(const char* message)
 {
     AppendDiagnosticFile(g_re2dj_vfs_trace_path, message);
+}
+
+// A file handle the guest opens and then abandons leaves no trace of its own,
+// so the two queries a loader makes between opening and reading are recorded
+// under the same budget as the read events.
+void ReportVfsFileQuery(const char* api, const char* kind, HANDLE handle, DWORD result)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0')
+    {
+        return;
+    }
+    const LONG event = ClaimVfsFileTraceBudget();
+    if (event == 0)
+    {
+        return;
+    }
+    char message[256] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:file-query:event=%ld:api=%.23s:kind=%.15s:handle=0x%08x:result=%u\r\n",
+                  event,
+                  api == nullptr ? "unknown" : api,
+                  kind == nullptr ? "unknown" : kind,
+                  static_cast<unsigned>(reinterpret_cast<ULONG_PTR>(handle)),
+                  static_cast<unsigned>(result));
+    AppendVfsTraceMessage(message);
 }
 
 void ReportVfsReadFileEnter(
@@ -471,13 +508,36 @@ void ReportCrashException(EXCEPTION_POINTERS* exception)
     {
         return;
     }
-    static volatile LONG s_crash_reported = 0;
-    if (InterlockedCompareExchange(&s_crash_reported, 1, 0) != 0)
+    const DWORD code = exception->ExceptionRecord->ExceptionCode;
+    // One record per exception code, not one per run. A protection layer that
+    // raises a handled fault at entry - as the 1st SE .protect build does with
+    // an access violation - used to consume the only slot and mask the fault
+    // that actually ends the process. Distinct codes are capped so a repeating
+    // fault still cannot fill the log.
     {
-        return;
+        constexpr std::size_t kMaximumReportedCodes = 8;
+        static volatile LONG s_reported_codes[kMaximumReportedCodes] = {};
+        bool claimed = false;
+        for (std::size_t index = 0; index < kMaximumReportedCodes; ++index)
+        {
+            const LONG seen = InterlockedCompareExchange(
+                &s_reported_codes[index], static_cast<LONG>(code), 0);
+            if (seen == 0)
+            {
+                claimed = true;
+                break;
+            }
+            if (static_cast<DWORD>(seen) == code)
+            {
+                break;
+            }
+        }
+        if (!claimed)
+        {
+            return;
+        }
     }
 
-    const DWORD code = exception->ExceptionRecord->ExceptionCode;
     const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(
         exception->ExceptionRecord->ExceptionAddress);
     const std::uintptr_t image_base =
@@ -611,6 +671,76 @@ void ReportCrashException(EXCEPTION_POINTERS* exception)
                   ecx_hex);
     AppendVfsTraceMessage(detail_msg);
     OutputDebugStringA(detail_msg);
+
+    // A divide-by-zero through a struct field says which field, but not where
+    // that field is written. The packed image is decrypted by the time it
+    // faults and this runs inside the guest, so the code that touches the same
+    // field can be found by scanning for its displacement. Only the F7 /7 form
+    // with a 32-bit displacement is decoded, which is the shape that faulted.
+    if (code == static_cast<DWORD>(EXCEPTION_INT_DIVIDE_BY_ZERO) &&
+        code_readable != FALSE && code_copied >= 6 && code_bytes[0] == 0xf7 &&
+        (code_bytes[1] & 0xc0) == 0x80)
+    {
+        const std::uint32_t displacement =
+            static_cast<std::uint32_t>(code_bytes[2]) |
+            (static_cast<std::uint32_t>(code_bytes[3]) << 8) |
+            (static_cast<std::uint32_t>(code_bytes[4]) << 16) |
+            (static_cast<std::uint32_t>(code_bytes[5]) << 24);
+        const std::uintptr_t scan_start = image_base + 0x1000;
+        constexpr std::size_t kScanBytes = 0x53000;
+        std::vector<std::uint8_t> text(kScanBytes, 0);
+        SIZE_T text_copied = 0;
+        ReadProcessMemory(GetCurrentProcess(),
+                          reinterpret_cast<const void*>(scan_start),
+                          text.data(),
+                          text.size(),
+                          &text_copied);
+        // The faulting ModRM names a base register whose value is the object.
+        // A static object's address is itself a constant in the code, so
+        // scanning for it finds the sites that build the object - which is
+        // where the field the divisor came from is written.
+        const DWORD* const integer_registers[8] = {
+            &exception->ContextRecord->Eax, &exception->ContextRecord->Ecx,
+            &exception->ContextRecord->Edx, &exception->ContextRecord->Ebx,
+            &exception->ContextRecord->Esp, &exception->ContextRecord->Ebp,
+            &exception->ContextRecord->Esi, &exception->ContextRecord->Edi};
+        const std::uint32_t base_value =
+            static_cast<std::uint32_t>(*integer_registers[code_bytes[1] & 0x07]);
+        std::string matches;
+        unsigned found = 0;
+        for (SIZE_T index = 0; index + 4 <= text_copied && found < 24; ++index)
+        {
+            const std::uint32_t value = static_cast<std::uint32_t>(text[index]) |
+                                        (static_cast<std::uint32_t>(text[index + 1]) << 8) |
+                                        (static_cast<std::uint32_t>(text[index + 2]) << 16) |
+                                        (static_cast<std::uint32_t>(text[index + 3]) << 24);
+            if (value != displacement && value != base_value)
+            {
+                continue;
+            }
+            char entry[32] = {};
+            // The displacement follows the opcode and ModRM, so the instruction
+            // starts a couple of bytes earlier; the RVA is what matters here.
+            std::snprintf(entry,
+                          sizeof(entry),
+                          "%c%08x,",
+                          value == displacement ? 'd' : 'b',
+                          static_cast<unsigned>(scan_start + index - image_base));
+            matches.append(entry);
+            ++found;
+        }
+        char scan_msg[768] = {};
+        std::snprintf(scan_msg,
+                      sizeof(scan_msg),
+                      "re2dj:vfs:crash-field-scan:displacement=0x%08x:base=0x%08x:"
+                      "scanned=%u:matches=%u:rvas=%.560s\r\n",
+                      static_cast<unsigned>(displacement),
+                      static_cast<unsigned>(base_value),
+                      static_cast<unsigned>(text_copied),
+                      found,
+                      matches.c_str());
+        AppendVfsTraceMessage(scan_msg);
+    }
 }
 
 void ReportDynamicResolverName(const char* name,
@@ -665,26 +795,165 @@ void ReportWtsQuery(DWORD session_id,
     AppendVfsTraceMessage(message);
 }
 
+// One code window around the site that opens the first bitmap. The guest opens
+// every sprite bitmap and then abandons it without reading, so the branch that
+// skips the load sits immediately after this call. A .protect build decrypts
+// .text at run time, which is why the window has to be read from inside the
+// process rather than from the original file.
+volatile LONG g_asset_caller_window_written = 0;
+
+void ReportAssetOpenCallerWindow(const char* requested, std::uintptr_t caller)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || requested == nullptr || caller == 0)
+    {
+        return;
+    }
+    const std::size_t length = std::strlen(requested);
+    if (length < 4 || _stricmp(requested + length - 4, ".bmp") != 0)
+    {
+        return;
+    }
+    if (InterlockedCompareExchange(&g_asset_caller_window_written, 1, 0) != 0)
+    {
+        return;
+    }
+    constexpr std::size_t kBefore = 32;
+    constexpr std::size_t kAfter = 288;
+    const std::uintptr_t start = caller >= kBefore ? caller - kBefore : 0;
+    unsigned char bytes[kBefore + kAfter] = {};
+    SIZE_T copied = 0;
+    ReadProcessMemory(GetCurrentProcess(),
+                      reinterpret_cast<const void*>(start),
+                      bytes,
+                      sizeof(bytes),
+                      &copied);
+    char hex[sizeof(bytes) * 2 + 1] = {};
+    for (SIZE_T index = 0; index < copied; ++index)
+    {
+        std::snprintf(hex + index * 2, 3, "%02x", bytes[index]);
+    }
+    // The call site turned out to be a FileExists helper, so the decision that
+    // skips the load belongs to its caller. Recording the stack above our own
+    // return address exposes that frame's return address without guessing at a
+    // frame layout.
+    // Most of the stack above this point is our own trace buffers, so the raw
+    // words are useless. Only values that land in the guest image's code range
+    // are kept: those are the return addresses of the frames that led here.
+    const auto* const return_slot =
+        static_cast<const std::uintptr_t*>(_AddressOfReturnAddress());
+    std::uintptr_t stack_words[1024] = {};
+    SIZE_T stack_copied = 0;
+    ReadProcessMemory(GetCurrentProcess(),
+                      return_slot,
+                      stack_words,
+                      sizeof(stack_words),
+                      &stack_copied);
+    const std::uintptr_t image_low =
+        reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr));
+    char stack_hex[32 * 9 + 1] = {};
+    const std::size_t stack_count = stack_copied / sizeof(stack_words[0]);
+    std::size_t kept = 0;
+    std::uintptr_t previous = 0;
+    for (std::size_t index = 0; index < stack_count && kept < 32; ++index)
+    {
+        const std::uintptr_t value = stack_words[index];
+        if (value <= image_low || value >= image_low + 0x00100000 || value == previous)
+        {
+            continue;
+        }
+        previous = value;
+        std::snprintf(stack_hex + kept * 9, 10, "%08x,", static_cast<unsigned>(value));
+        ++kept;
+    }
+    char message[1536] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:asset-open-caller-window:request=%.63s:caller=0x%08x:"
+                  "window_start=0x%08x:before=%u:bytes=%s:stack=%s\r\n",
+                  requested,
+                  static_cast<unsigned>(caller),
+                  static_cast<unsigned>(start),
+                  static_cast<unsigned>(kBefore),
+                  hex,
+                  stack_hex);
+    AppendVfsTraceMessage(message);
+
+    // The immediate caller is only the existence check. Each frame above it is
+    // dumped as well, because the decision that skips the load lives in one of
+    // them and their code is likewise only readable while running.
+    std::size_t frame_index = 0;
+    previous = 0;
+    for (std::size_t index = 0; index < stack_count && frame_index < 6; ++index)
+    {
+        const std::uintptr_t value = stack_words[index];
+        if (value <= image_low || value >= image_low + 0x00100000 ||
+            value == previous || value == caller)
+        {
+            continue;
+        }
+        previous = value;
+        const std::uintptr_t frame_start = value >= kBefore ? value - kBefore : 0;
+        unsigned char frame_bytes[kBefore + kAfter] = {};
+        SIZE_T frame_copied = 0;
+        ReadProcessMemory(GetCurrentProcess(),
+                          reinterpret_cast<const void*>(frame_start),
+                          frame_bytes,
+                          sizeof(frame_bytes),
+                          &frame_copied);
+        if (frame_copied == 0)
+        {
+            continue;
+        }
+        char frame_hex[sizeof(frame_bytes) * 2 + 1] = {};
+        for (SIZE_T byte_index = 0; byte_index < frame_copied; ++byte_index)
+        {
+            std::snprintf(frame_hex + byte_index * 2, 3, "%02x", frame_bytes[byte_index]);
+        }
+        char frame_message[1024] = {};
+        std::snprintf(frame_message,
+                      sizeof(frame_message),
+                      "re2dj:vfs:asset-open-frame-window:index=%u:address=0x%08x:"
+                      "window_start=0x%08x:before=%u:bytes=%s\r\n",
+                      static_cast<unsigned>(frame_index),
+                      static_cast<unsigned>(value),
+                      static_cast<unsigned>(frame_start),
+                      static_cast<unsigned>(kBefore),
+                      frame_hex);
+        AppendVfsTraceMessage(frame_message);
+        ++frame_index;
+    }
+}
+
 void ReportVfsAssetOpen(const char* api,
                         const char* requested,
                         const char* mapped,
                         HANDLE result,
-                        DWORD error)
+                        DWORD error,
+                        std::uintptr_t caller)
 {
     if (g_re2dj_vfs_trace_path[0] == '\0' ||
         !ClaimVfsTraceBudget(ClassifyVfsAsset(requested)))
     {
         return;
     }
+    // The call site is reported as an RVA as well, because the absolute address
+    // depends on where the image landed and cannot be compared across runs.
+    const std::uintptr_t image_base =
+        reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr));
+    const std::uintptr_t caller_rva =
+        caller == 0 || caller < image_base ? 0 : caller - image_base;
     char message[900] = {};
     std::snprintf(message,
                   sizeof(message),
-                  "re2dj:vfs:asset-open:api=%s:request=%s:mapped=%s:success=%u:error=%lu\r\n",
+                  "re2dj:vfs:asset-open:api=%s:request=%s:mapped=%s:success=%u:error=%lu"
+                  ":caller=0x%08x:caller_rva=0x%08x\r\n",
                   api,
                   requested,
                   mapped == nullptr ? "" : mapped,
                   result != INVALID_HANDLE_VALUE ? 1U : 0U,
-                  static_cast<unsigned long>(error));
+                  static_cast<unsigned long>(error),
+                  static_cast<unsigned>(caller),
+                  static_cast<unsigned>(caller_rva));
     AppendVfsTraceMessage(message);
 }
 
@@ -1486,9 +1755,11 @@ bool StripGuestRoot(const char* name, const char** suffix)
     {
         return true;
     }
-    if (HasPrefixIgnoreCase(name, "D:\\ez2dj"))
+    const std::size_t guest_root_length = std::strlen(g_re2dj_vfs_guest_root);
+    if (guest_root_length != 0 &&
+        HasPrefixIgnoreCase(name, g_re2dj_vfs_guest_root))
     {
-        const char* candidate = name + 8;
+        const char* candidate = name + guest_root_length;
         while (*candidate == '\\' || *candidate == '/')
         {
             ++candidate;
@@ -1725,7 +1996,7 @@ bool MapVfsSearchPath(const char* name, char path[MAX_PATH])
     return JoinRoot(mapped_directory, pattern.c_str(), path);
 }
 
-HANDLE OpenChdReadFile(const char* name, DWORD disposition)
+HANDLE OpenChdReadFile(const char* name, DWORD disposition, std::uintptr_t caller)
 {
     if (!IsChdConfigured() || disposition == CREATE_NEW || disposition == CREATE_ALWAYS ||
         disposition == TRUNCATE_EXISTING)
@@ -1749,7 +2020,7 @@ HANDLE OpenChdReadFile(const char* name, DWORD disposition)
         return INVALID_HANDLE_VALUE;
     }
     const std::string mapped = "chd://" + relative;
-    ReportVfsAssetOpen("CreateFileA", name, mapped.c_str(), handle, ERROR_SUCCESS);
+    ReportVfsAssetOpen("CreateFileA", name, mapped.c_str(), handle, ERROR_SUCCESS, caller);
     SetLastError(ERROR_SUCCESS);
     return handle;
 }
@@ -1979,9 +2250,106 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsLoadImageA(
                        name,
                        load_name,
                        result == nullptr ? INVALID_HANDLE_VALUE : result,
-                       error);
+                       error,
+                       reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
     SetLastError(error);
     return result;
+}
+
+// The guest's configuration lives in the CHD, where the real Win32 profile
+// APIs cannot reach it: they open the name against the host filesystem and
+// silently hand back the caller's default. Reads are answered from the VFS
+// copy instead, and recorded so a value the guest depends on is visible.
+// Resolves a profile file name to something the real profile API can open. The
+// guest's own copy lives in the CHD, so it is materialised into the staging
+// tree first; without this the API reads the host filesystem, finds nothing,
+// and silently returns the caller's default.
+const char* ResolveProfilePath(LPCSTR filename, char mapped[MAX_PATH])
+{
+    if (filename == nullptr || !MapVfsPath(filename, false, mapped, nullptr))
+    {
+        return filename;
+    }
+    if (IsRegularFile(mapped) || MaterializeChdFile(filename, mapped))
+    {
+        return mapped;
+    }
+    return filename;
+}
+
+void ReportProfileRead(const char* api,
+                       const char* section,
+                       const char* key,
+                       const char* filename,
+                       const char* resolved,
+                       unsigned result)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || ClaimVfsFileTraceBudget() == 0)
+    {
+        return;
+    }
+    char message[768] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:profile-read:api=%.31s:section=%.63s:key=%.63s:"
+                  "file=%.159s:resolved=%.159s:result=%u\r\n",
+                  api,
+                  section == nullptr ? "<all>" : section,
+                  key == nullptr ? "<all>" : key,
+                  filename == nullptr ? "" : filename,
+                  resolved == nullptr ? "" : resolved,
+                  result);
+    AppendVfsTraceMessage(message);
+}
+
+extern "C" __declspec(dllexport) UINT WINAPI Re2djVfsGetPrivateProfileIntA(
+    LPCSTR section, LPCSTR key, INT default_value, LPCSTR filename)
+{
+    char mapped[MAX_PATH] = {};
+    const char* const resolved = ResolveProfilePath(filename, mapped);
+    const UINT value =
+        Re2djHleGetPrivateProfileIntA(section, key, default_value, resolved);
+    ReportProfileRead("GetPrivateProfileIntA", section, key, filename, resolved, value);
+    return value;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetPrivateProfileStringA(
+    LPCSTR section,
+    LPCSTR key,
+    LPCSTR default_value,
+    LPSTR returned,
+    DWORD size,
+    LPCSTR filename)
+{
+    char mapped[MAX_PATH] = {};
+    const char* const resolved = ResolveProfilePath(filename, mapped);
+    const DWORD copied =
+        GetPrivateProfileStringA(section, key, default_value, returned, size, resolved);
+    ReportProfileRead(
+        "GetPrivateProfileStringA", section, key, filename, resolved, copied);
+    return copied;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetPrivateProfileSectionNamesA(
+    LPSTR returned, DWORD size, LPCSTR filename)
+{
+    char mapped[MAX_PATH] = {};
+    const char* const resolved = ResolveProfilePath(filename, mapped);
+    const DWORD copied = GetPrivateProfileSectionNamesA(returned, size, resolved);
+    ReportProfileRead(
+        "GetPrivateProfileSectionNamesA", nullptr, nullptr, filename, resolved, copied);
+    return copied;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetPrivateProfileSectionA(
+    LPCSTR section, LPSTR returned, DWORD size, LPCSTR filename)
+{
+    char mapped[MAX_PATH] = {};
+    const char* const resolved = ResolveProfilePath(filename, mapped);
+    const DWORD copied = GetPrivateProfileSectionA(section, returned, size, resolved);
+    ReportProfileRead(
+        "GetPrivateProfileSectionA", section, nullptr, filename, resolved, copied);
+    return copied;
 }
 
 extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
@@ -1993,9 +2361,12 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     DWORD flags,
     HANDLE template_handle)
 {
+    // Taken before any other call so it names the guest's own call site.
+    const std::uintptr_t caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     EnsureDiagnosticBoundariesInstalled();
     OutputDebugStringA(kCreateFileMessage);
     ReportVfsCreateFileRequest(name, access, disposition, flags);
+    ReportAssetOpenCallerWindow(name, caller);
     if (name == nullptr)
     {
         SetLastError(ERROR_INVALID_NAME);
@@ -2027,13 +2398,13 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
                                   INVALID_HANDLE_VALUE,
                                   ERROR_INVALID_NAME);
         ReportVfsDeviceOpen("CreateFileA", name, INVALID_HANDLE_VALUE, ERROR_INVALID_NAME);
-        ReportVfsAssetOpen("CreateFileA", name, "", INVALID_HANDLE_VALUE, ERROR_INVALID_NAME);
+        ReportVfsAssetOpen("CreateFileA", name, "", INVALID_HANDLE_VALUE, ERROR_INVALID_NAME, caller);
         SetLastError(ERROR_INVALID_NAME);
         return INVALID_HANDLE_VALUE;
     }
     if (!write && !IsRegularFile(path))
     {
-        const HANDLE chd_handle = OpenChdReadFile(name, disposition);
+        const HANDLE chd_handle = OpenChdReadFile(name, disposition, caller);
         if (chd_handle != INVALID_HANDLE_VALUE)
         {
             ReportVfsCreateFileResult("chd",
@@ -2124,7 +2495,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
                                       template_handle);
     const DWORD error = result == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
     ReportVfsCreateFileResult("native", name, path, result, error);
-    ReportVfsAssetOpen("CreateFileA", name, path, result, error);
+    ReportVfsAssetOpen("CreateFileA", name, path, result, error, caller);
     SetLastError(error);
     return result;
 }
@@ -2311,9 +2682,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileSize(
             *high = 0;
         }
         SetLastError(ERROR_SUCCESS);
+        ReportVfsFileQuery("GetFileSize", "chd", handle, chd_handle->size);
         return chd_handle->size;
     }
-    return GetFileSize(handle, high);
+    const DWORD native_size = GetFileSize(handle, high);
+    ReportVfsFileQuery("GetFileSize", "native", handle, native_size);
+    return native_size;
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsFindClose(HANDLE handle);
@@ -2353,9 +2727,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileType(HANDLE handle)
     if (LookupChdFileHandle(handle) != nullptr)
     {
         SetLastError(ERROR_SUCCESS);
+        ReportVfsFileQuery("GetFileType", "chd", handle, FILE_TYPE_DISK);
         return FILE_TYPE_DISK;
     }
-    return GetFileType(handle);
+    const DWORD native_type = GetFileType(handle);
+    ReportVfsFileQuery("GetFileType", "native", handle, native_type);
+    return native_type;
 }
 
 bool WildcardMatch(const char* pattern, const char* text)
@@ -2413,6 +2790,20 @@ void PopulateFindData(const re2dj::storage::Fat32Entry& entry, LPWIN32_FIND_DATA
     data->dwFileAttributes = entry.directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
     data->nFileSizeLow = entry.size;
     data->nFileSizeHigh = 0;
+    // Win32 reports real file times here. The FAT32 entry stores them as DOS
+    // date and time words, and a zero word means the entry carries no such
+    // stamp, so it is left as the zero the memset already wrote rather than
+    // being converted: DosDateTimeToFileTime rejects zero.
+    const auto fill_time = [](std::uint16_t date, std::uint16_t time, FILETIME* out) {
+        if (date == 0)
+        {
+            return;
+        }
+        DosDateTimeToFileTime(date, time, out);
+    };
+    fill_time(entry.creation_date, entry.creation_time, &data->ftCreationTime);
+    fill_time(entry.last_access_date, 0, &data->ftLastAccessTime);
+    fill_time(entry.write_date, entry.write_time, &data->ftLastWriteTime);
     strncpy_s(data->cFileName, sizeof(data->cFileName), entry.name.c_str(), _TRUNCATE);
 }
 
@@ -2446,34 +2837,27 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsFindFirstFileA(
         return INVALID_HANDLE_VALUE;
     }
 
-    std::string resolved;
+    // Split the pattern off before resolving, the way MapVfsSearchPath does for
+    // the native path. The guest path parser rejects '*' and '?' as filename
+    // characters, so handing it the whole search name fails and silently drops
+    // the guest current directory, sweeping the CHD root instead.
+    const std::string name_str(name);
+    const std::size_t last_slash = name_str.find_last_of("\\/");
+    const std::string directory =
+        last_slash == std::string::npos ? "." : name_str.substr(0, last_slash);
+    std::string pattern = name_str.substr(
+        last_slash == std::string::npos ? 0 : last_slash + 1);
+
     std::string dir_part;
-    std::string pattern;
-    if (ResolveGuestRelativePath(name, &resolved))
+    if (!ResolveGuestRelativePath(directory.c_str(), &dir_part))
     {
-        const std::size_t last_slash = resolved.find_last_of('/');
-        if (last_slash != std::string::npos)
+        dir_part = last_slash == std::string::npos ? std::string() : directory;
+        for (char& value : dir_part)
         {
-            dir_part = resolved.substr(0, last_slash);
-            pattern = resolved.substr(last_slash + 1);
-        }
-        else
-        {
-            pattern = resolved;
-        }
-    }
-    else
-    {
-        const std::string name_str(name);
-        const std::size_t last_slash = name_str.find_last_of("\\/");
-        if (last_slash != std::string::npos)
-        {
-            dir_part = name_str.substr(0, last_slash);
-            pattern = name_str.substr(last_slash + 1);
-        }
-        else
-        {
-            pattern = name_str;
+            if (value == '\\')
+            {
+                value = '/';
+            }
         }
     }
 
@@ -2984,6 +3368,54 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
             {
                 const FARPROC result =
                     reinterpret_cast<FARPROC>(&Re2djVfsGetCurrentDirectoryA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            // The song list lives in Songs\music.ini inside the CHD and is read
+            // through these APIs, so leaving them on the real entry points made
+            // the guest see an empty list.
+            if (_stricmp(name, "GetPrivateProfileIntA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetPrivateProfileIntA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetPrivateProfileStringA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetPrivateProfileStringA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetPrivateProfileSectionNamesA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetPrivateProfileSectionNamesA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetPrivateProfileSectionA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetPrivateProfileSectionA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            // The sprite loader reaches its bitmaps through LoadImageA, and a
+            // packed build resolves that import itself at unpack time, which
+            // overwrites whatever the launcher patched into the static slot.
+            // Answering here is the only way the guest's own call reaches the
+            // VFS, which is what lets a CHD-backed bitmap load at all.
+            if (_stricmp(name, "LoadImageA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsLoadImageA);
                 ReportDynamicResolverName(
                     name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
                 return result;

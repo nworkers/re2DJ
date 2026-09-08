@@ -147,14 +147,23 @@ build/linux-x64-debug/bin/re2dj --hdd /path/to/ez2dj_hdd
 
 *It selects a launch target from the scan and prints a summary. Use `--target <id>` to choose a different candidate and `--list-targets` to list candidates only.*
 
-확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 것은 EZ2DJ The 1st Tracks, 2nd Trax, 3rd Trax와 4th·5th·6th CHD shortcut입니다. 그 밖의 덤프도 스캔으로 감지됩니다.
+확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 디렉터리 프로파일은 EZ2DJ The 1st Tracks와 2nd Trax이고, CHD shortcut은 1st Trax Special Edition, 3rd Trax, 4th, 5th, 6th입니다. 그 밖의 덤프도 스캔으로 감지됩니다.
 
-*A recognised dump is matched by a built-in profile. EZ2DJ The 1st Tracks, 2nd Trax, 3rd Trax, and the 4th/5th/6th CHD shortcuts are built in today; anything else is still found by scanning.*
+*A recognised dump is matched by a built-in profile. EZ2DJ The 1st Tracks and 2nd Trax are built in as directory profiles, and the 1st Tracks Special Edition, 3rd Trax, 4th, 5th, and 6th are built in as CHD shortcuts; anything else is still found by scanning.*
 
 ```text
 targets:
-  * ez2dj1stse             ez2dj.exe                built-in
-    ez2dj1                  ez2dj1.exe               detected
+  * ez2dj2nd               ez2dj/EZ2DJ.exe          built-in
+```
+
+1st SE는 CHD shortcut이므로 추출 디렉터리 스캔에서는 built-in으로 잡히지 않고 detected 항목으로만 나열됩니다.
+
+*The 1st SE profile is a CHD shortcut, so an extracted-directory scan lists its executables as detected entries rather than claiming the built-in profile.*
+
+```text
+targets:
+  * ez2dj                  ez2dj.exe                detected
+    ez2dj1                 ez2dj1.exe               detected
     test                   Test.exe                 detected
     plzpoweroff            PlzPowerOff.exe          detected
 ```
@@ -235,7 +244,8 @@ re2dj_chd_probe /path/to/ez2dj4th.chd
 Windows 제품 실행 예:
 
 ```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe --hdd D:\EZ2DJ\1stSE --target ez2dj1stse --run
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj1stse
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj1stse --hdd D:\EZ2DJ\1stSE --list-targets
 .\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd
 .\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd --hdd D:\EZ2DJ\3rd --audio-gain-db 3
 .\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th --run
@@ -244,6 +254,10 @@ Windows 제품 실행 예:
 `ez2dj3rd` shortcut은 저장소 root 기준 `roms/ez2dj3rd`를 HDD 기본 경로로 사용하고, 첫 번째 positional profile ID만으로 실행을 선택한다. `--hdd`가 있으면 shortcut 경로를 덮어쓰며, 프로파일이 지원하는 오디오·fullscreen·I/O 관련 명령행 값은 프로파일 기본값보다 우선한다. 3rd의 `EZ2DJ.INI`에는 `FullScreen=1`이 있지만, 이 빌드는 `DirectDrawCreateEx`를 import하므로 현재 3rd 기본값은 확인된 VFS·DirectSound hook만 활성화한다.
 
 *The `ez2dj3rd` shortcut uses `roms/ez2dj3rd` relative to the repository root and selects execution from the first positional profile ID. `--hdd` overrides that convenience path, and supported command-line audio, fullscreen, and I/O values take precedence over profile defaults. The 3rd `EZ2DJ.INI` contains `FullScreen=1`, but this build imports `DirectDrawCreateEx`, so the current 3rd baseline enables only the confirmed VFS and DirectSound hooks.*
+
+`ez2dj1stse` shortcut도 같은 형태로 `roms/ez2dj1stse` 아래의 CHD를 사용하며, `--hdd`로 다른 CHD 디렉터리를 지정할 수 있다. 이 CHD의 실행 파일은 기존 추출 덤프의 `.gtide` 빌드가 아니라 `.protect` 빌드다. 프로파일 기본값은 이 빌드에서 관측한 경계를 따라 `\\.\FEnteDev` 장치와 dynamic VFS를 쓰고, packed import directory에 없는 Windows directory·DirectDraw·demo volume 경계는 끈다. 로컬 Hardlock 자료(`cfg/hardlock.ini`의 `[ez2dj1stse]` section과 `cfg/hardlock-ez2dj1stse.map`)가 없으면 Hardlock initialize 요청에서 멈춘다. 자료가 있으면 transform loop를 통과해 복호화된 게임 코드가 `System\CompanyLogo` 자산까지 읽는다. 관측 내용은 [ez2dj1stse CHD 파일시스템 분석](docs/analysis/ez2dj1stse-chd-filesystem.md)에 있다. 그 자료는 저장소에 포함하지 않으며 사용자가 직접 확보한다.
+
+*The `ez2dj1stse` shortcut works the same way against the CHD under `roms/ez2dj1stse`, and `--hdd` can point at a different CHD directory. Its executable is the `.protect` build rather than the extracted dump's `.gtide` build. The profile defaults follow the boundary observed on that build: it uses the `\\.\FEnteDev` device and the dynamic VFS, and disables the Windows-directory, DirectDraw, and demo-volume boundaries whose imports are missing from the packed import directory. Without local Hardlock material — the `[ez2dj1stse]` section of `cfg/hardlock.ini` plus `cfg/hardlock-ez2dj1stse.map` — a run stops at the Hardlock initialize request; with it, the run passes the transform loop and decrypted game code reads as far as the `System\CompanyLogo` assets. The observations are recorded in the [ez2dj1stse CHD filesystem analysis](docs/analysis/ez2dj1stse-chd-filesystem.md). That material is not part of the repository; users supply it themselves.*
 
 The `ez2dj4th` target uses a MAME CHD HDD shortcut at `roms/ez2dj4th`.
 `re2dj_chd_probe <path-to-chd>` now reads the real CHD through libchdr, validates

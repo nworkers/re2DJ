@@ -42,6 +42,15 @@ struct Fat32Entry
     std::uint8_t attributes = 0;
     std::uint32_t first_cluster = 0;
     std::uint32_t size = 0;
+    // DOS-format date and time words exactly as the directory entry stores
+    // them. They stay unconverted here because this is platform-neutral core:
+    // turning them into a host file time is the host layer's job. Last access
+    // has a date but no time, and zero means the entry carries no such stamp.
+    std::uint16_t creation_time = 0;
+    std::uint16_t creation_date = 0;
+    std::uint16_t last_access_date = 0;
+    std::uint16_t write_time = 0;
+    std::uint16_t write_date = 0;
 };
 
 // Read-only FAT32 filesystem view backed by a MAME CHD logical block device.

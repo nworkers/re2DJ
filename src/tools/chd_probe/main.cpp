@@ -193,11 +193,26 @@ int main(int argc, char** argv)
         std::printf("listing=%s entries=%zu\n", argv[3], entries.size());
         for (const re2dj::storage::Fat32Entry& entry : entries)
         {
-            std::printf("entry name=%s directory=%s size=%u first_cluster=%u\n",
-                        entry.name.c_str(),
-                        entry.directory ? "true" : "false",
-                        entry.size,
-                        entry.first_cluster);
+            // DOS date and time words are decoded here rather than stored
+            // decoded, so the listing shows what a guest would see from the
+            // entry without the reader taking a stance on time zones.
+            const auto year = [](std::uint16_t date) { return 1980 + ((date >> 9) & 0x7f); };
+            const auto month = [](std::uint16_t date) { return (date >> 5) & 0x0f; };
+            const auto day = [](std::uint16_t date) { return date & 0x1f; };
+            const auto hour = [](std::uint16_t time) { return (time >> 11) & 0x1f; };
+            const auto minute = [](std::uint16_t time) { return (time >> 5) & 0x3f; };
+            std::printf(
+                "entry name=%s directory=%s size=%u first_cluster=%u "
+                "written=%04d-%02d-%02d %02d:%02d created=%04d-%02d-%02d accessed=%04d-%02d-%02d\n",
+                entry.name.c_str(),
+                entry.directory ? "true" : "false",
+                entry.size,
+                entry.first_cluster,
+                year(entry.write_date), month(entry.write_date), day(entry.write_date),
+                hour(entry.write_time), minute(entry.write_time),
+                year(entry.creation_date), month(entry.creation_date), day(entry.creation_date),
+                year(entry.last_access_date), month(entry.last_access_date),
+                day(entry.last_access_date));
         }
         return 0;
     }

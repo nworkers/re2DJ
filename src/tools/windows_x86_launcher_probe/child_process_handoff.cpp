@@ -373,6 +373,14 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                result->runtime_base + rva,
                                options.vfs_source_root.string(),
                                error);
+    if (!options.guest_root.empty())
+    {
+        prepared = prepared && find_export("g_re2dj_vfs_guest_root", &rva) &&
+                   WriteRemoteAnsi(result->process,
+                                   result->runtime_base + rva,
+                                   options.guest_root,
+                                   error);
+    }
     prepared = prepared && find_export("g_re2dj_vfs_overlay_root", &rva) &&
                WriteRemoteAnsi(result->process,
                                result->runtime_base + rva,

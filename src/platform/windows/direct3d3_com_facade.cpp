@@ -443,6 +443,21 @@ struct RootFacade
     std::uint32_t late_draw_target_diagnostic_count = 0;
     std::uint32_t music_select_disc_diagnostic_count = 0;
     std::uint32_t transform_diagnostic_count = 0;
+    // Per-frame draw accounting, summarised once at present time. A line per
+    // draw would be thousands per second, and the question these answer - does
+    // the guest draw at all while the screen changes - only needs the totals.
+    std::uint32_t frame_draw_calls = 0;
+    std::uint32_t frame_draw_vertices = 0;
+    std::uint32_t frame_textured_draw_calls = 0;
+    std::uint32_t frame_draw_summary_count = 0;
+    // The first transformed vertex's diffuse colour of the frame. A guest that
+    // fades a full-screen quad does it by modulating this, so the sequence of
+    // these values is the fade curve it actually asked for.
+    std::uint32_t frame_first_diffuse = 0;
+    bool frame_first_diffuse_seen = false;
+    // A fade is often an overlay quad drawn last, so the final draw's colour is
+    // recorded alongside the first one.
+    std::uint32_t frame_last_diffuse = 0;
     std::uint64_t frame_number = 0;
     LARGE_INTEGER fps_frequency = {};
     LARGE_INTEGER fps_interval_start = {};
@@ -1469,11 +1484,16 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
     return true;
 }
 
+// `guest_blend_is_explicit` says the guest set blend factors we can decode, so
+// applying them to this quad reproduces what it asked for rather than inventing
+// a blend. That distinction decides whether a fully opaque quad qualifies: see
+// the alpha test below.
 bool IsFullScreenBlackFadeCandidate(
     const re2dj::graphics::LegacyDrawCommand& command,
     const re2dj::graphics::LegacyTextureView* texture,
     std::uint32_t logical_width,
-    std::uint32_t logical_height)
+    std::uint32_t logical_height,
+    bool guest_blend_is_explicit)
 {
     if (texture != nullptr || command.topology != re2dj::graphics::PrimitiveTopology::kTriangleStrip ||
         command.vertices.size() != 4 || logical_width == 0 || logical_height == 0)
@@ -1488,7 +1508,14 @@ bool IsFullScreenBlackFadeCandidate(
     const std::uint32_t first_color = command.vertices.front().diffuse_argb;
     const std::uint32_t first_rgb = first_color & 0x00ffffffU;
     const std::uint32_t first_alpha = first_color >> 24;
-    if (first_rgb != 0 || first_alpha == 0 || first_alpha == 0xff)
+    // An opaque quad only counts when the guest named the blend itself. Under
+    // its own factors an alpha of 0xff can be a no-op - 1st SE fades with
+    // ZERO/SRCALPHA, where the first step, alpha 0xff, means dst*1.0 and must
+    // leave the screen alone - whereas a guest that named no blend really is
+    // asking for an opaque black fill, and treating that as a fade would erase
+    // a legitimate clear.
+    if (first_rgb != 0 || first_alpha == 0 ||
+        (first_alpha == 0xff && !guest_blend_is_explicit))
     {
         return false;
     }
@@ -2602,6 +2629,35 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
 {
     SurfaceFacade* const surface = SurfaceFromInterface(self);
     ++surface->root->frame_number;
+    // One summary per presented frame, with its own budget: the Flip
+    // diagnostic budget is far too small to cover a boot sequence, and this is
+    // the record that says whether the guest drew anything for this frame.
+    {
+        RootFacade* const root = surface->root;
+        constexpr std::uint32_t kMaximumFrameDrawSummaries = 900;
+        if (root->frame_draw_summary_count < kMaximumFrameDrawSummaries)
+        {
+            ++root->frame_draw_summary_count;
+            char detail[160] = {};
+            std::snprintf(detail,
+                          sizeof(detail),
+                          "FrameDraws:frame=%llu:draws=%u:vertices=%u:textured=%u"
+                          ":diffuse=0x%08x:last=0x%08x",
+                          static_cast<unsigned long long>(root->frame_number),
+                          root->frame_draw_calls,
+                          root->frame_draw_vertices,
+                          root->frame_textured_draw_calls,
+                          root->frame_first_diffuse,
+                          root->frame_last_diffuse);
+            ReportCompositionDiagnostic(root, detail);
+        }
+        root->frame_draw_calls = 0;
+        root->frame_draw_vertices = 0;
+        root->frame_textured_draw_calls = 0;
+        root->frame_first_diffuse = 0;
+        root->frame_first_diffuse_seen = false;
+        root->frame_last_diffuse = 0;
+    }
     const auto finish = [&](HRESULT result) {
         ReportSurfaceDiagnostic("Flip", surface, result);
         return result;
@@ -3332,6 +3388,44 @@ HRESULT WINAPI DeviceSetTextureStageState(IDirect3DDevice3* self,
     return DD_OK;
 }
 
+// Counted once per draw, at the top of the funnel every draw entry point
+// reaches, and before validation so a draw the facade rejects still shows as an
+// attempt. The vertex-buffer entry points forward here rather than drawing
+// themselves, so counting them separately would double every VB draw. The
+// totals are reported once per presented frame.
+void CountFrameDraw(DeviceFacade* device, DWORD vertex_count)
+{
+    if (device == nullptr || device->root == nullptr)
+    {
+        return;
+    }
+    ++device->root->frame_draw_calls;
+    device->root->frame_draw_vertices += vertex_count;
+    if (device->texture_stage_zero != nullptr)
+    {
+        ++device->root->frame_textured_draw_calls;
+    }
+}
+
+// The frame's first and last vertex colour. A guest that fades a full-screen
+// quad does it by modulating this, so the sequence of these values across
+// frames is the fade curve it actually asked for; the last one is recorded
+// separately because a fade overlay is usually drawn after the scene.
+void RecordFrameDiffuse(RootFacade* root, const re2dj::graphics::LegacyDrawCommand& command)
+{
+    if (root == nullptr || command.vertices.empty())
+    {
+        return;
+    }
+    const std::uint32_t diffuse = command.vertices.front().diffuse_argb;
+    if (!root->frame_first_diffuse_seen)
+    {
+        root->frame_first_diffuse = diffuse;
+        root->frame_first_diffuse_seen = true;
+    }
+    root->frame_last_diffuse = diffuse;
+}
+
 HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
                                    D3DPRIMITIVETYPE primitive,
                                    DWORD vertex_type,
@@ -3340,6 +3434,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
                                    DWORD flags)
 {
     DeviceFacade* const device = DeviceFromInterface(self);
+    CountFrameDraw(device, vertex_count);
     const bool is_triangle_strip = primitive == D3DPT_TRIANGLESTRIP && vertex_count >= 3;
     const bool is_triangle_list =
         primitive == D3DPT_TRIANGLELIST && vertex_count >= 3 && vertex_count % 3 == 0;
@@ -3427,6 +3522,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
                              error.c_str());
         return DDERR_INVALIDPARAMS;
     }
+    RecordFrameDiffuse(device->root, command);
 
     RootFacade* const root = device->root;
     if (root->window == nullptr)
@@ -3486,17 +3582,39 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     re2dj::graphics::LegacyFixedFunctionState fixed_function_state;
     const bool state_built = BuildFixedFunctionState(*device, &fixed_function_state, &error);
+    // The factors the guest set, whether or not it also enabled blending. A
+    // guest that named a blend and then drew a full-screen black quad without
+    // enabling it is fading; honouring its own factors is what reproduces the
+    // fade it asked for. 1st SE names ZERO/SRCALPHA, which scales the
+    // framebuffer by the quad's alpha - forcing SRCALPHA/INVSRCALPHA there
+    // gives dst*(1-a) instead of dst*a and runs the fade backwards.
+    re2dj::graphics::BlendFactor guest_source_blend = {};
+    re2dj::graphics::BlendFactor guest_destination_blend = {};
+    const bool guest_blend_is_explicit =
+        re2dj::graphics::DecodeLegacyBlendFactor(
+            device->render_states[D3DRENDERSTATE_SRCBLEND], &guest_source_blend) &&
+        re2dj::graphics::DecodeLegacyBlendFactor(
+            device->render_states[D3DRENDERSTATE_DESTBLEND], &guest_destination_blend);
     if (state_built && !fixed_function_state.alpha_blend_enabled &&
         !fixed_function_state.alpha_test_enabled &&
         IsFullScreenBlackFadeCandidate(command,
                                        texture,
                                        root->width,
-                                       root->height))
+                                       root->height,
+                                       guest_blend_is_explicit))
     {
         fixed_function_state.alpha_blend_enabled = true;
-        fixed_function_state.source_blend = re2dj::graphics::BlendFactor::kSourceAlpha;
-        fixed_function_state.destination_blend =
-            re2dj::graphics::BlendFactor::kInverseSourceAlpha;
+        if (guest_blend_is_explicit)
+        {
+            fixed_function_state.source_blend = guest_source_blend;
+            fixed_function_state.destination_blend = guest_destination_blend;
+        }
+        else
+        {
+            fixed_function_state.source_blend = re2dj::graphics::BlendFactor::kSourceAlpha;
+            fixed_function_state.destination_blend =
+                re2dj::graphics::BlendFactor::kInverseSourceAlpha;
+        }
         fixed_function_state.fade_compatibility_applied = true;
     }
     const bool drawn = state_built && root->render_backend->Draw(command,

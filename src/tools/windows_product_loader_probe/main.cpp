@@ -142,22 +142,32 @@ int main()
     const bool canonical =
         first_profile != nullptr &&
         re2dj::platform::windows::BuildOriginalProcessArguments(options, &arguments, &error) &&
-        arguments.size() == 21 &&
+        arguments.size() == 16 &&
         arguments[1] == "--hdd" &&
         arguments[2] == "asset-free-hdd" &&
         arguments[3] == "--target" &&
         arguments[4] == "ez2dj1stse" &&
-        arguments[10] == "--audio-gain-db" &&
-        arguments[11] == "0.000000" &&
-        arguments[12] == "--demo-volume" &&
-        arguments[13] == "3" &&
-        arguments[14] == "--hle-io-ports" &&
-        arguments[15] == "--run-detached" &&
-        arguments[16] == "--device-mock-lptdi" &&
-        arguments[17] == "--device-mock-lptdi-path-prefix" &&
-        arguments[18] == "\\\\.\\LPTDI" &&
-        arguments[19] == "--device-mock-lptdi-target-state" &&
-        arguments[20] == "0900000000000000" &&
+        arguments[5] == "--hle-command-line" &&
+        arguments[6] == "--hle-vfs" &&
+        arguments[7] == "--hle-d3d3" &&
+        arguments[8] == "--hle-directsound" &&
+        arguments[9] == "--audio-gain-db" &&
+        arguments[10] == "0.000000" &&
+        arguments[11] == "--hle-io-ports" &&
+        arguments[12] == "--run-detached" &&
+        arguments[13] == "--device-mock-lptdi" &&
+        arguments[14] == "--device-mock-lptdi-path-prefix" &&
+        arguments[15] == "\\\\.\\FEnteDev" &&
+        // Neither table carries GetWindowsDirectoryA or GetPrivateProfileIntA,
+        // so those two boundaries contribute no arguments. DirectDrawCreate is
+        // absent from the packed table but present in the original .idata.
+        !first_profile->profile.run_defaults.hle_windows_directory &&
+        first_profile->profile.run_defaults.hle_d3d3 &&
+        !first_profile->profile.run_defaults.demo_volume.has_value() &&
+        first_profile->profile.run_defaults.hle_dynamic_vfs &&
+        first_profile->profile.run_defaults.lptdi.hardlock_cfg_material_default &&
+        first_profile->profile.run_defaults.lptdi.device_mock_target_state_hex.empty() &&
+        !first_profile->profile.run_defaults.hle_wts_active_console &&
         first_profile->profile.run_defaults.lptdi.legacy_io_ports &&
         first_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
         first_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x00038987 &&
@@ -167,13 +177,15 @@ int main()
     const bool custom_gain =
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments[11] == "12.000000";
+        arguments[10] == "12.000000";
 
+    // The profile itself no longer carries a demo volume, but an explicit
+    // command-line value must still reach the launcher.
     options.profile_defaults.demo_volume = 2;
     const bool custom_demo_volume =
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments[13] == "2";
+        arguments[11] == "--demo-volume" && arguments[12] == "2";
 
     const bool second_defaults = [&]() {
         if (second_profile == nullptr)
@@ -221,14 +233,14 @@ int main()
     const bool audio_trace =
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments.size() == 22 && arguments.back() == "--audio-volume-trace";
+        arguments.size() == 19 && arguments.back() == "--audio-volume-trace";
 
     options.audio_volume_trace = false;
     options.profile_defaults.fullscreen = true;
     const bool fullscreen =
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments.size() == 22 && arguments.back() == "--fullscreen";
+        arguments.size() == 19 && arguments.back() == "--fullscreen";
 
     options.profile_defaults.audio_gain_db = 19.0f;
     const bool invalid_gain =
@@ -250,8 +262,8 @@ int main()
     const bool io_config =
         re2dj::platform::windows::BuildOriginalProcessArguments(
             options, &arguments, &error) &&
-        arguments.size() == 23 && arguments[21] == "--io-config" &&
-        arguments[22] == "keyboard.ini";
+        arguments.size() == 20 && arguments[18] == "--io-config" &&
+        arguments[19] == "keyboard.ini";
 
     options.io_config.clear();
     options.profile_defaults.lptdi.device_mock_enabled = false;

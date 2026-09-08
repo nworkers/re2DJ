@@ -18,6 +18,7 @@
 #include <vector>
 
 extern "C" __declspec(dllimport) char g_re2dj_vfs_hdd_root[MAX_PATH];
+extern "C" __declspec(dllimport) char g_re2dj_vfs_guest_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_overlay_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_chd_path[MAX_PATH];
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_vfs_dynamic_resolver;
@@ -344,13 +345,20 @@ int main()
     }
     const bool enumeration_only =
         std::strstr(GetCommandLineA(), "--vfs-enumeration-only") != nullptr;
-    if (!Check(RunWindowCloseExitProbe(), "window close did not exit the child process"))
+    // This mode exists to run the path checks apart from the window and audio
+    // lifecycle probes, which need a desktop and an audio device. Running them
+    // first defeated that purpose, so they are skipped here.
+    if (!enumeration_only)
     {
-        return 1;
-    }
-    if (!Check(RunAudioExitProbe(), "audio backend blocked native process exit"))
-    {
-        return 1;
+        if (!Check(RunWindowCloseExitProbe(),
+                   "window close did not exit the child process"))
+        {
+            return 1;
+        }
+        if (!Check(RunAudioExitProbe(), "audio backend blocked native process exit"))
+        {
+            return 1;
+        }
     }
     char temporary_directory[MAX_PATH] = {};
     char temporary[MAX_PATH] = {};
@@ -504,6 +512,43 @@ int main()
     passed = Check(Re2djVfsSetCurrentDirectoryA("D:\\ez2dj") != FALSE,
                    "cannot restore guest root after enumeration") &&
              passed;
+
+    // The guest root prefix is a property of the dump, not of the product: 1st
+    // SE's CHD boots from C:\ez2dj while the earlier dumps used D:\ez2dj. The
+    // profile supplies exactly one name, so the configured value must be the
+    // only one recognised.
+    {
+        passed = Check(strcpy_s(g_re2dj_vfs_guest_root, "C:\\ez2dj") == 0,
+                       "cannot configure guest root prefix") &&
+                 passed;
+        passed = Check(Re2djVfsSetCurrentDirectoryA("c:\\ez2dj") != FALSE,
+                       "configured guest root was not recognised") &&
+                 passed;
+        HANDLE configured = Re2djVfsCreateFileA("C:\\ez2dj\\DATA\\ORIGINAL.TXT",
+                                                GENERIC_READ,
+                                                FILE_SHARE_READ,
+                                                nullptr,
+                                                OPEN_EXISTING,
+                                                FILE_ATTRIBUTE_NORMAL,
+                                                nullptr);
+        passed = Check(configured != INVALID_HANDLE_VALUE,
+                       "cannot open a file through the configured guest root") &&
+                 passed;
+        if (configured != INVALID_HANDLE_VALUE)
+        {
+            Re2djVfsCloseHandle(configured);
+        }
+        passed = Check(Re2djVfsSetCurrentDirectoryA("D:\\ez2dj") == FALSE,
+                       "the previous hardcoded guest root is still recognised") &&
+                 passed;
+        passed = Check(strcpy_s(g_re2dj_vfs_guest_root, "D:\\ez2dj") == 0,
+                       "cannot restore the default guest root prefix") &&
+                 passed;
+        passed = Check(Re2djVfsSetCurrentDirectoryA("D:\\ez2dj") != FALSE,
+                       "default guest root stopped being recognised") &&
+                 passed;
+    }
+
     if (enumeration_only)
     {
         std::filesystem::remove_all(root);

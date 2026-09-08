@@ -349,6 +349,11 @@ bool Fat32Volume::ReadDirectoryClusterChain(std::uint32_t first_cluster,
             result.first_cluster = (static_cast<std::uint32_t>(ReadU16(entry, 20)) << 16) |
                                    ReadU16(entry, 26);
             result.size = ReadU32(entry, 28);
+            result.creation_time = ReadU16(entry, 14);
+            result.creation_date = ReadU16(entry, 16);
+            result.last_access_date = ReadU16(entry, 18);
+            result.write_time = ReadU16(entry, 22);
+            result.write_date = ReadU16(entry, 24);
             if (result.name == "." || result.name == ".." || result.name.empty())
             {
                 continue;

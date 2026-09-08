@@ -27,6 +27,7 @@
 
 | [graphics-transition-depth.md](graphics-transition-depth.md) | 장면 전환 fade 후보와 Direct3D/OpenGL 깊이 상태 경계 | 작업 096 ddraw trace와 Win32 실행으로 확인 |
 
+| [ez2dj1stse-chd-filesystem.md](ez2dj1stse-chd-filesystem.md) | 1st SE CHD v5, FAT32 geometry, StartUp guest boot path, the `.protect` vs `.gtide` executable difference, the FEnteDev Hardlock IOCTL sequence, and the resolved transform response | Hardlock transform response resolved and the decrypted boot sequence reached; the stop at the logo stage unresolved |
 | [ez2dj3rd-hardlock-function-0e.md](ez2dj3rd-hardlock-function-0e.md) | 3rd Hardlock device name, API descriptor, and Function 0x0e boundary | Device/API boundary confirmed; valid 0x0e response unresolved |
 | [ez2dj3rd-chd-filesystem.md](ez2dj3rd-chd-filesystem.md) | 3rd Trax CHD v5, FAT32 geometry, and internal executable path | User-supplied CHD read confirmed; full protection-contract identity remains unresolved |
 | [ez2dj4th-chd-filesystem.md](ez2dj4th-chd-filesystem.md) | 4th Trax CHD v5, FAT32 geometry, directory and executable layout, codec set | Real 4th CHD read confirmed under two file names; cabinet boot sequence unresolved |

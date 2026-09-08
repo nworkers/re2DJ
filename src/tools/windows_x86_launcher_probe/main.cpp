@@ -9720,6 +9720,15 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         device_mock_lptdi_path_prefix.empty()
             ? target->run_defaults.lptdi.device_mock_path_prefix
             : device_mock_lptdi_path_prefix;
+    // The name the guest uses for its own root. It is a property of the dump,
+    // so it comes from the profile; the dumps this runtime was first written
+    // against used D:\ez2dj, which stays the default for profiles that record
+    // no guest path. Both the main process and a bootstrap child receive it.
+    const std::string profile_guest_root =
+        target->guest_drive_letter == '\0' || target->guest_directory.empty()
+            ? std::string("D:\\ez2dj")
+            : (std::string(1, target->guest_drive_letter) + ":" +
+               target->guest_directory);
     if (device_mock_lptdi && profile_device_mock_path_prefix.empty())
     {
         std::fprintf(stderr, "{\"error\":\"LPTDI device mock has no path prefix\"}\\n");
@@ -10300,8 +10309,26 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         const std::filesystem::path overlay = std::filesystem::current_path() / "overlays" / target->id;
         std::filesystem::path vfs_trace_path = diagnostic_log.path();
         vfs_trace_path.replace_extension(".vfs.log");
+        std::uint32_t guest_root_rva = 0;
+        // The diagnostic stream is JSON and this is the only value in it that
+        // carries Win32 separators.
+        std::string guest_root_json;
+        for (const char value : profile_guest_root)
+        {
+            if (value == '\\')
+            {
+                guest_root_json.push_back('\\');
+            }
+            guest_root_json.push_back(value);
+        }
         vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
                            runtime_path, "g_re2dj_vfs_hdd_root", &hdd_root_rva, &error) &&
+                       re2dj::platform::windows::FindPe32ExportRva(
+                           runtime_path, "g_re2dj_vfs_guest_root", &guest_root_rva, &error) &&
+                       WriteRemoteAnsi(child.hProcess,
+                                       runtime_base + guest_root_rva,
+                                       profile_guest_root,
+                                       &error) &&
                        re2dj::platform::windows::FindPe32ExportRva(
                            runtime_path, "g_re2dj_vfs_overlay_root", &overlay_root_rva, &error) &&
                        re2dj::platform::windows::FindPe32ExportRva(
@@ -10326,12 +10353,13 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                        &error);
         if (vfs_prepared)
         {
-            RecordDiagnostic("{\"event\":\"vfs_mount\",\"dump_root\":\"%s\",\"working_directory\":\"%s\",\"source_root\":\"%s\",\"overlay_root\":\"%s\",\"chd\":\"%s\"}",
+            RecordDiagnostic("{\"event\":\"vfs_mount\",\"dump_root\":\"%s\",\"working_directory\":\"%s\",\"source_root\":\"%s\",\"overlay_root\":\"%s\",\"chd\":\"%s\",\"guest_root\":\"%s\"}",
                              root.root().generic_string().c_str(),
                              target->working_directory_relative_path.c_str(),
                              vfs_source_root.generic_string().c_str(),
                              overlay.generic_string().c_str(),
-                             chd_path.generic_string().c_str());
+                             chd_path.generic_string().c_str(),
+                             guest_root_json.c_str());
             RecordDiagnostic("{\"event\":\"vfs_trace\",\"path\":\"%s\"}",
                              vfs_trace_path.generic_string().c_str());
         }
@@ -11492,6 +11520,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.vfs_trace_path.replace_extension(".child.vfs.log");
         child_follow_options.graphics_trace_path = diagnostic_log.path();
         child_follow_options.graphics_trace_path.replace_extension(".child.ddraw.log");
+        child_follow_options.guest_root = profile_guest_root;
         child_follow_options.profile_id = target->id;
         child_follow_options.device_path_prefix = profile_device_mock_path_prefix;
         child_follow_options.dynamic_vfs_resolver = child_dynamic_vfs_resolver;

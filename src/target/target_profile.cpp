@@ -211,32 +211,83 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.hle_profile_id = "ez2dj1stse";
             entry.profile.run_defaults.default_hdd_directory_relative_path =
                 "roms/ez2dj1stse";
+            entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
+            entry.profile.run_defaults.default_hdd_image_relative_path =
+                "roms/ez2dj1stse";
             entry.profile.run_defaults.audio_gain_db = 0.0f;
-            entry.profile.run_defaults.demo_volume = 3;
+            // Every HLE default below follows the CHD build's packed import
+            // directory at RVA 0x01aebbd0, which is what the launcher searches
+            // for IAT slots. The original .idata survives in the file but the
+            // PE header no longer points at it, so an import missing from the
+            // packed table cannot be patched at all.
+            //
+            // GetPrivateProfileIntA is absent, so the demo-volume injection
+            // cannot be prepared. The CHD's own ez2dj.ini already reads
+            // DemoVolume=3.
+            entry.profile.run_defaults.demo_volume.reset();
+            // GetCommandLineA is present in the packed table.
             entry.profile.run_defaults.hle_command_line = true;
-            entry.profile.run_defaults.hle_windows_directory = true;
+            // GetWindowsDirectoryA is not, and requesting it failed the whole
+            // handoff preparation.
+            entry.profile.run_defaults.hle_windows_directory = false;
             entry.profile.run_defaults.hle_vfs = true;
+            // The protection reaches CreateFileA, DeviceIoControl, and
+            // CloseHandle through GetProcAddress, so the static slots alone
+            // never see its device work.
+            entry.profile.run_defaults.hle_dynamic_vfs = true;
+            // The packed table contributes only DirectDrawEnumerateA, but the
+            // original .idata survives at RVA 0x01aba000 and imports
+            // DDRAW.dll!DirectDrawCreate, which the IAT lookup now finds.
             entry.profile.run_defaults.hle_d3d3 = true;
+            // DSOUND.dll ordinal 1 is present.
             entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
+            // These two RVAs are confirmed in the extracted .gtide build's
+            // plaintext .text. They prepare cleanly here, but this build dies
+            // in the Hardlock transform loop before reaching them, so their
+            // correctness for this executable is still unconfirmed.
             entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x00038987;
             entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000389ab;
-            entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\LPTDI";
+            // Confirmed by the device trace: this build opens \\.\NTICE, fails,
+            // then opens \\.\FEnteDev. It never opens the \\.\LPTDI device the
+            // extracted .gtide build used, so the LPTDI target-state probe has
+            // nothing to answer here and is left unset.
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix =
+                "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
             entry.profile.run_defaults.run_detached = true;
-            entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
-                "0900000000000000";
+            // hle_wts_active_console stays off: runs with and without the
+            // active-console report produced an identical IOCTL sequence, so
+            // there is no evidence to turn it on for this build.
             entry.profile.working_directory_relative_path = {};
-            // System.ini in this dump reads "shell=d:\ez2dj\ez2dj.exe", which is
-            // what Windows 98 launches in place of Explorer. That single line
-            // confirms the executable, the drive letter, and the directory.
-            entry.profile.guest_drive_letter = 'D';
+            // This CHD boots Explorer and starts the game from a StartUp
+            // shortcut whose target string is "C:\ez2dj\Ez2DJ.exe"; the spare
+            // SYSTEM.INI beside the executable names the same drive. The
+            // extracted dump's System.ini said "d:", so the letter is a
+            // property of the input, not of the release.
+            entry.profile.guest_drive_letter = 'C';
             entry.profile.guest_directory = "\\ez2dj";
+            entry.profile.executable_relative_path = "ez2dj/Ez2DJ.exe";
+            // The CHD executable is not the .gtide build every earlier 1st SE
+            // runtime fact came from. Both wrap the same original build - equal
+            // PE timestamp, equal placement of the first five sections, and
+            // byte-identical .idata - but this one is the .protect family used
+            // by 3rd and 4th, and its execution defaults now follow its own
+            // observed boundary rather than the .gtide baseline.
             entry.profile.note =
-                "Launched by the cabinet through the System.ini shell entry. The "
-                "executable is protected: its entry point sits in .gtide, so "
-                "running it needs a backend that tolerates self-modifying code.";
+                "The CHD build wraps the original image in a .protect section "
+                "with its entry point at 0x01ad1240, not the .gtide layout of "
+                "the extracted dump, so running it needs a backend that "
+                "tolerates self-modifying code. It belongs to the same Hardlock "
+                "family as 3rd and 4th: it opens \\\\.\\FEnteDev and reaches the "
+                "0x9c402468 initialize request, and without local Hardlock "
+                "material it stops there. Its packed import directory omits "
+                "GetWindowsDirectoryA, DirectDrawCreate, and "
+                "GetPrivateProfileIntA, so those HLE boundaries stay off. The "
+                "legacy-I/O helper RVAs are carried over from the .gtide build "
+                "and are not confirmed for this executable.";
             entry.fingerprint.executable_name = "ez2dj.exe";
             entry.fingerprint.required_siblings = {
                 "ez2dj1.exe", "ez2dj.ini", "System.ini", "Songs", "System"};

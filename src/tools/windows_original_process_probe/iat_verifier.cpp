@@ -264,82 +264,129 @@ bool FindIatSlotsByName(const exe::PeImageInfo& info,
         return false;
     }
     slot_rvas->clear();
+    // A packed image moves its import directory into the packer section while
+    // the original `.idata` table survives untouched at its own RVA. The header
+    // no longer points there, so a lookup that walks only the directory cannot
+    // see the game's own imports. The header directory is still authoritative
+    // and is searched first; `.idata` is consulted only when it finds nothing.
+    std::vector<exe::PeDataDirectory> tables;
     const exe::PeDataDirectory* directory = info.Directory(exe::PeDirectoryIndex::kImport);
-    if (directory == nullptr || directory->virtual_address == 0 || directory->size == 0)
+    if (directory != nullptr && directory->virtual_address != 0 && directory->size != 0)
+    {
+        tables.push_back(*directory);
+    }
+    for (const exe::PeSection& section : info.sections)
+    {
+        if (section.name != ".idata" || section.virtual_address == 0 ||
+            section.virtual_size == 0)
+        {
+            continue;
+        }
+        if (!tables.empty() && tables.front().virtual_address == section.virtual_address)
+        {
+            continue;
+        }
+        tables.push_back({section.virtual_address, section.virtual_size});
+    }
+    if (tables.empty())
     {
         *error = "PE image has no import directory";
         return false;
     }
-    for (std::uint32_t offset = 0; offset + kImportDescriptorSize <= directory->size;
-         offset += kImportDescriptorSize)
+
+    for (std::size_t table_index = 0; table_index < tables.size(); ++table_index)
     {
-        const std::uint8_t* descriptor = RvaPointer(
-            info, file, file_size, directory->virtual_address + offset, kImportDescriptorSize);
-        if (descriptor == nullptr)
+        const exe::PeDataDirectory& table = tables[table_index];
+        // Only the header directory is trusted enough for a malformed table to be
+        // an error; a secondary table that does not parse is simply not a match.
+        const bool table_is_authoritative = table_index == 0 && directory != nullptr;
+        for (std::uint32_t offset = 0; offset + kImportDescriptorSize <= table.size;
+             offset += kImportDescriptorSize)
         {
-            *error = "import descriptor lies outside original file";
-            return false;
-        }
-        const std::uint32_t original_first_thunk = ReadU32(descriptor);
-        const std::uint32_t name_rva = ReadU32(descriptor + 12);
-        const std::uint32_t first_thunk = ReadU32(descriptor + 16);
-        if (original_first_thunk == 0 && ReadU32(descriptor + 4) == 0 &&
-            ReadU32(descriptor + 8) == 0 && name_rva == 0 && first_thunk == 0)
-        {
-            break;
-        }
-        std::string imported_module;
-        if (!ReadCString(info, file, file_size, name_rva, &imported_module) ||
-            imported_module != module)
-        {
-            continue;
-        }
-        const std::uint32_t lookup_rva =
-            original_first_thunk == 0 ? first_thunk : original_first_thunk;
-        for (std::uint32_t index = 0; index <= info.size_of_image / 4; ++index)
-        {
-            const std::uint64_t offset_bytes = static_cast<std::uint64_t>(index) * 4;
-            if (lookup_rva > (std::numeric_limits<std::uint32_t>::max)() - offset_bytes ||
-                first_thunk > (std::numeric_limits<std::uint32_t>::max)() - offset_bytes)
+            const std::uint8_t* descriptor = RvaPointer(
+                info, file, file_size, table.virtual_address + offset, kImportDescriptorSize);
+            if (descriptor == nullptr)
             {
-                *error = "import thunk RVA overflows";
+                if (!table_is_authoritative)
+                {
+                    break;
+                }
+                *error = "import descriptor lies outside original file";
                 return false;
             }
-            const std::uint8_t* thunk = RvaPointer(
-                info, file, file_size, lookup_rva + static_cast<std::uint32_t>(offset_bytes), 4);
-            if (thunk == nullptr)
-            {
-                *error = "import lookup thunk lies outside original file";
-                return false;
-            }
-            const std::uint32_t import_by_name_rva = ReadU32(thunk);
-            if (import_by_name_rva == 0)
+            const std::uint32_t original_first_thunk = ReadU32(descriptor);
+            const std::uint32_t name_rva = ReadU32(descriptor + 12);
+            const std::uint32_t first_thunk = ReadU32(descriptor + 16);
+            if (original_first_thunk == 0 && ReadU32(descriptor + 4) == 0 &&
+                ReadU32(descriptor + 8) == 0 && name_rva == 0 && first_thunk == 0)
             {
                 break;
             }
-            if ((import_by_name_rva & kImportByOrdinalFlag32) != 0)
+            std::string imported_module;
+            if (!ReadCString(info, file, file_size, name_rva, &imported_module) ||
+                imported_module != module)
             {
                 continue;
             }
-            std::string imported_function;
-            if (!ReadCString(info,
-                             file,
-                             file_size,
-                             import_by_name_rva + 2,
-                             &imported_function))
+            const std::uint32_t lookup_rva =
+                original_first_thunk == 0 ? first_thunk : original_first_thunk;
+            for (std::uint32_t index = 0; index <= info.size_of_image / 4; ++index)
             {
-                *error = "import function name is malformed";
-                return false;
-            }
-            if (imported_function == function)
-            {
-                slot_rvas->push_back(first_thunk + static_cast<std::uint32_t>(offset_bytes));
+                const std::uint64_t offset_bytes = static_cast<std::uint64_t>(index) * 4;
+                if (lookup_rva > (std::numeric_limits<std::uint32_t>::max)() - offset_bytes ||
+                    first_thunk > (std::numeric_limits<std::uint32_t>::max)() - offset_bytes)
+                {
+                    if (!table_is_authoritative)
+                    {
+                        break;
+                    }
+                    *error = "import thunk RVA overflows";
+                    return false;
+                }
+                const std::uint8_t* thunk = RvaPointer(
+                    info, file, file_size, lookup_rva + static_cast<std::uint32_t>(offset_bytes), 4);
+                if (thunk == nullptr)
+                {
+                    if (!table_is_authoritative)
+                    {
+                        break;
+                    }
+                    *error = "import lookup thunk lies outside original file";
+                    return false;
+                }
+                const std::uint32_t import_by_name_rva = ReadU32(thunk);
+                if (import_by_name_rva == 0)
+                {
+                    break;
+                }
+                if ((import_by_name_rva & kImportByOrdinalFlag32) != 0)
+                {
+                    continue;
+                }
+                std::string imported_function;
+                if (!ReadCString(info,
+                                 file,
+                                 file_size,
+                                 import_by_name_rva + 2,
+                                 &imported_function))
+                {
+                    if (!table_is_authoritative)
+                    {
+                        break;
+                    }
+                    *error = "import function name is malformed";
+                    return false;
+                }
+                if (imported_function == function)
+                {
+                    slot_rvas->push_back(first_thunk + static_cast<std::uint32_t>(offset_bytes));
+                }
             }
         }
-    }
-    if (!slot_rvas->empty())
-    {
-        return true;
+        if (!slot_rvas->empty())
+        {
+            return true;
+        }
     }
     *error = "requested import is not present";
     return false;

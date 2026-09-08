@@ -393,26 +393,13 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                 re2dj::target::FindBuiltInTargetProfileById("ez2dj1stse_unpacked") ==
                     nullptr);
 
-    // ---- The 1st Tracks Special Edition ----
+    // ---- The 1st Tracks Special Edition CHD shortcut ----
     {
-        const TemporaryTree tree;
-        WriteFirstSeLayout(tree, "");
-
-        std::vector<re2dj::target::TargetProfile> profiles;
-        RE2DJ_CHECK(context, OpenAndBuild(tree, &profiles));
-        RE2DJ_CHECK_EQ(context, profiles.size(), std::size_t{4});
-
-        // The defect this design fixes: the default must be the game, not the
-        // larger service tool the size-ordered scan used to put first.
-        if (!profiles.empty())
-        {
-            RE2DJ_CHECK_EQ(context, profiles.front().id, std::string("ez2dj1stse"));
-            RE2DJ_CHECK_EQ(context, profiles.front().executable_relative_path,
-                           std::string("ez2dj.exe"));
-        }
-
-        const re2dj::target::TargetProfile* canonical = Find(profiles, "ez2dj1stse");
-        RE2DJ_CHECK(context, canonical != nullptr);
+        const re2dj::target::BuiltInTargetProfile* first_se_builtin =
+            re2dj::target::FindBuiltInTargetProfileById("ez2dj1stse");
+        RE2DJ_CHECK(context, first_se_builtin != nullptr);
+        const re2dj::target::TargetProfile* canonical =
+            first_se_builtin == nullptr ? nullptr : &first_se_builtin->profile;
         if (canonical != nullptr)
         {
             RE2DJ_CHECK_EQ(
@@ -420,19 +407,80 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                 std::string("EZ2DJ The 1st Tracks Special Edition"));
             RE2DJ_CHECK(context, !canonical->detected);
             RE2DJ_CHECK(context, !canonical->bring_up_target);
+            RE2DJ_CHECK_EQ(context,
+                           canonical->run_defaults.hdd_input_kind,
+                           re2dj::target::HddInputKind::kMameChd);
+            RE2DJ_CHECK_EQ(context,
+                           canonical->run_defaults.default_hdd_image_relative_path,
+                           std::string("roms/ez2dj1stse"));
+            RE2DJ_CHECK_EQ(context,
+                           canonical->run_defaults.default_hdd_directory_relative_path,
+                           std::string("roms/ez2dj1stse"));
+            RE2DJ_CHECK_EQ(context, canonical->executable_relative_path,
+                           std::string("ez2dj/Ez2DJ.exe"));
+            RE2DJ_CHECK_EQ(context, canonical->hle_profile_id,
+                           std::string("ez2dj1stse"));
+            // Each HLE default below follows what the launcher can actually
+            // patch in this build. GetCommandLineA and DSOUND ordinal 1 are in
+            // the packed table; DirectDrawCreate is absent from it but present
+            // in the surviving original .idata, which the IAT lookup also
+            // searches. GetWindowsDirectoryA and GetPrivateProfileIntA are in
+            // neither, so those two boundaries stay off.
+            RE2DJ_CHECK(context, canonical->run_defaults.hle_command_line);
+            RE2DJ_CHECK(context, !canonical->run_defaults.hle_windows_directory);
+            RE2DJ_CHECK(context, canonical->run_defaults.hle_vfs);
+            RE2DJ_CHECK(context, canonical->run_defaults.hle_d3d3);
+            RE2DJ_CHECK(context, canonical->run_defaults.hle_directsound);
+            RE2DJ_CHECK(context, !canonical->run_defaults.demo_volume.has_value());
+            // The protection resolves its device APIs through GetProcAddress.
+            RE2DJ_CHECK(context, canonical->run_defaults.hle_dynamic_vfs);
+            RE2DJ_CHECK(context, canonical->run_defaults.run_detached);
             RE2DJ_CHECK(context, canonical->run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context, canonical->run_defaults.lptdi.device_mock_enabled);
+            // Confirmed by the device trace: this build opens \\.\FEnteDev, so
+            // the LPTDI target-state probe has nothing to answer and stays unset.
             RE2DJ_CHECK_EQ(context,
                            canonical->run_defaults.lptdi.device_mock_path_prefix,
-                           std::string("\\\\.\\LPTDI"));
+                           std::string("\\\\.\\FEnteDev"));
+            RE2DJ_CHECK(context,
+                        canonical->run_defaults.lptdi.device_mock_target_state_hex.empty());
+            RE2DJ_CHECK(context,
+                        canonical->run_defaults.lptdi.hardlock_cfg_material_default);
+            // Runs with and without the active-console report behaved
+            // identically, so it stays off rather than being copied from 3rd.
+            RE2DJ_CHECK(context, !canonical->run_defaults.hle_wts_active_console);
             RE2DJ_CHECK_EQ(context,
-                           canonical->run_defaults.lptdi.device_mock_target_state_hex,
-                           std::string("0900000000000000"));
-            // Confirmed from the System.ini shell entry in the real dump.
-            RE2DJ_CHECK_EQ(context, canonical->guest_drive_letter, 'D');
+                           canonical->run_defaults.lptdi.legacy_io_in_byte_rva,
+                           std::uintptr_t{0x00038987});
+            RE2DJ_CHECK_EQ(context,
+                           canonical->run_defaults.lptdi.legacy_io_out_byte_rva,
+                           std::uintptr_t{0x000389ab});
+            // The CHD boots the game from a StartUp shortcut targeting
+            // C:\ez2dj\Ez2DJ.exe, so the drive letter is C - the extracted
+            // dump's System.ini said d:, which described that input only.
+            RE2DJ_CHECK_EQ(context, canonical->guest_drive_letter, 'C');
             RE2DJ_CHECK_EQ(context, canonical->guest_directory, std::string("\\ez2dj"));
-            RE2DJ_CHECK(context, canonical->working_directory_relative_path.empty());
             RE2DJ_CHECK(context, !canonical->note.empty());
+        }
+
+        // The extracted 1st SE dump is image-backed now, so the directory scan
+        // detects its executables instead of claiming the built-in profile.
+        const TemporaryTree tree;
+        WriteFirstSeLayout(tree, "");
+
+        std::vector<re2dj::target::TargetProfile> profiles;
+        RE2DJ_CHECK(context, OpenAndBuild(tree, &profiles));
+        RE2DJ_CHECK_EQ(context, profiles.size(), std::size_t{4});
+        RE2DJ_CHECK(context, Find(profiles, "ez2dj1stse") == nullptr);
+        RE2DJ_CHECK(context, Find(profiles, "ez2dj1stse_unpacked") == nullptr);
+
+        const re2dj::target::TargetProfile* detected_game = Find(profiles, "ez2dj");
+        RE2DJ_CHECK(context, detected_game != nullptr);
+        if (detected_game != nullptr)
+        {
+            RE2DJ_CHECK_EQ(context, detected_game->executable_relative_path,
+                           std::string("ez2dj.exe"));
+            RE2DJ_CHECK(context, detected_game->detected);
         }
 
         const re2dj::target::TargetProfile* detected_unpacked = Find(profiles, "ez2dj1");
@@ -447,7 +495,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, !detected_unpacked->bring_up_target);
         }
 
-        // The two executables no built-in claimed remain available by detection.
         const re2dj::target::TargetProfile* service = Find(profiles, "test");
         RE2DJ_CHECK(context, service != nullptr);
         if (service != nullptr)
@@ -455,9 +502,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, service->detected);
         }
         RE2DJ_CHECK(context, Find(profiles, "plzpoweroff") != nullptr);
-
-        // A built-in match must not also appear as a detected duplicate.
-        RE2DJ_CHECK(context, Find(profiles, "ez2dj") == nullptr);
 
         // This dump is not 3rd, even though EZ2DJ.EXE resolves to ez2dj.exe on
         // a case-insensitive host.
@@ -540,19 +584,21 @@ void RunTargetProfileTests(re2dj::test::Context& context)
     }
 
     // ---- A nested root, as when the user points at a parent directory ----
+    // 2nd is the directory-matched profile this exercises; 1st SE and 3rd are
+    // image-backed and never reached through a directory scan.
     {
         const TemporaryTree tree;
-        WriteFirstSeLayout(tree, "se/ez2dj/");
+        WriteSecondLayout(tree, "se/");
 
         std::vector<re2dj::target::TargetProfile> profiles;
         RE2DJ_CHECK(context, OpenAndBuild(tree, &profiles));
 
-        const re2dj::target::TargetProfile* canonical = Find(profiles, "ez2dj1stse");
+        const re2dj::target::TargetProfile* canonical = Find(profiles, "ez2dj2nd");
         RE2DJ_CHECK(context, canonical != nullptr);
         if (canonical != nullptr)
         {
             RE2DJ_CHECK_EQ(context, canonical->executable_relative_path,
-                           std::string("se/ez2dj/ez2dj.exe"));
+                           std::string("se/ez2dj/EZ2DJ.exe"));
             // The working directory follows the executable, not the root.
             RE2DJ_CHECK_EQ(context, canonical->working_directory_relative_path,
                            std::string("se/ez2dj"));
@@ -562,17 +608,17 @@ void RunTargetProfileTests(re2dj::test::Context& context)
     // ---- An incomplete dump must not claim a built-in profile ----
     {
         const TemporaryTree tree;
-        WriteFirstSeLayout(tree, "");
-        // Songs/ is part of the 1st SE fingerprint, so removing it must drop
-        // the built-in match rather than matching on the executable name alone.
+        WriteSecondLayout(tree, "");
+        // bg/ is part of the 2nd fingerprint, so removing it must drop the
+        // built-in match rather than matching on the executable name alone.
         std::error_code code;
-        std::filesystem::remove_all(tree.root() / "Songs", code);
+        std::filesystem::remove_all(tree.root() / "ez2dj" / "bg", code);
 
         std::vector<re2dj::target::TargetProfile> profiles;
         RE2DJ_CHECK(context, OpenAndBuild(tree, &profiles));
-        RE2DJ_CHECK(context, Find(profiles, "ez2dj1stse") == nullptr);
+        RE2DJ_CHECK(context, Find(profiles, "ez2dj2nd") == nullptr);
         // Detection still offers everything it found.
-        RE2DJ_CHECK_EQ(context, profiles.size(), std::size_t{4});
+        RE2DJ_CHECK_EQ(context, profiles.size(), std::size_t{1});
         RE2DJ_CHECK(context, Find(profiles, "ez2dj") != nullptr);
     }
 
