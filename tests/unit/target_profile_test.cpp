@@ -169,17 +169,29 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::optional<std::uint32_t>{0x019b6000});
             RE2DJ_CHECK(context, first->fingerprint.required_siblings.empty());
             RE2DJ_CHECK(context, first->profile.run_defaults.hle_command_line);
-            RE2DJ_CHECK(context, first->profile.run_defaults.hle_windows_directory);
+            // GetWindowsDirectoryA is absent from this build's import table and
+            // asking for it fails the whole handoff preparation.
+            RE2DJ_CHECK(context, !first->profile.run_defaults.hle_windows_directory);
             RE2DJ_CHECK(context, first->profile.run_defaults.hle_vfs);
+            // The .protect packer overwrites the static IAT patch, so the
+            // device work is only reachable through the dynamic resolver.
+            RE2DJ_CHECK(context, first->profile.run_defaults.hle_dynamic_vfs);
             RE2DJ_CHECK(context, first->profile.run_defaults.hle_d3d3);
             RE2DJ_CHECK(context, first->profile.run_defaults.hle_directsound);
             RE2DJ_CHECK(context, first->profile.run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context,
                         first->profile.run_defaults.lptdi.legacy_io_ports_default);
+            // The device trace shows \\.\FEnteDev, never \\.\LPTDI, so the
+            // LPTDI target-state probe has nothing to answer here.
             RE2DJ_CHECK_EQ(
+                context, first->profile.run_defaults.lptdi.device_mock_path_prefix,
+                std::string("\\\\.\\FEnteDev"));
+            RE2DJ_CHECK(
                 context,
-                first->profile.run_defaults.lptdi.device_mock_target_state_hex,
-                std::string("0900000000000000"));
+                first->profile.run_defaults.lptdi.device_mock_target_state_hex.empty());
+            RE2DJ_CHECK(
+                context,
+                first->profile.run_defaults.lptdi.hardlock_cfg_material_default);
             RE2DJ_CHECK(context, first->profile.guest_drive_letter == '\0');
             RE2DJ_CHECK(context, first->profile.guest_directory.empty());
         }
@@ -318,6 +330,11 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                    const char* image_path,
                    const char* executable_path,
                    bool legacy_io,
+                   // The port helpers live at a different place in each
+                   // build's .text, so the caller states the pair it expects
+                   // rather than sharing one baseline.
+                   std::uint32_t expected_in_rva,
+                   std::uint32_t expected_out_rva,
                    bool follow_child,
                    bool run_detached) {
             const re2dj::target::BuiltInTargetProfile* profile =
@@ -354,10 +371,10 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            legacy_io);
             RE2DJ_CHECK_EQ(context,
                            profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva,
-                           legacy_io ? std::uint32_t{0x000c3817} : std::uint32_t{0});
+                           expected_in_rva);
             RE2DJ_CHECK_EQ(context,
                            profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva,
-                           legacy_io ? std::uint32_t{0x000c384b} : std::uint32_t{0});
+                           expected_out_rva);
             RE2DJ_CHECK(context, profile->profile.run_defaults.lptdi.device_mock_enabled);
             RE2DJ_CHECK_EQ(context,
                            profile->profile.run_defaults.lptdi.device_mock_path_prefix,
@@ -378,15 +395,19 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::size_t{6});
             RE2DJ_CHECK(context, !profile->profile.note.empty());
         };
+    // 5th's own port helpers, read from its decrypted .text; the 4th values
+    // this profile used to inherit never matched it.
     check_chd_compatibility_profile(
         "ez2dj5th", "EZ2DJ 5th Trax", "roms/ez2dj5th", "EZ2DJ/EZ2DJ.EXE", true,
-        false, true);
+        0x000ca067, 0x000ca09b, false, true);
     check_chd_compatibility_profile(
         "ez2dj6th",
         "EZ2DJ 6th Trax",
         "roms/ez2dj6th",
         "EZ2DJ/EZ2DJ.EXE",
         false,
+        0,
+        0,
         true,
         false);
     RE2DJ_CHECK(context,

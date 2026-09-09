@@ -133,27 +133,57 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.audio_gain_db = 0.0f;
             entry.profile.run_defaults.demo_volume = 3;
             entry.profile.run_defaults.hle_command_line = true;
-            entry.profile.run_defaults.hle_windows_directory = true;
+            // GetWindowsDirectoryA is not in this build's import table.
+            // Requesting it fails the whole handoff preparation, exactly as it
+            // does on the 1st SE CHD build.
+            entry.profile.run_defaults.hle_windows_directory = false;
             entry.profile.run_defaults.hle_vfs = true;
+            // This executable is the same .protect family as the 1st SE CHD
+            // build: the packer resolves the original imports itself at unpack
+            // time, so a static IAT patch is overwritten. Without the dynamic
+            // resolver its CreateFileA reaches the host, it opens the real
+            // device, and it calls ExitProcess before any Hardlock request.
+            entry.profile.run_defaults.hle_dynamic_vfs = true;
+            // Unlike the 1st SE CHD build, this one's import table carries
+            // DirectDrawCreate and GetPrivateProfileIntA, so these two
+            // boundaries prepare and stay on.
             entry.profile.run_defaults.hle_d3d3 = true;
             entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x00038987;
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000389ab;
-            entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\LPTDI";
+            // Read out of this build's own decrypted .text. Past the Hardlock
+            // transform loop the guest faults on an untrapped `in al, dx` at
+            // 0x00035757, and the code window there holds the usual pair of
+            // port helpers: `xor eax,eax; mov dx,[esp+4]; in al,dx; ret` and
+            // `xor eax,eax; mov dx,[esp+4]; mov al,[esp+8]; out dx,al; ret`.
+            // The runtime matches the faulting instruction address, so these
+            // are the opcode bytes rather than the helper entry points. The
+            // 1st SE .gtide values that stood here before belong to a
+            // different build and never matched.
+            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x00035757;
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x0003577b;
+            // Confirmed by the device trace: it tries \\.\NTICE, fails with
+            // error 123, then opens \\.\FEnteDev. It never opens \\.\LPTDI, so
+            // the LPTDI target-state probe has nothing to answer here and is
+            // left unset.
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix =
+                "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
             entry.profile.run_defaults.run_detached = true;
-            entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
-                "0900000000000000";
             // The user-prepared Ez2DJ.exe is the only HDD entry used for profile
             // identification. Its parent directory becomes the VFS source root
             // after matching.
             entry.profile.note =
-                "Uses the user-provided Ez2DJ.exe representative executable. The "
-                "1st SE HLE execution defaults are reused as a compatibility "
-                "baseline; the guest drive and protection contract are not "
-                "independently confirmed for this binary.";
+                "Uses the user-provided Ez2DJ.exe representative executable. It "
+                "belongs to the same .protect Hardlock family as the 1st SE CHD "
+                "build, 3rd and 4th: it opens \\\\.\\FEnteDev and reaches the "
+                "0x9c402468 initialize, 0x9c402450 handshake and 0x9c40244c "
+                "descriptor requests, and without local Hardlock material it "
+                "stops at the handshake. Its descriptor reports module_address "
+                "0x15e5. The legacy-I/O helper RVAs are carried over from the "
+                "1st SE .gtide build and are not confirmed for this "
+                "executable.";
             entry.fingerprint.executable_name = "Ez2DJ.exe";
             entry.fingerprint.entry_point_rva = 0x0199b240;
             entry.fingerprint.size_of_image = 0x019b6000;
@@ -385,14 +415,28 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             table.push_back(std::move(entry));
         }
 
-        table.push_back(MakeChdCompatibilityProfile(
-            "ez2dj5th",
-            "EZ2DJ 5th Trax",
-            "roms/ez2dj5th",
-            "EZ2DJ/EZ2DJ.EXE",
-            "The 5th CHD is registered against the 4th compatibility baseline. "
-            "Its filesystem and version-specific execution contract are not "
-            "independently confirmed by the current FAT32 reader."));
+        {
+            BuiltInTargetProfile entry = MakeChdCompatibilityProfile(
+                "ez2dj5th",
+                "EZ2DJ 5th Trax",
+                "roms/ez2dj5th",
+                "EZ2DJ/EZ2DJ.EXE",
+                "The 5th executable belongs to the same .protect Hardlock family "
+                "as 1st, 1st SE, 3rd and 4th: it opens \\\\.\\FEnteDev and runs "
+                "the initialize, handshake, descriptor and transform requests, "
+                "and its descriptor reports module_address 0x4c5c. The supplied "
+                "CHD is a whole-disk FAT32 volume with no partition table, "
+                "which the current reader does not mount, so the boundary was "
+                "observed from the extracted directory instead.");
+            // Read out of this build's own decrypted .text rather than inherited
+            // from 4th. Past the Hardlock transform loop the guest faults on an
+            // untrapped `in al, dx` at 0x000ca067, and the code window there
+            // holds the usual pair of port helpers. The runtime matches the
+            // faulting instruction address, so these are the opcode bytes.
+            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000ca067;
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000ca09b;
+            table.push_back(std::move(entry));
+        }
 
         {
             BuiltInTargetProfile entry = MakeChdCompatibilityProfile(

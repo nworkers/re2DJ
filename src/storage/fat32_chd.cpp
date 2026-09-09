@@ -115,6 +115,70 @@ constexpr std::size_t kChainCacheEntries = 256;
 
 }  // namespace
 
+bool ParseFat32BootSector(const std::uint8_t* boot,
+                          std::size_t boot_size,
+                          std::uint64_t volume_lba,
+                          std::uint64_t volume_sectors,
+                          Fat32VolumeInfo* info)
+{
+    if (boot == nullptr || info == nullptr || boot_size < 512 || boot[510] != 0x55 ||
+        boot[511] != 0xaa)
+    {
+        return false;
+    }
+    const std::uint32_t bytes_per_sector = ReadU16(boot, 11);
+    const std::uint32_t sectors_per_cluster = boot[13];
+    const std::uint32_t reserved_sectors = ReadU16(boot, 14);
+    const std::uint32_t fat_count = boot[16];
+    const std::uint32_t total_sectors16 = ReadU16(boot, 19);
+    const std::uint32_t total_sectors32 = ReadU32(boot, 32);
+    const std::uint32_t sectors_per_fat = ReadU32(boot, 36);
+    const std::uint32_t root_cluster = ReadU32(boot, 44);
+    const std::uint64_t total_sectors =
+        total_sectors32 != 0 ? total_sectors32 : total_sectors16;
+    if (bytes_per_sector != 512 || sectors_per_cluster == 0 ||
+        (sectors_per_cluster & (sectors_per_cluster - 1)) != 0 ||
+        sectors_per_cluster > 128 || reserved_sectors == 0 || fat_count == 0 ||
+        sectors_per_fat == 0 || total_sectors == 0 || total_sectors > volume_sectors ||
+        root_cluster < 2)
+    {
+        return false;
+    }
+    const std::uint64_t fat_sectors = static_cast<std::uint64_t>(fat_count) * sectors_per_fat;
+    if (reserved_sectors + fat_sectors >= total_sectors)
+    {
+        return false;
+    }
+    const std::uint64_t data_sectors = total_sectors - reserved_sectors - fat_sectors;
+    const std::uint64_t cluster_count = data_sectors / sectors_per_cluster;
+    if (cluster_count == 0 || cluster_count > (std::numeric_limits<std::uint32_t>::max)() - 1)
+    {
+        return false;
+    }
+    const std::uint32_t maximum_cluster = static_cast<std::uint32_t>(cluster_count + 1);
+    const std::uint64_t fat_entries =
+        static_cast<std::uint64_t>(sectors_per_fat) * bytes_per_sector / 4;
+    if (maximum_cluster >= fat_entries || root_cluster > maximum_cluster)
+    {
+        return false;
+    }
+
+    info->partition_lba = volume_lba;
+    info->partition_sectors = volume_sectors;
+    info->bytes_per_sector = bytes_per_sector;
+    info->sectors_per_cluster = sectors_per_cluster;
+    info->reserved_sectors = reserved_sectors;
+    info->fat_count = fat_count;
+    info->sectors_per_fat = sectors_per_fat;
+    info->root_cluster = root_cluster;
+    info->data_lba = volume_lba + reserved_sectors + fat_sectors;
+    info->cluster_count = static_cast<std::uint32_t>(cluster_count);
+    info->maximum_cluster = maximum_cluster;
+    info->volume_label = TrimPadded(boot + 71, 11);
+    info->filesystem_type = TrimPadded(boot + 82, 8);
+    return true;
+}
+
 bool Fat32Volume::Open(const std::filesystem::path& chd_path,
                        std::unique_ptr<Fat32Volume>* out,
                        std::string* error)
@@ -142,90 +206,68 @@ bool Fat32Volume::Open(const std::filesystem::path& chd_path,
         return fail("FAT32 volume requires a 512-byte CHD logical sector");
     }
 
-    std::vector<std::uint8_t> mbr;
-    if (!image->ReadSector(0, &mbr, error) || mbr.size() < 512 || mbr[510] != 0x55 ||
-        mbr[511] != 0xaa)
+    const std::uint64_t image_sectors = image->info().logical_bytes / 512;
+
+    std::vector<std::uint8_t> first;
+    if (!image->ReadSector(0, &first, error) || first.size() < 512 || first[510] != 0x55 ||
+        first[511] != 0xaa)
     {
-        return fail("CHD does not contain a valid MBR signature");
+        return fail("CHD does not contain a valid boot signature");
     }
 
-    std::uint32_t partition_index = 0;
-    std::uint64_t partition_lba = 0;
-    std::uint64_t partition_sectors = 0;
-    for (std::uint32_t index = 0; index < 4; ++index)
-    {
-        const std::size_t offset = 446 + index * 16;
-        if (IsFat32PartitionType(mbr[offset + 4]))
-        {
-            partition_index = index;
-            partition_lba = ReadU32(mbr.data(), offset + 8);
-            partition_sectors = ReadU32(mbr.data(), offset + 12);
-            break;
-        }
-    }
-    if (partition_sectors == 0 || partition_lba >= image->info().logical_bytes / 512 ||
-        partition_sectors > image->info().logical_bytes / 512 - partition_lba)
-    {
-        return fail("CHD MBR has no in-range FAT32 partition");
-    }
-
-    std::vector<std::uint8_t> boot;
-    if (!image->ReadSector(partition_lba, &boot, error) || boot.size() < 512 ||
-        boot[510] != 0x55 || boot[511] != 0xaa)
-    {
-        return fail("FAT32 partition boot sector is invalid");
-    }
-    const std::uint32_t bytes_per_sector = ReadU16(boot.data(), 11);
-    const std::uint32_t sectors_per_cluster = boot[13];
-    const std::uint32_t reserved_sectors = ReadU16(boot.data(), 14);
-    const std::uint32_t fat_count = boot[16];
-    const std::uint32_t total_sectors16 = ReadU16(boot.data(), 19);
-    const std::uint32_t total_sectors32 = ReadU32(boot.data(), 32);
-    const std::uint32_t sectors_per_fat = ReadU32(boot.data(), 36);
-    const std::uint32_t root_cluster = ReadU32(boot.data(), 44);
-    const std::uint64_t total_sectors = total_sectors32 != 0 ? total_sectors32 : total_sectors16;
-    if (bytes_per_sector != 512 || sectors_per_cluster == 0 ||
-        (sectors_per_cluster & (sectors_per_cluster - 1)) != 0 ||
-        sectors_per_cluster > 128 || reserved_sectors == 0 || fat_count == 0 ||
-        sectors_per_fat == 0 || total_sectors == 0 || total_sectors > partition_sectors ||
-        root_cluster < 2)
-    {
-        return fail("unsupported or invalid FAT32 BPB");
-    }
-    const std::uint64_t fat_sectors = static_cast<std::uint64_t>(fat_count) * sectors_per_fat;
-    if (reserved_sectors + fat_sectors >= total_sectors)
-    {
-        return fail("FAT32 data region is empty");
-    }
-    const std::uint64_t data_sectors = total_sectors - reserved_sectors - fat_sectors;
-    const std::uint64_t cluster_count = data_sectors / sectors_per_cluster;
-    if (cluster_count == 0 || cluster_count > (std::numeric_limits<std::uint32_t>::max)() - 1)
-    {
-        return fail("FAT32 cluster count is outside the supported range");
-    }
-    const std::uint32_t maximum_cluster = static_cast<std::uint32_t>(cluster_count + 1);
-    const std::uint64_t fat_entries =
-        static_cast<std::uint64_t>(sectors_per_fat) * bytes_per_sector / 4;
-    if (maximum_cluster >= fat_entries || root_cluster > maximum_cluster)
-    {
-        return fail("FAT32 FAT does not cover the declared data region");
-    }
+    const auto build_volume = [](const std::vector<std::uint8_t>& boot,
+                                 std::uint64_t volume_lba,
+                                 std::uint64_t volume_sectors,
+                                 Fat32VolumeInfo* info) {
+        return ParseFat32BootSector(boot.data(), boot.size(), volume_lba, volume_sectors, info);
+    };
 
     Fat32VolumeInfo info;
-    info.partition_index = partition_index;
-    info.partition_lba = partition_lba;
-    info.partition_sectors = partition_sectors;
-    info.bytes_per_sector = bytes_per_sector;
-    info.sectors_per_cluster = sectors_per_cluster;
-    info.reserved_sectors = reserved_sectors;
-    info.fat_count = fat_count;
-    info.sectors_per_fat = sectors_per_fat;
-    info.root_cluster = root_cluster;
-    info.data_lba = partition_lba + reserved_sectors + fat_sectors;
-    info.cluster_count = static_cast<std::uint32_t>(cluster_count);
-    info.maximum_cluster = maximum_cluster;
-    info.volume_label = TrimPadded(boot.data() + 71, 11);
-    info.filesystem_type = TrimPadded(boot.data() + 82, 8);
+    bool accepted = false;
+    for (std::uint32_t index = 0; index < 4 && !accepted; ++index)
+    {
+        const std::size_t offset = 446 + index * 16;
+        if (!IsFat32PartitionType(first[offset + 4]))
+        {
+            continue;
+        }
+        const std::uint64_t partition_lba = ReadU32(first.data(), offset + 8);
+        const std::uint64_t partition_sectors = ReadU32(first.data(), offset + 12);
+        if (partition_sectors == 0 || partition_lba >= image_sectors ||
+            partition_sectors > image_sectors - partition_lba)
+        {
+            continue;
+        }
+        std::vector<std::uint8_t> boot;
+        if (!image->ReadSector(partition_lba, &boot, error))
+        {
+            return false;
+        }
+        if (build_volume(boot, partition_lba, partition_sectors, &info))
+        {
+            info.partitioned = true;
+            info.partition_index = index;
+            accepted = true;
+        }
+    }
+    if (!accepted)
+    {
+        // No usable partition entry. The image may be a whole-disk volume, in
+        // which case the sector already read is the boot sector itself; the
+        // ez2dj5th CHD is formatted that way.
+        if (build_volume(first, 0, image_sectors, &info))
+        {
+            info.partitioned = false;
+            info.partition_index = 0;
+            accepted = true;
+        }
+    }
+    if (!accepted)
+    {
+        return fail(
+            "CHD holds no FAT32 volume: no partition entry describes one, and "
+            "sector 0 is not a FAT32 boot sector either");
+    }
 
     *out = std::unique_ptr<Fat32Volume>(new Fat32Volume(std::move(image), std::move(info)));
     return true;

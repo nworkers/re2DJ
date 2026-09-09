@@ -19,6 +19,10 @@ namespace re2dj::storage
 
 struct Fat32VolumeInfo
 {
+    // False when the image carries no partition table and LBA 0 is itself the
+    // FAT32 boot sector. partition_index is then meaningless, so it cannot be
+    // used to tell that case from the first partition.
+    bool partitioned = true;
     std::uint32_t partition_index = 0;
     std::uint64_t partition_lba = 0;
     std::uint64_t partition_sectors = 0;
@@ -52,6 +56,17 @@ struct Fat32Entry
     std::uint16_t write_time = 0;
     std::uint16_t write_date = 0;
 };
+
+// Reads a candidate FAT32 boot sector and accepts it only when every declared
+// value is self-consistent and fits inside the span it is given. This is what
+// decides whether a sector is a FAT32 boot sector at all, so a caller can offer
+// sector 0 of an unpartitioned image and a partition's first sector to the same
+// test. `boot` must be at least 512 bytes.
+bool ParseFat32BootSector(const std::uint8_t* boot,
+                          std::size_t boot_size,
+                          std::uint64_t volume_lba,
+                          std::uint64_t volume_sectors,
+                          Fat32VolumeInfo* info);
 
 // Read-only FAT32 filesystem view backed by a MAME CHD logical block device.
 // The volume never writes to the source image.

@@ -162,9 +162,11 @@ int main(int argc, char** argv)
     }
     const re2dj::storage::Fat32VolumeInfo& filesystem = volume->info();
     std::printf(
-        "filesystem=fat32 partition=%u partition_lba=%llu partition_sectors=%llu "
+        "filesystem=fat32 partitioned=%u partition=%u partition_lba=%llu "
+        "partition_sectors=%llu "
         "bytes_per_sector=%u sectors_per_cluster=%u reserved_sectors=%u fat_count=%u "
         "sectors_per_fat=%u root_cluster=%u data_lba=%llu cluster_count=%u label=%s type=%s\n",
+        filesystem.partitioned ? 1u : 0u,
         filesystem.partition_index,
         static_cast<unsigned long long>(filesystem.partition_lba),
         static_cast<unsigned long long>(filesystem.partition_sectors),
