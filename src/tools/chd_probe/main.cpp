@@ -4,8 +4,10 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "chd_extract.h"
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/storage/mame_chd.h"
@@ -41,11 +43,59 @@ int main(int argc, char** argv)
     // directory, and only the image says whether the file is there.
     const bool list_requested = argc == 4 && std::string(argv[2]) == "--list";
     const bool dump_requested = (argc == 4 || argc == 5) && std::string(argv[2]) == "--dump";
-    if (argc != 2 && !list_requested && !dump_requested)
+    // Extraction lays a whole subtree onto the host so a new product's asset
+    // layout can be read without one invocation per directory.
+    const bool extract_requested = argc == 5 && std::string(argv[2]) == "--extract";
+    if (argc != 2 && !list_requested && !dump_requested && !extract_requested)
     {
         std::fprintf(stderr,
-                     "usage: re2dj_chd_probe <mame-chd-path> [--list <relative-directory> | --dump <relative-file> [output-path]]\n");
+                     "usage: re2dj_chd_probe <mame-chd-path> [--list <relative-directory> "
+                     "| --dump <relative-file> [output-path] "
+                     "| --extract <relative-directory> <output-directory>]\n");
         return 1;
+    }
+
+    if (extract_requested)
+    {
+        std::unique_ptr<re2dj::storage::Fat32Volume> volume;
+        std::string filesystem_error;
+        if (!re2dj::storage::Fat32Volume::Open(argv[1], &volume, &filesystem_error))
+        {
+            std::fprintf(stderr, "error: cannot open FAT32 volume: %s\n", filesystem_error.c_str());
+            return 2;
+        }
+        re2dj::tools::ChdExtractStats stats;
+        std::string extract_error;
+        const bool started = re2dj::tools::ExtractChdDirectory(
+            *volume,
+            argv[3],
+            std::filesystem::path(argv[4]),
+            [](std::string_view inner, std::size_t entries) {
+                std::printf("extract dir=%s entries=%zu\n",
+                            inner.empty() ? "<root>" : std::string(inner).c_str(),
+                            entries);
+                std::fflush(stdout);
+            },
+            [](std::string_view inner, std::string_view error) {
+                std::fprintf(stderr,
+                             "warning: cannot read %s: %s\n",
+                             std::string(inner).c_str(),
+                             std::string(error).c_str());
+            },
+            &stats,
+            &extract_error);
+        if (!started)
+        {
+            std::fprintf(stderr, "error: %s\n", extract_error.c_str());
+            return 6;
+        }
+        std::printf("extracted directories=%zu files=%zu bytes=%llu failures=%zu to %s\n",
+                    stats.directories,
+                    stats.files,
+                    static_cast<unsigned long long>(stats.bytes),
+                    stats.failures,
+                    argv[4]);
+        return stats.failures == 0 ? 0 : 7;
     }
 
     if (dump_requested)

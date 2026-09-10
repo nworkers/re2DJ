@@ -414,6 +414,7 @@ launcher's detached-only validation; the CLI reports that the option was ignored
 | `ez2dj4th` | `EZ2DJ/EZ2DJ.EXE` inside FAT32 CHD | `EZ2DJ.INI`, `FONTKR.DAT`, `FONTEN.DAT`, `BG`, `SOUND`, `SYSTEM` |
 | `ez2dj5th` | `EZ2DJ/EZ2DJ.EXE` inside CHD shortcut | 4th-based compatibility profile; filesystem not yet recognised |
 | `ez2dj6th` | `EZ2DJ/EZ2DJ6th.EXE` inside FAT32 CHD | `EZ2DJ.EXE` is a bootstrap; remaining contracts are under runtime verification |
+| `ez2d2m` | `ez2dancer/EZ2Dancer.exe` inside FAT32 CHD | EZ2Dancer 2nd MOVE, not EZ2DJ: same `.protect` Hardlock envelope, but `DirectDrawCreateEx` graphics and a 16-bit I/O board, so raw I/O is disabled |
 
 기본적으로 형제 항목은 경로 해석이 대소문자를 무시하는 환경에서 프로파일을 구별하기 위해 사용한다. `ez2dj1st`는 사용자가 지정한 대표 실행 파일 자체의 이름과 PE header만 식별 근거로 사용하고, `ez2dj2nd`는 sibling과 PE header를 함께 사용한다. CHD profile은 image shortcut으로 선택되므로 extracted-directory fingerprint 매칭 대상이 아니다. 이 매칭 정책은 프로파일 선택을 위한 것이며, 버전별 보호·legacy I/O·게스트 부트 계약을 자동으로 확정하지 않는다.
 
@@ -652,7 +653,7 @@ launcher probe의 bounded 진단 debug-event loop는 `--diagnostic-idle-timeout 
 | `re2dj_sdl3_opengl_backend` | Win32·Linux·Web 공용 SDL3/OpenGL 렌더 backend |
 | `re2dj` | 명령행 호스트 |
 | `re2dj_hdd_probe` | HDD 디렉터리 스캔 도구 |
-| `re2dj_chd_probe` | MAME CHD header·metadata·sector와 FAT32/PE 판독 도구 |
+| `re2dj_chd_probe` | MAME CHD header·metadata·sector와 FAT32/PE 판독 도구. `--extract`로 하위 트리를 호스트에 펼침 |
 | `re2dj_pe_analyzer` | PE32 헤더 분석 도구 |
 | `re2dj_code_score` | 바이트 구간이 x86 코드인지 암호문인지 판정하는 도구 |
 | `re2dj_pe_loader` | PE32 매핑·재배치·import gate 보고 도구 |

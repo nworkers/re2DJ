@@ -436,6 +436,7 @@ target_link_libraries(re2dj_hdd_probe PRIVATE re2dj_core re2dj_warnings)
 
 add_executable(re2dj_chd_probe
     src/tools/chd_probe/main.cpp
+    src/tools/chd_probe/chd_extract.cpp
 )
 target_link_libraries(re2dj_chd_probe PRIVATE re2dj_core re2dj_warnings)
 
@@ -484,6 +485,8 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/fat32_chd_test.cpp
         tests/unit/chd_hunk_cache_test.cpp
         tests/unit/fat32_directory_name_test.cpp
+        tests/unit/chd_extract_name_test.cpp
+        src/tools/chd_probe/chd_extract.cpp
         tests/unit/pe_image_test.cpp
         tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp
@@ -491,7 +494,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/target_profile_test.cpp
         tests/unit/vfs_file_table_test.cpp
     )
-    target_include_directories(re2dj_unit_tests PRIVATE tests/unit)
+    target_include_directories(re2dj_unit_tests PRIVATE tests/unit src/tools/chd_probe)
     target_link_libraries(re2dj_unit_tests PRIVATE re2dj_core re2dj_warnings)
     add_test(NAME re2dj_unit_tests COMMAND re2dj_unit_tests)
 

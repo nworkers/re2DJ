@@ -414,6 +414,65 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                 re2dj::target::FindBuiltInTargetProfileById("ez2dj1stse_unpacked") ==
                     nullptr);
 
+    // ---- EZ2Dancer 2nd MOVE ----
+    // This is not an EZ2DJ release, so it is checked on its own rather than
+    // through the shared CHD compatibility helper: its executable, its
+    // DirectDrawCreateEx graphics entry and its disabled raw I/O all differ.
+    {
+        const re2dj::target::BuiltInTargetProfile* dancer =
+            re2dj::target::FindBuiltInTargetProfileById("ez2d2m");
+        RE2DJ_CHECK(context, dancer != nullptr);
+        if (dancer != nullptr)
+        {
+            const re2dj::target::TargetProfile& profile = dancer->profile;
+            RE2DJ_CHECK_EQ(context, profile.display_name,
+                           std::string("EZ2Dancer 2nd MOVE"));
+            RE2DJ_CHECK(context, profile.run_defaults.hdd_input_kind ==
+                                     re2dj::target::HddInputKind::kMameChd);
+            RE2DJ_CHECK_EQ(context,
+                           profile.run_defaults.default_hdd_image_relative_path,
+                           std::string("roms/ez2d2m"));
+            RE2DJ_CHECK_EQ(context, profile.executable_relative_path,
+                           std::string("ez2dancer/EZ2Dancer.exe"));
+            RE2DJ_CHECK_EQ(context, profile.guest_drive_letter, 'C');
+            RE2DJ_CHECK_EQ(context, profile.guest_directory, std::string("\\ez2dancer"));
+            RE2DJ_CHECK(context, profile.run_defaults.hle_vfs);
+            RE2DJ_CHECK(context, profile.run_defaults.hle_dynamic_vfs);
+            RE2DJ_CHECK(context, profile.run_defaults.hle_d3d3);
+            RE2DJ_CHECK(context, profile.run_defaults.hle_directsound);
+            RE2DJ_CHECK(context, profile.run_defaults.hle_wts_active_console);
+            RE2DJ_CHECK(context, profile.run_defaults.run_detached);
+            // Absent from the packed import directory, so none of these can be
+            // prepared for this build.
+            RE2DJ_CHECK(context, !profile.run_defaults.hle_command_line);
+            RE2DJ_CHECK(context, !profile.run_defaults.hle_windows_directory);
+            RE2DJ_CHECK(context, !profile.run_defaults.demo_volume.has_value());
+            // The EZ2Dancer board is 16-bit-wide over a different port band
+            // than the byte-wide bus serves.
+            RE2DJ_CHECK(context, !profile.run_defaults.lptdi.legacy_io_ports);
+            RE2DJ_CHECK(context, !profile.run_defaults.lptdi.legacy_io_ports_default);
+            RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.legacy_io_in_byte_rva,
+                           std::uint32_t{0});
+            RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.legacy_io_out_byte_rva,
+                           std::uint32_t{0});
+            RE2DJ_CHECK(context, profile.run_defaults.lptdi.device_mock_enabled);
+            RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.device_mock_path_prefix,
+                           std::string("\\\\.\\FEnteDev"));
+            RE2DJ_CHECK(context,
+                        profile.run_defaults.lptdi.hardlock_cfg_material_default);
+            RE2DJ_CHECK(context, !profile.run_defaults.follow_child_process);
+            RE2DJ_CHECK(context, !profile.detected);
+            RE2DJ_CHECK(context, !profile.bring_up_target);
+            RE2DJ_CHECK(context, !profile.note.empty());
+            RE2DJ_CHECK_EQ(context, dancer->fingerprint.executable_name,
+                           std::string_view("EZ2Dancer.exe"));
+            RE2DJ_CHECK(context, dancer->fingerprint.entry_point_rva.has_value());
+            RE2DJ_CHECK(context, dancer->fingerprint.size_of_image.has_value());
+            RE2DJ_CHECK_EQ(context, dancer->fingerprint.required_siblings.size(),
+                           std::size_t{6});
+        }
+    }
+
     // ---- The 1st Tracks Special Edition CHD shortcut ----
     {
         const re2dj::target::BuiltInTargetProfile* first_se_builtin =

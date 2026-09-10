@@ -41,3 +41,35 @@ id_verify=<16 hex digits>
 - 여러 프로파일을 같은 `cfg/hardlock-id.ini`에 추출하면 각 프로파일 section이 유지되는지 확인합니다.
 
 *Confirm that the launcher JSONL contains `hardlock_descriptor_dump`, the `.vfs.log` contains a descriptor line with `header_valid=1`, `module_address`, `id_ref_hash`, and `id_verify_hash`, and the output section matches the selected profile. When extracting multiple profiles into the same `cfg/hardlock-id.ini`, verify that each profile section remains present.*
+
+## `.protect` 계열에서 추가로 필요한 것 / What the `.protect` family additionally needs
+
+위 명령만으로는 `.protect` 계열(1st, 1st SE, 3rd, 4th, 5th, ez2d2m)이 descriptor에 도달하지 못합니다. 세 가지를 더 붙입니다.
+
+*The command above does not reach a descriptor for the `.protect` family — 1st, 1st SE, 3rd, 4th, 5th and ez2d2m. Add three things.*
+
+| 추가 옵션 | 없을 때의 증상 |
+| --- | --- |
+| `--hle-dynamic-vfs` | `CreateFileA`가 `route=win32`로 해석되고 Hardlock 요청 0건 |
+| `--run-detached` | 첫 VFS 파일 개방이 handoff로 처리되어 원본이 즉시 종료 |
+| `--hardlock-device`와 `--device-mock-hardlock-450-response`·`--device-mock-hardlock-44c-tail` | initialize 뒤 descriptor를 요청하지 않고 종료 |
+
+*Without `--hle-dynamic-vfs`, `CreateFileA` resolves `route=win32` and no Hardlock request is made. Without `--run-detached`, the launcher treats the first VFS file open as the handoff and terminates the original immediately. Without `--hardlock-device` and the replay values, the guest stops after initialize without asking for a descriptor.*
+
+`cfg/hardlock.ini`의 프로파일 section은 같은 이름의 transform map이 있을 때만 적용됩니다. 새 프로파일에는 아직 map이 없으므로, 재생값은 명시적 옵션으로 넘깁니다. 명시적 옵션이 파일보다 우선합니다.
+
+*A `cfg/hardlock.ini` profile section is applied only alongside a transform map of the same name. A new profile has none yet, so pass the replay values as explicit options; an explicit option outranks the file.*
+
+## 셸 인용 주의 / A shell-quoting trap
+
+`--device-mock-lptdi-path-prefix`의 값은 백슬래시로 시작합니다. **Git Bash에서는 이 인자를 넘기지 마십시오.** 인용을 어떻게 하든 백슬래시 하나가 사라져 `\.\FEnteDev`가 전달되고, 장치 경로가 일치하지 않아 open이 `error=123`으로 실패합니다. 증상이 회귀처럼 보이지만 원인은 인용입니다.
+
+이 옵션은 생략하는 것이 정답입니다. 생략하면 프로파일의 `device_mock_path_prefix`가 그대로 쓰입니다. 값을 직접 지정해야 한다면 PowerShell에서 실행합니다.
+
+*The `--device-mock-lptdi-path-prefix` value begins with backslashes. **Do not pass this argument from Git Bash**: whatever the quoting, one backslash is lost, `\.\FEnteDev` arrives, the device path does not match, and the open fails with `error=123`. It looks like a regression and is not one.*
+
+*The right answer is to omit the option, which uses the profile's own `device_mock_path_prefix`. Run from PowerShell if a value really must be given explicitly.*
+
+확인 방법: `.vfs.log`의 `device-open` 줄이 `success=1:error=0`이어야 합니다. `error=123`이면 prefix가 게스트가 여는 이름과 다릅니다.
+
+*To check: the `device-open` line in `.vfs.log` must read `success=1:error=0`. An `error=123` means the prefix does not match the name the guest opens.*

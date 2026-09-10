@@ -36,6 +36,7 @@ int main()
     RunFat32ChdTests(context);
     RunChdHunkCacheTests(context);
     RunFat32DirectoryNameTests(context);
+    RunChdExtractNameTests(context);
 
     std::printf("checks: %d, failures: %d\n", context.checks, context.failures);
     return context.failures == 0 ? 0 : 1;

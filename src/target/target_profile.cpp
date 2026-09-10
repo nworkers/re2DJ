@@ -458,6 +458,91 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             table.push_back(std::move(entry));
         }
 
+        {
+            // EZ2Dancer 2nd MOVE is not an EZ2DJ release. It shares the
+            // Hardlock envelope and the CHD, VFS, graphics and audio
+            // boundaries, but its I/O board does not match, so this entry is
+            // written out rather than built from MakeChdCompatibilityProfile,
+            // whose executable name, siblings and port-helper RVAs all belong
+            // to 4th. See docs/analysis/ez2d2m-chd-filesystem.md.
+            BuiltInTargetProfile entry;
+            entry.profile.id = "ez2d2m";
+            entry.profile.display_name = "EZ2Dancer 2nd MOVE";
+            entry.profile.hle_profile_id = "ez2d2m";
+            entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
+            entry.profile.run_defaults.default_hdd_image_relative_path = "roms/ez2d2m";
+            entry.profile.run_defaults.audio_gain_db = 0.0f;
+            // Every setting below follows this executable's own packed import
+            // directory, which is what the launcher searches for IAT slots.
+            //
+            // GetCommandLineA, GetWindowsDirectoryA and GetPrivateProfileIntA
+            // are all absent from it, so those three boundaries cannot be
+            // prepared at all and stay off.
+            entry.profile.run_defaults.hle_command_line = false;
+            entry.profile.run_defaults.hle_windows_directory = false;
+            entry.profile.run_defaults.demo_volume.reset();
+            entry.profile.run_defaults.hle_vfs = true;
+            // Same .protect family as 1st, 1st SE, 3rd, 4th and 5th: the
+            // protection reaches CreateFileA through GetProcAddress, so the
+            // static slots alone never see its device work.
+            entry.profile.run_defaults.hle_dynamic_vfs = true;
+            // DDRAW.dll contributes DirectDrawCreateEx rather than
+            // DirectDrawCreate, which the launcher's IAT lookup already
+            // accepts. The image ships DirectX 7.0a, which agrees.
+            entry.profile.run_defaults.hle_d3d3 = true;
+            // DSOUND.dll ordinal 1 is present.
+            entry.profile.run_defaults.hle_directsound = true;
+            // Confirmed from this executable's strings: it carries
+            // \\.\HARDLOCK.VXD and \\.\FEnteDev, HLW32Proc and API_1LNM.DLL,
+            // exactly like the EZ2DJ builds of the same envelope.
+            entry.profile.run_defaults.lptdi.device_mock_path_prefix =
+                "\\\\.\\FEnteDev";
+            entry.profile.run_defaults.lptdi.device_mock_enabled = true;
+            entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
+            // The same envelope's WTSQuerySessionInformationA path is present
+            // in this build's strings. Whether this build stops without the
+            // active-console report has not been observed here.
+            entry.profile.run_defaults.hle_wts_active_console = true;
+            // Raw I/O stays off. The public EZ2Dancer I/O description is
+            // 16-bit-wide access (IN AX,DX / OUT DX,AX) over ports 0x300 to
+            // 0x30c, while LegacyIoPortBus is byte-wide over 0x100 to 0x106
+            // and the fault handler advances EIP by one. Turning it on would
+            // answer an unsupported port and resume inside an instruction, so
+            // serving nothing is the correct baseline until the bus is
+            // widened. See docs/analysis/ez2dancer-io-map.md.
+            entry.profile.run_defaults.lptdi.legacy_io_ports = false;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = false;
+            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0;
+            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0;
+            entry.profile.run_defaults.run_detached = true;
+            // The image is a Windows 98 SE boot disk whose MSDOS.SYS reads
+            // HostWinBootDrv=C, and the game sits at that volume's root.
+            entry.profile.guest_drive_letter = 'C';
+            entry.profile.guest_directory = "\\ez2dancer";
+            entry.profile.executable_relative_path = "ez2dancer/EZ2Dancer.exe";
+            entry.profile.note =
+                "EZ2Dancer 2nd MOVE, not an EZ2DJ release. The supplied CHD is a "
+                "FAT32 volume labelled EZ2DANCER holding a Windows 98 SE install "
+                "whose game is ez2dancer/EZ2Dancer.exe. That executable is the "
+                "same .protect Hardlock family as the EZ2DJ builds - it carries "
+                "\\\\.\\FEnteDev, HLW32Proc and API_1LNM.DLL - but its graphics "
+                "entry point is DirectDrawCreateEx rather than DirectDrawCreate, "
+                "and its cabinet I/O is described publicly as 16-bit-wide access "
+                "over ports 0x300 to 0x30c, which the byte-wide LegacyIoPortBus "
+                "does not serve, so raw I/O is disabled. Its descriptor reports "
+                "module_address 0x4c5e, and with local Hardlock material it "
+                "passes the protection and executes original .text, where it "
+                "stops on an untrapped `out dx, ax` at RVA 0x0000b565 writing "
+                "port 0x30a. That address belongs to a word-wide I/O boundary "
+                "and must not be placed in the byte-width helper fields above.";
+            entry.fingerprint.executable_name = "EZ2Dancer.exe";
+            entry.fingerprint.entry_point_rva = 0x00401240;
+            entry.fingerprint.size_of_image = 0x0043b000;
+            entry.fingerprint.required_siblings = {
+                "EZ2DANCER.ini", "song.ini", "fontkr.dat", "fonten.dat", "Songs", "SYSTEM"};
+            table.push_back(std::move(entry));
+        }
+
         return table;
     }();
     return profiles;

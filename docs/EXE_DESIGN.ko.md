@@ -100,3 +100,13 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax 덤프 세 개를 확�
 ## 2026-09-06 2nd 실행 경계 보정
 
 2nd 실행 로그에서 `GetPrivateProfileIntA` import 부재, legacy I/O helper RVA `0x000782d7`/`0x0007832b`, 그리고 `DirectDrawCreateEx` HLE 연결을 확인했습니다. 따라서 2nd 프로파일은 demo-volume 주입을 사용하지 않으며, D3D IAT 예외는 packer를 보존해야 하는 4th에만 적용합니다. 상세 실행 증거는 [실행 파일 구조 분석](analysis/ez2dj-exe-structures.md)과 [I/O port map](analysis/ez2dj-io-map.md)에 기록합니다.
+
+## 2026-09-10 EZ2Dancer 2nd MOVE 실행 파일 (`ez2d2m`)
+
+**확인됨:** 이 문서가 다루는 첫 비-EZ2DJ 제품이다. `ez2dancer/EZ2Dancer.exe`는 PE32/i386, image base `0x00400000`, entry point RVA `0x00401240`, SizeOfImage `0x0043b000`, timestamp `0x3a5f074c`이며 섹션은 `.text`, `.rdata`, `.data`, `.protect` 넷이다. entry point가 쓰기·실행 `.protect` 안에 있어 EZ2DJ 1st·1st SE·3rd·4th·5th와 같은 자기 수정 packer 계열이다. 문자열에 `\.\FEnteDev`, `\.\HARDLOCK.VXD`, `HLW32Proc`, `API_1LNM.DLL`, `WTSQuerySessionInformationA`가 있어 보호 envelope도 같다.
+
+**확인됨:** packed import directory는 DLL당 stub 하나를 두며 그래픽 진입점이 `DirectDrawCreate`가 아니라 `DirectDrawCreateEx`다. `GetCommandLineA`, `GetWindowsDirectoryA`, `GetPrivateProfileIntA`는 없다. 따라서 `ez2d2m` 프로파일은 세 경계를 끄고 DirectDraw 7 경로를 쓴다.
+
+**추정:** cabinet I/O는 EZ2DJ의 byte 폭 `0x100`~`0x106`이 아니라 16비트 폭 `0x300`~`0x30c`다. 근거는 공개 구현 한 곳뿐이며 원본에서 확인하지 않았다. **미확정:** 이 실행 파일의 raw I/O helper RVA, Hardlock 응답과 descriptor, 실제 실행 성공.
+
+상세 근거는 [ez2d2m CHD 파일시스템과 실행 파일 관찰](analysis/ez2d2m-chd-filesystem.md)과 [EZ2Dancer I/O 포트 맵](analysis/ez2dancer-io-map.md)에 있다.

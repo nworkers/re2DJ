@@ -101,3 +101,13 @@ The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, 
 ## 2026-09-06 2nd execution-boundary correction
 
 2nd execution logs confirmed the absent `GetPrivateProfileIntA` import, legacy-I/O helper RVAs `0x000782d7` and `0x0007832b`, and the `DirectDrawCreateEx` HLE connection. The 2nd profile therefore does not inject demo-volume, and the D3D IAT exception is limited to 4th, where packer data must be preserved. Detailed evidence is recorded in the [executable structures analysis](analysis/ez2dj-exe-structures.md) and [I/O port map](analysis/ez2dj-io-map.md).
+
+## 2026-09-10 The EZ2Dancer 2nd MOVE executable (`ez2d2m`)
+
+**Confirmed:** this is the first non-EZ2DJ product covered here. `ez2dancer/EZ2Dancer.exe` is PE32/i386 with image base `0x00400000`, entry point RVA `0x00401240`, SizeOfImage `0x0043b000`, timestamp `0x3a5f074c`, and four sections: `.text`, `.rdata`, `.data` and `.protect`. Its entry point lies inside a writable, executable `.protect` section, making it the same self-modifying packer family as EZ2DJ 1st, 1st SE, 3rd, 4th and 5th. Its strings carry `\.\FEnteDev`, `\.\HARDLOCK.VXD`, `HLW32Proc`, `API_1LNM.DLL` and `WTSQuerySessionInformationA`, so the protection envelope is the same as well.
+
+**Confirmed:** the packed import directory holds one stub per DLL, and its graphics entry point is `DirectDrawCreateEx` rather than `DirectDrawCreate`. `GetCommandLineA`, `GetWindowsDirectoryA` and `GetPrivateProfileIntA` are absent, so the `ez2d2m` profile leaves those three boundaries off and takes the DirectDraw 7 path.
+
+**Inferred:** its cabinet I/O is 16-bit-wide over ports `0x300` to `0x30c` rather than EZ2DJ's byte-wide `0x100` to `0x106`. The evidence is a single public implementation and was not verified against the original. **Unresolved:** this executable's raw-I/O helper RVAs, its Hardlock response and descriptor, and whether it runs at all.
+
+The detailed evidence is in [ez2d2m CHD filesystem and executable observations](analysis/ez2d2m-chd-filesystem.md) and [the EZ2Dancer I/O port map](analysis/ez2dancer-io-map.md).

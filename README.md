@@ -147,9 +147,9 @@ build/linux-x64-debug/bin/re2dj --hdd /path/to/ez2dj_hdd
 
 *It selects a launch target from the scan and prints a summary. Use `--target <id>` to choose a different candidate and `--list-targets` to list candidates only.*
 
-확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 디렉터리 프로파일은 EZ2DJ The 1st Tracks와 2nd Trax이고, CHD shortcut은 1st Trax Special Edition, 3rd Trax, 4th, 5th, 6th입니다. 그 밖의 덤프도 스캔으로 감지됩니다.
+확인된 덤프는 내장 프로파일이 자동으로 잡습니다. 현재 내장된 디렉터리 프로파일은 EZ2DJ The 1st Tracks와 2nd Trax이고, CHD shortcut은 1st Trax Special Edition, 3rd Trax, 4th, 5th, 6th, 그리고 EZ2DJ가 아닌 EZ2Dancer 2nd MOVE(`ez2d2m`)입니다. 그 밖의 덤프도 스캔으로 감지됩니다.
 
-*A recognised dump is matched by a built-in profile. EZ2DJ The 1st Tracks and 2nd Trax are built in as directory profiles, and the 1st Tracks Special Edition, 3rd Trax, 4th, 5th, and 6th are built in as CHD shortcuts; anything else is still found by scanning.*
+*A recognised dump is matched by a built-in profile. EZ2DJ The 1st Tracks and 2nd Trax are built in as directory profiles; the 1st Tracks Special Edition, 3rd Trax, 4th, 5th and 6th are built in as CHD shortcuts, along with EZ2Dancer 2nd MOVE (`ez2d2m`), which is a different product rather than an EZ2DJ release. Anything else is still found by scanning.*
 
 ```text
 targets:
@@ -239,6 +239,16 @@ re2dj_chd_probe /path/to/ez2dj4th.chd
 
 ```bash
 re2dj_chd_probe /path/to/ez2dj4th.chd
+```
+
+같은 도구로 이미지 안의 디렉터리를 나열하거나, 파일 하나를 꺼내거나, 하위 트리 전체를 호스트로 펼칠 수 있습니다. 추출은 자산 배치를 사람이 보기 위한 진단 경로이며 실행 입력이 아닙니다. 런타임은 계속 CHD를 직접 읽습니다. 빈 내부 경로는 볼륨 루트를 뜻하고, 읽지 못한 항목이 있으면 경로를 경고로 남긴 뒤 계속 진행하며 0이 아닌 종료 코드로 알립니다.
+
+*The same tool lists a directory inside the image, dumps a single file, or lays a whole subtree onto the host. Extraction is a diagnostic path for reading an asset layout by hand, not an execution input — the runtime keeps reading the CHD directly. An empty inner path means the volume root; entries that cannot be read are reported as warnings, the walk continues, and the exit code is non-zero.*
+
+```bash
+re2dj_chd_probe /path/to/ez2d2m.chd --list ez2dancer
+re2dj_chd_probe /path/to/ez2d2m.chd --dump ez2dancer/EZ2Dancer.exe ./EZ2Dancer.exe
+re2dj_chd_probe /path/to/ez2d2m.chd --extract "" roms/ez2d2m/extracted
 ```
 
 Windows 제품 실행 예:
