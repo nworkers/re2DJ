@@ -75,6 +75,7 @@ void RunHardlockProtocolTests(re2dj::test::Context& context);
 void RunHardlockDeviceTests(re2dj::test::Context& context);
 void RunHardlockPayloadResponsesTests(re2dj::test::Context& context);
 void RunHardlockTransformResponsesTests(re2dj::test::Context& context);
+void RunHardlockEngineTests(re2dj::test::Context& context);
 void RunHardlockMaterialConfigTests(re2dj::test::Context& context);
 void RunLegacyIoPortBusTests(re2dj::test::Context& context);
 void RunEz2DjIoBoardTests(re2dj::test::Context& context);

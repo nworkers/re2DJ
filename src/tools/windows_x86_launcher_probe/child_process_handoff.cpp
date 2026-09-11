@@ -502,6 +502,19 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
         prepared = prepared && find_export("g_re2dj_hardlock_44c_tail_enabled", &rva) &&
                    WriteRemoteU32(result->process, result->runtime_base + rva, 1, error);
     }
+    if (options.hardlock_seeds.has_value())
+    {
+        prepared = prepared && find_export("g_re2dj_hardlock_seed_module_address", &rva) &&
+                   WriteRemoteU32(result->process, result->runtime_base + rva, options.hardlock_seeds->module_address, error);
+        prepared = prepared && find_export("g_re2dj_hardlock_seed1", &rva) &&
+                   WriteRemoteU32(result->process, result->runtime_base + rva, options.hardlock_seeds->seed1, error);
+        prepared = prepared && find_export("g_re2dj_hardlock_seed2", &rva) &&
+                   WriteRemoteU32(result->process, result->runtime_base + rva, options.hardlock_seeds->seed2, error);
+        prepared = prepared && find_export("g_re2dj_hardlock_seed3", &rva) &&
+                   WriteRemoteU32(result->process, result->runtime_base + rva, options.hardlock_seeds->seed3, error);
+        prepared = prepared && find_export("g_re2dj_hardlock_seeds_enabled", &rva) &&
+                   WriteRemoteU32(result->process, result->runtime_base + rva, 1, error);
+    }
     if (options.hardlock_device)
     {
         prepared = prepared && find_export("g_re2dj_hardlock_device_enabled", &rva) &&

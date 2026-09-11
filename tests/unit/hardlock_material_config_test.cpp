@@ -60,6 +60,24 @@ void RunHardlockMaterialConfigTests(re2dj::test::Context& context)
     RE2DJ_CHECK(context, partial.handshake_response_hex.empty());
     RE2DJ_CHECK_EQ(context, partial.descriptor_tail_hex, std::string("0001"));
 
+    // Seed keys are loaded verbatim.
+    tree.WriteText("seeds.ini",
+                   "[test-profile]\n"
+                   "module_address=0x1234\n"
+                   "seed1=0x1111\n"
+                   "seed2=0x2222\n"
+                   "seed3=0x3333\n");
+    re2dj::config::HardlockSecretMaterial seeds_mat;
+    found = false;
+    RE2DJ_CHECK(context,
+                re2dj::config::LoadHardlockProfileMaterial(
+                    tree.root() / "seeds.ini", "test-profile", &seeds_mat, &found, &error));
+    RE2DJ_CHECK(context, found);
+    RE2DJ_CHECK_EQ(context, seeds_mat.module_address_hex, std::string("0x1234"));
+    RE2DJ_CHECK_EQ(context, seeds_mat.seed1_hex, std::string("0x1111"));
+    RE2DJ_CHECK_EQ(context, seeds_mat.seed2_hex, std::string("0x2222"));
+    RE2DJ_CHECK_EQ(context, seeds_mat.seed3_hex, std::string("0x3333"));
+
     // Keys re2DJ does not use are rejected rather than ignored: a key nothing
     // reads would look configured while doing nothing.
     tree.WriteText("unknown.ini", "[test-profile]\nmodad=1\n");

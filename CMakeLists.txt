@@ -226,7 +226,9 @@ add_library(re2dj_core STATIC
     src/hle/hardlock/api_descriptor.cpp
     src/hle/hardlock/protocol.cpp
     src/hle/hardlock/device.cpp
+    src/hle/hardlock/engine.cpp
     src/hle/hardlock/payload_responses.cpp
+    src/hle/hardlock/seed_config.cpp
     src/hle/hardlock/transform_responses.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
@@ -318,6 +320,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/hle/hardlock/api_descriptor.cpp
         src/hle/hardlock/protocol.cpp
         src/hle/hardlock/device.cpp
+        src/hle/hardlock/engine.cpp
         src/hle/hardlock/payload_responses.cpp
         src/hle/hardlock/transform_responses.cpp
         src/device/lptdi_challenge_response.cpp
@@ -477,6 +480,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/hardlock_device_test.cpp
         tests/unit/hardlock_payload_responses_test.cpp
         tests/unit/hardlock_transform_responses_test.cpp
+        tests/unit/hardlock_engine_test.cpp
         tests/unit/code_scan_test.cpp
         tests/unit/immediate_scan_test.cpp
         tests/unit/hdd_root_test.cpp

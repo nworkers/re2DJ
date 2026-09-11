@@ -25,6 +25,7 @@ int main()
     RunHardlockDeviceTests(context);
     RunHardlockPayloadResponsesTests(context);
     RunHardlockTransformResponsesTests(context);
+    RunHardlockEngineTests(context);
     RunHardlockMaterialConfigTests(context);
     RunEz2DjIoBoardTests(context);
     RunEz2DancerIoBoardTests(context);

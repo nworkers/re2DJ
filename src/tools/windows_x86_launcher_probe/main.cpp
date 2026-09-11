@@ -15,12 +15,14 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "re2dj/config/hardlock_secret_config.h"
+#include "re2dj/hle/hardlock/device.h"
 #include "re2dj/hle/hardlock/handshake_response.h"
 #include "re2dj/hle/hardlock/api_descriptor.h"
 #include "re2dj/hle/hardlock/transform_responses.h"
@@ -8629,6 +8631,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     std::string device_mock_hardlock_450_response_hex;
     std::string device_mock_hardlock_44c_tail_hex;
     bool hardlock_device = false;
+    std::optional<re2dj::hle::hardlock::HardlockSeeds> hardlock_seeds;
     bool hardlock_transform_input_trace = false;
     bool hardlock_reject_function_enabled = false;
     std::uint16_t hardlock_reject_function = 0;
@@ -9738,11 +9741,33 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 hardlock_cfg_map = true;
             }
         }
-        // The device replay values are applied only alongside a map, because
-        // the three materials only make sense together: with the replay but no
-        // map the protection reaches its own modal dialog and waits there,
-        // which is worse than stopping at the earlier boundary.
-        if (cfg_section_found && !hardlock_transform_map_path.empty())
+        const bool cfg_has_seeds = !cfg_material.module_address_hex.empty() &&
+                                   !cfg_material.seed1_hex.empty() &&
+                                   !cfg_material.seed2_hex.empty() &&
+                                   !cfg_material.seed3_hex.empty();
+        if (cfg_has_seeds)
+        {
+            re2dj::hle::hardlock::HardlockSeeds parsed_seeds{};
+            auto parse_hex_u16 = [](const std::string& str, std::uint16_t* out) -> bool {
+                if (out == nullptr || str.empty()) return false;
+                try {
+                    *out = static_cast<std::uint16_t>(std::stoul(str, nullptr, 0) & 0xffff);
+                    return true;
+                } catch (...) {
+                    return false;
+                }
+            };
+            if (parse_hex_u16(cfg_material.module_address_hex, &parsed_seeds.module_address) &&
+                parse_hex_u16(cfg_material.seed1_hex, &parsed_seeds.seed1) &&
+                parse_hex_u16(cfg_material.seed2_hex, &parsed_seeds.seed2) &&
+                parse_hex_u16(cfg_material.seed3_hex, &parsed_seeds.seed3))
+            {
+                hardlock_seeds = parsed_seeds;
+                hardlock_device = true;
+            }
+        }
+        // The device replay values are applied alongside a map or when seeds are present.
+        if (cfg_section_found && (!hardlock_transform_map_path.empty() || cfg_has_seeds))
         {
             if (device_mock_hardlock_450_response_hex.empty() &&
                 !cfg_material.handshake_response_hex.empty())
@@ -10657,6 +10682,34 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 RecordDiagnostic(
                     "{\"event\":\"hardlock_44c_tail_patch\",\"value\":%u}",
                     static_cast<unsigned>(hardlock_44c_tail_word));
+            }
+        }
+        if (vfs_prepared && hardlock_seeds.has_value())
+        {
+            std::uint32_t mod_rva = 0;
+            std::uint32_t s1_rva = 0;
+            std::uint32_t s2_rva = 0;
+            std::uint32_t s3_rva = 0;
+            std::uint32_t enabled_rva = 0;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, "g_re2dj_hardlock_seed_module_address", &mod_rva, &error) &&
+                           WriteRemoteU32(child.hProcess, runtime_base + mod_rva, hardlock_seeds->module_address, &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, "g_re2dj_hardlock_seed1", &s1_rva, &error) &&
+                           WriteRemoteU32(child.hProcess, runtime_base + s1_rva, hardlock_seeds->seed1, &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, "g_re2dj_hardlock_seed2", &s2_rva, &error) &&
+                           WriteRemoteU32(child.hProcess, runtime_base + s2_rva, hardlock_seeds->seed2, &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, "g_re2dj_hardlock_seed3", &s3_rva, &error) &&
+                           WriteRemoteU32(child.hProcess, runtime_base + s3_rva, hardlock_seeds->seed3, &error) &&
+                           re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, "g_re2dj_hardlock_seeds_enabled", &enabled_rva, &error) &&
+                           WriteRemoteU32(child.hProcess, runtime_base + enabled_rva, 1, &error);
+            if (vfs_prepared)
+            {
+                RecordDiagnostic("{\"event\":\"hardlock_seeds\",\"module_address\":%u,\"enabled\":true}",
+                                 static_cast<unsigned>(hardlock_seeds->module_address));
             }
         }
         if (vfs_prepared && hardlock_device)
@@ -11653,6 +11706,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.hardlock_tail_enabled =
             !device_mock_hardlock_44c_tail_hex.empty();
         child_follow_options.hardlock_tail = hardlock_44c_tail_word;
+        child_follow_options.hardlock_seeds = hardlock_seeds;
         child_follow_options.hardlock_transform_map = hardlock_transform_map;
     }
     const bool parent_preparation_ready =

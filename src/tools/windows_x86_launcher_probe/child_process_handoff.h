@@ -8,10 +8,12 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "re2dj/exe/pe_image.h"
+#include "re2dj/hle/hardlock/device.h"
 #include "re2dj/hle/hardlock/handshake_response.h"
 #include "re2dj/hle/hardlock/transform_responses.h"
 
@@ -45,6 +47,7 @@ struct BootstrapChildHandoffOptions
     re2dj::hle::hardlock::HardlockHandshakeResponse hardlock_handshake = {};
     bool hardlock_tail_enabled = false;
     std::uint16_t hardlock_tail = 0;
+    std::optional<re2dj::hle::hardlock::HardlockSeeds> hardlock_seeds;
     re2dj::hle::hardlock::HardlockTransformResponseMap hardlock_transform_map;
 };
 

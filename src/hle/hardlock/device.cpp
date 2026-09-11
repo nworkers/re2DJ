@@ -153,34 +153,64 @@ HardlockDeviceResult HardlockDevice::Complete(std::uint32_t control_code,
         // block no row covers passes through untouched rather than being
         // guessed.
         const std::span<std::uint8_t> payload = output.subspan(kHardlockApiDescriptorSize);
-        const HardlockPayloadResponseEntry* const request_row =
-            descriptor ? nullptr
-                       : FindHardlockPayloadResponse(options_.payload_responses, payload);
-        if (request_row != nullptr)
+        if (!descriptor && options_.seeds.has_value())
         {
-            ApplyHardlockPayloadResponse(*request_row, payload);
-            result.transform_payload_mapped = true;
-        }
-        else if (!descriptor && !options_.transform_responses.empty())
-        {
-            for (std::size_t offset = kHardlockApiDescriptorSize; offset < output.size();
-                 offset += kHardlockTransformBlockSize)
+            HardlockEngine engine(*options_.seeds);
+            if (header.function == 0x0009 ||
+                (header.block_count == 7 && header.function == 0x0011 && payload.size() == 56))
             {
-                HardlockTransformBlock block = {};
-                std::copy_n(output.begin() + static_cast<std::ptrdiff_t>(offset),
-                            block.size(),
-                            block.begin());
-                const HardlockTransformBlock* const mapped =
-                    FindHardlockTransformResponse(options_.transform_responses, block);
-                if (mapped == nullptr)
+                std::span<const std::uint8_t, 8> in_block(payload.data() + 40, 8);
+                const auto code_resp = engine.CodePayload(in_block);
+                // Blocks 0, 1, 2 from code response
+                std::copy_n(code_resp.begin(), 24, payload.begin());
+                // Blocks 4, 5 from code response
+                std::copy_n(code_resp.begin() + 32, 16, payload.begin() + 32);
+                result.transform_dynamically_computed = true;
+                result.transform_payload_mapped = true;
+            }
+            else
+            {
+                for (std::size_t offset = kHardlockApiDescriptorSize; offset < output.size();
+                     offset += kHardlockTransformBlockSize)
                 {
-                    ++result.transform_blocks_unmapped;
-                    continue;
+                    std::span<std::uint8_t, 8> block(output.data() + offset, 8);
+                    engine.EncryptBlock(block);
+                    ++result.transform_blocks_mapped;
                 }
-                std::copy_n(mapped->begin(),
-                            mapped->size(),
-                            output.begin() + static_cast<std::ptrdiff_t>(offset));
-                ++result.transform_blocks_mapped;
+                result.transform_dynamically_computed = true;
+            }
+        }
+        else
+        {
+            const HardlockPayloadResponseEntry* const request_row =
+                descriptor ? nullptr
+                           : FindHardlockPayloadResponse(options_.payload_responses, payload);
+            if (request_row != nullptr)
+            {
+                ApplyHardlockPayloadResponse(*request_row, payload);
+                result.transform_payload_mapped = true;
+            }
+            else if (!descriptor && !options_.transform_responses.empty())
+            {
+                for (std::size_t offset = kHardlockApiDescriptorSize; offset < output.size();
+                     offset += kHardlockTransformBlockSize)
+                {
+                    HardlockTransformBlock block = {};
+                    std::copy_n(output.begin() + static_cast<std::ptrdiff_t>(offset),
+                                block.size(),
+                                block.begin());
+                    const HardlockTransformBlock* const mapped =
+                        FindHardlockTransformResponse(options_.transform_responses, block);
+                    if (mapped == nullptr)
+                    {
+                        ++result.transform_blocks_unmapped;
+                        continue;
+                    }
+                    std::copy_n(mapped->begin(),
+                                mapped->size(),
+                                output.begin() + static_cast<std::ptrdiff_t>(offset));
+                    ++result.transform_blocks_mapped;
+                }
             }
         }
         result.bytes_written = output.size();

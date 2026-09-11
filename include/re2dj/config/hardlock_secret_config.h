@@ -18,6 +18,10 @@ struct HardlockSecretMaterial
     // absent and the corresponding option stays unset.
     std::string handshake_response_hex;
     std::string descriptor_tail_hex;
+    std::string module_address_hex;
+    std::string seed1_hex;
+    std::string seed2_hex;
+    std::string seed3_hex;
 };
 
 std::filesystem::path DefaultHardlockSecretConfigPath();

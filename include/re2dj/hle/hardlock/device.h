@@ -7,6 +7,7 @@
 #include <span>
 #include <vector>
 
+#include "re2dj/hle/hardlock/engine.h"
 #include "re2dj/hle/hardlock/handshake_response.h"
 #include "re2dj/hle/hardlock/payload_responses.h"
 #include "re2dj/hle/hardlock/protocol.h"
@@ -40,6 +41,9 @@ struct HardlockDeviceOptions
     std::optional<std::uint16_t> descriptor_tail_word;
     // Clears the descriptor status word so the API call reads as success.
     bool clear_descriptor_status = true;
+    // When configured, dynamically computes transforms and payloads in real time,
+    // taking precedence over static pre-computed maps.
+    std::optional<HardlockSeeds> seeds;
     // Function 0x0e responses keyed by challenge block. Nothing here derives
     // them; a block with no entry passes through unchanged.
     std::vector<HardlockTransformResponseEntry> transform_responses;
@@ -67,6 +71,8 @@ struct HardlockDeviceResult
     std::size_t transform_blocks_unmapped = 0;
     // A request row answered the whole payload; the block counts stay zero.
     bool transform_payload_mapped = false;
+    // The clean-room engine dynamically calculated the transform/payload.
+    bool transform_dynamically_computed = false;
 };
 
 class HardlockDevice

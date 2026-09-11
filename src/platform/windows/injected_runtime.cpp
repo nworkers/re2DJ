@@ -68,6 +68,11 @@ extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_response_450_en
 extern "C" __declspec(dllexport) unsigned char g_re2dj_hardlock_response_450[6] = {};
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_44c_tail_enabled = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_44c_tail_word = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_seeds_enabled = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_seed_module_address = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_seed1 = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_seed2 = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_seed3 = 0;
 // The Hardlock device boundary. Enabled when the launcher has material to
 // apply. It answers the four IOCTLs from values computed outside this
 // repository; nothing here derives a response.
@@ -1502,6 +1507,15 @@ re2dj::hle::hardlock::HardlockDeviceOptions BuildHardlockDeviceOptions()
     {
         options.descriptor_tail_word =
             static_cast<std::uint16_t>(g_re2dj_hardlock_44c_tail_word);
+    }
+    if (g_re2dj_hardlock_seeds_enabled != 0)
+    {
+        re2dj::hle::hardlock::HardlockSeeds seeds;
+        seeds.module_address = static_cast<std::uint16_t>(g_re2dj_hardlock_seed_module_address & 0xffff);
+        seeds.seed1 = static_cast<std::uint16_t>(g_re2dj_hardlock_seed1 & 0xffff);
+        seeds.seed2 = static_cast<std::uint16_t>(g_re2dj_hardlock_seed2 & 0xffff);
+        seeds.seed3 = static_cast<std::uint16_t>(g_re2dj_hardlock_seed3 & 0xffff);
+        options.seeds = seeds;
     }
     const DWORD response_count = g_re2dj_hardlock_transform_response_count;
     constexpr DWORD kEntryStride =

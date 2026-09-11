@@ -149,14 +149,37 @@ bool LoadHardlockProfileMaterial(const std::filesystem::path& path,
         }
         const std::string_view key = Trim(text.substr(0, separator));
         const std::string_view raw_value = Trim(text.substr(separator + 1));
-        if (key != "response450" && key != "tail44c")
+        std::string* target = nullptr;
+        if (key == "response450")
+        {
+            target = &material->handshake_response_hex;
+        }
+        else if (key == "tail44c")
+        {
+            target = &material->descriptor_tail_hex;
+        }
+        else if (key == "module_address")
+        {
+            target = &material->module_address_hex;
+        }
+        else if (key == "seed1")
+        {
+            target = &material->seed1_hex;
+        }
+        else if (key == "seed2")
+        {
+            target = &material->seed2_hex;
+        }
+        else if (key == "seed3")
+        {
+            target = &material->seed3_hex;
+        }
+        else
         {
             *error = "unknown Hardlock configuration key";
             return false;
         }
-        std::string& target = key == "response450" ? material->handshake_response_hex
-                                                   : material->descriptor_tail_hex;
-        if (!target.empty())
+        if (!target->empty())
         {
             *error = "duplicate Hardlock configuration key";
             return false;
@@ -168,7 +191,7 @@ bool LoadHardlockProfileMaterial(const std::filesystem::path& path,
         }
         // The value keeps its file spelling; the launcher option parser is the
         // single place that validates the hex width.
-        target.assign(raw_value);
+        target->assign(raw_value);
     }
     if (!stream.eof())
     {
