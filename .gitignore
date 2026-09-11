@@ -63,6 +63,8 @@
 /overlays/
 /nvram/
 /cfg/
+/cfg*/
+
 
 # Local diagnostics: whole-run captures regenerated on demand.
 /logs/

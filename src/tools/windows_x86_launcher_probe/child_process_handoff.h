@@ -43,6 +43,11 @@ struct BootstrapChildHandoffOptions
     bool hle_d3d3 = false;
     bool fullscreen = false;
     bool hle_directsound = false;
+    bool hle_io_ports = false;
+    std::filesystem::path io_config_path;
+    std::uint32_t io_in_byte_rva = 0;
+    std::uint32_t io_out_byte_rva = 0;
+    bool io_word_width = false;
     bool hardlock_handshake_enabled = false;
     re2dj::hle::hardlock::HardlockHandshakeResponse hardlock_handshake = {};
     bool hardlock_tail_enabled = false;

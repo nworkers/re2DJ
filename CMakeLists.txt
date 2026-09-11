@@ -335,11 +335,13 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/directdraw7_com_facade.cpp
         src/platform/windows/directinput7_com_facade.cpp
         src/platform/windows/display_mode_boundary.cpp
+        src/platform/windows/ez2dancer_keyboard_input.cpp
         src/platform/windows/ez2dj_keyboard_input.cpp
         src/platform/windows/graphics_trace_log.cpp
         src/platform/windows/host_window_shell.cpp
         src/platform/windows/ini_profile_hle.cpp
         src/platform/windows/injected_runtime.cpp
+        src/platform/windows/keyboard_input_common.cpp
         src/platform/windows/message_box_boundary.cpp
         src/platform/windows/window_mode.cpp
         src/platform/windows/winmm_mixer_trace.cpp
@@ -379,6 +381,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         add_executable(re2dj_ez2dj_keyboard_input_test
             tests/unit/ez2dj_keyboard_input_test.cpp
             src/platform/windows/ez2dj_keyboard_input.cpp
+            src/platform/windows/keyboard_input_common.cpp
             tests/unit/temporary_tree.cpp
         )
         target_include_directories(re2dj_ez2dj_keyboard_input_test PRIVATE include tests/unit .)
@@ -389,6 +392,21 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
             PRIVATE re2dj_core re2dj_warnings
         )
         add_test(NAME re2dj_ez2dj_keyboard_input_test COMMAND re2dj_ez2dj_keyboard_input_test)
+
+        add_executable(re2dj_ez2dancer_keyboard_input_test
+            tests/unit/ez2dancer_keyboard_input_test.cpp
+            src/platform/windows/ez2dancer_keyboard_input.cpp
+            src/platform/windows/keyboard_input_common.cpp
+            tests/unit/temporary_tree.cpp
+        )
+        target_include_directories(re2dj_ez2dancer_keyboard_input_test PRIVATE include tests/unit .)
+        target_compile_definitions(re2dj_ez2dancer_keyboard_input_test PRIVATE
+            RE2DJ_VERSION="${RE2DJ_VERSION}"
+        )
+        target_link_libraries(re2dj_ez2dancer_keyboard_input_test
+            PRIVATE re2dj_core re2dj_warnings
+        )
+        add_test(NAME re2dj_ez2dancer_keyboard_input_test COMMAND re2dj_ez2dancer_keyboard_input_test)
     endif()
     add_library(re2dj_windows_original_process_backend STATIC
         src/tools/windows_original_process_probe/iat_verifier.cpp

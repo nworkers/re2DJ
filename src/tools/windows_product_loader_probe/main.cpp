@@ -360,7 +360,7 @@ int main()
         fourth_profile->profile.run_defaults.lptdi.legacy_io_in_rva == 0x000c3817 &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_out_rva == 0x000c384b;
 
-    const bool sixth_io_config_omitted = [&]() {
+    const bool sixth_io_config_supported = [&]() {
         if (sixth_profile == nullptr)
         {
             return false;
@@ -372,11 +372,6 @@ int main()
         options.chd_image = "6th.chd";
         options.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
         options.io_config = "keyboard.ini";
-        const bool rejects_unsupported_io_config =
-            !re2dj::platform::windows::BuildOriginalProcessArguments(
-                options, &arguments, &error) &&
-            error.find("requires a profile with legacy I/O ports") != std::string::npos;
-        options.io_config.clear();
         if (!re2dj::platform::windows::BuildOriginalProcessArguments(
                 options, &arguments, &error))
         {
@@ -389,8 +384,8 @@ int main()
             has_io_config = has_io_config || argument == "--io-config";
             follows_child = follows_child || argument == "--follow-child";
         }
-        return rejects_unsupported_io_config && !has_io_config && follows_child &&
-               !sixth_profile->profile.run_defaults.lptdi.legacy_io_ports;
+        return has_io_config && follows_child &&
+               sixth_profile->profile.run_defaults.lptdi.legacy_io_ports;
     }();
 
     options.target_id = "ez2dj4th";
@@ -477,7 +472,7 @@ int main()
     const bool resolve_iat_slot = TestResolveIatSlot();
     if (!canonical || !custom_gain || !custom_demo_volume || !second_defaults || !audio_trace || !fullscreen ||
         !invalid_gain || !invalid_demo_volume || !io_config || !invalid_lptdi_policy ||
-        !third_defaults || !chd_handoff || !sixth_io_config_omitted || !no_diagnostic_options ||
+        !third_defaults || !chd_handoff || !sixth_io_config_supported || !no_diagnostic_options ||
         !invalid_console_policy || !invalid_material_policy || !rejected || !resolve_iat_slot)
     {
         // Naming the failed checks keeps a policy change from producing an
@@ -496,7 +491,7 @@ int main()
                      invalid_lptdi_policy ? "" : " invalid-lptdi-policy",
                      third_defaults ? "" : " third-defaults",
                      chd_handoff ? "" : " chd-handoff",
-                     sixth_io_config_omitted ? "" : " sixth-io-config-omitted",
+                     sixth_io_config_supported ? "" : " sixth-io-config-supported",
                      no_diagnostic_options ? "" : " no-diagnostic-options",
                      invalid_console_policy ? "" : " invalid-console-policy",
                      invalid_material_policy ? "" : " invalid-material-policy",

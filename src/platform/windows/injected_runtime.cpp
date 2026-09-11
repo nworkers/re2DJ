@@ -24,6 +24,7 @@
 #include "direct3d3_com_facade.h"
 #include "directdraw7_com_facade.h"
 #include "display_mode_boundary.h"
+#include "ez2dancer_keyboard_input.h"
 #include "ez2dj_keyboard_input.h"
 #include "ini_profile_hle.h"
 #include "message_box_boundary.h"
@@ -129,7 +130,8 @@ constexpr char kExitProcessMessage[] = "re2dj:probe:ExitProcess";
 
 re2dj::input::LegacyIoPortBus g_legacy_io_port_bus;
 re2dj::input::Ez2DancerIoPortBus g_dancer_io_port_bus;
-re2dj::platform::windows::Ez2DjKeyboardInput g_keyboard_input;
+re2dj::platform::windows::Ez2DjKeyboardInput g_ez2dj_keyboard_input;
+re2dj::platform::windows::Ez2DancerKeyboardInput g_ez2dancer_keyboard_input;
 volatile LONG g_keyboard_input_state = 0;
 volatile LONG g_vfs_image_trace_count = 0;
 volatile LONG g_vfs_script_trace_count = 0;
@@ -1745,12 +1747,15 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
     const std::uint16_t port = static_cast<std::uint16_t>(exception->ContextRecord->Edx);
     std::uint8_t value = static_cast<std::uint8_t>(exception->ContextRecord->Eax);
     std::uint16_t word_value = static_cast<std::uint16_t>(exception->ContextRecord->Eax);
-    if (is_read && !profile_is_word && g_re2dj_io_config_path[0] != '\0')
+    if (is_read && g_re2dj_io_config_path[0] != '\0')
     {
         if (g_keyboard_input_state == 0)
         {
             std::string error;
-            if (g_keyboard_input.Initialize(g_re2dj_io_config_path, &error))
+            const bool initialized = profile_is_word
+                ? g_ez2dancer_keyboard_input.Initialize(g_re2dj_io_config_path, &error)
+                : g_ez2dj_keyboard_input.Initialize(g_re2dj_io_config_path, &error);
+            if (initialized)
             {
                 InterlockedExchange(&g_keyboard_input_state, 1);
             }
@@ -1763,8 +1768,15 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
         }
         if (g_keyboard_input_state == 1)
         {
-            g_keyboard_input.Poll(&g_legacy_io_port_bus,
-                                 static_cast<std::uint64_t>(GetTickCount()));
+            if (profile_is_word)
+            {
+                g_ez2dancer_keyboard_input.Poll(&g_dancer_io_port_bus);
+            }
+            else
+            {
+                g_ez2dj_keyboard_input.Poll(
+                    &g_legacy_io_port_bus, static_cast<std::uint64_t>(GetTickCount()));
+            }
         }
     }
     bool handled = false;
@@ -1999,6 +2011,20 @@ bool EnsureChdMounted()
 // mapping moves, which keeps unrelated host APIs unaffected.
 std::vector<std::string> g_guest_directory_components;
 
+// Builds a path inside the image-internal product directory. The launcher
+// selects this root from the target profile, while the default keeps the
+// existing EZ2DJ layout for profiles that do not override it.
+std::string ChdPathFromRelative(const std::string& relative)
+{
+    std::string path = g_re2dj_vfs_chd_root;
+    if (!path.empty() && !relative.empty())
+    {
+        path.push_back('/');
+    }
+    path.append(relative);
+    return path;
+}
+
 // Strips whichever root prefix `name` carries and reports whether one was
 // found. A name under the mapped HDD root, or under the drive letter the
 // original used, names the root directly rather than the current directory.
@@ -2098,12 +2124,7 @@ bool ChdRelativePath(const char* name, std::string* relative)
     {
         return false;
     }
-    relative->assign(g_re2dj_vfs_chd_root);
-    if (!relative->empty() && relative->back() != '/')
-    {
-        relative->push_back('/');
-    }
-    relative->append(resolved);
+    *relative = ChdPathFromRelative(resolved);
     return true;
 }
 
@@ -2335,7 +2356,7 @@ bool GuestDirectoryExists(const std::string& relative)
     }
     re2dj::storage::Fat32Entry entry;
     std::string error;
-    return g_chd_volume->Find("EZ2DJ/" + relative, &entry, &error) && entry.directory;
+    return g_chd_volume->Find(ChdPathFromRelative(relative), &entry, &error) && entry.directory;
 }
 
 std::vector<std::string> SplitGuestRelative(const std::string& relative)
@@ -2393,6 +2414,24 @@ void ReportVfsCurrentDirectory(const char* stage,
                   sizeof(message),
                   "re2dj:vfs:current-directory:stage=%.31s:request=%.383s:resolved=%.383s:success=%u\r\n",
                   stage,
+                  requested == nullptr ? "" : requested,
+                  resolved == nullptr ? "" : resolved,
+                  success ? 1U : 0U);
+    AppendVfsTraceMessage(message);
+}
+
+void ReportVfsGetFullPathName(const char* requested,
+                              const char* resolved,
+                              bool success)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || !ClaimVfsOpenTraceBudget())
+    {
+        return;
+    }
+    char message[900] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:get-full-path:request=%.383s:resolved=%.383s:success=%u\r\n",
                   requested == nullptr ? "" : requested,
                   resolved == nullptr ? "" : resolved,
                   success ? 1U : 0U);
@@ -2472,6 +2511,61 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetCurrentDirectoryA(DWORD
     }
     std::memcpy(buffer, path, static_cast<std::size_t>(length) + 1);
     ReportVfsCurrentDirectory("get", path, path, true);
+    SetLastError(ERROR_SUCCESS);
+    return length;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFullPathNameA(
+    LPCSTR file_name,
+    DWORD buffer_length,
+    LPSTR buffer,
+    LPSTR* file_part)
+{
+    if (file_name == nullptr)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    std::string resolved;
+    if (!ResolveGuestRelativePath(file_name, &resolved))
+    {
+        const DWORD result =
+            GetFullPathNameA(file_name, buffer_length, buffer, file_part);
+        ReportVfsGetFullPathName(
+            file_name, buffer != nullptr ? buffer : "<buffer-null>", result != 0);
+        return result;
+    }
+    for (char& ch : resolved)
+    {
+        if (ch == '/')
+        {
+            ch = '\\';
+        }
+    }
+    char full_path[MAX_PATH] = {};
+    if (!JoinRoot(g_re2dj_vfs_hdd_root, resolved.c_str(), full_path))
+    {
+        const DWORD result =
+            GetFullPathNameA(file_name, buffer_length, buffer, file_part);
+        ReportVfsGetFullPathName(
+            file_name, buffer != nullptr ? buffer : "<buffer-null>", result != 0);
+        return result;
+    }
+    const DWORD length = static_cast<DWORD>(std::strlen(full_path));
+    if (buffer == nullptr || buffer_length <= length)
+    {
+        ReportVfsGetFullPathName(file_name, full_path, true);
+        return length + 1;
+    }
+    std::memcpy(buffer, full_path, static_cast<std::size_t>(length) + 1);
+    if (file_part != nullptr)
+    {
+        char* last_slash = std::strrchr(buffer, '\\');
+        char* last_forward = std::strrchr(buffer, '/');
+        char* part = last_slash > last_forward ? last_slash : last_forward;
+        *file_part = part != nullptr ? part + 1 : buffer;
+    }
+    ReportVfsGetFullPathName(file_name, buffer, true);
     SetLastError(ERROR_SUCCESS);
     return length;
 }
@@ -3119,7 +3213,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsFindFirstFileA(
         }
     }
 
-    std::string chd_dir = dir_part.empty() ? "EZ2DJ" : ("EZ2DJ/" + dir_part);
+    const std::string chd_dir = ChdPathFromRelative(dir_part);
 
     std::vector<re2dj::storage::Fat32Entry> matches;
     if (EnsureChdMounted())
@@ -3626,6 +3720,14 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
             {
                 const FARPROC result =
                     reinterpret_cast<FARPROC>(&Re2djVfsGetCurrentDirectoryA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetFullPathNameA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetFullPathNameA);
                 ReportDynamicResolverName(
                     name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
                 return result;

@@ -224,7 +224,7 @@ re2dj --hdd <directory> [options]
                       DirectSound/WINMM 음량 증거를 별도 로그에 기록.
   --fullscreen        Windows에서 monitor 크기 borderless fullscreen 사용.
   --windowed          프로파일의 fullscreen 기본값을 끄기.
-  --io-config <path>  Windows EZ2DJ 키보드 I/O mapping INI.
+  --io-config <path>  선택한 타깃용 Windows 키보드 I/O mapping INI.
   --version           버전 출력.
   --help              도움말 출력.
 ```
@@ -287,9 +287,13 @@ HLE/Hardlock boundary remains a runtime observation item.
 
 *The default is a normal resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. The original 640x480 logical display starts at exactly 2x in both dimensions. Add `--fullscreen` to select fullscreen without changing the original INI.*
 
-키보드 입력은 `config/ez2dj-io.example.ini`를 복사·수정하고 `--io-config <path>`로 주입한다. 옵션을 생략하면 I/O board는 idle 상태를 유지한다.
+키보드 입력은 선택한 제품의 예제 파일을 복사·수정하고 `--io-config <path>`로 주입한다. EZ2DJ는 `config/ez2dj-io.example.ini`, EZ2Dancer 2nd MOVE는 `config/ez2dancer-io.example.ini`를 사용한다. 옵션을 생략하면 I/O board는 idle 상태를 유지한다.
 
-*For keyboard input, copy and edit `config/ez2dj-io.example.ini`, then inject it with `--io-config <path>`. Omitting the option leaves the I/O board idle.*
+*For keyboard input, copy and edit the example for the selected product, then inject it with `--io-config <path>`. EZ2DJ uses `config/ez2dj-io.example.ini`; EZ2Dancer 2nd MOVE uses `config/ez2dancer-io.example.ini`. Omitting the option leaves the I/O board idle.*
+
+```powershell
+.\build\windows-x86\bin\Debug\re2dj.exe ez2d2m --io-config .\config\ez2dancer-io.example.ini
+```
 
 제품은 원본 HDD의 `DemoVolume=0`을 수정하지 않고 title/demo 프로필을 기본 3(0 dB)으로 재정의한다. 원본 프로필을 선택하려면 `--demo-volume 0..3`을 사용한다. 대응 DirectSound 값은 각각 `-10000`, `-2222`, `-1111`, `0`이다. 최종 출력 보정이 별도로 필요할 때만 `--audio-gain-db`를 사용하며 기본값은 0 dB다.
 

@@ -2,10 +2,8 @@
 #include <windows.h>
 
 #include "ez2dj_keyboard_input.h"
+#include "keyboard_input_common.h"
 
-#include <algorithm>
-#include <cctype>
-#include <cstdlib>
 #include <string>
 
 namespace re2dj::platform::windows
@@ -43,71 +41,6 @@ constexpr ButtonBinding kButtonBindings[] = {
     {"p2_pedal", re2dj::input::Ez2DjButton::kPlayer2Pedal},
 };
 
-std::string Upper(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
-        return static_cast<char>(std::toupper(character));
-    });
-    return value;
-}
-
-int ParseKey(const std::string& input)
-{
-    const std::string value = Upper(input);
-    if (value.empty() || value == "NONE") return 0;
-    if (value.size() == 1 && ((value[0] >= 'A' && value[0] <= 'Z') ||
-                              (value[0] >= '0' && value[0] <= '9'))) return value[0];
-    if (value[0] == 'F' && value.size() <= 3)
-    {
-        const int number = std::atoi(value.c_str() + 1);
-        if (number >= 1 && number <= 24) return VK_F1 + number - 1;
-    }
-    if (value.rfind("NUMPAD", 0) == 0 && value.size() == 7 &&
-        value[6] >= '0' && value[6] <= '9') return VK_NUMPAD0 + value[6] - '0';
-    if (value == "TAB") return VK_TAB;
-    if (value == "ENTER") return VK_RETURN;
-    if (value == "SPACE") return VK_SPACE;
-    if (value == "ESCAPE" || value == "ESC") return VK_ESCAPE;
-    if (value == "LSHIFT") return VK_LSHIFT;
-    if (value == "RSHIFT") return VK_RSHIFT;
-    if (value == "SHIFT") return VK_SHIFT;
-    if (value == "LCONTROL" || value == "LCTRL") return VK_LCONTROL;
-    if (value == "RCONTROL" || value == "RCTRL") return VK_RCONTROL;
-    if (value == "CONTROL" || value == "CTRL") return VK_CONTROL;
-    if (value == "LMENU" || value == "LALT") return VK_LMENU;
-    if (value == "RMENU" || value == "RALT") return VK_RMENU;
-    if (value == "ALT") return VK_MENU;
-    if (value == "BACKSPACE" || value == "BACK") return VK_BACK;
-    if (value == "CAPITAL" || value == "CAPSLOCK" || value == "CAPS") return VK_CAPITAL;
-    if (value == "LEFT") return VK_LEFT;
-    if (value == "RIGHT") return VK_RIGHT;
-    if (value == "UP") return VK_UP;
-    if (value == "DOWN") return VK_DOWN;
-    if (value == "DECIMAL") return VK_DECIMAL;
-    if (value == "INSERT") return VK_INSERT;
-    if (value == "DELETE" || value == "DEL") return VK_DELETE;
-    if (value == "HOME") return VK_HOME;
-    if (value == "END") return VK_END;
-    if (value == "PAGEUP" || value == "PGUP" || value == "PRIOR") return VK_PRIOR;
-    if (value == "PAGEDOWN" || value == "PGDN" || value == "NEXT") return VK_NEXT;
-    return -1;
-}
-
-bool ReadKey(const char* path, const char* section, const char* name, int* key, std::string* error)
-{
-    char value[32] = {};
-    GetPrivateProfileStringA(section, name, "NONE", value, sizeof(value), path);
-    *key = ParseKey(value);
-    if (*key >= 0) return true;
-    *error = std::string("unknown key name for ") + section + "." + name + ": " + value;
-    return false;
-}
-
-bool IsPressed(int key)
-{
-    return key != 0 && (GetAsyncKeyState(key) & 0x8000) != 0;
-}
-
 }  // namespace
 
 bool Ez2DjKeyboardInput::Initialize(const char* path, std::string* error)
@@ -119,15 +52,15 @@ bool Ez2DjKeyboardInput::Initialize(const char* path, std::string* error)
     for (const ButtonBinding& binding : kButtonBindings)
     {
         int key = 0;
-        if (!ReadKey(path, "buttons", binding.name, &key, error)) return false;
+        if (!ReadKeyboardKeyBinding(path, "buttons", binding.name, &key, error)) return false;
         button_keys_[static_cast<std::size_t>(binding.button)] = key;
     }
     constexpr const char* kTurntableNames[] = {
         "p1_negative", "p1_positive", "p2_negative", "p2_positive"};
     for (std::size_t index = 0; index < turntable_keys_.size(); ++index)
     {
-        if (!ReadKey(path, "turntables", kTurntableNames[index],
-                     &turntable_keys_[index], error)) return false;
+        if (!ReadKeyboardKeyBinding(path, "turntables", kTurntableNames[index],
+                                    &turntable_keys_[index], error)) return false;
     }
     const UINT step = GetPrivateProfileIntA("turntables", "step", 4, path);
     if (step < 1 || step > 32)
@@ -145,14 +78,16 @@ void Ez2DjKeyboardInput::Poll(re2dj::input::LegacyIoPortBus* bus, std::uint64_t 
     if (bus == nullptr) return;
     for (std::size_t index = 0; index < button_keys_.size(); ++index)
     {
-        bus->SetButton(static_cast<re2dj::input::Ez2DjButton>(index), IsPressed(button_keys_[index]));
+        bus->SetButton(static_cast<re2dj::input::Ez2DjButton>(index),
+                       IsKeyboardKeyPressed(button_keys_[index]));
     }
     if (last_turntable_update_ms_ != 0 && now_ms - last_turntable_update_ms_ < 8) return;
     last_turntable_update_ms_ = now_ms;
     for (std::size_t player = 0; player < 2; ++player)
     {
-        const int direction = static_cast<int>(IsPressed(turntable_keys_[player * 2 + 1])) -
-                              static_cast<int>(IsPressed(turntable_keys_[player * 2]));
+        const int direction =
+            static_cast<int>(IsKeyboardKeyPressed(turntable_keys_[player * 2 + 1])) -
+            static_cast<int>(IsKeyboardKeyPressed(turntable_keys_[player * 2]));
         turntable_positions_[player] = static_cast<std::uint8_t>(
             turntable_positions_[player] + direction * turntable_step_);
         bus->SetTurntable(static_cast<re2dj::input::Ez2DjPlayer>(player),

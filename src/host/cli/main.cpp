@@ -171,6 +171,16 @@ bool PrepareChdStaging(const re2dj::storage::Fat32Volume& volume,
         *error = executable_relative_path + ": " + materialize_error;
         return false;
     }
+    if (profile_id == "ez2dj6th")
+    {
+        const std::string child_rel = "EZ2DJ/EZ2DJ6th.EXE";
+        const std::filesystem::path child_output = root / "EZ2DJ" / "EZ2DJ6th.EXE";
+        if (!volume.MaterializeFile(child_rel, child_output, &materialize_error))
+        {
+            *error = child_rel + ": " + materialize_error;
+            return false;
+        }
+    }
     *staging_root = root;
     return true;
 }
@@ -232,7 +242,7 @@ void PrintUsage()
         "                      Record bounded DirectSound/WINMM volume evidence.\n"
         "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
         "  --windowed          Override a profile's fullscreen default on Windows.\n"
-        "  --io-config <path>  Windows EZ2DJ keyboard I/O mapping INI.\n"
+        "  --io-config <path>  Windows keyboard I/O mapping INI for the selected target.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
         "\n"

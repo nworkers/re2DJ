@@ -405,6 +405,7 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                        "_Re2djVfsGetFileType@4",
                                        "_Re2djVfsSetCurrentDirectoryA@4",
                                        "_Re2djVfsGetCurrentDirectoryA@8",
+                                       "_Re2djVfsGetFullPathNameA@16",
                                        "_Re2djVfsFindFirstFileA@8",
                                        "_Re2djVfsFindNextFileA@8",
                                        "_Re2djVfsFindClose@4"};
@@ -417,6 +418,7 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                        "GetFileType",
                                        "SetCurrentDirectoryA",
                                        "GetCurrentDirectoryA",
+                                       "GetFullPathNameA",
                                        "FindFirstFileA",
                                        "FindNextFileA",
                                        "FindClose"};
@@ -570,6 +572,41 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                               "g_re2dj_hardlock_payload_response_count",
                               payload_records,
                               options.hardlock_transform_map.payloads.size());
+    }
+    if (options.hle_io_ports)
+    {
+        prepared = prepared &&
+                   find_export("g_re2dj_io_word_width", &rva) &&
+                   WriteRemoteU32(result->process,
+                                  result->runtime_base + rva,
+                                  options.io_word_width ? 1u : 0u,
+                                  error) &&
+                   (options.io_config_path.empty() ||
+                    (find_export("g_re2dj_io_config_path", &rva) &&
+                     WriteRemoteAnsi(result->process,
+                                     result->runtime_base + rva,
+                                     options.io_config_path.string(),
+                                     error))) &&
+                   find_export("g_re2dj_io_image_base", &rva) &&
+                   WriteRemoteU32(result->process,
+                                  result->runtime_base + rva,
+                                  static_cast<std::uint32_t>(result->image_base),
+                                  error) &&
+                   find_export("g_re2dj_io_in_byte_rva", &rva) &&
+                   WriteRemoteU32(result->process,
+                                  result->runtime_base + rva,
+                                  options.io_in_byte_rva,
+                                  error) &&
+                   find_export("g_re2dj_io_out_byte_rva", &rva) &&
+                   WriteRemoteU32(result->process,
+                                  result->runtime_base + rva,
+                                  options.io_out_byte_rva,
+                                  error) &&
+                   find_export("g_re2dj_hle_io_ports", &rva) &&
+                   WriteRemoteU32(result->process,
+                                  result->runtime_base + rva,
+                                  1,
+                                  error);
     }
     if (options.message_box)
     {

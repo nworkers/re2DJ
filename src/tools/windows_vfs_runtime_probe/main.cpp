@@ -47,6 +47,8 @@ extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsWriteFile(
     HANDLE handle, LPCVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped);
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle);
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsSetCurrentDirectoryA(LPCSTR name);
+extern "C" __declspec(dllimport) DWORD WINAPI Re2djVfsGetFullPathNameA(
+    LPCSTR file_name, DWORD buffer_length, LPSTR buffer, LPSTR* file_part);
 extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsFindFirstFileA(
     LPCSTR name, LPWIN32_FIND_DATAA data);
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsFindNextFileA(
@@ -508,6 +510,16 @@ int main()
                            "cannot close guest-relative directory enumeration") &&
                      passed;
         }
+        char full_buf[MAX_PATH] = {};
+        LPSTR file_part = nullptr;
+        const DWORD full_len =
+            Re2djVfsGetFullPathNameA("Title.str", MAX_PATH, full_buf, &file_part);
+        passed = Check(full_len > 0, "GetFullPathNameA failed") &&
+                 Check(file_part != nullptr && std::strcmp(file_part, "Title.str") == 0,
+                       "GetFullPathNameA file_part is incorrect") &&
+                 Check(std::strstr(full_buf, "System\\Title\\Title.str") != nullptr,
+                       "GetFullPathNameA did not include guest current directory") &&
+                 passed;
     }
     passed = Check(Re2djVfsSetCurrentDirectoryA("D:\\ez2dj") != FALSE,
                    "cannot restore guest root after enumeration") &&

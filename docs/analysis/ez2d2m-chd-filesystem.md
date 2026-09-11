@@ -1067,3 +1067,33 @@ Taken with the `cc` filler in the payload, which is uninitialised stack, the sec
 If that holds, nothing written into the payload blocks changes what the guest reads, which would also explain why varying blocks 0 to 5 produces no observable difference. re2DJ has no path that writes guest memory.
 
 **This is inferred.** That corrupting the pointer is fatal shows only that the guest uses the address; whether it reads or writes there was not distinguished.
+
+## 2026-09-12 프로필별 CHD 디렉터리 확인 수정
+
+### 확인됨
+
+사용자 제공 `ez2d2m` 실행 로그에서 VFS가 `ez2dancer`를 CHD 내부 제품 루트로 주입받았지만,
+`GuestDirectoryExists`와 `FindFirstFileA` 경로만 `EZ2DJ/`를 하드코딩하고 있었습니다.
+그 결과 `system/opening`과 `system/title`의 게스트 현재 디렉터리 설정이 실패하고,
+상대 경로인 `opening.scr`과 `1P_Press.str`가 제품 루트에서 검색되었습니다.
+
+`g_re2dj_vfs_chd_root`를 공통으로 사용하는 경로 조립으로 수정한 뒤에는 두 디렉터리 설정이
+성공하고 제목 화면 자산이 `chd://ez2dancer/system/title/...`에서 열렸습니다. 수정 후 실행은
+즉시 `ExitProcess`로 끝나지 않고 자산 로딩을 계속했습니다. 최초 Hardlock 보호 코드의
+`0xc0000005` 관찰은 남아 있지만, 이번 경로 수정 이후 실행을 중단시키지 않았습니다.
+
+### English
+
+## 2026-09-12 Profile-specific CHD directory checks fixed
+
+### Confirmed
+
+The user-supplied `ez2d2m` run showed that the VFS received `ez2dancer` as the image-internal
+product root, but only the `GuestDirectoryExists` and `FindFirstFileA` paths still hard-coded
+`EZ2DJ/`. As a result, guest current-directory changes to `system/opening` and `system/title`
+failed, and the relative files `opening.scr` and `1P_Press.str` were searched at the product root.
+
+After changing path construction to use `g_re2dj_vfs_chd_root`, both directory changes succeed
+and title assets open from `chd://ez2dancer/system/title/...`. The corrected run no longer exits
+immediately through `ExitProcess` and continues loading assets. The first `0xc0000005` observed
+inside the Hardlock-protected code remains, but it did not stop the corrected run.

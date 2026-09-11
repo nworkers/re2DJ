@@ -9392,7 +9392,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         PrintUsage();
         return 1;
     }
-    if (!io_config_path.empty() && !run_detached)
+    if (!io_config_path.empty() && !run_detached && !follow_child_process)
     {
         PrintUsage();
         return 1;
@@ -9609,7 +9609,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     const bool child_device_mock_lptdi = follow_child_process && device_mock_lptdi;
     const bool child_device_mock_wts_console_session =
         follow_child_process && device_mock_wts_console_session;
-    const bool child_hardlock_device = follow_child_process && hardlock_device;
+    const bool child_hle_io_ports = follow_child_process && hle_io_ports;
     const bool child_hle_message_box = follow_child_process && hle_message_box;
     const bool child_hle_d3d3 = follow_child_process && hle_d3d3;
     const bool child_fullscreen = follow_child_process && fullscreen;
@@ -10343,6 +10343,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                        "_Re2djVfsGetFileType@4",
                                        "_Re2djVfsSetCurrentDirectoryA@4",
                                        "_Re2djVfsGetCurrentDirectoryA@8",
+                                       "_Re2djVfsGetFullPathNameA@16",
                                        "_Re2djVfsFindFirstFileA@8",
                                        "_Re2djVfsFindNextFileA@8",
                                        "_Re2djVfsFindClose@4"};
@@ -10355,6 +10356,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                        "GetFileType",
                                        "SetCurrentDirectoryA",
                                        "GetCurrentDirectoryA",
+                                       "GetFullPathNameA",
                                        "FindFirstFileA",
                                        "FindNextFileA",
                                        "FindClose"};
@@ -11691,7 +11693,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.device_mock_lptdi = child_device_mock_lptdi;
         child_follow_options.device_mock_wts_console_session =
             child_device_mock_wts_console_session;
-        child_follow_options.hardlock_device = child_hardlock_device;
+        child_follow_options.hardlock_device = follow_child_process && hardlock_device;
         child_follow_options.hardlock_transform_input_trace =
             hardlock_transform_input_trace;
         child_follow_options.hardlock_transform_input_dump_path =
@@ -11700,6 +11702,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.hle_d3d3 = child_hle_d3d3;
         child_follow_options.fullscreen = child_fullscreen;
         child_follow_options.hle_directsound = child_hle_directsound;
+        child_follow_options.hle_io_ports = child_hle_io_ports;
+        child_follow_options.io_config_path = io_config_path;
+        child_follow_options.io_in_byte_rva = static_cast<std::uint32_t>(io_policy.in_byte_rva);
+        child_follow_options.io_out_byte_rva = static_cast<std::uint32_t>(io_policy.out_byte_rva);
+        child_follow_options.io_word_width = io_policy.word_width;
         child_follow_options.hardlock_handshake_enabled =
             !device_mock_hardlock_450_response_hex.empty();
         child_follow_options.hardlock_handshake = hardlock_450_response;

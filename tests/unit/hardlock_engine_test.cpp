@@ -104,6 +104,11 @@ void TestDynamicDevicePayload(re2dj::test::Context& context)
     std::array<std::uint8_t, 8> input_block{0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04};
     // block 5 sits at offset 40 in payload (offset 256 + 40 in req)
     std::copy(input_block.begin(), input_block.end(), req.begin() + re2dj::hle::hardlock::kHardlockApiDescriptorSize + 40);
+    // Put test DWORDs into block 3 of payload (offset 24 and 28)
+    const std::uint32_t init_b3_dw0 = 0x10203040;
+    const std::uint32_t init_b3_dw1 = 0x50607080;
+    std::memcpy(req.data() + re2dj::hle::hardlock::kHardlockApiDescriptorSize + 24, &init_b3_dw0, 4);
+    std::memcpy(req.data() + re2dj::hle::hardlock::kHardlockApiDescriptorSize + 28, &init_b3_dw1, 4);
 
     std::vector<std::uint8_t> resp = req;
     auto trans_res = device.Complete(re2dj::hle::hardlock::kHardlockIoctlTransform, req, resp);
@@ -119,6 +124,16 @@ void TestDynamicDevicePayload(re2dj::test::Context& context)
     std::array<std::uint8_t, 8> exp_b0{};
     std::copy_n(expected_code.begin(), 8, exp_b0.begin());
     RE2DJ_CHECK(context, b0 == exp_b0);
+
+    // Block 3 should be initial DWORDs + expected_code DWORDs
+    std::uint32_t resp_b3_dw0 = 0, resp_b3_dw1 = 0;
+    std::uint32_t exp_b3_dw0 = 0, exp_b3_dw1 = 0;
+    std::memcpy(&resp_b3_dw0, resp.data() + re2dj::hle::hardlock::kHardlockApiDescriptorSize + 24, 4);
+    std::memcpy(&resp_b3_dw1, resp.data() + re2dj::hle::hardlock::kHardlockApiDescriptorSize + 28, 4);
+    std::memcpy(&exp_b3_dw0, expected_code.data() + 24, 4);
+    std::memcpy(&exp_b3_dw1, expected_code.data() + 28, 4);
+    RE2DJ_CHECK_EQ(context, resp_b3_dw0, init_b3_dw0 + exp_b3_dw0);
+    RE2DJ_CHECK_EQ(context, resp_b3_dw1, init_b3_dw1 + exp_b3_dw1);
 }
 
 void TestSeedConfigAndArtifact(re2dj::test::Context& context)

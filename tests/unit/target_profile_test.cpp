@@ -408,7 +408,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         "EZ2DJ 6th Trax",
         "roms/ez2dj6th",
         "EZ2DJ/EZ2DJ.EXE",
-        false,
+        true,
         0,
         0,
         true,

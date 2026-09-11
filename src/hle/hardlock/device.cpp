@@ -1,6 +1,7 @@
 #include "re2dj/hle/hardlock/device.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 
 #include "re2dj/hle/hardlock/api_descriptor.h"
@@ -163,6 +164,17 @@ HardlockDeviceResult HardlockDevice::Complete(std::uint32_t control_code,
                 const auto code_resp = engine.CodePayload(in_block);
                 // Blocks 0, 1, 2 from code response
                 std::copy_n(code_resp.begin(), 24, payload.begin());
+                // Block 3: add two 32-bit little-endian DWORDs from code response
+                std::uint32_t base0 = 0, add0 = 0;
+                std::uint32_t base1 = 0, add1 = 0;
+                std::memcpy(&base0, payload.data() + 24, 4);
+                std::memcpy(&add0, code_resp.data() + 24, 4);
+                std::memcpy(&base1, payload.data() + 28, 4);
+                std::memcpy(&add1, code_resp.data() + 28, 4);
+                base0 += add0;
+                base1 += add1;
+                std::memcpy(payload.data() + 24, &base0, 4);
+                std::memcpy(payload.data() + 28, &base1, 4);
                 // Blocks 4, 5 from code response
                 std::copy_n(code_resp.begin() + 32, 16, payload.begin() + 32);
                 result.transform_dynamically_computed = true;

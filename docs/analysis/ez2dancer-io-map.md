@@ -277,3 +277,21 @@ The end state `0x0f07` is exactly bits 0, 1, 2, 8, 9, 10 and 11. **That is preci
 The sequence does **not** settle polarity. Setting one bit at a time reads equally as "light one lamp after another" (active high) or "start from all lit and switch them off one by one" (active low). The implementation follows the public description and treats them as active low, but this observation neither supports nor contradicts that.
 
 Which lamp each bit drives is likewise unresolved: the set of seven positions is confirmed, not their assignment.
+
+---
+
+## 2026-09-12 키보드 설정 연결 / Keyboard configuration connection
+
+### 한국어
+
+- **확인됨 — 구현:** `--io-config`로 전달한 절대 경로가 word-wide 프로필에서도 `Ez2DancerKeyboardInput`에 도달하며, 각 16비트 입력 read 직전에 키 상태를 `Ez2DancerIoPortBus`에 반영합니다.
+- **확인됨 — 실행:** `config/ez2dancer-io.example.ini`를 지정한 실행 로그 `20260912-034218-362.vfs.log`에서 `0x300`, `0x302`, `0x304`, `0x306` read가 모두 `width=16`, `handled=1`로 기록됐습니다. idle 값은 각각 `0xf000`, `0xf000`, `0x0000`, `0x00ff`였습니다.
+- **추정:** 예제의 pad·sensor·TEST·SERVICE 이름은 현재 `Ez2DancerIoBoard`의 추정 bit 배치를 사람이 설정할 수 있는 이름으로 노출한 것입니다. 이 작업이 실제 캐비닛 배선을 새로 확정하지는 않습니다.
+- **미확정:** coin의 port와 bit는 계속 확인되지 않았으므로 예제 파일과 키보드 adapter에 포함하지 않았습니다.
+
+### English
+
+- **Confirmed — implementation:** the absolute path passed with `--io-config` now reaches `Ez2DancerKeyboardInput` for word-wide profiles, and keyboard state is applied to `Ez2DancerIoPortBus` immediately before each 16-bit input read.
+- **Confirmed — runtime:** with `config/ez2dancer-io.example.ini`, run log `20260912-034218-362.vfs.log` records reads from `0x300`, `0x302`, `0x304`, and `0x306` as `width=16` and `handled=1`. Their idle values were `0xf000`, `0xf000`, `0x0000`, and `0x00ff` respectively.
+- **Inferred:** the example's pad, sensor, TEST, and SERVICE names expose the inferred bit layout already modeled by `Ez2DancerIoBoard`; this work does not newly confirm cabinet wiring.
+- **Unresolved:** the coin port and bit remain unknown, so neither the example nor the keyboard adapter exposes coin.

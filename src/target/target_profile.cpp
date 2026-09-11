@@ -451,8 +451,9 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "responses are not confirmed.");
             entry.profile.run_defaults.follow_child_process = true;
             entry.profile.run_defaults.run_detached = false;
-            entry.profile.run_defaults.lptdi.legacy_io_ports = false;
-            entry.profile.run_defaults.lptdi.legacy_io_ports_default = false;
+            entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
+            entry.profile.run_defaults.lptdi.legacy_io_port_range_fallback = true;
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0;
             entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0;
             table.push_back(std::move(entry));
