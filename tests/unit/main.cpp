@@ -23,9 +23,11 @@ int main()
     RunHardlockApiDescriptorTests(context);
     RunHardlockProtocolTests(context);
     RunHardlockDeviceTests(context);
+    RunHardlockPayloadResponsesTests(context);
     RunHardlockTransformResponsesTests(context);
     RunHardlockMaterialConfigTests(context);
     RunEz2DjIoBoardTests(context);
+    RunEz2DancerIoBoardTests(context);
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);
     RunLegacyTextureTests(context);

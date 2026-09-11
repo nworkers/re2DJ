@@ -46,8 +46,8 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         return false;
     }
     if (options.profile_defaults.lptdi.legacy_io_ports &&
-        options.profile_defaults.lptdi.legacy_io_in_byte_rva == 0 &&
-        options.profile_defaults.lptdi.legacy_io_out_byte_rva == 0 &&
+        options.profile_defaults.lptdi.legacy_io_in_rva == 0 &&
+        options.profile_defaults.lptdi.legacy_io_out_rva == 0 &&
         !options.profile_defaults.lptdi.legacy_io_port_range_fallback)
     {
         *error = "profile enables legacy I/O without a confirmed helper RVA";

@@ -57,6 +57,35 @@ f11007c2771cc1ff     0a9d43ce77b1e6f8
 
 *A challenge missing from the map passes through unchanged in re2DJ and increments an `unmapped` count in the trace, so a partial map never passes silently.*
 
+### 1.1 요청 행 — 2026-09-11 확장
+
+[작업 247](20260911-247-hardlock-payload-response-rows.md)이 같은 파일에 **요청 행**을 추가했습니다. 기존 16자리 행은 뜻이 바뀌지 않으므로 기존 매핑 파일은 그대로 읽힙니다.
+
+```
+# block row (API_CRYPT): one block in, one block out
+62eaaf2b89f004aa     3f1c88d0a4e5b201
+# request row (API_CODE): N blocks, "??" = unspecified byte
+????????????????...0102030405060708...    a0a1a2a3a4a5a6a7...????????????????
+```
+
+| 규칙 | 내용 |
+| --- | --- |
+| 행 종류 | 두 토큰이 모두 16자면 블록 행, 그 외에는 요청 행 |
+| 요청 행 길이 | 두 토큰의 길이가 같고 16의 배수, 2–16블록 |
+| 요청 행 바이트 | 두 hex 문자 또는 `??`. `?a` 같은 반쪽 지정은 오류 |
+| 입력의 `??` | 비교하지 않음 |
+| 출력의 `??` | 게스트 바이트 유지 |
+| 지정 바이트 | 입력과 출력 모두 최소 한 바이트 지정. 전부 `??`면 오류 |
+| 모호한 요청 행 | **오류**. 블록 수가 같고 둘 다 지정한 모든 위치의 바이트가 같은 두 행 |
+| 적용 | 맞는 요청 행이 있으면 그 요청은 payload 전체를 행으로 처리하고 블록 조회를 하지 않음 |
+| 용량 | 블록 행 256, 요청 행 8. 넘으면 launcher가 실행을 거절 |
+
+요청 행의 입력으로 쓸 원자료는 `--hardlock-transform-input-dump <path>`가 남기는 파일입니다. 요청마다 `# function=0x.... block_count=N` 머리 줄 뒤에 N개의 16자리 블록이 옵니다. `ez2d2m`에서는 7블록 `0x0011` 요청의 일부 블록이 실행마다 바뀌므로, 생성기는 그런 바이트를 입력에서 `??`로 두어야 합니다.
+
+*[Task 247](20260911-247-hardlock-payload-response-rows.md) adds **request rows** to the same file. Sixteen-digit rows keep their meaning, so existing map files are read unchanged. When both tokens are sixteen characters the row is a block row; otherwise it is a request row whose tokens have equal length, a multiple of sixteen, covering 2 to 16 blocks. Each request-row byte is two hex digits or `??` — a half-specified byte such as `?a` is an error — where `??` in the input is not compared and in the output keeps the guest's byte. Input and output must each specify at least one byte. Two request rows with the same block count that agree on every position both specify are **an error**. A matching request row handles the whole payload and no block lookup is made for that request. Capacity is 256 block rows and 8 request rows, beyond which the launcher refuses to run.*
+
+*The raw input for a request row is the file `--hardlock-transform-input-dump <path>` writes: each request is a `# function=0x.... block_count=N` header line followed by N sixteen-digit blocks. On `ez2d2m` some blocks of the seven-block `0x0011` request change between runs, so a generator must leave those bytes `??` in the input.*
+
 ---
 
 ## 2. Challenge 목록 파일 — 생성기 입력

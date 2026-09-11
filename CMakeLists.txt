@@ -226,10 +226,13 @@ add_library(re2dj_core STATIC
     src/hle/hardlock/api_descriptor.cpp
     src/hle/hardlock/protocol.cpp
     src/hle/hardlock/device.cpp
+    src/hle/hardlock/payload_responses.cpp
     src/hle/hardlock/transform_responses.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/ez2dj_io_board.cpp
+    src/input/ez2dancer_io_board.cpp
+    src/input/ez2dancer_io_port_bus.cpp
     src/input/legacy_io_port_bus.cpp
     src/exe/code_scan.cpp
     src/exe/immediate_scan.cpp
@@ -315,9 +318,12 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/hle/hardlock/api_descriptor.cpp
         src/hle/hardlock/protocol.cpp
         src/hle/hardlock/device.cpp
+        src/hle/hardlock/payload_responses.cpp
         src/hle/hardlock/transform_responses.cpp
         src/device/lptdi_challenge_response.cpp
         src/input/ez2dj_io_board.cpp
+        src/input/ez2dancer_io_board.cpp
+        src/input/ez2dancer_io_port_bus.cpp
         src/input/legacy_io_port_bus.cpp
         src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
@@ -462,12 +468,14 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/code_region_score_test.cpp
         tests/unit/execution_backend_test.cpp
         tests/unit/ez2dj_io_board_test.cpp
+        tests/unit/ez2dancer_io_board_test.cpp
         tests/unit/guest_path_test.cpp
         tests/unit/hardlock_material_config_test.cpp
         tests/unit/hardlock_handshake_response_test.cpp
         tests/unit/hardlock_protocol_test.cpp
         tests/unit/hardlock_api_descriptor_test.cpp
         tests/unit/hardlock_device_test.cpp
+        tests/unit/hardlock_payload_responses_test.cpp
         tests/unit/hardlock_transform_responses_test.cpp
         tests/unit/code_scan_test.cpp
         tests/unit/immediate_scan_test.cpp

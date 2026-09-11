@@ -524,24 +524,39 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
     }
     if (!options.hardlock_transform_map.empty())
     {
-        std::vector<std::uint8_t> packed;
-        packed.reserve(options.hardlock_transform_map.size() * 16);
-        for (const auto& map_entry : options.hardlock_transform_map)
-        {
-            packed.insert(packed.end(), map_entry.input.begin(), map_entry.input.end());
-            packed.insert(packed.end(), map_entry.output.begin(), map_entry.output.end());
-        }
-        prepared = prepared && find_export("g_re2dj_hardlock_transform_responses", &rva) &&
+        std::vector<std::uint8_t> block_rows;
+        std::vector<std::uint8_t> payload_records;
+        re2dj::hle::hardlock::PackHardlockTransformResponseMap(
+            options.hardlock_transform_map, &block_rows, &payload_records);
+        const auto write_rows = [&](const char* rows_export,
+                                    const char* count_export,
+                                    const std::vector<std::uint8_t>& packed,
+                                    std::size_t count) -> bool {
+            if (count == 0)
+            {
+                return true;
+            }
+            return find_export(rows_export, &rva) &&
                    WriteRemoteBytes(result->process,
                                     result->runtime_base + rva,
                                     packed.data(),
                                     packed.size(),
                                     error) &&
-                   find_export("g_re2dj_hardlock_transform_response_count", &rva) &&
+                   find_export(count_export, &rva) &&
                    WriteRemoteU32(result->process,
                                   result->runtime_base + rva,
-                                  static_cast<std::uint32_t>(options.hardlock_transform_map.size()),
+                                  static_cast<std::uint32_t>(count),
                                   error);
+        };
+        prepared = prepared &&
+                   write_rows("g_re2dj_hardlock_transform_responses",
+                              "g_re2dj_hardlock_transform_response_count",
+                              block_rows,
+                              options.hardlock_transform_map.blocks.size()) &&
+                   write_rows("g_re2dj_hardlock_payload_responses",
+                              "g_re2dj_hardlock_payload_response_count",
+                              payload_records,
+                              options.hardlock_transform_map.payloads.size());
     }
     if (options.message_box)
     {

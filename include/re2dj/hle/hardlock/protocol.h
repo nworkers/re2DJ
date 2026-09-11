@@ -1,6 +1,7 @@
 #ifndef RE2DJ_HLE_HARDLOCK_PROTOCOL_H_
 #define RE2DJ_HLE_HARDLOCK_PROTOCOL_H_
 
+#include <cstddef>
 #include <cstdint>
 
 namespace re2dj::hle::hardlock
@@ -12,6 +13,9 @@ constexpr std::uint32_t kHardlockIoctlInitialize = 0x9c402468;
 constexpr std::uint32_t kHardlockIoctlHandshake = 0x9c402450;
 constexpr std::uint32_t kHardlockIoctlDescriptor = 0x9c40244c;
 constexpr std::uint32_t kHardlockIoctlTransform = 0x9c402458;
+
+// A transform payload follows the descriptor as block_count eight-byte blocks.
+constexpr std::size_t kHardlockTransformBlockSize = 8;
 
 enum class HardlockRequestKind
 {

@@ -248,11 +248,11 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                         second->profile.run_defaults.lptdi.legacy_io_ports_default);
             RE2DJ_CHECK_EQ(
                 context,
-                second->profile.run_defaults.lptdi.legacy_io_in_byte_rva,
+                second->profile.run_defaults.lptdi.legacy_io_in_rva,
                 std::uintptr_t{0x000782d7});
             RE2DJ_CHECK_EQ(
                 context,
-                second->profile.run_defaults.lptdi.legacy_io_out_byte_rva,
+                second->profile.run_defaults.lptdi.legacy_io_out_rva,
                 std::uintptr_t{0x0007832b});
             RE2DJ_CHECK(context, !second->profile.run_defaults.demo_volume.has_value());
             RE2DJ_CHECK_EQ(
@@ -370,11 +370,14 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            profile->profile.run_defaults.lptdi.legacy_io_ports_default,
                            legacy_io);
             RE2DJ_CHECK_EQ(context,
-                           profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva,
+                           profile->profile.run_defaults.lptdi.legacy_io_in_rva,
                            expected_in_rva);
             RE2DJ_CHECK_EQ(context,
-                           profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva,
+                           profile->profile.run_defaults.lptdi.legacy_io_out_rva,
                            expected_out_rva);
+            // Every EZ2DJ board is byte-wide; only EZ2Dancer is not.
+            RE2DJ_CHECK(context, profile->profile.run_defaults.lptdi.legacy_io_width ==
+                                     re2dj::target::LegacyIoWidth::kByte);
             RE2DJ_CHECK(context, profile->profile.run_defaults.lptdi.device_mock_enabled);
             RE2DJ_CHECK_EQ(context,
                            profile->profile.run_defaults.lptdi.device_mock_path_prefix,
@@ -447,13 +450,16 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, !profile.run_defaults.hle_command_line);
             RE2DJ_CHECK(context, !profile.run_defaults.hle_windows_directory);
             RE2DJ_CHECK(context, !profile.run_defaults.demo_volume.has_value());
-            // The EZ2Dancer board is 16-bit-wide over a different port band
-            // than the byte-wide bus serves.
-            RE2DJ_CHECK(context, !profile.run_defaults.lptdi.legacy_io_ports);
-            RE2DJ_CHECK(context, !profile.run_defaults.lptdi.legacy_io_ports_default);
-            RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.legacy_io_in_byte_rva,
-                           std::uint32_t{0});
-            RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.legacy_io_out_byte_rva,
+            // The EZ2Dancer board is word-wide, and its output helper is
+            // confirmed from the guest's own privileged fault. The input
+            // helper has not been reached yet, so it stays zero.
+            RE2DJ_CHECK(context, profile.run_defaults.lptdi.legacy_io_ports);
+            RE2DJ_CHECK(context, profile.run_defaults.lptdi.legacy_io_ports_default);
+            RE2DJ_CHECK(context, profile.run_defaults.lptdi.legacy_io_width ==
+                                     re2dj::target::LegacyIoWidth::kWord);
+            RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.legacy_io_out_rva,
+                           std::uint32_t{0x0000b565});
+            RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.legacy_io_in_rva,
                            std::uint32_t{0});
             RE2DJ_CHECK(context, profile.run_defaults.lptdi.device_mock_enabled);
             RE2DJ_CHECK_EQ(context, profile.run_defaults.lptdi.device_mock_path_prefix,
@@ -530,10 +536,10 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             // identically, so it stays off rather than being copied from 3rd.
             RE2DJ_CHECK(context, !canonical->run_defaults.hle_wts_active_console);
             RE2DJ_CHECK_EQ(context,
-                           canonical->run_defaults.lptdi.legacy_io_in_byte_rva,
+                           canonical->run_defaults.lptdi.legacy_io_in_rva,
                            std::uintptr_t{0x00038987});
             RE2DJ_CHECK_EQ(context,
-                           canonical->run_defaults.lptdi.legacy_io_out_byte_rva,
+                           canonical->run_defaults.lptdi.legacy_io_out_rva,
                            std::uintptr_t{0x000389ab});
             // The CHD boots the game from a StartUp shortcut targeting
             // C:\ez2dj\Ez2DJ.exe, so the drive letter is C - the extracted
@@ -642,10 +648,10 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, third->run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context, third->run_defaults.lptdi.legacy_io_ports_default);
             RE2DJ_CHECK_EQ(context,
-                           third->run_defaults.lptdi.legacy_io_in_byte_rva,
+                           third->run_defaults.lptdi.legacy_io_in_rva,
                            0x000a9887u);
             RE2DJ_CHECK_EQ(context,
-                           third->run_defaults.lptdi.legacy_io_out_byte_rva,
+                           third->run_defaults.lptdi.legacy_io_out_rva,
                            0x000a98bbu);
             RE2DJ_CHECK(context,
                         !third->run_defaults.lptdi.legacy_io_port_range_fallback);

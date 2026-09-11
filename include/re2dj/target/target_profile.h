@@ -24,6 +24,16 @@ enum class HddInputKind
     kMameChd,
 };
 
+// Operand width of one product's raw port instructions. This is a property of
+// the cabinet's I/O board, so it belongs to the profile: EZ2DJ boards are read
+// and written a byte at a time, while the EZ2Dancer board is word-wide and its
+// instructions therefore carry a 0x66 operand-size prefix.
+enum class LegacyIoWidth
+{
+    kByte,
+    kWord,
+};
+
 // LPTDI and legacy I/O policy for one executable profile. An empty or false
 // setting means that the profile does not claim that capability.
 struct TargetLptdiPolicy
@@ -32,13 +42,16 @@ struct TargetLptdiPolicy
     bool legacy_io_ports = false;
     // Adds raw I/O HLE to the product facade's normal arguments.
     bool legacy_io_ports_default = false;
-    // Allows byte I/O trapping at supported board ports when this executable's
-    // exact helper RVA has not yet been confirmed.
+    // Allows I/O trapping at supported board ports when this executable's exact
+    // helper RVA has not yet been confirmed.
     bool legacy_io_port_range_fallback = false;
-    // Main-image RVA of the confirmed byte-input helper. Zero means unknown.
-    std::uint32_t legacy_io_in_byte_rva = 0;
-    // Main-image RVA of the confirmed byte-output helper. Zero means unknown.
-    std::uint32_t legacy_io_out_byte_rva = 0;
+    LegacyIoWidth legacy_io_width = LegacyIoWidth::kByte;
+    // Main-image RVA of the confirmed input helper. Zero means unknown. The
+    // address is that of the instruction's first byte, which for a word-wide
+    // helper is its 0x66 prefix rather than the opcode.
+    std::uint32_t legacy_io_in_rva = 0;
+    // Main-image RVA of the confirmed output helper. Zero means unknown.
+    std::uint32_t legacy_io_out_rva = 0;
     // Case-insensitive prefix for the synthetic Win32 device path.
     std::string device_mock_path_prefix;
     // Allows the diagnostic synthetic LPTDI device boundary for this profile.

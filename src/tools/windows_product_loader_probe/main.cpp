@@ -170,8 +170,8 @@ int main()
         !first_profile->profile.run_defaults.hle_wts_active_console &&
         first_profile->profile.run_defaults.lptdi.legacy_io_ports &&
         first_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
-        first_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x00038987 &&
-        first_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0x000389ab;
+        first_profile->profile.run_defaults.lptdi.legacy_io_in_rva == 0x00038987 &&
+        first_profile->profile.run_defaults.lptdi.legacy_io_out_rva == 0x000389ab;
 
     options.profile_defaults.audio_gain_db = 12.0f;
     const bool custom_gain =
@@ -211,9 +211,9 @@ int main()
         }
         return arguments.size() == 19 && arguments[3] == "--target" &&
                arguments[4] == "ez2dj2nd" && !has_demo_volume &&
-               second_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva ==
+               second_profile->profile.run_defaults.lptdi.legacy_io_in_rva ==
                    0x000782d7 &&
-               second_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva ==
+               second_profile->profile.run_defaults.lptdi.legacy_io_out_rva ==
                    0x0007832b &&
                !second_profile->profile.run_defaults.demo_volume.has_value();
     }();
@@ -317,8 +317,8 @@ int main()
                !has_demo_volume && has_io_ports && !has_io_port_range && has_lptdi_path &&
                has_lptdi_state && third_profile->profile.run_defaults.lptdi.legacy_io_ports &&
                third_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
-               third_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x000a9887 &&
-               third_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0x000a98bb &&
+               third_profile->profile.run_defaults.lptdi.legacy_io_in_rva == 0x000a9887 &&
+               third_profile->profile.run_defaults.lptdi.legacy_io_out_rva == 0x000a98bb &&
                !third_profile->profile.run_defaults.lptdi.legacy_io_port_range_fallback &&
                third_profile->profile.run_defaults.lptdi.device_mock_enabled &&
                third_profile->profile.run_defaults.lptdi.device_mock_path_prefix ==
@@ -357,8 +357,8 @@ int main()
         arguments[17] == "--device-mock-wts-console-session" &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_ports &&
         fourth_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
-        fourth_profile->profile.run_defaults.lptdi.legacy_io_in_byte_rva == 0x000c3817 &&
-        fourth_profile->profile.run_defaults.lptdi.legacy_io_out_byte_rva == 0x000c384b;
+        fourth_profile->profile.run_defaults.lptdi.legacy_io_in_rva == 0x000c3817 &&
+        fourth_profile->profile.run_defaults.lptdi.legacy_io_out_rva == 0x000c384b;
 
     const bool sixth_io_config_omitted = [&]() {
         if (sixth_profile == nullptr)
@@ -433,8 +433,8 @@ int main()
         re2dj::platform::windows::OriginalProcessOptions console_options = options;
         console_options.profile_defaults.lptdi.legacy_io_ports = false;
         console_options.profile_defaults.lptdi.legacy_io_ports_default = false;
-        console_options.profile_defaults.lptdi.legacy_io_in_byte_rva = 0;
-        console_options.profile_defaults.lptdi.legacy_io_out_byte_rva = 0;
+        console_options.profile_defaults.lptdi.legacy_io_in_rva = 0;
+        console_options.profile_defaults.lptdi.legacy_io_out_rva = 0;
         console_options.profile_defaults.lptdi.device_mock_enabled = false;
         console_options.profile_defaults.lptdi.device_mock_path_prefix.clear();
         // Cleared so this isolates the console policy: Hardlock material also
@@ -453,8 +453,8 @@ int main()
         re2dj::platform::windows::OriginalProcessOptions material_options = options;
         material_options.profile_defaults.lptdi.legacy_io_ports = false;
         material_options.profile_defaults.lptdi.legacy_io_ports_default = false;
-        material_options.profile_defaults.lptdi.legacy_io_in_byte_rva = 0;
-        material_options.profile_defaults.lptdi.legacy_io_out_byte_rva = 0;
+        material_options.profile_defaults.lptdi.legacy_io_in_rva = 0;
+        material_options.profile_defaults.lptdi.legacy_io_out_rva = 0;
         material_options.profile_defaults.lptdi.device_mock_enabled = false;
         material_options.profile_defaults.lptdi.device_mock_path_prefix.clear();
         material_options.profile_defaults.hle_wts_active_console = false;

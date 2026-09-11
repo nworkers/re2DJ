@@ -45,8 +45,7 @@ struct BootstrapChildHandoffOptions
     re2dj::hle::hardlock::HardlockHandshakeResponse hardlock_handshake = {};
     bool hardlock_tail_enabled = false;
     std::uint16_t hardlock_tail = 0;
-    std::vector<re2dj::hle::hardlock::HardlockTransformResponseEntry>
-        hardlock_transform_map;
+    re2dj::hle::hardlock::HardlockTransformResponseMap hardlock_transform_map;
 };
 
 struct BootstrapChildHandoffResult

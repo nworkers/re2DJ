@@ -111,3 +111,9 @@ The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, 
 **Inferred:** its cabinet I/O is 16-bit-wide over ports `0x300` to `0x30c` rather than EZ2DJ's byte-wide `0x100` to `0x106`. The evidence is a single public implementation and was not verified against the original. **Unresolved:** this executable's raw-I/O helper RVAs, its Hardlock response and descriptor, and whether it runs at all.
 
 The detailed evidence is in [ez2d2m CHD filesystem and executable observations](analysis/ez2d2m-chd-filesystem.md) and [the EZ2Dancer I/O port map](analysis/ez2dancer-io-map.md).
+
+## 2026-09-11 The two kinds of `ez2d2m` Hardlock transform
+
+**Confirmed:** the protection sends two kinds of transform — eleven one-block `function=0x000e` requests and one seven-block `function=0x0011` request. The first eleven carry identical values on two machines. In the `0x0011` request only block 5 is identical in every capture; blocks 0, 1 and 6 move with the re2DJ runtime's load address, and blocks 2 to 4 differ between machines.
+
+**Inferred:** by 2EZConfig-V2's high-level contract, consulted for facts only, `0x000e` is `API_CRYPT` and `0x0011` is `API_CODE`. `API_CODE` computes once from the second-to-last block — block 5 — and writes several places in the payload, so its answer is a function of the whole request. The response table gained request rows to match ([design 247](design/20260911-247-hardlock-payload-response-rows.md)). **Unresolved:** a valid `0x0011` answer.

@@ -1,6 +1,7 @@
 #include "re2dj/hle/hardlock/transform_responses.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace re2dj::hle::hardlock
 {
@@ -65,24 +66,83 @@ std::string_view NextToken(std::string_view line, std::size_t* cursor)
     return line.substr(begin, *cursor - begin);
 }
 
-std::string DescribeLine(std::size_t line_number, const char* reason)
+std::string DescribeLine(std::size_t line_number, std::string_view reason)
 {
     return "Hardlock transform response line " + std::to_string(line_number) + ": " +
-           reason;
+           std::string(reason);
+}
+
+bool ParseBlockRow(std::string_view input_token,
+                   std::string_view output_token,
+                   std::size_t line_number,
+                   HardlockTransformResponseMap* map,
+                   std::string* error)
+{
+    HardlockTransformResponseEntry entry;
+    if (!ParseBlock(input_token, &entry.input))
+    {
+        *error = DescribeLine(line_number, "input must be 16 hex digits");
+        return false;
+    }
+    if (!ParseBlock(output_token, &entry.output))
+    {
+        *error = DescribeLine(line_number, "output must be 16 hex digits");
+        return false;
+    }
+    if (FindHardlockTransformResponse(map->blocks, entry.input) != nullptr)
+    {
+        *error = DescribeLine(line_number, "duplicate input block");
+        return false;
+    }
+    map->blocks.push_back(entry);
+    return true;
+}
+
+bool ParseRequestRow(std::string_view input_token,
+                     std::string_view output_token,
+                     std::size_t line_number,
+                     HardlockTransformResponseMap* map,
+                     std::string* error)
+{
+    HardlockPayloadResponseEntry entry;
+    std::string pattern_error;
+    if (!ParseHardlockPayloadPattern(
+            input_token, &entry.input, &entry.input_mask, &pattern_error))
+    {
+        *error = DescribeLine(line_number, "input: " + pattern_error);
+        return false;
+    }
+    if (!ParseHardlockPayloadPattern(
+            output_token, &entry.output, &entry.output_mask, &pattern_error))
+    {
+        *error = DescribeLine(line_number, "output: " + pattern_error);
+        return false;
+    }
+    entry.block_count = entry.input.size() / kHardlockTransformBlockSize;
+    for (const HardlockPayloadResponseEntry& existing : map->payloads)
+    {
+        if (HardlockPayloadResponsesOverlap(existing, entry))
+        {
+            *error = DescribeLine(line_number,
+                                  "request row can match the same payload as an earlier row");
+            return false;
+        }
+    }
+    map->payloads.push_back(std::move(entry));
+    return true;
 }
 
 }  // namespace
 
-bool ParseHardlockTransformResponseTable(
-    std::string_view text,
-    std::vector<HardlockTransformResponseEntry>* entries,
-    std::string* error)
+bool ParseHardlockTransformResponseMap(std::string_view text,
+                                       HardlockTransformResponseMap* map,
+                                       std::string* error)
 {
-    if (entries == nullptr || error == nullptr)
+    if (map == nullptr || error == nullptr)
     {
         return false;
     }
-    std::vector<HardlockTransformResponseEntry> parsed;
+    HardlockTransformResponseMap parsed;
     std::size_t line_number = 0;
     std::size_t position = 0;
     while (position <= text.size())
@@ -106,30 +166,34 @@ bool ParseHardlockTransformResponseTable(
             return false;
         }
 
-        HardlockTransformResponseEntry entry;
-        if (!ParseBlock(input_token, &entry.input))
+        // Existing maps consist entirely of sixteen-digit rows, so their
+        // reading is unchanged.
+        const bool block_row =
+            input_token.size() == kHexDigitsPerBlock && output_token.size() == kHexDigitsPerBlock;
+        if (block_row)
         {
-            *error = DescribeLine(line_number, "input must be 16 hex digits");
+            if (!ParseBlockRow(input_token, output_token, line_number, &parsed, error))
+            {
+                return false;
+            }
+            continue;
+        }
+        if (input_token.size() != output_token.size())
+        {
+            *error = DescribeLine(line_number, "input and output must be the same length");
             return false;
         }
-        if (!ParseBlock(output_token, &entry.output))
+        if (!ParseRequestRow(input_token, output_token, line_number, &parsed, error))
         {
-            *error = DescribeLine(line_number, "output must be 16 hex digits");
             return false;
         }
-        if (FindHardlockTransformResponse(parsed, entry.input) != nullptr)
-        {
-            *error = DescribeLine(line_number, "duplicate input block");
-            return false;
-        }
-        parsed.push_back(entry);
     }
     if (parsed.empty())
     {
         *error = "Hardlock transform response map contains no entries";
         return false;
     }
-    *entries = std::move(parsed);
+    *map = std::move(parsed);
     error->clear();
     return true;
 }
@@ -146,6 +210,31 @@ const HardlockTransformBlock* FindHardlockTransformResponse(
         }
     }
     return nullptr;
+}
+
+void PackHardlockTransformResponseMap(const HardlockTransformResponseMap& map,
+                                      std::vector<std::uint8_t>* block_rows,
+                                      std::vector<std::uint8_t>* payload_records)
+{
+    if (block_rows == nullptr || payload_records == nullptr)
+    {
+        return;
+    }
+    block_rows->clear();
+    block_rows->reserve(map.blocks.size() * kHardlockTransformBlockSize * 2);
+    for (const HardlockTransformResponseEntry& entry : map.blocks)
+    {
+        block_rows->insert(block_rows->end(), entry.input.begin(), entry.input.end());
+        block_rows->insert(block_rows->end(), entry.output.begin(), entry.output.end());
+    }
+    payload_records->assign(map.payloads.size() * kHardlockPayloadRecordSize, 0);
+    for (std::size_t index = 0; index < map.payloads.size(); ++index)
+    {
+        PackHardlockPayloadResponse(
+            map.payloads[index],
+            std::span<std::uint8_t>(*payload_records)
+                .subspan(index * kHardlockPayloadRecordSize, kHardlockPayloadRecordSize));
+    }
 }
 
 }  // namespace re2dj::hle::hardlock

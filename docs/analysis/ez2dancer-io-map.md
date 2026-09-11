@@ -204,3 +204,76 @@ Every other port: inputs `0x300`, `0x302`, `0x304` and `0x306` and outputs `0x30
 #### What this means for the profile
 
 `legacy_io_ports` stays off for the `ez2d2m` profile. Putting the confirmed helper address `0x0000b565` into today's `legacy_io_in_byte_rva` or `legacy_io_out_byte_rva` would be **wrong**: that path assumes byte-width semantics and a one-byte instruction, so it would hand a byte value to a 16-bit instruction and advance `EIP` incorrectly. The address is recorded here for use when a 16-bit boundary exists.
+
+---
+
+## 2026-09-10 word 경계 가동 후의 관측 / Observations once the word boundary ran
+
+### 한국어
+
+[16비트 폭 legacy I/O 경계](../design/20260910-244-word-width-legacy-io.md)를 구현하고 `ez2d2m`을 실행해 얻은 결과입니다. 경계가 port 접근을 기록하므로, 이제 게스트가 실제로 무엇을 건드리는지 볼 수 있습니다.
+
+#### 확인됨 — 트랩이 성립합니다
+
+RVA `0x0000b565`의 privileged instruction fault가 사라지고 실행이 이어집니다. 게스트는 crash 대신 `.protect`의 RVA `0x0043843a`에서 `ExitProcess(0)`으로 종료합니다. Hardlock 요청도 31건(initialize 1, handshake 4, descriptor 15, transform 11)으로 늘었습니다.
+
+#### 확인됨 — 게스트가 실제로 건드리는 port
+
+한 실행에서 관측된 port 접근 전부입니다.
+
+| 방향 | 폭 | port | 횟수 |
+| --- | --- | --- | --- |
+| write | 16 | `0x030a` | 8 |
+
+**읽기는 한 번도 없습니다.** 종료 전까지 게스트는 입력 port를 전혀 읽지 않으므로, 입력 helper의 주소는 여전히 관측되지 않았습니다. 프로파일의 `legacy_io_in_rva`가 0으로 남는 이유입니다.
+
+`0x308`과 `0x30c`도 이 실행에서는 쓰이지 않았습니다. 두 port의 의미는 계속 미확정입니다.
+
+#### 확인됨 — `0x30a`의 bit 집합
+
+여덟 번의 쓰기는 값이 누적되는 순서열입니다.
+
+| 순서 | 값 | 새로 켜진 bit |
+| --- | --- | --- |
+| 1 | `0x0004` | b2 |
+| 2 | `0x0104` | b8 |
+| 3 | `0x0304` | b9 |
+| 4 | `0x0704` | b10 |
+| 5 | `0x0f04` | b11 |
+| 6 | `0x0f05` | b0 |
+| 7 | `0x0f07` | b1 |
+| 8 | `0x0f07` | (없음) |
+
+최종값 `0x0f07`은 bit 0, 1, 2, 8, 9, 10, 11입니다. **이는 이 문서가 추정으로 기록한 캐비닛 조명 7개의 bit 집합과 정확히 일치하며, 그 밖의 bit는 하나도 쓰이지 않습니다.** 공개 구현과 무관하게 원본 자신이 이 7개 위치만 사용한다는 것이 확인됐습니다.
+
+#### 미확정 — 극성
+
+이 순서열은 **극성을 정하지 않습니다.** 한 번에 하나씩 bit를 세우는 동작은 "램프를 하나씩 켠다"(active-high)로도, "모두 켜진 상태에서 하나씩 끈다"(active-low)로도 읽힙니다. 구현은 공개 구현을 따라 active-low로 두었지만, 이 관측은 그것을 뒷받침하지도 반박하지도 않습니다.
+
+각 bit가 **어느** 램프인지도 미확정입니다. 확인된 것은 7개 위치의 집합이지 그 배정이 아닙니다.
+
+### English
+
+These are the results of implementing [the word-width legacy I/O boundary](../design/20260910-244-word-width-legacy-io.md) and running `ez2d2m`. The boundary records port accesses, so what the guest really touches is now visible.
+
+#### Confirmed — the trap holds
+
+The privileged-instruction fault at RVA `0x0000b565` is gone and execution continues. Instead of crashing, the guest ends by calling `ExitProcess(0)` from RVA `0x0043843a` inside `.protect`, and its Hardlock traffic grows to 31 requests: 1 initialize, 4 handshakes, 15 descriptors and 11 transforms.
+
+#### Confirmed — which ports the guest actually touches
+
+Every port access observed in a run is eight 16-bit writes to `0x030a`, and nothing else.
+
+**There is not one read.** The guest never reads an input port before it exits, so the input helper's address remains unobserved — which is why the profile's `legacy_io_in_rva` stays zero. `0x308` and `0x30c` were not written either, so both remain unresolved.
+
+#### Confirmed — the bit set of `0x030a`
+
+The eight writes are a cumulative sequence: `0x0004`, `0x0104`, `0x0304`, `0x0704`, `0x0f04`, `0x0f05`, `0x0f07`, `0x0f07` — setting bits 2, 8, 9, 10, 11, 0 and 1 in that order and then repeating the final value.
+
+The end state `0x0f07` is exactly bits 0, 1, 2, 8, 9, 10 and 11. **That is precisely the seven-bit cabinet-light set this document recorded by inference, and no other bit is ever written.** The original itself therefore confirms that these seven positions are the ones in use, independently of the public implementation.
+
+#### Unresolved — the polarity
+
+The sequence does **not** settle polarity. Setting one bit at a time reads equally as "light one lamp after another" (active high) or "start from all lit and switch them off one by one" (active low). The implementation follows the public description and treats them as active low, but this observation neither supports nor contradicts that.
+
+Which lamp each bit drives is likewise unresolved: the set of seven positions is confirmed, not their assignment.

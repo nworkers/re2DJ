@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <cstdio>
 #include <filesystem>
@@ -127,7 +128,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -2818,6 +2819,9 @@ struct LegacyIoTrapPolicy
     std::uintptr_t in_byte_rva = 0;
     std::uintptr_t out_byte_rva = 0;
     bool port_range_fallback = false;
+    // True when the profile's board is word-wide, so its port instructions
+    // carry a 0x66 prefix and are two bytes long.
+    bool word_width = false;
 };
 
 enum class IoPortTrapResult
@@ -8626,6 +8630,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     std::string device_mock_hardlock_44c_tail_hex;
     bool hardlock_device = false;
     bool hardlock_transform_input_trace = false;
+    bool hardlock_reject_function_enabled = false;
+    std::uint16_t hardlock_reject_function = 0;
     std::filesystem::path hardlock_transform_input_dump_path;
     std::string hardlock_transform_map_path;
     std::filesystem::path hardlock_descriptor_dump_path;
@@ -8964,6 +8970,27 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             hle_vfs = true;
             inject_runtime = true;
             software_breakpoint = true;
+        }
+        else if (option == "--hardlock-reject-function" && index + 1 < argc)
+        {
+            const std::string value = argv[++index];
+            int base = 10;
+            std::size_t start = 0;
+            if (value.size() > 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X'))
+            {
+                base = 16;
+                start = 2;
+            }
+            char* end = nullptr;
+            const unsigned long parsed =
+                std::strtoul(value.c_str() + start, &end, base);
+            if (end == nullptr || *end != '\0' || parsed > 0xffff)
+            {
+                std::fprintf(stderr, "{\"error\":\"invalid --hardlock-reject-function\"}\n");
+                return 1;
+            }
+            hardlock_reject_function_enabled = true;
+            hardlock_reject_function = static_cast<std::uint16_t>(parsed);
         }
         else if (option == "--hardlock-descriptor-dump" && index + 1 < argc)
         {
@@ -9415,7 +9442,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     re2dj::device::LptdiTargetState device_target_state = {};
     re2dj::hle::hardlock::HardlockHandshakeResponse hardlock_450_response = {};
     std::uint16_t hardlock_44c_tail_word = 0;
-    std::vector<re2dj::hle::hardlock::HardlockTransformResponseEntry> hardlock_transform_map;
+    re2dj::hle::hardlock::HardlockTransformResponseMap hardlock_transform_map;
     // Deferred until the target is known, because a profile default may fill
     // these in from cfg after the command line has been read.
     const auto parse_hardlock_material = [&]() -> bool {
@@ -9448,10 +9475,27 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             }
             const std::string map_text((std::istreambuf_iterator<char>(map_stream)),
                                        std::istreambuf_iterator<char>());
-            if (!re2dj::hle::hardlock::ParseHardlockTransformResponseTable(
+            if (!re2dj::hle::hardlock::ParseHardlockTransformResponseMap(
                     map_text, &hardlock_transform_map, &error))
             {
                 std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
+                return false;
+            }
+            // The runtime holds fixed-size arrays; a larger map would be
+            // written past them or ignored there as a whole.
+            if (hardlock_transform_map.blocks.size() >
+                    re2dj::hle::hardlock::kHardlockTransformBlockRowCapacity ||
+                hardlock_transform_map.payloads.size() >
+                    re2dj::hle::hardlock::kHardlockPayloadRecordCapacity)
+            {
+                std::fprintf(stderr,
+                             "{\"error\":\"Hardlock transform map exceeds runtime capacity\","
+                             "\"blocks\":%zu,\"block_capacity\":%zu,"
+                             "\"payloads\":%zu,\"payload_capacity\":%zu}\n",
+                             hardlock_transform_map.blocks.size(),
+                             re2dj::hle::hardlock::kHardlockTransformBlockRowCapacity,
+                             hardlock_transform_map.payloads.size(),
+                             re2dj::hle::hardlock::kHardlockPayloadRecordCapacity);
                 return false;
             }
         }
@@ -9648,9 +9692,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     const LegacyIoTrapPolicy io_policy = {
-        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_in_byte_rva),
-        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_out_byte_rva),
-        hle_io_port_range_fallback};
+        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_in_rva),
+        static_cast<std::uintptr_t>(target->run_defaults.lptdi.legacy_io_out_rva),
+        hle_io_port_range_fallback,
+        target->run_defaults.lptdi.legacy_io_width ==
+            re2dj::target::LegacyIoWidth::kWord};
     if (device_mock_lptdi && !target->run_defaults.lptdi.device_mock_enabled)
     {
         std::fprintf(stderr, "{\"error\":\"LPTDI device mock is not configured for this target\"}\\n");
@@ -10310,6 +10356,20 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::filesystem::path vfs_trace_path = diagnostic_log.path();
         vfs_trace_path.replace_extension(".vfs.log");
         std::uint32_t guest_root_rva = 0;
+        std::uint32_t chd_root_rva = 0;
+        // The product's directory inside the image. It is a property of the
+        // image, not of EZ2DJ, so it comes from the profile's own executable
+        // path: ez2d2m lives under "ez2dancer", and a hard-coded "EZ2DJ" made
+        // every CHD lookup for it miss.
+        std::string profile_chd_root;
+        {
+            const std::string& image_executable = target->executable_relative_path;
+            const std::size_t slash = image_executable.find_last_of('/');
+            if (slash != std::string::npos)
+            {
+                profile_chd_root = image_executable.substr(0, slash);
+            }
+        }
         // The diagnostic stream is JSON and this is the only value in it that
         // carries Win32 separators.
         std::string guest_root_json;
@@ -10329,6 +10389,13 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                        runtime_base + guest_root_rva,
                                        profile_guest_root,
                                        &error) &&
+                       (profile_chd_root.empty() ||
+                        (re2dj::platform::windows::FindPe32ExportRva(
+                             runtime_path, "g_re2dj_vfs_chd_root", &chd_root_rva, &error) &&
+                         WriteRemoteAnsi(child.hProcess,
+                                         runtime_base + chd_root_rva,
+                                         profile_chd_root,
+                                         &error))) &&
                        re2dj::platform::windows::FindPe32ExportRva(
                            runtime_path, "g_re2dj_vfs_overlay_root", &overlay_root_rva, &error) &&
                        re2dj::platform::windows::FindPe32ExportRva(
@@ -10646,48 +10713,82 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                     "{\"event\":\"hardlock_transform_input_dump\",\"enabled\":true}");
             }
         }
-        if (vfs_prepared && !hardlock_transform_map.empty())
+        if (vfs_prepared && hardlock_reject_function_enabled)
         {
-            constexpr std::size_t kEntryStride =
-                re2dj::hle::hardlock::kHardlockTransformBlockSize * 2;
-            std::vector<unsigned char> packed;
-            packed.reserve(hardlock_transform_map.size() * kEntryStride);
-            for (const re2dj::hle::hardlock::HardlockTransformResponseEntry& map_entry :
-                 hardlock_transform_map)
-            {
-                packed.insert(packed.end(), map_entry.input.begin(), map_entry.input.end());
-                packed.insert(
-                    packed.end(), map_entry.output.begin(), map_entry.output.end());
-            }
-            std::uint32_t map_rva = 0;
-            std::uint32_t count_rva = 0;
+            std::uint32_t value_rva = 0;
+            std::uint32_t enabled_rva = 0;
             vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                runtime_path,
-                               "g_re2dj_hardlock_transform_responses",
-                               &map_rva,
+                               "g_re2dj_hardlock_reject_function",
+                               &value_rva,
                                &error) &&
                            re2dj::platform::windows::FindPe32ExportRva(
                                runtime_path,
-                               "g_re2dj_hardlock_transform_response_count",
-                               &count_rva,
+                               "g_re2dj_hardlock_reject_function_enabled",
+                               &enabled_rva,
                                &error) &&
-                           WriteRemoteBytes(child.hProcess,
-                                            runtime_base + map_rva,
-                                            packed.data(),
-                                            packed.size(),
-                                            &error) &&
-                           WriteRemoteU32(
-                               child.hProcess,
-                               runtime_base + count_rva,
-                               static_cast<std::uint32_t>(hardlock_transform_map.size()),
-                               &error);
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + value_rva,
+                                          hardlock_reject_function,
+                                          &error) &&
+                           WriteRemoteU32(child.hProcess,
+                                          runtime_base + enabled_rva,
+                                          1,
+                                          &error);
             if (vfs_prepared)
             {
-                // Only the entry count is recorded; the blocks themselves stay
+                RecordDiagnostic(
+                    "{\"event\":\"hardlock_reject_function\",\"function\":%u}",
+                    static_cast<unsigned>(hardlock_reject_function));
+            }
+        }
+        if (vfs_prepared && !hardlock_transform_map.empty())
+        {
+            std::vector<std::uint8_t> block_rows;
+            std::vector<std::uint8_t> payload_records;
+            re2dj::hle::hardlock::PackHardlockTransformResponseMap(
+                hardlock_transform_map, &block_rows, &payload_records);
+            const auto write_rows = [&](const char* rows_export,
+                                        const char* count_export,
+                                        const std::vector<std::uint8_t>& packed,
+                                        std::size_t count) -> bool {
+                if (count == 0)
+                {
+                    return true;
+                }
+                std::uint32_t rows_rva = 0;
+                std::uint32_t count_rva = 0;
+                return re2dj::platform::windows::FindPe32ExportRva(
+                           runtime_path, rows_export, &rows_rva, &error) &&
+                       re2dj::platform::windows::FindPe32ExportRva(
+                           runtime_path, count_export, &count_rva, &error) &&
+                       WriteRemoteBytes(child.hProcess,
+                                        runtime_base + rows_rva,
+                                        packed.data(),
+                                        packed.size(),
+                                        &error) &&
+                       WriteRemoteU32(child.hProcess,
+                                      runtime_base + count_rva,
+                                      static_cast<std::uint32_t>(count),
+                                      &error);
+            };
+            vfs_prepared = write_rows("g_re2dj_hardlock_transform_responses",
+                                      "g_re2dj_hardlock_transform_response_count",
+                                      block_rows,
+                                      hardlock_transform_map.blocks.size()) &&
+                           write_rows("g_re2dj_hardlock_payload_responses",
+                                      "g_re2dj_hardlock_payload_response_count",
+                                      payload_records,
+                                      hardlock_transform_map.payloads.size());
+            if (vfs_prepared)
+            {
+                // Only the row counts are recorded; the bytes themselves stay
                 // out of the diagnostic log.
                 RecordDiagnostic(
-                    "{\"event\":\"hardlock_transform_map\",\"entries\":%u}",
-                    static_cast<unsigned>(hardlock_transform_map.size()));
+                    "{\"event\":\"hardlock_transform_map\",\"entries\":%u,"
+                    "\"payload_entries\":%u}",
+                    static_cast<unsigned>(hardlock_transform_map.blocks.size()),
+                    static_cast<unsigned>(hardlock_transform_map.payloads.size()));
             }
         }
         for (const re2dj::device::LptdiResponseEntry& profile_entry :
@@ -10818,6 +10919,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         std::uint32_t image_base_rva = 0;
         std::uint32_t in_byte_rva = 0;
         std::uint32_t out_byte_rva = 0;
+        std::uint32_t word_width_rva = 0;
         std::uint32_t config_path_rva = 0;
         io_runtime_prepared = re2dj::platform::windows::FindPe32ExportRva(
                                   runtime_path,
@@ -10839,6 +10941,15 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                   "g_re2dj_io_out_byte_rva",
                                   &out_byte_rva,
                                   &error) &&
+                              re2dj::platform::windows::FindPe32ExportRva(
+                                  runtime_path,
+                                  "g_re2dj_io_word_width",
+                                  &word_width_rva,
+                                  &error) &&
+                              WriteRemoteU32(child.hProcess,
+                                             runtime_base + word_width_rva,
+                                             io_policy.word_width ? 1u : 0u,
+                                             &error) &&
                               (io_config_path.empty() ||
                                (re2dj::platform::windows::FindPe32ExportRva(
                                     runtime_path,

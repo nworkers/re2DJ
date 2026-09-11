@@ -19,6 +19,7 @@
 | [web-x86-execution-engines.md](web-x86-execution-engines.md) | Web용 x86 실행 엔진 후보, 라이선스와 제한된 검증 결정 |
 | [windows-wow64-process-introspection.md](windows-wow64-process-introspection.md) | suspended WOW64 process의 주 이미지 주소를 검증하는 제한된 방법 |
 | [hasp4-parallel-dongle.md](hasp4-parallel-dongle.md) | HASP4 병렬포트 API 형태, Hardlock 구분, Win32 IOCTL 반환 계약 |
+| [hardlock-api-functions.md](hardlock-api-functions.md) | Hardlock `HL_API` function 코드와 `API_CRYPT`·`API_CODE` transform 모양 (GPL 소스 사실 대조) |
 | [legacy-direct3d-immediate-mode.md](legacy-direct3d-immediate-mode.md) | DirectDraw에서 얻는 구형 Direct3D COM interface, hardware device 검색, proxy HLE 경계 |
 | [legacy-directdraw-surface-gdi.md](legacy-directdraw-surface-gdi.md) | DirectDraw surface 생성, GDI GetDC/ReleaseDC interop와 HLE pixel-storage 계약 |
 | [legacy-directsound-buffer.md](legacy-directsound-buffer.md) | DirectSound secondary buffer 생성, Lock/Unlock sample upload와 HRESULT 경계 |

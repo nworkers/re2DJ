@@ -95,8 +95,8 @@ BuiltInTargetProfile MakeChdCompatibilityProfile(std::string_view id,
     entry.profile.run_defaults.hle_directsound = true;
     entry.profile.run_defaults.lptdi.legacy_io_ports = true;
     entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
-    entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000c3817;
-    entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000c384b;
+    entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000c3817;
+    entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000c384b;
     entry.profile.run_defaults.lptdi.device_mock_enabled = true;
     entry.profile.run_defaults.lptdi.device_mock_path_prefix =
         "\\\\.\\FEnteDev";
@@ -160,8 +160,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // are the opcode bytes rather than the helper entry points. The
             // 1st SE .gtide values that stood here before belong to a
             // different build and never matched.
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x00035757;
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x0003577b;
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x00035757;
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x0003577b;
             // Confirmed by the device trace: it tries \\.\NTICE, fails with
             // error 123, then opens \\.\FEnteDev. It never opens \\.\LPTDI, so
             // the LPTDI target-state probe has nothing to answer here and is
@@ -211,10 +211,10 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             // Confirmed by the first 2nd runtime privileged-instruction fault.
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000782d7;
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000782d7;
             // Confirmed by the follow-up 2nd runtime privileged-instruction
             // fault at the OUT DX,AL helper.
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x0007832b;
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x0007832b;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\LPTDI";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.run_detached = true;
@@ -277,8 +277,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // plaintext .text. They prepare cleanly here, but this build dies
             // in the Hardlock transform loop before reaching them, so their
             // correctness for this executable is still unconfirmed.
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x00038987;
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000389ab;
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x00038987;
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000389ab;
             // Confirmed by the device trace: this build opens \\.\NTICE, fails,
             // then opens \\.\FEnteDev. It never opens the \\.\LPTDI device the
             // extracted .gtide build used, so the LPTDI target-state probe has
@@ -341,8 +341,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000a9887;
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000a98bb;
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000a9887;
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000a98bb;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             // This zero-state probe is separate from 1st SE and is not a
@@ -385,11 +385,11 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000c3817;
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000c3817;
             // The byte-width out helper, observed as the faulting instruction
             // of an untrapped `out dx, al` once graphics initialization got
             // past device creation.
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000c384b;
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000c384b;
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix =
                 "\\\\.\\FEnteDev";
@@ -433,8 +433,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // untrapped `in al, dx` at 0x000ca067, and the code window there
             // holds the usual pair of port helpers. The runtime matches the
             // faulting instruction address, so these are the opcode bytes.
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0x000ca067;
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0x000ca09b;
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000ca067;
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000ca09b;
             table.push_back(std::move(entry));
         }
 
@@ -453,8 +453,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.run_detached = false;
             entry.profile.run_defaults.lptdi.legacy_io_ports = false;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = false;
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0;
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0;
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0;
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0;
             table.push_back(std::move(entry));
         }
 
@@ -503,17 +503,22 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // in this build's strings. Whether this build stops without the
             // active-console report has not been observed here.
             entry.profile.run_defaults.hle_wts_active_console = true;
-            // Raw I/O stays off. The public EZ2Dancer I/O description is
-            // 16-bit-wide access (IN AX,DX / OUT DX,AX) over ports 0x300 to
-            // 0x30c, while LegacyIoPortBus is byte-wide over 0x100 to 0x106
-            // and the fault handler advances EIP by one. Turning it on would
-            // answer an unsupported port and resume inside an instruction, so
-            // serving nothing is the correct baseline until the bus is
-            // widened. See docs/analysis/ez2dancer-io-map.md.
-            entry.profile.run_defaults.lptdi.legacy_io_ports = false;
-            entry.profile.run_defaults.lptdi.legacy_io_ports_default = false;
-            entry.profile.run_defaults.lptdi.legacy_io_in_byte_rva = 0;
-            entry.profile.run_defaults.lptdi.legacy_io_out_byte_rva = 0;
+            // This board is word-wide over ports 0x300 to 0x30c, which is
+            // confirmed rather than inherited: past the Hardlock protection the
+            // guest faults on an untrapped `out dx, ax` whose bytes are 66 ef,
+            // writing port 0x030a. See docs/analysis/ez2dancer-io-map.md.
+            entry.profile.run_defaults.lptdi.legacy_io_ports = true;
+            entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
+            entry.profile.run_defaults.lptdi.legacy_io_width =
+                LegacyIoWidth::kWord;
+            // The address of that instruction's first byte, which is its 0x66
+            // prefix. The runtime matches the faulting address, so this is the
+            // prefix rather than the helper's entry point.
+            entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x0000b565;
+            // The input helper's address is not known yet: output was reached
+            // first and execution stopped there. Zero leaves that direction to
+            // opcode matching, which the pinned width makes unambiguous.
+            entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0;
             entry.profile.run_defaults.run_detached = true;
             // The image is a Windows 98 SE boot disk whose MSDOS.SYS reads
             // HostWinBootDrv=C, and the game sits at that volume's root.
@@ -527,14 +532,17 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "same .protect Hardlock family as the EZ2DJ builds - it carries "
                 "\\\\.\\FEnteDev, HLW32Proc and API_1LNM.DLL - but its graphics "
                 "entry point is DirectDrawCreateEx rather than DirectDrawCreate, "
-                "and its cabinet I/O is described publicly as 16-bit-wide access "
-                "over ports 0x300 to 0x30c, which the byte-wide LegacyIoPortBus "
-                "does not serve, so raw I/O is disabled. Its descriptor reports "
-                "module_address 0x4c5e, and with local Hardlock material it "
-                "passes the protection and executes original .text, where it "
-                "stops on an untrapped `out dx, ax` at RVA 0x0000b565 writing "
-                "port 0x30a. That address belongs to a word-wide I/O boundary "
-                "and must not be placed in the byte-width helper fields above.";
+                "and its cabinet I/O is the only word-wide board here, over "
+                "ports 0x300 to 0x30c. Its descriptor reports module_address "
+                "0x4c5e, and with local Hardlock material it passes the "
+                "protection and runs original .text: it writes an eight-step "
+                "lamp sequence to port 0x30a through the confirmed helper at "
+                "RVA 0x0000b565, reads its own EZ2Dancer.ini, and then returns "
+                "0 from WinMain and exits through the CRT before opening any "
+                "asset. Its last Hardlock request is a seven-block Function "
+                "0x0011 API_CODE transform that no response row answers; "
+                "whether the game gates on that answer is unresolved. It never "
+                "reads an input port, so the input helper RVA stays unknown.";
             entry.fingerprint.executable_name = "EZ2Dancer.exe";
             entry.fingerprint.entry_point_rva = 0x00401240;
             entry.fingerprint.size_of_image = 0x0043b000;

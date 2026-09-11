@@ -18,6 +18,7 @@
 #include "re2dj/hle/hardlock/transform_responses.h"
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/input/legacy_io_port_bus.h"
+#include "re2dj/input/ez2dancer_io_port_bus.h"
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/storage/guest_path.h"
 #include "direct3d3_com_facade.h"
@@ -39,6 +40,11 @@ extern "C" __declspec(dllexport) char g_re2dj_vfs_hdd_root[MAX_PATH] = {};
 // runtime was first written against used D:\ez2dj, which stays the default for
 // profiles that record no guest path.
 extern "C" __declspec(dllexport) char g_re2dj_vfs_guest_root[MAX_PATH] = "D:\\ez2dj";
+// The directory inside the CHD that holds the product, used to turn a guest-
+// relative path into an image path. It is a property of the image rather than
+// of EZ2DJ, so the launcher sets it from the profile's executable path; the
+// default only keeps a profile that sets nothing behaving as before.
+extern "C" __declspec(dllexport) char g_re2dj_vfs_chd_root[MAX_PATH] = "EZ2DJ";
 extern "C" __declspec(dllexport) char g_re2dj_vfs_overlay_root[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_chd_path[MAX_PATH] = {};
 extern "C" __declspec(dllexport) char g_re2dj_vfs_trace_path[MAX_PATH] = {};
@@ -70,10 +76,22 @@ extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_device_enabled 
 // Each entry is an eight-byte challenge followed by its eight-byte response.
 // re2DJ never derives these values; it only applies what it is given.
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_transform_response_count = 0;
-extern "C" __declspec(dllexport) unsigned char g_re2dj_hardlock_transform_responses[4096] = {};
+extern "C" __declspec(dllexport) unsigned char g_re2dj_hardlock_transform_responses
+    [re2dj::hle::hardlock::kHardlockTransformBlockRowCapacity *
+     re2dj::hle::hardlock::kHardlockTransformBlockSize * 2] = {};
+// Externally computed request rows, each answering a whole transform payload,
+// transferred as the fixed-width records payload_responses.h defines.
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_payload_response_count = 0;
+extern "C" __declspec(dllexport) unsigned char g_re2dj_hardlock_payload_responses
+    [re2dj::hle::hardlock::kHardlockPayloadRecordCapacity *
+     re2dj::hle::hardlock::kHardlockPayloadRecordSize] = {};
 // Diagnostic-only flag: record hashes of incoming transform blocks without
 // exposing the block or response bytes.
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_transform_input_trace = 0;
+// Diagnostic-only: when enabled, the device rejects any descriptor or transform
+// whose header function equals this value. Never set from a profile.
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_reject_function_enabled = 0;
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hardlock_reject_function = 0;
 // Explicit one-shot diagnostic output for transform input blocks. The
 // launcher supplies a user-selected temporary path; this is never enabled by
 // default and does not contain response bytes.
@@ -86,6 +104,9 @@ extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_io_ports = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_image_base = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_in_byte_rva = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_out_byte_rva = 0;
+// Non-zero when this profile's board is word-wide. The launcher sets it from
+// the profile, so the handler never has to infer the width from the guest.
+extern "C" __declspec(dllexport) volatile DWORD g_re2dj_io_word_width = 0;
 extern "C" __declspec(dllexport) char g_re2dj_io_config_path[MAX_PATH] = {};
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_hle_message_box = 0;
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_message_box_result = 1;
@@ -102,11 +123,13 @@ constexpr char kDeviceIoControlMessage[] = "re2dj:device:DeviceIoControl";
 constexpr char kExitProcessMessage[] = "re2dj:probe:ExitProcess";
 
 re2dj::input::LegacyIoPortBus g_legacy_io_port_bus;
+re2dj::input::Ez2DancerIoPortBus g_dancer_io_port_bus;
 re2dj::platform::windows::Ez2DjKeyboardInput g_keyboard_input;
 volatile LONG g_keyboard_input_state = 0;
 volatile LONG g_vfs_image_trace_count = 0;
 volatile LONG g_vfs_script_trace_count = 0;
 volatile LONG g_vfs_device_trace_count = 0;
+volatile LONG g_vfs_io_port_trace_count = 0;
 volatile LONG g_vfs_open_trace_count = 0;
 volatile LONG g_vfs_file_trace_count = 0;
 volatile LONG g_dynamic_resolver_trace_count = 0;
@@ -184,6 +207,15 @@ bool ClaimVfsDeviceTraceBudget()
 {
     constexpr LONG kMaximumDeviceDiagnostics = 128;
     return InterlockedIncrement(&g_vfs_device_trace_count) <= kMaximumDeviceDiagnostics;
+}
+
+// Raw port accesses are far more frequent than device requests once a guest
+// starts polling its board, so they carry their own budget rather than
+// competing with the device trace for the same allowance.
+bool ClaimVfsIoPortTraceBudget()
+{
+    constexpr LONG kMaximumIoPortDiagnostics = 256;
+    return InterlockedIncrement(&g_vfs_io_port_trace_count) <= kMaximumIoPortDiagnostics;
 }
 
 bool ClaimVfsOpenTraceBudget()
@@ -498,6 +530,137 @@ void ReportExitProcess(const char* route, unsigned code, std::uintptr_t caller)
                   static_cast<unsigned>(base),
                   readable ? 1U : 0U,
                   hex);
+    AppendVfsTraceMessage(message);
+}
+
+// Reads SizeOfImage from the main module's PE header so the stack scan can tell
+// image-resident return addresses from everything else.
+std::uintptr_t MainImageSize(std::uintptr_t image_base)
+{
+    if (image_base == 0)
+    {
+        return 0;
+    }
+    std::int32_t lfanew = 0;
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(GetCurrentProcess(),
+                          reinterpret_cast<const void*>(image_base + 0x3c),
+                          &lfanew,
+                          sizeof(lfanew),
+                          &copied) == FALSE ||
+        copied != sizeof(lfanew) || lfanew <= 0)
+    {
+        return 0;
+    }
+    std::uint32_t size_of_image = 0;
+    // SizeOfImage sits at optional-header offset 0x38, i.e. PE signature (4) +
+    // file header (20) + 0x38 past e_lfanew.
+    if (ReadProcessMemory(
+            GetCurrentProcess(),
+            reinterpret_cast<const void*>(image_base + static_cast<std::uintptr_t>(lfanew) + 0x50),
+            &size_of_image,
+            sizeof(size_of_image),
+            &copied) == FALSE ||
+        copied != sizeof(size_of_image))
+    {
+        return 0;
+    }
+    return size_of_image;
+}
+
+// Records the image-resident return addresses on the stack at exit, so the
+// .protect call chain that decided to exit is visible. Only code addresses are
+// logged, never data. The scan is bounded and fires once per process.
+void ReportExitStackChain(void* return_slot)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || return_slot == nullptr)
+    {
+        return;
+    }
+    const std::uintptr_t image_base =
+        reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr));
+    const std::uintptr_t image_size = MainImageSize(image_base);
+    if (image_base == 0 || image_size == 0)
+    {
+        return;
+    }
+    constexpr std::size_t kStackWords = 96;
+    std::uint32_t stack[kStackWords] = {};
+    SIZE_T copied = 0;
+    if (ReadProcessMemory(GetCurrentProcess(),
+                          return_slot,
+                          stack,
+                          sizeof(stack),
+                          &copied) == FALSE ||
+        copied < sizeof(std::uint32_t))
+    {
+        return;
+    }
+    const std::size_t words = copied / sizeof(std::uint32_t);
+    char refs[640] = {};
+    std::size_t cursor = 0;
+    unsigned reported = 0;
+    // Each reported return address is preceded by the call that led toward the
+    // exit, so a window before it shows what the caller did. 40 before, 8 after.
+    constexpr std::size_t kBytesBeforeReturn = 40;
+    constexpr std::size_t kBytesAfterReturn = 8;
+    for (std::size_t index = 0; index < words && reported < 12; ++index)
+    {
+        const std::uintptr_t value = stack[index];
+        if (value < image_base || value >= image_base + image_size)
+        {
+            continue;
+        }
+        const int written = std::snprintf(
+            refs + cursor,
+            sizeof(refs) - cursor,
+            "%s%u:0x%08x",
+            reported == 0 ? "" : ",",
+            static_cast<unsigned>(index),
+            static_cast<unsigned>(value - image_base));
+        if (written >= 0 && static_cast<std::size_t>(written) < sizeof(refs) - cursor)
+        {
+            cursor += static_cast<std::size_t>(written);
+        }
+        // Dump the call site preceding this return address.
+        if (value >= kBytesBeforeReturn)
+        {
+            const std::uintptr_t window_base = value - kBytesBeforeReturn;
+            unsigned char window[kBytesBeforeReturn + kBytesAfterReturn] = {};
+            SIZE_T window_copied = 0;
+            if (ReadProcessMemory(GetCurrentProcess(),
+                                  reinterpret_cast<const void*>(window_base),
+                                  window,
+                                  sizeof(window),
+                                  &window_copied) != FALSE &&
+                window_copied != 0)
+            {
+                char hex[sizeof(window) * 2 + 1] = {};
+                for (SIZE_T byte_index = 0; byte_index < window_copied; ++byte_index)
+                {
+                    std::snprintf(hex + byte_index * 2, 3, "%02x", window[byte_index]);
+                }
+                char window_message[256] = {};
+                std::snprintf(
+                    window_message,
+                    sizeof(window_message),
+                    "re2dj:vfs:exit-stack-code:index=%u:return_rva=0x%08x:window_base=0x%08x:bytes=%s\r\n",
+                    static_cast<unsigned>(index),
+                    static_cast<unsigned>(value - image_base),
+                    static_cast<unsigned>(window_base - image_base),
+                    hex);
+                AppendVfsTraceMessage(window_message);
+            }
+        }
+        ++reported;
+    }
+    char message[768] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:exit-stack-chain:image_base=0x%08x:image_size=0x%08x:refs=%s\r\n",
+                  static_cast<unsigned>(image_base),
+                  static_cast<unsigned>(image_size),
+                  refs);
     AppendVfsTraceMessage(message);
 }
 
@@ -1360,6 +1523,29 @@ re2dj::hle::hardlock::HardlockDeviceOptions BuildHardlockDeviceOptions()
             options.transform_responses.push_back(parsed);
         }
     }
+    const DWORD payload_count = g_re2dj_hardlock_payload_response_count;
+    if (payload_count != 0 &&
+        payload_count <= re2dj::hle::hardlock::kHardlockPayloadRecordCapacity)
+    {
+        options.payload_responses.reserve(payload_count);
+        for (DWORD index = 0; index < payload_count; ++index)
+        {
+            const auto record = std::span<const std::uint8_t>(
+                g_re2dj_hardlock_payload_responses +
+                    index * re2dj::hle::hardlock::kHardlockPayloadRecordSize,
+                re2dj::hle::hardlock::kHardlockPayloadRecordSize);
+            re2dj::hle::hardlock::HardlockPayloadResponseEntry parsed;
+            if (re2dj::hle::hardlock::UnpackHardlockPayloadResponse(record, &parsed))
+            {
+                options.payload_responses.push_back(std::move(parsed));
+            }
+        }
+    }
+    if (g_re2dj_hardlock_reject_function_enabled != 0)
+    {
+        options.reject_function =
+            static_cast<std::uint16_t>(g_re2dj_hardlock_reject_function & 0xffff);
+    }
     return options;
 }
 
@@ -1400,7 +1586,7 @@ bool CompleteHardlockRequest(DWORD control_code,
                   sizeof(message),
                   "re2dj:vfs:hardlock-device:request=%s:outcome=%s:bytes=%u:"
                   "handshake_answered=%u:status_cleared=%u:tail=%u:"
-                  "mapped=%u:unmapped=%u:tick_ms=%llu\r\n",
+                  "mapped=%u:unmapped=%u:payload=%u:tick_ms=%llu\r\n",
                   re2dj::hle::hardlock::HardlockRequestKindName(result.kind),
                   re2dj::hle::hardlock::HardlockOutcomeName(result.outcome),
                   static_cast<unsigned>(result.bytes_written),
@@ -1409,6 +1595,7 @@ bool CompleteHardlockRequest(DWORD control_code,
                   result.descriptor_tail_written ? 1u : 0u,
                   static_cast<unsigned>(result.transform_blocks_mapped),
                   static_cast<unsigned>(result.transform_blocks_unmapped),
+                  result.transform_payload_mapped ? 1u : 0u,
                   static_cast<unsigned long long>(GetTickCount64()));
     AppendVfsTraceMessage(message);
 
@@ -1494,27 +1681,48 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
 
     const DWORD address = static_cast<DWORD>(
         reinterpret_cast<std::uintptr_t>(exception->ExceptionRecord->ExceptionAddress));
-    const unsigned char opcode = *reinterpret_cast<const unsigned char*>(address);
+    // A word-wide port instruction in 32-bit code carries a 0x66 operand-size
+    // prefix, so the faulting address is that prefix and the opcode follows it.
+    // Getting this wrong does not merely answer the wrong port: advancing EIP
+    // by one would resume inside the instruction.
+    const unsigned char first_byte = *reinterpret_cast<const unsigned char*>(address);
+    const bool word_prefixed = first_byte == 0x66;
+    const unsigned char opcode =
+        word_prefixed ? *reinterpret_cast<const unsigned char*>(address + 1) : first_byte;
+    const DWORD instruction_length = word_prefixed ? 2u : 1u;
+    const bool profile_is_word = g_re2dj_io_word_width != 0;
+    // The profile states the board's width, so a guest instruction of the other
+    // width is not this boundary's business. Unprefixed 0xed and 0xef are
+    // 32-bit accesses, which no supported product has been observed using.
+    const unsigned char read_opcode = profile_is_word ? 0xed : 0xec;
+    const unsigned char write_opcode = profile_is_word ? 0xef : 0xee;
+    if (word_prefixed != profile_is_word)
+    {
+        ReportCrashException(exception);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
     const bool configured_read = g_re2dj_io_in_byte_rva != 0 &&
                                  address == g_re2dj_io_image_base +
                                                 g_re2dj_io_in_byte_rva;
     const bool configured_write = g_re2dj_io_out_byte_rva != 0 &&
                                   address == g_re2dj_io_image_base +
                                                 g_re2dj_io_out_byte_rva;
-    const bool range_fallback = g_re2dj_hle_io_ports != 0 &&
-                                g_re2dj_io_in_byte_rva == 0 &&
-                                g_re2dj_io_out_byte_rva == 0;
-    const bool is_read = configured_read ||
-                         (!configured_write && range_fallback && opcode == 0xec);
-    const bool is_write = configured_write ||
-                          (!configured_read && range_fallback && opcode == 0xee);
+    // A direction whose helper RVA is still unknown is judged by opcode alone.
+    // Bring-up reaches one direction before the other, and the width is pinned
+    // by the profile, so the opcode is unambiguous.
+    const bool read_by_opcode = g_re2dj_hle_io_ports != 0 &&
+                                g_re2dj_io_in_byte_rva == 0 && opcode == read_opcode;
+    const bool write_by_opcode = g_re2dj_hle_io_ports != 0 &&
+                                 g_re2dj_io_out_byte_rva == 0 && opcode == write_opcode;
+    const bool is_read = configured_read || (!configured_write && read_by_opcode);
+    const bool is_write = configured_write || (!configured_read && write_by_opcode);
     if (!is_read && !is_write)
     {
         ReportCrashException(exception);
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    if ((configured_read || configured_write) &&
-        opcode != (configured_read ? 0xec : 0xee))
+    if (opcode != (is_read ? read_opcode : write_opcode))
     {
         ReportCrashException(exception);
         return EXCEPTION_CONTINUE_SEARCH;
@@ -1522,7 +1730,8 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
 
     const std::uint16_t port = static_cast<std::uint16_t>(exception->ContextRecord->Edx);
     std::uint8_t value = static_cast<std::uint8_t>(exception->ContextRecord->Eax);
-    if (is_read && g_re2dj_io_config_path[0] != '\0')
+    std::uint16_t word_value = static_cast<std::uint16_t>(exception->ContextRecord->Eax);
+    if (is_read && !profile_is_word && g_re2dj_io_config_path[0] != '\0')
     {
         if (g_keyboard_input_state == 0)
         {
@@ -1544,8 +1753,34 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
                                  static_cast<std::uint64_t>(GetTickCount()));
         }
     }
-    const bool handled = is_read ? g_legacy_io_port_bus.ReadByte(port, &value)
-                                 : g_legacy_io_port_bus.WriteByte(port, value);
+    bool handled = false;
+    if (profile_is_word)
+    {
+        handled = is_read ? g_dancer_io_port_bus.ReadWord(port, &word_value)
+                          : g_dancer_io_port_bus.WriteWord(port, word_value);
+    }
+    else
+    {
+        handled = is_read ? g_legacy_io_port_bus.ReadByte(port, &value)
+                          : g_legacy_io_port_bus.WriteByte(port, value);
+    }
+    // Every other boundary in this runtime records what the guest asked for,
+    // and a board that answers silently cannot be diagnosed: which ports a
+    // product really touches is exactly what is unresolved for a new one.
+    if (ClaimVfsIoPortTraceBudget())
+    {
+        char message[160] = {};
+        std::snprintf(message,
+                      sizeof(message),
+                      "re2dj:vfs:io-port:dir=%s:width=%u:port=0x%04x:value=0x%04x:handled=%u\r\n",
+                      is_read ? "read" : "write",
+                      profile_is_word ? 16u : 8u,
+                      static_cast<unsigned>(port),
+                      profile_is_word ? static_cast<unsigned>(word_value)
+                                      : static_cast<unsigned>(value),
+                      handled ? 1u : 0u);
+        AppendVfsTraceMessage(message);
+    }
     if (!handled)
     {
         ReportCrashException(exception);
@@ -1553,10 +1788,14 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
     }
     if (is_read)
     {
+        // Only the operand's own width is replaced; the rest of EAX belongs to
+        // the guest.
         exception->ContextRecord->Eax =
-            (exception->ContextRecord->Eax & 0xffffff00u) | value;
+            profile_is_word
+                ? ((exception->ContextRecord->Eax & 0xffff0000u) | word_value)
+                : ((exception->ContextRecord->Eax & 0xffffff00u) | value);
     }
-    exception->ContextRecord->Eip += 1;
+    exception->ContextRecord->Eip += instruction_length;
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 
@@ -1845,7 +2084,11 @@ bool ChdRelativePath(const char* name, std::string* relative)
     {
         return false;
     }
-    relative->assign("EZ2DJ/");
+    relative->assign(g_re2dj_vfs_chd_root);
+    if (!relative->empty() && relative->back() != '/')
+    {
+        relative->push_back('/');
+    }
     relative->append(resolved);
     return true;
 }
@@ -2154,6 +2397,7 @@ extern "C" __declspec(dllexport) void WINAPI Re2djHleExitProcess(UINT code)
     ReportExitProcess("exit_process",
                       static_cast<unsigned>(code),
                       reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
+    ReportExitStackChain(_AddressOfReturnAddress());
     ReportExitProcessHardlock();
     ExitProcess(code);
 }

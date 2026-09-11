@@ -53,6 +53,12 @@ response/seed 계산 알고리즘은 re2DJ에 구현하지 않습니다. re2DJ�
 
 map을 주입하지 않은 baseline은 transform 뒤 Function `0x0001` descriptor까지 도달하고 종료 코드 `0x00000000`을 남겼지만, 이것은 response가 맞다는 증거가 아닙니다. 오히려 현재 reSoftlock의 `HL_CRYPT` map을 Function `0x0011`에 적용하는 방식 또는 4th 기반 초기 descriptor response가 6th와 호환되지 않을 가능성을 보여줍니다.
 
+### 추정 — 2026-09-11, Function `0x0011`은 `API_CODE`
+
+2EZConfig-V2의 상위 계약(사실 대조만 함, [Hardlock API function 코드](../kb/hardlock-api-functions.md))에서 Function 17(`0x11`)은 `API_CODE`입니다. `API_CODE`는 끝에서 두 번째 블록을 입력으로 **한 번** 계산해 payload 여러 위치에 쓰고, 일부 블록에는 더하며, 마지막 블록은 유지합니다. 응답이 블록마다 독립이 아니므로, 위에서 7개 입력 블록 각각에 `HL_CRYPT`를 적용한 map은 **모양부터** 이 계약과 맞지 않습니다. 194개 후보가 모두 실패한 결과는 seed 후보를 제거하는 근거가 아닐 가능성이 큽니다.
+
+같은 요청을 보내는 `ez2d2m`에서는 7개 입력 중 블록 5만 실행·환경과 무관하게 같고 나머지는 바뀌는 것이 확인됐습니다([ez2d2m 분석](ez2d2m-chd-filesystem.md)). 6th의 7개 입력도 같은 구조인지는 **미확정**이며, 6th의 map을 재판별하기 전에 입력을 여러 번 받아 확인해야 합니다. re2DJ는 이런 응답을 담는 요청 행을 갖추었습니다([설계 247](../design/20260911-247-hardlock-payload-response-rows.md)).
+
 ## English
 
 ### Confirmed — 2026-09-06, correct CHD-backed execution
@@ -94,3 +100,9 @@ The response/seed algorithm remains in reSoftlock. re2DJ only injects generated 
 - The actual 6th Hardlock response and seed.
 - The relationship between the seven runtime-generated inputs and static executable challenges.
 - Which regenerated candidate, if any, fully passes the original execution.
+
+### Inferred — 2026-09-11, Function `0x0011` is `API_CODE`
+
+In 2EZConfig-V2's high-level contract, consulted for facts only ([Hardlock API function codes](../kb/hardlock-api-functions.md)), Function 17 (`0x11`) is `API_CODE`. It computes **once** from the second-to-last block, writes the result to several places in the payload, adds into some blocks and keeps the last one. Because its answer is not independent per block, the maps above that applied `HL_CRYPT` to each of the seven input blocks do not fit the contract **even in shape**, and the failure of all 194 candidates is most likely not evidence for eliminating seed candidates.
+
+On `ez2d2m`, which sends the same request, only block 5 of the seven inputs is confirmed to stay the same across runs and environments while the rest change ([the ez2d2m analysis](ez2d2m-chd-filesystem.md)). Whether 6th's seven inputs share that structure is **unresolved** and should be checked by capturing them more than once before re-judging 6th's maps. re2DJ now has request rows able to carry such an answer ([design 247](../design/20260911-247-hardlock-payload-response-rows.md)).

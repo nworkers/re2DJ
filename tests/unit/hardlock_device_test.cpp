@@ -246,6 +246,74 @@ void RunHardlockDeviceTests(re2dj::test::Context& context)
         re2dj::hle::hardlock::kHardlockIoctlDescriptor, mapped_descriptor, mapped_descriptor);
     RE2DJ_CHECK(context, result.outcome == HardlockOutcome::kCompleted);
     RE2DJ_CHECK_EQ(context, result.transform_blocks_mapped, std::size_t{0});
+    RE2DJ_CHECK(context, !result.transform_payload_mapped);
+
+    // A request row takes a whole payload before any block row is consulted.
+    // The row is keyed on the second block and answers one byte of the first.
+    constexpr std::size_t kPayload = re2dj::hle::hardlock::kHardlockApiDescriptorSize;
+    HardlockDeviceOptions request_options = mapped_options;
+    re2dj::hle::hardlock::HardlockPayloadResponseEntry request_row;
+    request_row.block_count = 2;
+    request_row.input.assign(16, 0);
+    request_row.input_mask.assign(16, 0);
+    request_row.input[8] = 0x42;
+    request_row.input_mask[8] = 1;
+    request_row.output.assign(16, 0);
+    request_row.output_mask.assign(16, 0);
+    request_row.output[1] = 0x99;
+    request_row.output_mask[1] = 1;
+    request_options.payload_responses.push_back(request_row);
+    HardlockDevice requesting(request_options);
+
+    std::vector<std::uint8_t> whole = MakeDescriptor(0x11, 2, kPayload + 16);
+    // This first block would match the block row if it were consulted.
+    whole[kPayload] = 0x5a;
+    whole[kPayload + 8] = 0x42;
+    result = requesting.Complete(re2dj::hle::hardlock::kHardlockIoctlTransform, whole, whole);
+    RE2DJ_CHECK(context, result.outcome == HardlockOutcome::kCompleted);
+    RE2DJ_CHECK(context, result.transform_payload_mapped);
+    RE2DJ_CHECK_EQ(context, result.transform_blocks_mapped, std::size_t{0});
+    RE2DJ_CHECK_EQ(context, result.transform_blocks_unmapped, std::size_t{0});
+    RE2DJ_CHECK_EQ(context, whole[kPayload], std::uint8_t{0x5a});
+    RE2DJ_CHECK_EQ(context, whole[kPayload + 1], std::uint8_t{0x99});
+    RE2DJ_CHECK_EQ(context, whole[kPayload + 8], std::uint8_t{0x42});
+    RE2DJ_CHECK_EQ(context, whole[0x1a], std::uint8_t{0});
+
+    // A payload the request row does not match falls back to block lookup,
+    // exactly as a map without request rows behaves.
+    std::vector<std::uint8_t> fallback = MakeDescriptor(0x11, 2, kPayload + 16);
+    fallback[kPayload] = 0x5a;
+    fallback[kPayload + 8] = 0x43;
+    result = requesting.Complete(
+        re2dj::hle::hardlock::kHardlockIoctlTransform, fallback, fallback);
+    RE2DJ_CHECK(context, !result.transform_payload_mapped);
+    RE2DJ_CHECK_EQ(context, result.transform_blocks_mapped, std::size_t{1});
+    RE2DJ_CHECK_EQ(context, result.transform_blocks_unmapped, std::size_t{1});
+    RE2DJ_CHECK_EQ(context, fallback[kPayload], std::uint8_t{0xc0});
+    RE2DJ_CHECK_EQ(context, fallback[kPayload + 8], std::uint8_t{0x43});
+
+    // A request row never answers a transform of a different block count.
+    std::vector<std::uint8_t> single = MakeDescriptor(0x0e, 1, kPayload + 8);
+    single[kPayload] = 0x42;
+    result = requesting.Complete(re2dj::hle::hardlock::kHardlockIoctlTransform, single, single);
+    RE2DJ_CHECK(context, !result.transform_payload_mapped);
+    RE2DJ_CHECK_EQ(context, result.transform_blocks_unmapped, std::size_t{1});
+
+    // The diagnostic reject_function refuses only the chosen function and leaves
+    // other functions completing normally.
+    HardlockDeviceOptions reject_options;
+    reject_options.reject_function = std::uint16_t{0x0011};
+    HardlockDevice rejecting(reject_options);
+    std::vector<std::uint8_t> rejected_transform =
+        MakeDescriptor(0x11, 7, kPayload + 7 * 8);
+    result = rejecting.Complete(
+        re2dj::hle::hardlock::kHardlockIoctlTransform, rejected_transform, rejected_transform);
+    RE2DJ_CHECK(context, result.outcome == HardlockOutcome::kRejectedShape);
+    std::vector<std::uint8_t> allowed_transform =
+        MakeDescriptor(0x0e, 1, kPayload + 8);
+    result = rejecting.Complete(
+        re2dj::hle::hardlock::kHardlockIoctlTransform, allowed_transform, allowed_transform);
+    RE2DJ_CHECK(context, result.outcome == HardlockOutcome::kCompleted);
 
     // Status clearing can be turned off so the request passes through as-is.
     HardlockDeviceOptions preserve_status;

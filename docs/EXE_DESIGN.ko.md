@@ -110,3 +110,9 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax 덤프 세 개를 확�
 **추정:** cabinet I/O는 EZ2DJ의 byte 폭 `0x100`~`0x106`이 아니라 16비트 폭 `0x300`~`0x30c`다. 근거는 공개 구현 한 곳뿐이며 원본에서 확인하지 않았다. **미확정:** 이 실행 파일의 raw I/O helper RVA, Hardlock 응답과 descriptor, 실제 실행 성공.
 
 상세 근거는 [ez2d2m CHD 파일시스템과 실행 파일 관찰](analysis/ez2d2m-chd-filesystem.md)과 [EZ2Dancer I/O 포트 맵](analysis/ez2dancer-io-map.md)에 있다.
+
+## 2026-09-11 `ez2d2m` Hardlock transform 두 종류
+
+**확인됨:** 보호 계층은 transform을 두 종류로 보낸다. 1블록 `function=0x000e` 11건과 7블록 `function=0x0011` 1건이다. 앞의 11건은 두 머신에서 값이 같다. `0x0011` 요청은 블록 5만 모든 관찰에서 같고, 블록 0·1·6은 re2DJ runtime 적재 주소를 따라 움직이며 블록 2–4는 머신마다 다르다.
+
+**추정:** 2EZConfig-V2의 상위 계약(사실 대조만 함)에 따르면 `0x000e`는 `API_CRYPT`, `0x0011`은 `API_CODE`다. `API_CODE`는 끝에서 두 번째 블록(블록 5)을 입력으로 한 번 계산해 payload 여러 위치에 쓰므로, 응답이 요청 전체의 함수다. 이에 맞춰 응답 표에 요청 행을 추가했다([설계 247](design/20260911-247-hardlock-payload-response-rows.md)). **미확정:** 유효한 `0x0011` 응답.

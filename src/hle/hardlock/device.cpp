@@ -12,7 +12,6 @@ namespace
 
 constexpr std::size_t kHandshakeSize = 6;
 constexpr std::size_t kDescriptorStatusOffset = 0x1a;
-constexpr std::size_t kTransformBlockSize = 8;
 
 // Partial overlap would make an in-place copy order-dependent, so only exact
 // aliasing (the shape the original actually uses) and fully separate buffers
@@ -52,9 +51,9 @@ bool TransformSizeMatches(std::uint16_t block_count, std::size_t size)
     const std::size_t blocks = block_count;
     const bool size_safe =
         blocks <= (std::numeric_limits<std::size_t>::max() - kHardlockApiDescriptorSize) /
-                      kTransformBlockSize;
+                      kHardlockTransformBlockSize;
     return size_safe &&
-           size == kHardlockApiDescriptorSize + blocks * kTransformBlockSize;
+           size == kHardlockApiDescriptorSize + blocks * kHardlockTransformBlockSize;
 }
 
 }  // namespace
@@ -126,6 +125,14 @@ HardlockDeviceResult HardlockDevice::Complete(std::uint32_t control_code,
         {
             return result;
         }
+        // Diagnostic: refuse a chosen function so a retry, or its absence,
+        // shows whether the protection inspects that answer. The request is
+        // left rejected exactly as a framing violation would be.
+        if (options_.reject_function.has_value() &&
+            header.function == *options_.reject_function)
+        {
+            return result;
+        }
         CopyRequest(input, output);
         if (options_.clear_descriptor_status)
         {
@@ -140,14 +147,24 @@ HardlockDeviceResult HardlockDevice::Complete(std::uint32_t control_code,
             WriteU16(output, kHardlockApiTailWordOffset, *options_.descriptor_tail_word);
             result.descriptor_tail_written = true;
         }
-        // The dongle-internal Function 0x0e algorithm is unknown here, so a
-        // payload is only ever replaced from the externally computed response
-        // map. A block the map does not cover passes through untouched rather
-        // than being guessed.
-        if (!descriptor && !options_.transform_responses.empty())
+        // The dongle-internal algorithms are unknown here, so a payload is
+        // only ever replaced from the externally computed response map. A
+        // request row is more specific than a block row, so it goes first. A
+        // block no row covers passes through untouched rather than being
+        // guessed.
+        const std::span<std::uint8_t> payload = output.subspan(kHardlockApiDescriptorSize);
+        const HardlockPayloadResponseEntry* const request_row =
+            descriptor ? nullptr
+                       : FindHardlockPayloadResponse(options_.payload_responses, payload);
+        if (request_row != nullptr)
+        {
+            ApplyHardlockPayloadResponse(*request_row, payload);
+            result.transform_payload_mapped = true;
+        }
+        else if (!descriptor && !options_.transform_responses.empty())
         {
             for (std::size_t offset = kHardlockApiDescriptorSize; offset < output.size();
-                 offset += kTransformBlockSize)
+                 offset += kHardlockTransformBlockSize)
             {
                 HardlockTransformBlock block = {};
                 std::copy_n(output.begin() + static_cast<std::ptrdiff_t>(offset),

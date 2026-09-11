@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "re2dj/hle/hardlock/handshake_response.h"
+#include "re2dj/hle/hardlock/payload_responses.h"
 #include "re2dj/hle/hardlock/protocol.h"
 #include "re2dj/hle/hardlock/transform_responses.h"
 
@@ -42,6 +43,14 @@ struct HardlockDeviceOptions
     // Function 0x0e responses keyed by challenge block. Nothing here derives
     // them; a block with no entry passes through unchanged.
     std::vector<HardlockTransformResponseEntry> transform_responses;
+    // Rows that answer a whole transform payload. A matching row takes the
+    // request, and the block lookup above is then not consulted for it.
+    std::vector<HardlockPayloadResponseEntry> payload_responses;
+    // Diagnostic only: reject any descriptor or transform whose header function
+    // equals this value, instead of completing it. Used to test whether the
+    // protection inspects a given function's answer by watching for retries.
+    // Never set from a profile; only from an explicit launcher option.
+    std::optional<std::uint16_t> reject_function;
 };
 
 struct HardlockDeviceResult
@@ -56,6 +65,8 @@ struct HardlockDeviceResult
     // An incomplete map makes the run meaningless, so both are reported.
     std::size_t transform_blocks_mapped = 0;
     std::size_t transform_blocks_unmapped = 0;
+    // A request row answered the whole payload; the block counts stay zero.
+    bool transform_payload_mapped = false;
 };
 
 class HardlockDevice
