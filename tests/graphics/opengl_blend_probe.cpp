@@ -152,6 +152,10 @@ int main()
         Draw(backend, Quad(0, 0, 32, 32, 0xffffffff), Blend(10, 1));
         checks.Check("inverse destination color", 24, 4, {191, 127, 63});
 
+        Draw(backend, Quad(0, 0, 32, 32, 0xff4080c0), copy);
+        Draw(backend, Quad(0, 0, 32, 32, 0xffffffff), Blend(9, 8));
+        checks.Check("destination alpha blend factors", 24, 4, {64, 128, 192});
+
         Draw(backend, Quad(0, 0, 32, 32, 0xffff0000), copy);
         Draw(backend, header, Blend(1, 3), &mask);
         checks.Check("existing ZERO/SRCCOLOR mask", 24, 4, {0, 0, 0});

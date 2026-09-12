@@ -30,6 +30,7 @@
 #include "message_box_boundary.h"
 #include "directinput7_com_facade.h"
 #include "directsound_com_facade.h"
+#include "graphics_trace_log.h"
 
 extern "C" __declspec(dllexport) volatile DWORD g_re2dj_probe_original_target = 0;
 extern "C" __declspec(dllexport) char g_re2dj_hle_command_line[MAX_PATH] = {};
@@ -196,6 +197,10 @@ bool IsWin32DevicePath(const char* path)
 // before the rarer script requests appear in it.
 bool ClaimVfsTraceBudget(VfsAssetKind kind)
 {
+    if (re2dj::platform::windows::AreCompleteDiagnosticsEnabled())
+    {
+        return true;
+    }
     constexpr LONG kMaximumImageDiagnostics = 1024;
     constexpr LONG kMaximumScriptDiagnostics = 256;
     switch (kind)
@@ -227,6 +232,10 @@ bool ClaimVfsIoPortTraceBudget()
 
 bool ClaimVfsOpenTraceBudget()
 {
+    if (re2dj::platform::windows::AreCompleteDiagnosticsEnabled())
+    {
+        return true;
+    }
     // Raised from 128 once a diagnosis needed the whole open sequence: a
     // title screen probes about 60 sprite files before drawing, and the old
     // budget truncated the log mid-pass and made an absent read look like a
@@ -237,6 +246,10 @@ bool ClaimVfsOpenTraceBudget()
 
 LONG ClaimVfsFileTraceBudget()
 {
+    if (re2dj::platform::windows::AreCompleteDiagnosticsEnabled())
+    {
+        return InterlockedIncrement(&g_vfs_file_trace_count);
+    }
     constexpr LONG kMaximumFileDiagnostics = 1024;
     const LONG event = InterlockedIncrement(&g_vfs_file_trace_count);
     return event <= kMaximumFileDiagnostics ? event : 0;

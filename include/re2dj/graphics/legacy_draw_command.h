@@ -25,6 +25,8 @@ enum class BlendFactor
     kInverseSourceColor,
     kSourceAlpha,
     kInverseSourceAlpha,
+    kDestinationAlpha,
+    kInverseDestinationAlpha,
     kDestinationColor,
     kInverseDestinationColor,
 };
@@ -101,10 +103,13 @@ struct LegacyDrawCommand
 
 inline constexpr std::size_t kTransformedLitVertexStride = 32;
 inline constexpr std::uint32_t kLegacyDrawWaitFlag = 0x00000001;
+inline constexpr float kLegacyNeutralClipDepth = 0.5f;
 
 bool AreLegacyDrawFlagsSupported(std::uint32_t flags);
 
 bool DecodeLegacyBlendFactor(std::uint32_t value, BlendFactor* factor);
+
+float ResolveLegacyClipDepth(const LegacyFixedFunctionState& state, float guest_z);
 
 bool DecodeTransformedLitVertices(std::span<const std::byte> source,
                                   std::size_t vertex_count,

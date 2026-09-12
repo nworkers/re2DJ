@@ -627,6 +627,12 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                   result->runtime_base + rva,
                                   options.fullscreen ? TRUE : FALSE,
                                   error) &&
+                   (!options.graphics_draw_diagnostics ||
+                    (find_export("g_re2dj_graphics_draw_diagnostics", &rva) &&
+                     WriteRemoteU32(result->process,
+                                    result->runtime_base + rva,
+                                    TRUE,
+                                    error))) &&
                    patch_iat("DDRAW.dll",
                              "DirectDrawCreate",
                              "_Re2djHleDirectDrawCreate@12") &&

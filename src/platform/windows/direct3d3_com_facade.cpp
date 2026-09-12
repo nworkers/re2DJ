@@ -697,7 +697,8 @@ void ReportCreateSurfaceDiagnostic(RootFacade* root,
 {
     constexpr std::uint32_t kMaximumCreateSurfaceDiagnostics = 256;
     if (root == nullptr ||
-        ++root->create_surface_diagnostic_count > kMaximumCreateSurfaceDiagnostics)
+        (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+         ++root->create_surface_diagnostic_count > kMaximumCreateSurfaceDiagnostics))
     {
         return;
     }
@@ -747,7 +748,8 @@ void ReportBltDiagnostic(const char* operation,
         diagnostic_count = &destination->root->source_blt_diagnostic_count;
         maximum_diagnostics = kMaximumSourceBltDiagnostics;
     }
-    if (++(*diagnostic_count) > maximum_diagnostics)
+    if (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+        ++(*diagnostic_count) > maximum_diagnostics)
     {
         return;
     }
@@ -806,7 +808,8 @@ void ReportSurfaceDiagnostic(const char* operation,
                                               : surface->root->surface_dc_diagnostic_count;
     const std::uint32_t maximum_diagnostics =
         is_flip ? kMaximumFlipDiagnostics : kMaximumSurfaceDcDiagnostics;
-    if (++diagnostic_count > maximum_diagnostics)
+    if (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+        ++diagnostic_count > maximum_diagnostics)
     {
         return;
     }
@@ -831,8 +834,8 @@ void ReportTextureLoadDiagnostic(const SurfaceFacade* destination,
         return;
     }
     constexpr std::uint32_t kMaximumTextureLoadDiagnostics = 256;
-    if (++destination->root->texture_load_diagnostic_count >
-        kMaximumTextureLoadDiagnostics)
+    if (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+        ++destination->root->texture_load_diagnostic_count > kMaximumTextureLoadDiagnostics)
     {
         return;
     }
@@ -869,8 +872,10 @@ void ReportDrawDiagnostic(DeviceFacade* device,
     SurfaceFacade* texture_surface = device->texture_stage_zero == nullptr
                                          ? nullptr
                                          : SurfaceFromTexture(device->texture_stage_zero);
+    const bool complete_capture =
+        re2dj::platform::windows::AreCompleteDiagnosticsEnabled();
     if (result == DD_OK && texture_surface != nullptr &&
-        texture_surface->draw_diagnostic_reported)
+        texture_surface->draw_diagnostic_reported && !complete_capture)
     {
         return;
     }
@@ -878,21 +883,21 @@ void ReportDrawDiagnostic(DeviceFacade* device,
     constexpr std::uint32_t kMaximumUntexturedDrawDiagnostics = 16;
     const bool first_texture_failure = result != DD_OK && texture_surface != nullptr &&
                                        !texture_surface->draw_failure_diagnostic_reported;
-    if (result != DD_OK && !first_texture_failure &&
+    if (!complete_capture && result != DD_OK && !first_texture_failure &&
         ++device->root->draw_failure_diagnostic_count > kMaximumDrawFailureDiagnostics)
     {
         return;
     }
-    if (result == DD_OK && texture_surface == nullptr &&
+    if (!complete_capture && result == DD_OK && texture_surface == nullptr &&
         ++device->root->untextured_draw_diagnostic_count > kMaximumUntexturedDrawDiagnostics)
     {
         return;
     }
-    if (result == DD_OK && texture_surface != nullptr)
+    if (!complete_capture && result == DD_OK && texture_surface != nullptr)
     {
         texture_surface->draw_diagnostic_reported = true;
     }
-    if (first_texture_failure)
+    if (!complete_capture && first_texture_failure)
     {
         texture_surface->draw_failure_diagnostic_reported = true;
     }
@@ -970,8 +975,9 @@ void ReportLateDrawDiagnostic(
     if (is_music_select_disc)
     {
         constexpr std::uint32_t kMaximumMusicSelectDiscDiagnostics = 2048;
-        if (++device->root->music_select_disc_diagnostic_count >
-            kMaximumMusicSelectDiscDiagnostics)
+        if (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+            ++device->root->music_select_disc_diagnostic_count >
+                kMaximumMusicSelectDiscDiagnostics)
         {
             return;
         }
@@ -1053,7 +1059,8 @@ void ReportLateDrawDiagnostic(
     constexpr std::uint64_t kTargetFrame = 3000;
     constexpr std::uint32_t kMaximumLateDrawDiagnostics = 16384;
     constexpr std::uint32_t kMaximumLateDrawTargetDiagnostics = 4096;
-    if (device->root->frame_number >= kTargetFrame)
+    if (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+        device->root->frame_number >= kTargetFrame)
     {
         if (++device->root->late_draw_target_diagnostic_count >
             kMaximumLateDrawTargetDiagnostics)
@@ -1061,7 +1068,8 @@ void ReportLateDrawDiagnostic(
             return;
         }
     }
-    else if (++device->root->late_draw_diagnostic_count > kMaximumLateDrawDiagnostics)
+    else if (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+             ++device->root->late_draw_diagnostic_count > kMaximumLateDrawDiagnostics)
     {
         return;
     }
@@ -1700,7 +1708,9 @@ void ReportTransformDiagnostic(const DeviceFacade& device,
     {
         return;
     }
-    if (device.root == nullptr || ++device.root->transform_diagnostic_count > 128)
+    if (device.root == nullptr ||
+        (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+         ++device.root->transform_diagnostic_count > 128))
     {
         return;
     }
@@ -2732,7 +2742,8 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
     {
         RootFacade* const root = surface->root;
         constexpr std::uint32_t kMaximumFrameDrawSummaries = 900;
-        if (root->frame_draw_summary_count < kMaximumFrameDrawSummaries)
+        if (re2dj::platform::windows::AreCompleteDiagnosticsEnabled() ||
+            root->frame_draw_summary_count < kMaximumFrameDrawSummaries)
         {
             ++root->frame_draw_summary_count;
             LARGE_INTEGER now = {};

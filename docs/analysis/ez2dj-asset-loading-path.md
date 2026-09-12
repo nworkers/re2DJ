@@ -238,6 +238,18 @@ open은 성공하고 read만 실패하므로, VFS open 로그에는 `success=1`�
 
 ---
 
+## 6.1 진단 로그의 관찰 한계와 complete capture / Diagnostic trace observation limits and complete capture
+
+**확인됨:** 기존 VFS 진단은 asset-open, create/open, file query/read, profile-read에 각각 bounded 예산을 사용했다. 특히 file query와 `ReadFile` 진입·결과 이벤트는 하나의 1,024 이벤트 예산을 공유했으므로, 파일 I/O가 계속되어도 후반 read 이벤트가 로그에서 사라질 수 있었다. asset-open 진단은 `.bmp`와 `.str` 중심의 별도 스트림이어서 이 스트림에 없는 확장자의 부재를 파일 read 부재로 해석할 수 없다.
+
+**확인됨:** 명시적인 `--graphics-draw-diagnostics` 실행은 2026-09-13-265 이후 complete capture 모드로 VFS file/open/asset/profile 진단의 상한을 우회한다. 따라서 이 옵션을 사용한 실행에서만 로그의 특정 파일 read 부재를 로딩 경계의 근거로 사용할 수 있다. 옵션 없는 실행은 기존 bounded 정책을 유지한다.
+
+* **Confirmed:** The earlier VFS diagnostics used separate bounded budgets for asset-open, create/open, file query/read, and profile-read records. File-query and `ReadFile` enter/result events shared one 1,024-event budget, so later read events could disappear while file I/O continued. Asset-open was a separate stream focused on `.bmp` and `.str`; absence from that stream cannot be interpreted as absence of a file read for every other extension.
+
+* **Confirmed:** After 2026-09-13-265, an explicit `--graphics-draw-diagnostics` run enables complete capture and bypasses the VFS file/open/asset/profile limits. Only such a run can use the absence of a specific file-read record as evidence about the loading boundary. Runs without the option retain the bounded policy.
+
+---
+
 ## 7. HLE 경계 요약 / HLE boundary summary
 
 | 게스트 호출 | 목적 | 현재 HLE 대체 |

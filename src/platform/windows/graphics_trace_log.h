@@ -14,8 +14,8 @@ namespace re2dj::platform::windows
 // happens and the file write is skipped.
 void WriteGraphicsTraceLine(const char* message);
 
-// printf-style form of WriteGraphicsTraceLine. Lines longer than the internal
-// buffer are truncated rather than split.
+// printf-style form of WriteGraphicsTraceLine. The formatted line is sized
+// before it is written, so long diagnostic records are not truncated.
 void WriteGraphicsTraceFormat(const char* format, ...);
 
 // A per-method budget for a vtable slot that has no implementation yet. The
@@ -44,5 +44,9 @@ void ReportUnimplementedGraphicsCall(const char* interface_name,
 // graphics trace path, which the launcher always fills and which therefore
 // cannot act as a switch.
 bool AreGraphicsDrawDiagnosticsEnabled();
+
+// Whether an explicit investigation requested complete diagnostic capture.
+// Complete capture bypasses the bounded records used by the product path.
+bool AreCompleteDiagnosticsEnabled();
 
 }  // namespace re2dj::platform::windows

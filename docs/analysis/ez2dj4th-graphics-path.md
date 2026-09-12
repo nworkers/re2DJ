@@ -9,6 +9,16 @@ EZ2DJ 4th Trax가 DirectX 7 경계에서 무엇을 요구하는지, 실제 실�
 >
 > ***The draw trace requires `--graphics-draw-diagnostics` as of 2026-09-07.** Every `LateDraw`, `DrawPrimitive`, and `MusicSelectDiscDraw` observation in this document is produced inside the draw path, and those diagnostics now default to off; without the option the `.ddraw.log` carries initialization entries only. See [work log 221](../work-logs/20260907-221-draw-path-diagnostic-gate.md).*
 
+### 0.1 진단 로그 완전성 / Diagnostic trace completeness
+
+**확인됨:** 2026-09-13 실행 `20260913-024058-981`의 `LateDraw`는 정확히 20,480개에서 마지막 프레임 3043으로 끝났지만, 같은 로그의 `DrawPrimitive`는 프레임 4659까지 계속되었다. 이는 실제 실행이 계속된 뒤 `LateDraw` 상한만 소진되었음을 보여준다. 기존 `DrawPrimitive` 성공 레코드도 텍스처별 최초 성공 1회만 기록하므로 전체 draw 호출의 증거가 아니었다. VFS file trace는 file query와 read가 공유하는 1,024 이벤트에서 끝났다. 따라서 이전 로그에서 Note 또는 롱노트 관련 read가 보이지 않는다는 사실만으로 게임 미진행이나 데이터 로딩 실패를 결론 내릴 수 없다.
+
+**확인됨:** 2026-09-13-265 구현 이후 명시적인 `--graphics-draw-diagnostics`는 complete capture를 켠다. 이 모드에서는 관련 그래픽/VFS 상한을 우회하고 장문 graphics 레코드를 동적 길이로 기록한다. 옵션 없는 실행은 bounded 정책을 유지한다. 이 항목은 로거의 관찰 계약이며 노트 렌더링 또는 게임 로직의 원인을 확정하는 분석이 아니다.
+
+* **Confirmed:** In run `20260913-024058-981` on 2026-09-13, `LateDraw` ended at exactly 20,480 records at frame 3043, while `DrawPrimitive` in the same log continued through frame 4659. This shows that execution continued after the `LateDraw` budget was exhausted. Successful `DrawPrimitive` records were also first-success-per-texture reports rather than a complete draw stream. The VFS file trace ended at its shared 1,024-event budget across file queries and reads. Therefore the absence of Note or long-note reads in the earlier log cannot by itself establish that the game was not played or that loading failed.
+
+* **Confirmed:** After the 2026-09-13-265 implementation, an explicit `--graphics-draw-diagnostics` enables complete capture. Relevant graphics/VFS limits are bypassed and long graphics records are written at their required length. Runs without the option retain the bounded policy. This is a logger observation contract, not a conclusion about the cause of note rendering or game logic behavior.
+
 ---
 
 ## 1. 인터페이스 선택 (확인됨) (Interface Selection — Confirmed)
@@ -223,6 +233,34 @@ Task 187에서 전역 인스턴스 `0x00aca5b0`과 vtable 계통, 그리고 초�
 **확정됨:** 사용자는 culling 적용 후에도 상단 헤더 뒤 디스크가 보였지만, Task 198의 DESTCOLOR/INVSRCALPHA 지원 후 실행 `20260905-185621-933`에서는 정상으로 돌아왔다고 확인했습니다. 해당 로그는 중앙 mask `texture=250`과 상단 header mask `texture=280`을 `srcblend=9`, `dstblend=6`, `reason=success`로 기록하고, header artwork `texture=281`을 이어서 성공 처리합니다. 오류와 unsupported blend 기록은 0건입니다. 따라서 누락된 목적지 색상 mask draw가 디스크와 광선을 가리지 못하게 한 직접 원인으로 확정합니다. 상세 근거는 [원판 상태 분석](ez2dj4th-music-select-disc-state.md)에 둡니다.
 
 *Confirmed: The user reported a disc behind the header after culling, then confirmed that the screen returned to normal after Task 198 added DESTCOLOR/INVSRCALPHA support. Run `20260905-185621-933` records center mask texture 250 and header mask texture 280 with `srcblend=9`, `dstblend=6`, and `reason=success`, followed by successful additive header artwork texture 281. It has zero unsupported-blend and draw-failure records. The missing destination-color mask draw is therefore confirmed as the direct cause; see [disc-state analysis](ez2dj4th-music-select-disc-state.md).*
+
+### 5.11 목적지 알파 blend 거부와 note 출력 후보 (Destination-Alpha Blend Rejection and Note Candidate)
+
+**확인됨 — 진단 실행 `20260913-013726-216`에서 66건의 `DrawPrimitive`가 backend 호출 전에 `unsupported Direct3D3 alpha blend factor`로 거부되었다.** 대표 기록은 `texture=580`, `srcblend=9`(`D3DBLEND_DESTCOLOR`), `dstblend=8`(`D3DBLEND_INVDESTALPHA`)이며, 같은 texture에서 frame과 bounds가 변하는 draw가 반복되었다. `texture=2716`에서도 같은 종류의 1건이 관찰되었다.
+
+**확인됨 — 같은 실행의 CHD-backed VFS read 445건은 모두 `ok=1`이었고, `Note_white_0..5.abm`, `Note_BLUE_0..5.abm`, `Note_PEDAL_0..5.abm`을 포함한 note 관련 asset open이 성공했다.** 실패한 open은 `\\.\NTICE` 2건과 native fallback의 `System\\SongInfo\\temp.abm` 1건이었으며, note texture read 실패 증거는 없다.
+
+**판단 — 이번 증거에서 note가 보이지 않는 직접적인 HLE 결함 후보는 데이터 로딩보다 blend decoder/backend의 ABI 8 누락이다.** `DecodeLegacyBlendFactor`가 raw 8을 지원하지 않아 facade가 정점과 texture를 backend에 전달하지 않았으며, Task 264에서 7/8을 각각 destination alpha enum과 OpenGL 계수로 보완한다. 수정 후에도 개별 note의 visibility가 확인되지 않으면 texture identity와 실제 gameplay frame을 연결하는 추가 실행이 필요하다.
+
+*Confirmed: In diagnostic run `20260913-013726-216`, 66 `DrawPrimitive` calls were rejected before the backend with `unsupported Direct3D3 alpha blend factor`. The representative record used `texture=580`, `srcblend=9` (`D3DBLEND_DESTCOLOR`), and `dstblend=8` (`D3DBLEND_INVDESTALPHA`), with repeated draws whose frame and bounds changed. One additional failure of the same kind was observed for `texture=2716`.*
+
+*Confirmed: The same run had 445 successful CHD-backed VFS read results, including successful opens for note-related assets such as `Note_white_0..5.abm`, `Note_BLUE_0..5.abm`, and `Note_PEDAL_0..5.abm`. The three open failures were two `\\.\NTICE` probes and one native-fallback `System\\SongInfo\\temp.abm` probe; there is no evidence of a note-texture read failure.*
+
+*Assessment: In this evidence, the direct HLE candidate for invisible notes is the missing ABI-8 blend conversion rather than data loading. Because `DecodeLegacyBlendFactor` rejected raw 8, the facade did not forward the vertices and texture to the backend. Task 264 adds destination-alpha enum and OpenGL mappings for 7/8. If individual note visibility is still unresolved afterward, a further run must correlate texture identities with a real gameplay frame.*
+
+### 5.12 depth-disabled transformed vertex의 OpenGL clip 후보 (Transformed-Vertex Clip Candidate)
+
+**확인됨 — 최신 complete capture `20260913-030626-082`에서 note 관련 데이터 로딩은 성공했다.** `Note_white_0..5.abm`, `Note_BLUE_0..5.abm`, `Note_PEDAL_0..5.abm`, `LONG_EFFECT0..3.abm`의 asset open/read 결과는 모두 성공이며, `DrawPrimitive` 297,628건도 모두 `reason=success`, `result=0x00000000`으로 기록되었다. 따라서 이번 실행은 profile 또는 CHD-backed VFS 실패의 증거가 아니다.
+
+**확인됨 — 같은 실행에서 texture draw 11,755건이 `z=-107374176.000000`, `rhw=1.000000`, `zenable=0`을 사용했다.** 이 float는 정점 메모리의 `0xCCCCCCCC` debug-fill 값과 일치하며, 해당 기록에는 texture `425..429`, `433..437`, `501`이 포함된다. 현재 SDL3/OpenGL vertex shader는 `a_position.z`를 clip-space 깊이에 사용하므로, `GL_DEPTH_TEST`가 꺼져도 clip volume 밖의 z가 primitive를 제거할 수 있다. OpenGL API 오류가 없다는 사실은 rasterization 전 clip으로 사라지는 경우를 배제하지 않는다.
+
+**구현됨 — depth test가 꺼진 transformed draw에서 clip 깊이를 `0.5`로 보정한다.** `ResolveLegacyClipDepth`는 `LegacyFixedFunctionState::depth_test_enabled`가 false이면 OpenGL clip 계산에 유효한 중립 깊이를 선택하고, true이면 guest z를 보존한다. x/y/rhw/UV/color, texture/VFS, blend와 원본 실행 파일은 변경하지 않는다. 사용자 화면에서 모든 note와 롱노트가 복원되는지는 실제 gameplay 재실행으로 확인해야 한다.
+
+*Confirmed: In the latest complete capture `20260913-030626-082`, note-related data loading succeeds. Asset opens/reads for `Note_white_0..5.abm`, `Note_BLUE_0..5.abm`, `Note_PEDAL_0..5.abm`, and `LONG_EFFECT0..3.abm` all succeed, and all 297,628 `DrawPrimitive` records report `reason=success` and `result=0x00000000`. This run therefore contains no evidence of a profile or CHD-backed VFS failure.*
+
+*Confirmed: In the same run, 11,755 textured draws use `z=-107374176.000000`, `rhw=1.000000`, and `zenable=0`. The float matches the `0xCCCCCCCC` debug-fill value in transformed vertex memory; the records include textures `425..429`, `433..437`, and `501`. The SDL3/OpenGL vertex shader uses `a_position.z` for clip-space depth, so a z outside the clip volume can remove a primitive even while `GL_DEPTH_TEST` is disabled. The absence of an OpenGL API error does not exclude clipping before rasterization.*
+
+*Implemented: Depth-disabled transformed draws now use clip depth `0.5` through `ResolveLegacyClipDepth`, while depth-enabled draws preserve guest z. x/y/rhw/UV/color, texture/VFS behavior, blending, and the original executable are unchanged. Whether this restores every missing note and long note remains a user gameplay re-run item.*
 
 ## 6. 아직 확인하지 못한 것 (미확정) (Unresolved)
 

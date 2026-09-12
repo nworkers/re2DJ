@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "graphics_trace_log.h"
 
@@ -77,21 +78,45 @@ void WriteGraphicsTraceFormat(const char* format, ...)
     {
         return;
     }
-    char message[1024] = {};
     va_list arguments;
     va_start(arguments, format);
-    const int length = std::vsnprintf(message, sizeof(message), format, arguments);
+    va_list sizing_arguments;
+    va_copy(sizing_arguments, arguments);
+    const int length = std::vsnprintf(nullptr, 0, format, sizing_arguments);
+    va_end(sizing_arguments);
     va_end(arguments);
     if (length <= 0)
     {
         return;
     }
-    WriteGraphicsTraceLine(message);
+    constexpr std::size_t kStackMessageCapacity = 2048;
+    if (static_cast<std::size_t>(length) < kStackMessageCapacity)
+    {
+        char message[kStackMessageCapacity] = {};
+        va_start(arguments, format);
+        std::vsnprintf(message, sizeof(message), format, arguments);
+        va_end(arguments);
+        WriteGraphicsTraceLine(message);
+        return;
+    }
+    va_start(arguments, format);
+    std::vector<char> message(static_cast<std::size_t>(length) + 1, '\0');
+    std::vsnprintf(message.data(), message.size(), format, arguments);
+    va_end(arguments);
+    WriteGraphicsTraceLine(message.data());
 }
 
 bool AreGraphicsDrawDiagnosticsEnabled()
 {
     return g_re2dj_graphics_draw_diagnostics != 0;
+}
+
+bool AreCompleteDiagnosticsEnabled()
+{
+    // The draw-diagnostics switch is an explicit investigation request. The
+    // correlated VFS trace uses the same request so later file reads cannot
+    // disappear while the draw trace remains enabled.
+    return AreGraphicsDrawDiagnosticsEnabled();
 }
 
 void ReportUnimplementedGraphicsCall(const char* interface_name,

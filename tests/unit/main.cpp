@@ -31,6 +31,7 @@ int main()
     RunEz2DancerIoBoardTests(context);
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);
+    RunPresentationFilterTests(context);
     RunLegacyTextureTests(context);
     RunLegacyTransformTests(context);
     RunLegacyVertexBufferTests(context);

@@ -64,6 +64,12 @@ bool DecodeLegacyBlendFactor(std::uint32_t value, BlendFactor* factor)
     case 6:
         *factor = BlendFactor::kInverseSourceAlpha;
         return true;
+    case 7:
+        *factor = BlendFactor::kDestinationAlpha;
+        return true;
+    case 8:
+        *factor = BlendFactor::kInverseDestinationAlpha;
+        return true;
     case 9:
         *factor = BlendFactor::kDestinationColor;
         return true;
@@ -73,6 +79,14 @@ bool DecodeLegacyBlendFactor(std::uint32_t value, BlendFactor* factor)
     default:
         return false;
     }
+}
+
+float ResolveLegacyClipDepth(const LegacyFixedFunctionState& state, float guest_z)
+{
+    // Direct3D transformed vertices can leave z undefined when depth testing is
+    // disabled. OpenGL still clips by clip-space depth, so use an in-range
+    // neutral value unless the guest actually requested depth testing.
+    return state.depth_test_enabled ? guest_z : kLegacyNeutralClipDepth;
 }
 
 bool DecodeTransformedLitVertices(std::span<const std::byte> source,

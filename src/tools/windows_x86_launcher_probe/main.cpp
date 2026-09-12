@@ -8882,6 +8882,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         else if (option == "--graphics-draw-diagnostics")
         {
             graphics_draw_diagnostics = true;
+            hle_d3d3 = true;
+            inject_runtime = true;
+            software_breakpoint = true;
         }
         else if (option == "--ksnd-load-trace")
         {
@@ -11700,6 +11703,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             hardlock_transform_input_dump_path;
         child_follow_options.message_box = child_hle_message_box;
         child_follow_options.hle_d3d3 = child_hle_d3d3;
+        child_follow_options.graphics_draw_diagnostics = graphics_draw_diagnostics;
         child_follow_options.fullscreen = child_fullscreen;
         child_follow_options.hle_directsound = child_hle_directsound;
         child_follow_options.hle_io_ports = child_hle_io_ports;

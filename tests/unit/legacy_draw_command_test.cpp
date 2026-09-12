@@ -37,6 +37,26 @@ void RunLegacyDrawCommandTests(re2dj::test::Context& context)
                     re2dj::graphics::kLegacyDrawWaitFlag));
     RE2DJ_CHECK(context, !re2dj::graphics::AreLegacyDrawFlagsSupported(0x00000002));
 
+    re2dj::graphics::LegacyFixedFunctionState clip_state;
+    clip_state.depth_test_enabled = false;
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::graphics::ResolveLegacyClipDepth(clip_state, -107374176.0f),
+                   re2dj::graphics::kLegacyNeutralClipDepth);
+    clip_state.depth_test_enabled = true;
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::graphics::ResolveLegacyClipDepth(clip_state, -107374176.0f),
+                   -107374176.0f);
+
+    re2dj::graphics::BlendFactor blend_factor = re2dj::graphics::BlendFactor::kZero;
+    RE2DJ_CHECK(context,
+                re2dj::graphics::DecodeLegacyBlendFactor(7, &blend_factor));
+    RE2DJ_CHECK(context,
+                blend_factor == re2dj::graphics::BlendFactor::kDestinationAlpha);
+    RE2DJ_CHECK(context,
+                re2dj::graphics::DecodeLegacyBlendFactor(8, &blend_factor));
+    RE2DJ_CHECK(context,
+                blend_factor == re2dj::graphics::BlendFactor::kInverseDestinationAlpha);
+
     const std::array<PackedVertex, 4> input = {{
         {0.0f, 480.0f, 0.99f, 0.5f, 0xffffffff, 0, 0.0f, 1.0f},
         {0.0f, 0.0f, 0.99f, 0.5f, 0xffffffff, 0, 0.0f, 0.0f},

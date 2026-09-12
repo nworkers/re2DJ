@@ -201,6 +201,7 @@ add_library(re2dj_legacy_graphics STATIC
     src/graphics/legacy_texture.cpp
     src/graphics/legacy_transform.cpp
     src/graphics/legacy_vertex_buffer.cpp
+    src/graphics/presentation_filter.cpp
 )
 target_include_directories(re2dj_legacy_graphics PUBLIC include)
 target_link_libraries(re2dj_legacy_graphics PRIVATE re2dj_warnings)
@@ -507,6 +508,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/lptdi_response_profile_test.cpp
         tests/unit/legacy_io_port_bus_test.cpp
         tests/unit/legacy_draw_command_test.cpp
+        tests/unit/presentation_filter_test.cpp
         tests/unit/legacy_texture_test.cpp
         tests/unit/legacy_transform_test.cpp
         tests/unit/legacy_vertex_buffer_test.cpp

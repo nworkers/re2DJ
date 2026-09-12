@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "re2dj/graphics/presentation_filter.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 
 namespace re2dj::graphics
@@ -731,7 +732,7 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
         GlVertex output = {};
         output.position[0] = input.x;
         output.position[1] = input.y;
-        output.position[2] = input.z;
+        output.position[2] = ResolveLegacyClipDepth(state, input.z);
         output.position[3] =
             command.topology == PrimitiveTopology::kLineList && input.reciprocal_w == 0.0f
                 ? 1.0f
@@ -959,6 +960,10 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
                 return GL_SRC_ALPHA;
             case BlendFactor::kInverseSourceAlpha:
                 return GL_ONE_MINUS_SRC_ALPHA;
+            case BlendFactor::kDestinationAlpha:
+                return GL_DST_ALPHA;
+            case BlendFactor::kInverseDestinationAlpha:
+                return GL_ONE_MINUS_DST_ALPHA;
             case BlendFactor::kDestinationColor:
                 return GL_DST_COLOR;
             case BlendFactor::kInverseDestinationColor:
@@ -1099,6 +1104,11 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     }
     const int presentation_x = (pixel_width - presentation_width) / 2;
     const int presentation_y = (pixel_height - presentation_height) / 2;
+    const PresentationFilter presentation_filter = SelectPresentationFilter(
+        impl_->logical_width,
+        impl_->logical_height,
+        static_cast<std::uint32_t>(presentation_width),
+        static_cast<std::uint32_t>(presentation_height));
     impl_->viewport(presentation_x,
                     presentation_y,
                     presentation_width,
@@ -1116,8 +1126,11 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
         impl_->uniform_1f(impl_->uniforms.alpha_reference, 0.0f);
     }
     impl_->bind_texture(GL_TEXTURE_2D, impl_->render_color_texture);
-    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    const GLint gl_presentation_filter = presentation_filter == PresentationFilter::kNearest
+                                             ? static_cast<GLint>(GL_NEAREST)
+                                             : static_cast<GLint>(GL_LINEAR);
+    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, gl_presentation_filter);
+    impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, gl_presentation_filter);
     impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
     impl_->tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
     std::array<GlVertex, 4> vertices = {};

@@ -81,6 +81,7 @@ void RunLegacyIoPortBusTests(re2dj::test::Context& context);
 void RunEz2DjIoBoardTests(re2dj::test::Context& context);
 void RunEz2DancerIoBoardTests(re2dj::test::Context& context);
 void RunLegacyDrawCommandTests(re2dj::test::Context& context);
+void RunPresentationFilterTests(re2dj::test::Context& context);
 void RunLegacyTextureTests(re2dj::test::Context& context);
 void RunLegacyTransformTests(re2dj::test::Context& context);
 void RunLegacyVertexBufferTests(re2dj::test::Context& context);

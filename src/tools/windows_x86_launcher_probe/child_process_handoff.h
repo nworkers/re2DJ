@@ -41,6 +41,7 @@ struct BootstrapChildHandoffOptions
     std::filesystem::path hardlock_transform_input_dump_path;
     bool message_box = false;
     bool hle_d3d3 = false;
+    bool graphics_draw_diagnostics = false;
     bool fullscreen = false;
     bool hle_directsound = false;
     bool hle_io_ports = false;

@@ -49,7 +49,11 @@ RGB565 source color key는 packed low/high의 inclusive 범위다. linear filter
 
 `D3DBLEND_DESTCOLOR(9)`는 목적지 RGB를 source factor로 사용하고 OpenGL `GL_DST_COLOR`에 대응합니다. `INVDESTCOLOR(10)`은 각각 `1 - destination`/`GL_ONE_MINUS_DST_COLOR`입니다. 일반 가산 blend 식에서 DESTCOLOR/INVSRCALPHA의 RGB는 `Cs * Cd + Cd * (1 - As)`입니다. source alpha가 1이면 `Cs * Cd`가 되어 검정에 가까운 mask는 목적지를 지우고 white mask는 보존합니다. 뒤에 ONE/ONE 그림을 더하면 불투명 UI를 두 pass로 합성할 수 있습니다. alpha가 1이 아니면 두 번째 항도 유지해야 합니다. [Microsoft D3DBLEND](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dblend), [Khronos glBlendFunc](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBlendFunc.xhtml).
 
+`D3DBLEND_DESTALPHA(7)`와 `D3DBLEND_INVDESTALPHA(8)`는 각각 destination alpha와 `1 - destination alpha`를 source/destination factor로 사용하며 OpenGL `GL_DST_ALPHA`와 `GL_ONE_MINUS_DST_ALPHA`에 대응합니다. 따라서 RGB만 보아도 destination alpha가 1이면 7/8 조합의 source 항은 유지되고 destination 항은 제거됩니다. 이 계수는 원본 draw 상태에서 명시적으로 지원해야 하며, 미지원으로 draw 전체를 버리면 해당 texture의 화면 출력이 사라집니다.
+
 *DESTCOLOR(9) uses destination color as the source factor and maps to GL_DST_COLOR; INVDESTCOLOR(10) maps to one minus destination / GL_ONE_MINUS_DST_COLOR. DESTCOLOR/INVSRCALPHA computes Cs*Cd + Cd*(1-As). With source alpha one it becomes Cs*Cd, allowing a near-black mask to erase and a white mask to preserve the destination before ONE/ONE artwork addition. Preserve the second term for partial alpha. Sources: [Microsoft D3DBLEND](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dblend) and [Khronos glBlendFunc](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBlendFunc.xhtml).*
+
+*DESTALPHA(7) and INVDESTALPHA(8) use destination alpha and one minus destination alpha as the blend factors, mapping to GL_DST_ALPHA and GL_ONE_MINUS_DST_ALPHA. Even for RGB, a destination alpha of one keeps the source term and removes the destination term for the 7/8 pair. These factors must be represented explicitly in the original draw state; rejecting them as unsupported drops the texture draw entirely.*
 
 ## DirectDraw offscreen surface와 2D blit
 
