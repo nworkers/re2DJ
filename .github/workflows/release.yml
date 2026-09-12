@@ -1,0 +1,151 @@
+name: Release
+
+# Build a Windows x86 distribution for every v* tag. A manual run is useful
+# for checking the package, but it does not publish a GitHub Release without a
+# tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Windows x86 Release build and package
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version gate
+        id: version
+        shell: powershell
+        run: |
+          $version = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$')
+          {
+              throw "VERSION must use major.minor.patch format, found '$version'."
+          }
+
+          if ('${{ github.ref_type }}' -eq 'tag')
+          {
+              $tag = '${{ github.ref_name }}'
+              $tagVersion = $tag -replace '^v', ''
+              if ($tagVersion -ne $version)
+              {
+                  Write-Host "::error::VERSION file and tag disagree."
+                  Write-Host "  VERSION file : $version"
+                  Write-Host "  tag          : $tag (reads as $tagVersion)"
+                  exit 1
+              }
+              Write-Host "Tag $tag matches VERSION $version."
+          }
+          else
+          {
+              Write-Host "Manual run; using VERSION $version without a tag comparison."
+          }
+
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$version`r`n")
+
+      - name: Restore FetchContent dependency cache
+        uses: actions/cache@v4
+        with:
+          path: build/windows-x86/_deps
+          key: deps-windows-2022-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            deps-windows-2022-
+
+      - name: Build (Release)
+        shell: powershell
+        run: .\scripts\build_release.ps1 -SkipTests
+
+      - name: Test (Release)
+        shell: powershell
+        # The full product lifecycle probe can wait for an original-device
+        # boundary. Its deterministic VFS mode is run separately below.
+        run: >-
+          ctest --test-dir build/windows-x86 -C Release
+          --output-on-failure -E re2dj_windows_vfs_runtime_probe
+
+      - name: Test VFS enumeration probe
+        shell: powershell
+        run: |
+          & .\build\windows-x86\bin\Release\re2dj_windows_vfs_runtime_probe.exe --vfs-enumeration-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package
+        id: package
+        shell: powershell
+        run: .\scripts\package_release.ps1 -Configuration Release -Version ${{ steps.version.outputs.version }}
+
+      - name: Upload workflow artifact
+        if: always() && steps.package.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: re2dj-v${{ steps.version.outputs.version }}-windows-x86
+          path: |
+            build/package/*.zip
+            build/package/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update GitHub Release
+        if: success() && github.ref_type == 'tag'
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $files = @(Get-ChildItem -Path 'build\package\*.zip', 'build\package\*.sha256' -File |
+              ForEach-Object { $_.FullName })
+          if ($files.Count -eq 0)
+          {
+              throw "No release files were produced for $tag."
+          }
+
+          $ErrorActionPreference = 'Continue'
+          gh release view $tag | Out-Null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          $ErrorActionPreference = 'Stop'
+
+          $notesFile = Join-Path 'docs\release-notes' "$tag.md"
+          $hasNotes = Test-Path $notesFile
+          if ($hasNotes)
+          {
+              Write-Host "Using release notes from $notesFile."
+          }
+          else
+          {
+              Write-Host "No $notesFile; falling back to generated notes."
+          }
+
+          if ($releaseExists)
+          {
+              gh release upload $tag @files --clobber
+              if ($hasNotes)
+              {
+                  gh release edit $tag --notes-file $notesFile
+              }
+          }
+          else
+          {
+              $notesArguments = if ($hasNotes)
+              {
+                  @('--notes-file', $notesFile)
+              }
+              else
+              {
+                  @('--generate-notes')
+              }
+              gh release create $tag @files --title $tag @notesArguments
+          }

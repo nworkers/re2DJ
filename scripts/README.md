@@ -36,3 +36,13 @@ PowerShell script 실행이 시스템 policy로 제한된 환경에서는 `power
 powershell -ExecutionPolicy Bypass -File scripts/build_release.ps1
 powershell -ExecutionPolicy Bypass -File scripts/build_release.ps1 -SkipTests
 ```
+
+## GitHub Release package
+
+`package_release.ps1` collects the Release `re2dj.exe`, injected runtime DLL, example `config/`, and user-facing repository documents into a Windows x86 zip and writes a SHA256 sidecar file. It does not include original HDD or CHD assets. `package_release.bat` is the command-prompt wrapper.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Configuration Release -Version 0.0.40
+```
+
+*`package_release.ps1` collects the Release `re2dj.exe`, injected runtime DLL, example `config/`, and user-facing repository documents into a Windows x86 zip and writes a SHA256 sidecar file. It never includes original HDD or CHD assets. `package_release.bat` is the command-prompt wrapper. The GitHub Actions workflow uses this package and reads optional notes from `docs/release-notes/v<version>.md`.*
