@@ -21,18 +21,41 @@ namespace
 
 constexpr char kWindowTitleFormat[] =
     "re2DJ v%s - Build %s - SDL3 OpenGL - FPS : %.1f";
-constexpr DWORD kWindowedScale = 2;
+constexpr DWORD kDefaultWindowScale = 2;
 constexpr DWORD kWindowedStyle = WS_OVERLAPPEDWINDOW;
 constexpr DWORD kFullscreenStyle = WS_POPUP;
 constexpr DWORD kExtendedStyle = WS_EX_APPWINDOW;
 constexpr DWORD kWindowLifetimePollMilliseconds = 50;
 constexpr DWORD kWindowLifetimeSamplePolls = 20;
 constexpr DWORD kWindowLifetimeMaximumSamples = 600;
+constexpr DWORD kWindowLifetimeHiddenGracePolls = 20;
 PVOID volatile g_watched_window = nullptr;
 volatile LONG g_window_lifetime_watcher_started = FALSE;
+volatile LONG g_window_mode_transition = FALSE;
 SRWLOCK g_window_title_lock = SRWLOCK_INIT;
 char g_window_title[192] = {};
 volatile LONG g_caption_trace_count = 0;
+DWORD g_window_scale = kDefaultWindowScale;
+DWORD g_logical_client_width = 0;
+DWORD g_logical_client_height = 0;
+
+bool WindowModeTransitionActive()
+{
+    return InterlockedCompareExchange(&g_window_mode_transition, 0, 0) != FALSE;
+}
+
+struct WindowModeTransitionGuard
+{
+    WindowModeTransitionGuard()
+    {
+        InterlockedIncrement(&g_window_mode_transition);
+    }
+
+    ~WindowModeTransitionGuard()
+    {
+        InterlockedDecrement(&g_window_mode_transition);
+    }
+};
 
 void CopyWindowTitle(char* destination, std::size_t destination_size)
 {
@@ -128,22 +151,37 @@ DWORD WINAPI WatchWindowLifetime(void*)
 {
     DWORD polls = 0;
     DWORD samples = 0;
+    DWORD hidden_polls = 0;
     while (true)
     {
         const HWND window = reinterpret_cast<HWND>(InterlockedCompareExchangePointer(
             &g_watched_window, nullptr, nullptr));
         const BOOL valid = window == nullptr ? FALSE : IsWindow(window);
         const BOOL visible = valid == FALSE ? FALSE : IsWindowVisible(window);
+        const bool transitioning = WindowModeTransitionActive();
         if (samples < kWindowLifetimeMaximumSamples &&
             polls % kWindowLifetimeSamplePolls == 0)
         {
             TraceWindowLifetime("sample", window, valid, visible);
             ++samples;
         }
-        if (window != nullptr && (valid == FALSE || visible == FALSE))
+        if (window != nullptr && valid == FALSE)
         {
             TraceWindowLifetime("watcher-exit", window, valid, visible);
             TerminateCurrentProcessForHostClose();
+        }
+        if (window != nullptr && visible == FALSE)
+        {
+            hidden_polls = transitioning ? 0 : hidden_polls + 1;
+            if (hidden_polls >= kWindowLifetimeHiddenGracePolls)
+            {
+                TraceWindowLifetime("watcher-exit", window, valid, visible);
+                TerminateCurrentProcessForHostClose();
+            }
+        }
+        else
+        {
+            hidden_polls = 0;
         }
         ++polls;
         Sleep(kWindowLifetimePollMilliseconds);
@@ -212,7 +250,7 @@ extern "C" __declspec(dllexport) void WINAPI Re2djExitIfWindowClosed(HWND window
     window = PresentationWindow(window);
     const BOOL valid = window == nullptr ? FALSE : IsWindow(window);
     const BOOL visible = valid == FALSE ? FALSE : IsWindowVisible(window);
-    if (window != nullptr && (valid == FALSE || visible == FALSE))
+    if (window != nullptr && valid == FALSE)
     {
         TraceWindowLifetime("flip-exit", window, valid, visible);
         TerminateCurrentProcessForHostClose();
@@ -250,13 +288,18 @@ bool ApplyRe2djWindowMode(HWND window, DWORD client_width, DWORD client_height)
     }
     if (g_re2dj_fullscreen == FALSE &&
         (client_width > static_cast<DWORD>((std::numeric_limits<LONG>::max)()) /
-                            kWindowedScale ||
+                            g_window_scale ||
          client_height > static_cast<DWORD>((std::numeric_limits<LONG>::max)()) /
-                             kWindowedScale))
+                             g_window_scale))
     {
         SetLastError(ERROR_ARITHMETIC_OVERFLOW);
         return false;
     }
+
+    WindowModeTransitionGuard transition_guard;
+
+    g_logical_client_width = client_width;
+    g_logical_client_height = client_height;
 
     const HWND host_window = EnsureRe2djHostWindow(window, &HandleHostClose);
     if (host_window == nullptr)
@@ -277,8 +320,8 @@ bool ApplyRe2djWindowMode(HWND window, DWORD client_width, DWORD client_height)
                       ? monitor_info.rcMonitor
                       : RECT{0,
                              0,
-                             static_cast<LONG>(client_width * kWindowedScale),
-                             static_cast<LONG>(client_height * kWindowedScale)};
+                             static_cast<LONG>(client_width * g_window_scale),
+                             static_cast<LONG>(client_height * g_window_scale)};
     if (!fullscreen && !AdjustWindowBoundsForDpi(host_window,
                                                  &bounds,
                                                  style,
@@ -328,4 +371,41 @@ bool ApplyRe2djWindowMode(HWND window, DWORD client_width, DWORD client_height)
     }
     TraceWindowCaption("mode-applied", host_window);
     return StartWindowLifetimeWatcher(host_window);
+}
+
+bool SetRe2djWindowScale(HWND window, DWORD scale)
+{
+    if (scale < 1 || scale > 3 || g_logical_client_width == 0 ||
+        g_logical_client_height == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    const DWORD previous_scale = g_window_scale;
+    g_window_scale = scale;
+    if (ApplyRe2djWindowMode(window, g_logical_client_width, g_logical_client_height))
+    {
+        return true;
+    }
+    g_window_scale = previous_scale;
+    ApplyRe2djWindowMode(window, g_logical_client_width, g_logical_client_height);
+    return false;
+}
+
+bool ToggleRe2djFullscreen(HWND window)
+{
+    if (g_logical_client_width == 0 || g_logical_client_height == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    const DWORD previous_fullscreen = g_re2dj_fullscreen;
+    g_re2dj_fullscreen = previous_fullscreen == FALSE ? TRUE : FALSE;
+    if (ApplyRe2djWindowMode(window, g_logical_client_width, g_logical_client_height))
+    {
+        return true;
+    }
+    g_re2dj_fullscreen = previous_fullscreen;
+    ApplyRe2djWindowMode(window, g_logical_client_width, g_logical_client_height);
+    return false;
 }

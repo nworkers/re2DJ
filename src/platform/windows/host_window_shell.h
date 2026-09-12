@@ -8,6 +8,8 @@ using Re2djHostCloseCallback = void (*)(HWND guest_window);
 
 HWND EnsureRe2djHostWindow(HWND guest_window, Re2djHostCloseCallback close_callback);
 HWND ResolveRe2djHostWindow(HWND guest_window);
+bool SuspendRe2djGuestWindowInput(HWND guest_window);
+bool EnsureRe2djGuestWindowInput(HWND guest_window);
 bool ConfigureRe2djHostWindow(HWND host_window,
                               HWND guest_window,
                               DWORD host_style,

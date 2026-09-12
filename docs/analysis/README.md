@@ -38,5 +38,6 @@
 | [ez2dj4th-graphics-path.md](ez2dj4th-graphics-path.md) | 4th가 DirectX 7 경계에 요구하는 인터페이스·표면·디바이스와 현재 차단 지점 | 표면 형식과 디바이스 요구는 실행으로 확인됨, present와 종료 원인은 미확정 |
 | [ez2d2m-chd-filesystem.md](ez2d2m-chd-filesystem.md) | EZ2Dancer 2nd MOVE CHD의 볼륨 geometry, Windows 98 SE 배치, 게임 디렉터리, `EZ2Dancer.exe` PE 구조와 packed import directory | 정적 관찰로 확인됨, Hardlock 응답과 실행 성공은 미확정 |
 | [ez2dancer-io-map.md](ez2dancer-io-map.md) | EZ2Dancer의 16비트 폭 `0x300`~`0x30c` 포트 맵과 EZ2DJ byte 폭 보드와의 차이 | 전부 공개 구현 기반 추정, 원본 helper RVA는 미확정 |
+| [ez2d2m-ez2dj4th-graphics-clear.md](ez2d2m-ez2dj4th-graphics-clear.md) | `ez2d2m`/`ez2dj4th` retained-frame presentation and Direct3D clear forwarding | Both `DDSCAPS_FLIP` and `LegacyDeviceClear` traces confirmed; HLE omission fixed, new-screen verification pending |
 
 *Update this table in the same task whenever an analysis document is added or renamed.*

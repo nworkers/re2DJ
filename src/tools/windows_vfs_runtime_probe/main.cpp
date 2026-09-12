@@ -915,7 +915,8 @@ int main()
                  Check((windowed_style & WS_CAPTION) == WS_CAPTION &&
                            (windowed_style & WS_SYSMENU) != 0 &&
                            (windowed_style & WS_THICKFRAME) != 0 &&
-                           (windowed_style & WS_MAXIMIZEBOX) != 0,
+                           (windowed_style & WS_MAXIMIZEBOX) != 0 &&
+                           (windowed_style & WS_VISIBLE) != 0,
                        "windowed style policy failed") &&
                  Check(SUCCEEDED(DwmGetWindowAttribute(
                            presentation_window,
@@ -952,6 +953,95 @@ int main()
                            std::strstr(window_title, " - FPS : 59.9") != nullptr,
                        "window FPS title policy failed");
 
+        const auto windowed_client_size_is = [&](LONG width, LONG height) {
+            RECT current_client = {};
+            return GetClientRect(presentation_window, &current_client) != FALSE &&
+                   current_client.right - current_client.left == width &&
+                   current_client.bottom - current_client.top == height;
+        };
+        passed = passed &&
+                 Check(SendMessageA(graphics_window, WM_SYSKEYDOWN, '1', 0) == 0 &&
+                           windowed_client_size_is(640, 480),
+                       "Alt+1 window scale policy failed") &&
+                 Check(SendMessageA(graphics_window, WM_SYSKEYDOWN, '2', 0) == 0 &&
+                           windowed_client_size_is(1280, 960),
+                       "Alt+2 window scale policy failed") &&
+                 Check(SendMessageA(graphics_window, WM_SYSKEYDOWN, '3', 0) == 0 &&
+                           windowed_client_size_is(1920, 1440) &&
+                           (GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_VISIBLE) != 0,
+                       "Alt+3 window scale policy failed") &&
+                 Check(SendMessageA(graphics_window, WM_SYSKEYDOWN, '2', 0) == 0 &&
+                           windowed_client_size_is(1280, 960),
+                       "window scale restore policy failed") &&
+                 Check(SendMessageA(presentation_window, WM_SYSKEYDOWN, '1', 0) == 0 &&
+                           windowed_client_size_is(640, 480),
+                       "host Alt+1 window scale policy failed") &&
+                 Check(SendMessageA(presentation_window, WM_SYSKEYDOWN, '2', 0) == 0 &&
+                           windowed_client_size_is(1280, 960),
+                       "host Alt+2 window scale policy failed") &&
+                 Check(SendMessageA(presentation_window, WM_SYSKEYDOWN, '3', 0) == 0 &&
+                           windowed_client_size_is(1920, 1440),
+                       "host Alt+3 window scale policy failed") &&
+                 Check(SendMessageA(presentation_window, WM_SYSKEYDOWN, '2', 0) == 0 &&
+                           windowed_client_size_is(1280, 960),
+                       "host window scale restore policy failed") &&
+                 Check([&]() {
+                           RECT current_window = {};
+                           if (GetWindowRect(presentation_window, &current_window) == FALSE)
+                           {
+                               return false;
+                           }
+                           RECT proposed = current_window;
+                           proposed.right += 200;
+                           if (SendMessageA(presentation_window,
+                                             WM_SIZING,
+                                             WMSZ_RIGHT,
+                                             reinterpret_cast<LPARAM>(&proposed)) != TRUE ||
+                               SetWindowPos(presentation_window,
+                                            nullptr,
+                                            proposed.left,
+                                            proposed.top,
+                                            proposed.right - proposed.left,
+                                            proposed.bottom - proposed.top,
+                                            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW) ==
+                                   FALSE)
+                           {
+                               return false;
+                           }
+                           RECT resized_client = {};
+                           if (GetClientRect(presentation_window, &resized_client) == FALSE)
+                           {
+                               return false;
+                           }
+                           return (resized_client.right - resized_client.left) * 3 ==
+                                  (resized_client.bottom - resized_client.top) * 4;
+                       }(),
+                       "window resize aspect-ratio policy failed") &&
+                 Check(SendMessageA(presentation_window, WM_SYSKEYDOWN, '2', 0) == 0 &&
+                           windowed_client_size_is(1280, 960),
+                       "window scale reset after resize policy failed") &&
+                 Check(SendMessageA(graphics_window,
+                                    WM_LBUTTONDOWN,
+                                    MK_LBUTTON,
+                                    MAKELPARAM(8, 8)) == 0 &&
+                           SendMessageA(graphics_window,
+                                        WM_LBUTTONDOWN,
+                                        MK_LBUTTON,
+                                        MAKELPARAM(8, 8)) == 0 &&
+                           (GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_POPUP) != 0,
+                       "double-click fullscreen entry policy failed") &&
+                 Check(SendMessageA(graphics_window,
+                                    WM_LBUTTONDOWN,
+                                    MK_LBUTTON,
+                                    MAKELPARAM(8, 8)) == 0 &&
+                           SendMessageA(graphics_window,
+                                        WM_LBUTTONDOWN,
+                                        MK_LBUTTON,
+                                        MAKELPARAM(8, 8)) == 0 &&
+                           (GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_CAPTION) != 0 &&
+                           windowed_client_size_is(1280, 960),
+                       "double-click fullscreen exit policy failed");
+
         g_re2dj_fullscreen = TRUE;
         passed = passed &&
                  Check(IDirectDraw4_SetCooperativeLevel(
@@ -964,7 +1054,8 @@ int main()
             MonitorFromWindow(presentation_window, MONITOR_DEFAULTTONEAREST);
         passed = passed &&
                  Check((GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_POPUP) != 0 &&
-                           (GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_CAPTION) == 0,
+                           (GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_CAPTION) == 0 &&
+                           (GetWindowLongPtrA(presentation_window, GWL_STYLE) & WS_VISIBLE) != 0,
                        "fullscreen style policy failed") &&
                  Check(SUCCEEDED(DwmGetWindowAttribute(
                            presentation_window,

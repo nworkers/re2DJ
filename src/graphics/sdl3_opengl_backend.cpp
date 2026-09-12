@@ -1073,11 +1073,36 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
         return false;
     }
     impl_->bind_framebuffer(kFramebuffer, 0);
-    impl_->viewport(0, 0, pixel_width, pixel_height);
     impl_->disable(GL_BLEND);
     impl_->disable(GL_DEPTH_TEST);
     impl_->disable(GL_CULL_FACE);
     impl_->depth_mask(GL_FALSE);
+    impl_->viewport(0, 0, pixel_width, pixel_height);
+    impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+    impl_->clear(GL_COLOR_BUFFER_BIT);
+    int presentation_width = pixel_width;
+    int presentation_height = pixel_height;
+    if (static_cast<std::int64_t>(pixel_width) * impl_->logical_height >
+        static_cast<std::int64_t>(pixel_height) * impl_->logical_width)
+    {
+        presentation_height = pixel_height;
+        presentation_width = static_cast<int>(
+            (static_cast<std::int64_t>(pixel_height) * impl_->logical_width) /
+            impl_->logical_height);
+    }
+    else
+    {
+        presentation_width = pixel_width;
+        presentation_height = static_cast<int>(
+            (static_cast<std::int64_t>(pixel_width) * impl_->logical_height) /
+            impl_->logical_width);
+    }
+    const int presentation_x = (pixel_width - presentation_width) / 2;
+    const int presentation_y = (pixel_height - presentation_height) / 2;
+    impl_->viewport(presentation_x,
+                    presentation_y,
+                    presentation_width,
+                    presentation_height);
     impl_->use_program(impl_->program);
     impl_->uniform_2f(impl_->uniforms.viewport,
                       static_cast<float>(impl_->logical_width),

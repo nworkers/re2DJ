@@ -43,8 +43,8 @@ public:
               std::uint32_t logical_width, std::uint32_t logical_height,
               const LegacyTextureView* texture, std::string* error);
     void DiscardTexture(std::uint64_t identity);
-    // Fills the buffer currently being drawn into with one RGB565 colour, for a
-    // guest that clears through its display layer rather than by drawing.
+    // Fills the logical render target with one RGB565 color for an explicit
+    // guest clear that does not arrive as a draw command.
     bool ClearRenderTarget(std::uint16_t rgb565_color, std::string* error);
     bool Present(std::string* error);
 

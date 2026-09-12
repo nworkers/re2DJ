@@ -26,6 +26,7 @@
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 #include "directdraw_legacy_interop.h"
 #include "graphics_trace_log.h"
+#include "host_window_shell.h"
 #include "window_mode.h"
 
 namespace
@@ -470,9 +471,13 @@ struct RootFacade
     // surface onto the primary overwrites the screen every time and starts
     // from nothing.
     bool presentation_retains_frames = false;
-    // The surface the guest presents from. A colour fill aimed at it is a
-    // request to clear what is about to be shown, not just its memory copy.
+    // The surface the guest presents from. A full-surface color fill or D3D
+    // target clear aimed at it clears what is about to be shown.
     SurfaceFacade* presentation_surface = nullptr;
+    // A guest can clear before the first draw creates the backend. Keep the
+    // latest full-target color until the logical render target exists.
+    bool pending_render_target_clear = false;
+    std::uint16_t pending_render_target_clear_color = 0;
     LARGE_INTEGER fps_frequency = {};
     LARGE_INTEGER fps_interval_start = {};
     std::uint32_t fps_interval_frames = 0;
@@ -602,6 +607,54 @@ void MarkSurfaceDirty(SurfaceFacade* surface)
     surface->diagnostic_nonzero_min_y = 0;
     surface->diagnostic_nonzero_max_x = 0;
     surface->diagnostic_nonzero_max_y = 0;
+}
+
+void FillSurfaceWithColor(SurfaceFacade* surface, std::uint16_t color)
+{
+    if (surface == nullptr || surface->pixels == nullptr || surface->pitch == 0)
+    {
+        return;
+    }
+    auto* const pixels = static_cast<unsigned char*>(surface->pixels);
+    for (DWORD y = 0; y < surface->height; ++y)
+    {
+        auto* const row = reinterpret_cast<std::uint16_t*>(pixels + y * surface->pitch);
+        std::fill(row, row + surface->width, color);
+    }
+    MarkSurfaceDirty(surface);
+}
+
+std::uint16_t Rgb565FromD3dColor(D3DCOLOR color)
+{
+    const std::uint16_t red = static_cast<std::uint16_t>((color >> 16) & 0xff);
+    const std::uint16_t green = static_cast<std::uint16_t>((color >> 8) & 0xff);
+    const std::uint16_t blue = static_cast<std::uint16_t>(color & 0xff);
+    return static_cast<std::uint16_t>(((red >> 3) << 11) | ((green >> 2) << 5) |
+                                      (blue >> 3));
+}
+
+bool RequestRenderTargetClear(RootFacade* root,
+                              std::uint16_t color,
+                              std::string* error)
+{
+    if (root == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    if (root->render_backend == nullptr)
+    {
+        root->pending_render_target_clear = true;
+        root->pending_render_target_clear_color = color;
+        error->clear();
+        return true;
+    }
+    if (!root->render_backend->ClearRenderTarget(color, error))
+    {
+        return false;
+    }
+    root->pending_render_target_clear = false;
+    error->clear();
+    return true;
 }
 
 std::uint64_t AllocateSurfaceIdentity(RootFacade* root)
@@ -2580,18 +2633,17 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         std::fill(row + rectangle.left, row + rectangle.right, color);
     }
     MarkSurfaceDirty(surface);
-    // Filling the surface the guest presents from is how it clears the screen;
-    // nothing else clears the render target, so the fill has to reach it. Only
-    // a fill of the whole surface maps onto a target clear - a partial one is
-    // a region update, and the memory copy above already carries it.
+    // Filling the surface the guest presents from is a display-layer screen
+    // clear. Only a fill of the whole surface maps onto a target clear; a
+    // partial one is a region update, and the memory copy above carries it.
     RootFacade* const root = surface->root;
-    if (root != nullptr && root->render_backend != nullptr &&
-        surface == root->presentation_surface && rectangle.left == full.left &&
+    if (root != nullptr && surface == root->presentation_surface &&
+        rectangle.left == full.left &&
         rectangle.top == full.top && rectangle.right == full.right &&
         rectangle.bottom == full.bottom)
     {
         std::string clear_error;
-        if (!root->render_backend->ClearRenderTarget(color, &clear_error))
+        if (!RequestRenderTargetClear(root, color, &clear_error))
         {
             OutputDebugStringA(kOpenGlFailureMessage);
             return finish(DDERR_GENERIC);
@@ -3608,7 +3660,12 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
             "re2DJ",
             re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled(),
             root->presentation_retains_frames};
-        if (backend == nullptr || !backend->Initialize(window_config, &error) ||
+        const bool input_suspended = SuspendRe2djGuestWindowInput(root->window);
+        const bool backend_initialized =
+            input_suspended && backend != nullptr && backend->Initialize(window_config, &error);
+        const bool input_restored =
+            input_suspended && EnsureRe2djGuestWindowInput(root->window);
+        if (!backend_initialized || !input_restored ||
             !ApplyRe2djWindowMode(root->window, root->width, root->height))
         {
             delete backend;
@@ -3623,6 +3680,23 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
             return DDERR_GENERIC;
         }
         root->render_backend = backend;
+    }
+    if (root->pending_render_target_clear)
+    {
+        const std::uint16_t color = root->pending_render_target_clear_color;
+        if (!root->render_backend->ClearRenderTarget(color, &error))
+        {
+            OutputDebugStringA(kOpenGlFailureMessage);
+            ReportDrawDiagnostic(device,
+                                 primitive,
+                                 vertex_type,
+                                 vertex_count,
+                                 flags,
+                                 DDERR_GENERIC,
+                                 "pending-target-clear");
+            return DDERR_GENERIC;
+        }
+        root->pending_render_target_clear = false;
     }
 
     re2dj::graphics::LegacyTextureView texture_view;
@@ -4271,12 +4345,22 @@ HRESULT LegacyDeviceClear(IDirect3DDevice3* device,
     {
         return DDERR_INVALIDOBJECT;
     }
-    // The render backend already clears colour and depth once per presented
-    // frame, before the frame's first draw. A guest that clears the whole
-    // target to black at the top of its frame therefore gets what it asked for
-    // without this doing any work. A different colour, a sub-rectangle, or a
-    // mid-frame clear would not, so the request is recorded rather than
-    // silently accepted.
+    const bool full_target = rect_count == 0;
+    const bool clears_target = (flags & D3DCLEAR_TARGET) != 0;
+    const bool targets_presentation_surface =
+        facade->root != nullptr && facade->render_target != nullptr &&
+        facade->render_target == facade->root->presentation_surface;
+    if (full_target && clears_target && targets_presentation_surface)
+    {
+        const std::uint16_t color565 = Rgb565FromD3dColor(color);
+        FillSurfaceWithColor(facade->render_target, color565);
+        std::string clear_error;
+        if (!RequestRenderTargetClear(facade->root, color565, &clear_error))
+        {
+            OutputDebugStringA(kOpenGlFailureMessage);
+            return DDERR_GENERIC;
+        }
+    }
     static GraphicsCallLedger ledger = {"Clear", 8};
     if (InterlockedDecrement(reinterpret_cast<volatile LONG*>(&ledger.remaining)) >= 0)
     {
