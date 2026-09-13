@@ -30,7 +30,13 @@ secondary buffer 생성 뒤 일반적인 upload는 `IDirectSoundBuffer::Lock`으
 
 `Lock/Unlock`의 pointer와 길이는 응용 프로그램이 접근할 수 있었던 범위를 뜻하며 실제로 변경한 byte 범위를 직접 나타내지 않는다. 응용 프로그램은 `DSBLOCK_ENTIREBUFFER`로 전체 ring을 받은 뒤 일부 frame만 고칠 수 있다. HLE가 Unlock 길이 전체를 producer queue에 추가하면 같은 PCM을 중복 큐잉하고 latency가 계속 증가한다.
 
-복사형 host streaming API로 변환할 때는 guest ring의 committed snapshot과 현재 frame을 비교해 실제 dirty circular 구간을 찾거나, 동등한 동기화된 pull model을 사용해야 한다. SDL3의 `SDL_AudioStream`과 SDL_mixer의 `MIX_SetTrackAudioStream`은 응용 프로그램이 공급하는 streaming PCM 입력을 위한 계약이다.
+복사형 host streaming API로 변환할 때 Unlock 범위 전체를 queue에 복사하면 초기 ring을
+반복할 수 있다. 현재 HLE는 committed snapshot과 현재 frame을 비교해 실제로 달라진
+원형 구간만 queue에 추가한다. 소비량만으로 아직 guest가 갱신하지 않은 ring 시작점을
+다시 넣으면 작업 284에서 확인한 것처럼 1~2초 반복이 발생한다. 동일한 PCM을 guest가
+새로 쓴 경우는 pointer 범위만으로 구분할 수 없으므로 별도의 명시적 write 범위나 pull
+동기화가 필요하다. SDL3의 `SDL_AudioStream`과 SDL_mixer의 `MIX_SetTrackAudioStream`은
+응용 프로그램이 공급하는 streaming PCM 입력을 위한 계약이다.
 
 - [SDL_AudioStream — SDL Wiki](https://wiki.libsdl.org/SDL3/SDL_AudioStream)
 - [MIX_SetTrackAudioStream — SDL_mixer Wiki](https://wiki.libsdl.org/SDL3_mixer/MIX_SetTrackAudioStream)
@@ -45,4 +51,10 @@ Generic COM value 0x80004001 is E_NOTIMPL. Observing it from a DirectSound call 
 
 IDirectSound::DuplicateSoundBuffer creates a separate secondary-buffer object sharing the original sample memory. Initial parameters match, but cursor, controls, and Play/Stop state can diverge independently. Writes through either object's Lock are visible through the other; primary buffers cannot be duplicated.
 
-Lock/Unlock pointer-length pairs describe the region an application could access, not necessarily every byte it changed. An application can lock an entire ring with `DSBLOCK_ENTIREBUFFER` and modify only a subset of frames. Appending the whole Unlock range to a copied host producer queue duplicates stale PCM and grows latency. A translation should compare a committed ring snapshot to locate the dirty circular frame interval, or use an equivalent synchronized pull model. SDL3 `SDL_AudioStream` connected through SDL_mixer `MIX_SetTrackAudioStream` provides the streaming-PCM input contract used here.
+Lock/Unlock pointer-length pairs describe accessible regions, not necessarily changed bytes.
+Appending the entire lock range can replay the initial ring. The current HLE compares a
+committed snapshot and appends only changed circular ranges. Task 284 shows that refilling
+from consumption alone replays the initial segment every 1–2 seconds when the guest has not
+refreshed that range. Identical PCM writes need an explicit write range or synchronized pull
+contract. SDL3 `SDL_AudioStream` connected through `MIX_SetTrackAudioStream` supplies the
+streaming PCM input.

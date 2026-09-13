@@ -28,6 +28,7 @@ constexpr ButtonBinding kButtonBindings[] = {
     {"p2_sensor_top_right", re2dj::input::Ez2DancerButton::kPlayer2SensorTopRight},
     {"p2_sensor_bottom_left", re2dj::input::Ez2DancerButton::kPlayer2SensorBottomLeft},
     {"p2_sensor_bottom_right", re2dj::input::Ez2DancerButton::kPlayer2SensorBottomRight},
+    {"coin", re2dj::input::Ez2DancerButton::kCoin},
     {"test", re2dj::input::Ez2DancerButton::kTest},
     {"service", re2dj::input::Ez2DancerButton::kService},
 };

@@ -1981,6 +1981,9 @@ int main()
                        "DirectSound streaming initial position failed") &&
                  Check(IDirectSoundBuffer_Play(streaming_buffer, 0, 0, DSBPLAY_LOOPING) == DS_OK,
                        "DirectSound streaming play failed");
+        passed = passed &&
+                 Check(IDirectSoundBuffer_Play(streaming_buffer, 0, 0, DSBPLAY_LOOPING) == DS_OK,
+                       "DirectSound repeated streaming play failed");
 
         stream_first = nullptr;
         stream_first_bytes = 0;
@@ -2045,6 +2048,20 @@ int main()
              Check(audio_trace_text.find("directsound:streaming-start") != std::string::npos &&
                        audio_trace_text.find("streaming=1") != std::string::npos,
                    "audio trace omitted streaming start") &&
+             Check(audio_trace_text.find("track-reset=1") != std::string::npos,
+                   "audio trace omitted stopped streaming track reset") &&
+             Check(audio_trace_text.find("directsound:streaming-continue") != std::string::npos &&
+                       audio_trace_text.find("continued=1") != std::string::npos,
+                   "audio trace omitted repeated streaming play continuation") &&
+             Check(audio_trace_text.find("directsound:set-position") != std::string::npos &&
+                       audio_trace_text.find("requested=12") != std::string::npos &&
+                       audio_trace_text.find("applied=12") != std::string::npos &&
+                       audio_trace_text.find("cursor-after=12") != std::string::npos,
+                   "audio trace omitted streaming position transition") &&
+             Check(audio_trace_text.find("directsound:stop") != std::string::npos &&
+                       audio_trace_text.find("guest-playing-after=0") != std::string::npos &&
+                       audio_trace_text.find("track-playing-after=0") != std::string::npos,
+                   "audio trace omitted streaming stop transition") &&
              Check(audio_trace_text.find("lock-offset=24 first=8 second=8") != std::string::npos &&
                        audio_trace_text.find("dirty-offset=24 dirty-bytes=16") != std::string::npos &&
                        audio_trace_text.find("backend-refresh=1") != std::string::npos,

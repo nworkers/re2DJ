@@ -294,4 +294,83 @@ Which lamp each bit drives is likewise unresolved: the set of seven positions is
 - **Confirmed — implementation:** the absolute path passed with `--io-config` now reaches `Ez2DancerKeyboardInput` for word-wide profiles, and keyboard state is applied to `Ez2DancerIoPortBus` immediately before each 16-bit input read.
 - **Confirmed — runtime:** with `config/ez2dancer-io.example.ini`, run log `20260912-034218-362.vfs.log` records reads from `0x300`, `0x302`, `0x304`, and `0x306` as `width=16` and `handled=1`. Their idle values were `0xf000`, `0xf000`, `0x0000`, and `0x00ff` respectively.
 - **Inferred:** the example's pad, sensor, TEST, and SERVICE names expose the inferred bit layout already modeled by `Ez2DancerIoBoard`; this work does not newly confirm cabinet wiring.
-- **Unresolved:** the coin port and bit remain unknown, so neither the example nor the keyboard adapter exposes coin.
+- **Unresolved:** the original coin port and bit remain unknown; the example and keyboard
+  adapter now expose only an inferred compatibility mapping.
+
+## 2026-09-13 coin 호환 입력 노출 / Exposing the coin compatibility input
+
+### 한국어
+
+`0x304` 입력은 원본 실행 로그에서 실제 read가 확인되었지만, 원본이 그 word의
+어느 bit를 coin으로 사용하는지는 아직 확인되지 않았습니다. 현재 구현은 이
+미확정 port를 계속 `0x304`로 유지하면서, 설정 가능한 `coin` 버튼을 **추정
+호환 경로**로 bit 0에 연결합니다.
+
+- idle: `0x0000`
+- coin held: `0x0001`
+- coin released: `0x0000`
+
+`config/ez2dancer-io.example.ini`에는 `coin=F5`가 추가되었습니다. 이는 EZ2DJ
+예제와 같은 편의 키일 뿐 원본 cabinet 배선을 확인한 결과가 아닙니다. 따라서 이
+절의 bit 0과 active-high 극성은 **추정**으로 표시하며, 실제 게임 실행에서 credit이
+증가하는지 확인해야 합니다. 증가하지 않으면 원본 input helper의 port read 관측을
+확보한 뒤 mapping을 교체해야 합니다.
+
+### English
+
+The original run logs confirm reads from input `0x304`, but do not identify which bit
+of that word is coin. The implementation keeps the unresolved port as `0x304` and
+connects the configurable `coin` button to bit 0 as an **inferred compatibility path**:
+
+- idle: `0x0000`
+- coin held: `0x0001`
+- coin released: `0x0000`
+
+`config/ez2dancer-io.example.ini` now contains `coin=F5`. This is a convenience key,
+matching the EZ2DJ example, and is not evidence of the original cabinet wiring. The bit
+0 mapping and active-high polarity are therefore **inferred** and must be checked against
+credit behaviour in a real run. If credit does not increase, obtain an observation of
+the original input helper's port reads and replace the mapping.
+
+## 2026-09-13 coin counter compatibility path / Coin Counter Compatibility Path
+
+### 한국어
+
+위의 bit 0 held-level mapping은 실제 실행에서 credit으로 반영되지 않아
+**폐기(superseded)**합니다. 원본 `0x304` register 의미 자체는 여전히 미확정이지만,
+idle 값이 0인 별도 word와 EZ2DJ의 동일한 coin counter 관례를 고려하여 re2DJ의
+호환 경로를 rising-edge counter로 변경했습니다.
+
+- `kCoin`이 released → pressed로 바뀔 때 counter가 1 증가합니다.
+- key를 계속 누르고 있어도 같은 coin이 반복 추가되지 않습니다.
+- key를 떼었다가 다시 누르면 다음 counter 값이 생성됩니다.
+- `0x304` read는 현재 16비트 counter를 반환합니다.
+- runtime VFS 로그에 `re2dj:vfs:io-config:profile=ez2dancer:status=initialized`가
+  한 번 기록되어 설정 주입 여부를 확인할 수 있습니다.
+- 일반 I/O trace budget 이후에도 counter 변화는
+  `re2dj:vfs:io-coin:previous=...:value=...` 이벤트로 기록됩니다.
+
+이는 원본 cabinet register 의미를 확정하는 분석 결과가 아니라, 이전 level mapping이
+동작하지 않은 것을 보완하는 **호환 동작**입니다. 실제 실행에서 counter 증가와
+`INSERT COIN(S)` 화면의 credit 반영을 다시 확인해야 합니다.
+
+### English
+
+The bit-0 held-level mapping above did not produce a credit in the real run and is
+**superseded**. The original meaning of register `0x304` remains unresolved, but its
+zero-valued separate word and the existing EZ2DJ coin-counter convention make a
+rising-edge counter the better re2DJ compatibility path.
+
+- The counter increments when `kCoin` changes from released to pressed.
+- Holding the key does not add repeated coins.
+- Releasing and pressing again produces the next counter value.
+- Reads from `0x304` return the current 16-bit counter.
+- The runtime VFS log records
+  `re2dj:vfs:io-config:profile=ez2dancer:status=initialized` once, proving whether
+  configuration injection reached the keyboard adapter.
+- Counter changes remain visible after the general I/O trace budget through
+  `re2dj:vfs:io-coin:previous=...:value=...` events.
+
+This is **compatibility behaviour** added because the previous level mapping did not
+work; it does not confirm the original cabinet register semantics. A real run must still
+confirm both the counter increase and the credit transition from `INSERT COIN(S)`.

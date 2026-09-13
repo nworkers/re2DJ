@@ -40,4 +40,6 @@
 | [ez2dancer-io-map.md](ez2dancer-io-map.md) | EZ2Dancer의 16비트 폭 `0x300`~`0x30c` 포트 맵과 EZ2DJ byte 폭 보드와의 차이 | 전부 공개 구현 기반 추정, 원본 helper RVA는 미확정 |
 | [ez2d2m-ez2dj4th-graphics-clear.md](ez2d2m-ez2dj4th-graphics-clear.md) | `ez2d2m`/`ez2dj4th` retained-frame presentation and Direct3D clear forwarding | Both `DDSCAPS_FLIP` and `LegacyDeviceClear` traces confirmed; HLE omission fixed, new-screen verification pending |
 
+| [ez2d2m-jam-audio-runtime.md](ez2d2m-jam-audio-runtime.md) | EZ2Dancer JAM VFS/DirectSound/SDL runtime audio evidence and streaming Play semantics | 2026-09-14 VFS, PCM delivery, and repeated-Play HLE divergence confirmed |
+
 *Update this table in the same task whenever an analysis document is added or renamed.*

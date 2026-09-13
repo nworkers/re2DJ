@@ -287,9 +287,9 @@ HLE/Hardlock boundary remains a runtime observation item.
 
 *The default is a normal resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. The original 640x480 logical display starts at exactly 2x in both dimensions. Add `--fullscreen` to select fullscreen without changing the original INI.*
 
-키보드 입력은 선택한 제품의 예제 파일을 복사·수정하고 `--io-config <path>`로 주입한다. EZ2DJ는 `config/ez2dj-io.example.ini`, EZ2Dancer 2nd MOVE는 `config/ez2dancer-io.example.ini`를 사용한다. 옵션을 생략하면 I/O board는 idle 상태를 유지한다.
+키보드 입력은 선택한 제품의 예제 파일을 복사·수정하고 `--io-config <path>`로 주입한다. EZ2DJ는 `config/ez2dj-io.example.ini`, EZ2Dancer 2nd MOVE는 `config/ez2dancer-io.example.ini`를 사용한다. EZ2Dancer 예제의 `coin=F5`는 원본 배선이 확정되지 않은 호환 입력이며, 키를 누를 때마다 `0x304` counter를 1 증가시킨다. 옵션을 생략하면 I/O board는 idle 상태를 유지한다.
 
-*For keyboard input, copy and edit the example for the selected product, then inject it with `--io-config <path>`. EZ2DJ uses `config/ez2dj-io.example.ini`; EZ2Dancer 2nd MOVE uses `config/ez2dancer-io.example.ini`. Omitting the option leaves the I/O board idle.*
+*For keyboard input, copy and edit the example for the selected product, then inject it with `--io-config <path>`. EZ2DJ uses `config/ez2dj-io.example.ini`; EZ2Dancer 2nd MOVE uses `config/ez2dancer-io.example.ini`. The EZ2Dancer example's `coin=F5` is a compatibility mapping because the original cabinet wiring is not confirmed; each press increments the `0x304` counter. Omitting the option leaves the I/O board idle.*
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe ez2d2m --io-config .\config\ez2dancer-io.example.ini

@@ -14,11 +14,12 @@ namespace re2dj::input
 //
 // Confirmation status differs per fact and is deliberately not smoothed over.
 // The access width and that 0x30a is an output port are **confirmed** from the
-// original executable: ez2d2m faults on `66 ef` writing 0x030a. Every port
-// meaning and every bit position below is **inferred** from an independent
-// public implementation, cross-checked in docs/analysis/ez2dancer-io-map.md.
-// None of that code is copied; only the externally observable protocol is
-// reimplemented here.
+// original executable: ez2d2m faults on `66 ef` writing 0x030a. Pad, sensor,
+// and light positions are **inferred** from an independent public
+// implementation, while the coin counter is an explicit re2DJ compatibility
+// mapping. Both are cross-checked in docs/analysis/ez2dancer-io-map.md. None
+// of that code is copied; only the externally observable protocol and the
+// compatibility input are reimplemented here.
 
 enum class Ez2DancerPlayer : std::uint8_t
 {
@@ -42,6 +43,7 @@ enum class Ez2DancerButton : std::uint8_t
     kPlayer2SensorTopRight,
     kPlayer2SensorBottomLeft,
     kPlayer2SensorBottomRight,
+    kCoin,
     kTest,
     kService,
     kCount,
@@ -75,6 +77,7 @@ private:
 
     std::array<bool, kButtonCount> buttons_ = {};
     std::array<bool, kLightCount> lights_ = {};
+    std::uint16_t coin_counter_ = 0;
 };
 
 }  // namespace re2dj::input

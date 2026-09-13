@@ -19,3 +19,28 @@ SDL_mixer 3 copies caller-provided PCM and an SDL_AudioSpec into MIX_Audio throu
 SDL 3.4.14 and SDL_mixer 3.2.4 use the zlib license. Optional codec integrations remain disabled because the guest already supplies decoded raw PCM.
 
 `MIX_SetTrackGain` maps each sound's DirectSound dB value to linear gain, while `MIX_SetMixerGain` provides independent compensation after all tracks are mixed. Gain `1.0` is unchanged and values above one amplify. Master gain preserves relative track levels but can clip the final output, so it needs a bounded dB range and listening validation.
+## streaming input exhaustion
+
+SDL_mixer track에 SDL_AudioStream을 입력으로 연결할 때
+MIX_PROP_PLAY_HALT_WHEN_EXHAUSTED_BOOLEAN의 기본값은 true입니다. 실시간으로
+SDL_PutAudioStreamData를 공급하는 track은 이 값을 false로 설정해야 queue가 일시적으로
+비어도 track이 stopped 상태로 전환되지 않습니다. false이면 해당 순간에는 silence가
+출력되고 이후 새 데이터가 들어오면 같은 track이 계속 소비합니다.
+
+MIX_CreateMixer()는 실제 playback device가 없는 memory-only mixer를 생성합니다.
+이 mixer는 MIX_Generate()를 호출해야 output이 생성되므로, 제품이 device mixer 생성에
+실패한 뒤 이 경로로 fallback하면 queue가 정상이어도 스피커로 출력되지 않습니다.
+
+## English
+
+## Streaming input exhaustion
+
+When an SDL_AudioStream is assigned as a SDL_mixer track input, the default value of
+MIX_PROP_PLAY_HALT_WHEN_EXHAUSTED_BOOLEAN is true. A track fed incrementally through
+SDL_PutAudioStreamData should set this property to false so a temporary empty queue does not
+transition the track to stopped. With false, that interval contributes silence and later
+input continues on the same track.
+
+MIX_CreateMixer() creates a memory-only mixer without a playback device. It requires
+MIX_Generate() to produce output, so a product that falls back to this path after device
+mixer creation fails will not reach speakers even if its queue is populated.

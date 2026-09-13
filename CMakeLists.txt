@@ -363,6 +363,19 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         target_link_libraries(re2dj_windows_injected_runtime
             PRIVATE SDL3_mixer::SDL3_mixer-static SDL3::SDL3-static
         )
+        if(RE2DJ_BUILD_TESTS)
+            add_executable(re2dj_audio_stream_progress_test
+                tests/audio/stream_progress_test.cpp
+                src/audio/legacy_audio_buffer.cpp
+                src/audio/sdl3_mixer_audio_backend.cpp
+            )
+            target_include_directories(re2dj_audio_stream_progress_test PRIVATE include src/audio)
+            target_link_libraries(re2dj_audio_stream_progress_test PRIVATE
+                SDL3_mixer::SDL3_mixer-static SDL3::SDL3-static)
+            add_test(NAME re2dj_audio_stream_progress_test COMMAND re2dj_audio_stream_progress_test)
+            set_tests_properties(re2dj_audio_stream_progress_test PROPERTIES
+                ENVIRONMENT "SDL_AUDIODRIVER=dummy" TIMEOUT 15)
+        endif()
     endif()
     if(RE2DJ_BUILD_TESTS)
         add_executable(re2dj_windows_vfs_runtime_probe

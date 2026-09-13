@@ -26,7 +26,8 @@ constexpr char kIdleBindings[] =
     "p2_sensor_top_left=NONE\n"
     "p2_sensor_top_right=NONE\n"
     "p2_sensor_bottom_left=NONE\n"
-    "p2_sensor_bottom_right=NONE\n";
+    "p2_sensor_bottom_right=NONE\n"
+    "coin=NONE\n";
 
 }  // namespace
 

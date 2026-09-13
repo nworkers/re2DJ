@@ -34,6 +34,27 @@ void RunEz2DancerIoBoardTests(re2dj::test::Context& context)
         RE2DJ_CHECK_EQ(context, ReadPort(context, bus, 0x306), std::uint16_t{0x00ff});
     }
 
+    // Coin is exposed as a rising-edge counter through the otherwise
+    // unresolved 0x304 input port.
+    {
+        Ez2DancerIoPortBus bus;
+        RE2DJ_CHECK_EQ(context, ReadPort(context, bus, 0x304), std::uint16_t{0x0000});
+        RE2DJ_CHECK(context, bus.SetButton(Ez2DancerButton::kCoin, true));
+        RE2DJ_CHECK_EQ(context, ReadPort(context, bus, 0x304), std::uint16_t{0x0001});
+        RE2DJ_CHECK(context, bus.SetButton(Ez2DancerButton::kCoin, true));
+        RE2DJ_CHECK_EQ(context, ReadPort(context, bus, 0x304), std::uint16_t{0x0001});
+        RE2DJ_CHECK(context, bus.SetButton(Ez2DancerButton::kCoin, false));
+        RE2DJ_CHECK_EQ(context, ReadPort(context, bus, 0x304), std::uint16_t{0x0001});
+        RE2DJ_CHECK(context, bus.SetButton(Ez2DancerButton::kCoin, true));
+        RE2DJ_CHECK_EQ(context, ReadPort(context, bus, 0x304), std::uint16_t{0x0002});
+        for (std::uint32_t press = 0; press < 0xfffe; ++press)
+        {
+            bus.SetButton(Ez2DancerButton::kCoin, false);
+            bus.SetButton(Ez2DancerButton::kCoin, true);
+        }
+        RE2DJ_CHECK_EQ(context, ReadPort(context, bus, 0x304), std::uint16_t{0x0000});
+    }
+
     // Only the board's own even ports answer. An odd address inside the range
     // and anything outside it must be refused rather than answered with zero,
     // so an unexpected access is reported instead of silently satisfied.

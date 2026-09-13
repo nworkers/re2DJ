@@ -1097,3 +1097,300 @@ After changing path construction to use `g_re2dj_vfs_chd_root`, both directory c
 and title assets open from `chd://ez2dancer/system/title/...`. The corrected run no longer exits
 immediately through `ExitProcess` and continues loading assets. The first `0xc0000005` observed
 inside the Hardlock-protected code remains, but it did not stop the corrected run.
+
+## 2026-09-13 JAM 음원 파일과 런타임 경계 확인
+
+### 확인됨
+
+CHD 목록에서 `ez2dancer/Songs/Jam/jam.ezw`를 확인했으며 크기는 `17,753,894` bytes입니다.
+파일의 18-byte header는 2채널, 44,100 Hz, 16-bit PCM, block align 4를 설명하고,
+`17,753,876` bytes의 data 길이가 전체 파일 크기와 정확히 일치합니다.
+
+`re2dj_chd_probe --dump`로 CHD에서 직접 추출한 파일은 사용자가 제공한 추출본과 크기 및
+SHA-256이 일치했습니다. 따라서 현재 확인 범위에서 CHD의 `jam.ezw` 데이터가 누락되거나
+잘못된 FAT32 cluster chain으로 절단되었다는 증거는 없습니다. 추출 트리의 `.ezw` 252개도
+모두 header data length와 파일 크기가 일치했습니다.
+
+`ez2d2m` 프로파일은 guest `C:\\ez2dancer`를 CHD 내부 `ez2dancer` 루트에 매핑합니다.
+기존 실행 로그의 `jam` 검색 결과에는 `Songs\\DEMO1\\jam.abm`만 있었고, 실제 곡 경로인
+`Songs\\Jam\\jam.ezw`의 open/read 기록은 없었습니다. `DEMO1\\jam.abm`은 데모 재생용
+자산이므로 이 기록만으로 JAM 곡의 음원 로딩을 확인할 수 없습니다.
+
+### 미확정
+
+실제 JAM 곡 시작 구간을 포함한 실행에서 `jam.ezw`의 VFS open/read와 DirectSound `Play`를
+동시에 기록한 로그가 아직 없습니다. 따라서 현 단계에서는 파일시스템 문제라고 볼 근거가
+없으며, 실제 접근이 성공한 뒤에도 소리가 나지 않는다면 원본 EZW 처리 또는 DirectSound/
+SDL3 오디오 HLE 경계를 다음 조사 대상으로 삼아야 합니다. 현재 `ez2d2m` 실행에는 대응하는
+`.audio.log`도 확인되지 않았습니다.
+
+## English
+
+## 2026-09-13 JAM audio asset and runtime boundary check
+
+### Confirmed
+
+The CHD contains `ez2dancer/Songs/Jam/jam.ezw` with a size of `17,753,894` bytes.
+Its 18-byte header describes 2-channel, 44,100 Hz, 16-bit PCM with block align 4, and a
+data length of `17,753,876` bytes, which exactly matches the file size.
+
+A file dumped directly from the CHD with `re2dj_chd_probe --dump` has the same size and
+SHA-256 as the user-provided extracted copy. Within the current evidence there is therefore
+no indication that the CHD data is missing or truncated by an invalid FAT32 cluster chain.
+All 252 extracted `.ezw` files also have header data lengths matching their file sizes.
+
+The `ez2d2m` profile maps guest `C:\\ez2dancer` to the CHD-internal `ez2dancer` root.
+Existing runtime logs found only `Songs\\DEMO1\\jam.abm` when searching for `jam`; there is
+no open/read record for the actual track path `Songs\\Jam\\jam.ezw`. `DEMO1\\jam.abm` is a
+demo playback asset, so that record does not prove that the JAM track audio was loaded.
+
+### Unresolved
+
+There is not yet a run covering the actual JAM start with both the `jam.ezw` VFS open/read
+and DirectSound `Play` recorded. At this stage the evidence does not support a filesystem
+failure. If the file is opened and read successfully but remains silent, the next targets
+are the original EZW handling and the DirectSound/SDL3 audio HLE boundary. No matching
+`ez2d2m` `.audio.log` has been found yet.
+
+## 2026-09-13 JAM 실행 trace 확인
+
+### 확인됨
+
+사용자가 제공한 `20260913-225937-078.jsonl` 실행은 CHD와 `ez2dancer` 루트를 정상적으로
+mount했고, 대응하는 VFS 및 DirectSound 로그를 생성했습니다. VFS 로그에는 CHD
+`create-file` 성공 492건, `read-file-enter` 358건, 성공한 `read-file-result` 357건이
+기록되었고 read failure 기록은 없습니다.
+
+그러나 이 실행의 `.ezw` 요청 34건은 `system\\soundFX`, `system\\opening`,
+`system\\title`, `system\\mode` 아래에만 있습니다. `Songs\\Jam\\jam.ezw` 또는
+`jam.ezw` 요청은 0건입니다. `jam`으로 검색되는 30건은 모두 `songs/jam` 아래의
+`.str` 자산 open이며, JAM 폴더의 시각 자산 로딩을 보여줄 뿐 음원 파일 로딩을 보여주지
+않습니다.
+
+오디오 로그 자체는 DirectSound buffer 12개 생성, Play 21건, first-play 7건, streaming
+start 5건을 기록했습니다. first-play PCM 측정값은 모두 peak/RMS가 0이 아니며, 44.1 kHz
+stream buffer `00ADBE80`도 peak `0.997924805`, RMS `0.248371771`로 시작했습니다.
+따라서 이 실행에서는 오디오 HLE가 전역적으로 무음이거나 PCM을 거부한 증거가 없습니다.
+다만 로그만으로 이 stream이 JAM 음원인지 식별할 수는 없습니다.
+
+### 판단
+
+현재 가장 직접적인 결론은 `jam.ezw`의 CHD 데이터나 FAT32 read 경로가 실패한 것이
+아니라, 이 실행에서 원본이 해당 파일을 요청하지 않았다는 것입니다. 실제 게임플레이
+진입 전의 선택/자산 로딩에서 실행이 끝났거나, 원본 곡 로더가 아직 관측되지 않은 파일
+경로/API를 사용했을 가능성이 남아 있습니다. `jam.ezw` open/read가 나타나기 전에는
+DirectSound HLE의 JAM 음원 처리 문제로 확정할 수 없습니다.
+
+## English
+
+## 2026-09-13 JAM execution trace check
+
+### Confirmed
+
+The user-provided `20260913-225937-078.jsonl` run mounted the CHD and `ez2dancer` root
+correctly and produced matching VFS and DirectSound logs. The VFS log records 492 successful
+CHD `create-file` results, 358 `read-file-enter` events, and 357 successful
+`read-file-result` events, with no read-failure record.
+
+However, all 34 `.ezw` requests in this run are under `system\\soundFX`, `system\\opening`,
+`system\\title`, or `system\\mode`. There are zero requests for `Songs\\Jam\\jam.ezw`
+or bare `jam.ezw`. The 30 `jam` matches are all `.str` assets opened under `songs/jam`,
+which demonstrates visual asset loading but not the track audio loading.
+
+The audio log records 12 DirectSound buffers, 21 Play calls, seven first-play measurements,
+and five streaming starts. Every first-play PCM measurement has non-zero peak and RMS; the
+44.1 kHz streaming buffer `00ADBE80` starts with peak `0.997924805` and RMS `0.248371771`.
+This run therefore provides no evidence that the audio HLE is globally silent or rejecting
+PCM. The log does not identify that stream as the JAM track, however.
+
+### Assessment
+
+The most direct conclusion is that the CHD data or FAT32 read path for `jam.ezw` did not fail;
+the original did not request that file during this run. The run may have ended during song
+selection/resource loading before actual gameplay, or the original song loader may use a file
+path/API not yet observed. Until an open/read for `jam.ezw` appears, the JAM-specific
+DirectSound HLE path cannot be identified as the cause.
+
+## 2026-09-13 다른 곡 실행의 EZW trace 확인
+
+### 확인됨
+
+사용자가 다른 곡을 선택·실행한 `20260913-230853-991.jsonl`과 부속 로그를 확인했습니다.
+VFS에는 `*.ezw` 요청 34건이 남았고, 요청된 고유 경로는
+`system\mode\modeselect1.ezw`, `system\opening\opening.ezw`,
+`system\soundFX\FX02.ezw`, `FX03.ezw`, `FX04.ezw`, `FX05.ezw`, `FX06.ezw`,
+`FX07.ezw`, `FX14.ezw`, `FX15.ezw`, `system\title\title.ezw`였습니다.
+모든 요청은 CHD 매핑 성공(`success=1:error=0`)으로 기록되었습니다.
+
+이 실행에서 선택된 곡은 `songs/arcturus`로 확인되며, `01.str`부터 `09.str`,
+`whiteout01.str`, `logo.str` 등 곡 시각 자산은 `CreateFileA`로
+`chd://ez2dancer/songs/arcturus/...`에 성공적으로 매핑되었습니다. 그러나 곡 음원으로
+추정되는 `songs/arcturus/arcturus.ezw` 요청은 VFS에 나타나지 않았습니다.
+
+DirectSound 로그에는 13개 buffer 생성, 27건의 Play, 7건의 first-play,
+10건의 streaming-start가 기록되었고, 측정된 PCM의 peak/RMS는 0이 아니었습니다.
+따라서 이번 실행에서도 EZW 요청 로거, CHD 파일 매핑, DirectSound PCM 측정 자체는
+동작했지만, 곡별 EZW 음원 요청은 관측되지 않았습니다.
+
+### 미확정 및 판단
+
+이번 결과는 “EZW 로거가 전혀 동작하지 않는다”는 가설과 맞지 않습니다. 시스템 EZW는
+반복해서 기록되고 CHD 매핑도 성공합니다. 반면 곡 시각 자산까지 진입한 뒤에도
+`arcturus.ezw`가 기록되지 않았으므로, 현재 증거만으로는 곡 음원 파일이 실제로
+요청되지 않았는지, 또는 원본 곡 로더가 현재 추적 중인 `CreateFileA`/`ReadFile` 경로가
+아닌 다른 CRT·메모리 매핑 경로를 사용하는지 확정할 수 없습니다.
+
+## English
+
+## 2026-09-13 EZW trace from a different song
+
+### Confirmed
+
+The user-provided `20260913-230853-991.jsonl` run and its companion logs cover a
+different song. The VFS contains 34 `*.ezw` request records. The unique requests are
+`system\mode\modeselect1.ezw`, `system\opening\opening.ezw`,
+`system\soundFX\FX02.ezw`, `FX03.ezw`, `FX04.ezw`, `FX05.ezw`, `FX06.ezw`,
+`FX07.ezw`, `FX14.ezw`, `FX15.ezw`, and `system\title\title.ezw`.
+Every request was mapped to the CHD successfully (`success=1:error=0`).
+
+The selected song is identified as `songs/arcturus`; visual assets including `01.str`
+through `09.str`, `whiteout01.str`, and `logo.str` were successfully mapped by
+`CreateFileA` to `chd://ez2dancer/songs/arcturus/...`. However, no VFS request for the
+song audio candidate `songs/arcturus/arcturus.ezw` appears in this run.
+
+The DirectSound log records 13 buffer creations, 27 Play calls, seven first-play
+measurements, and 10 streaming starts. The measured PCM peak/RMS values are non-zero.
+This confirms that the EZW request logger, CHD mapping, and DirectSound PCM measurement
+are functioning in this run, while no per-song EZW audio request is observed.
+
+### Unresolved and assessment
+
+This result does not support the hypothesis that the EZW logger is completely inactive:
+system EZW requests are repeatedly captured and mapped successfully. Since the trace
+reaches `arcturus` visual assets without recording `arcturus.ezw`, it remains unresolved
+whether the original did not request the song audio during this run or whether its song
+loader uses a CRT or memory-mapped path outside the currently traced `CreateFileA`/`ReadFile`
+boundary.
+
+## 2026-09-13 arcturus 재생 후 EZW trace 해석 정정
+
+### 확인됨
+
+사용자는 같은 실행에서 `arcturus` 곡의 음악이 실제로 재생되었다고 확인했습니다. 따라서
+이 실행의 DirectSound stream은 단순한 시스템 효과음만이 아니라 곡 재생 경로까지 도달한
+것으로 판단할 수 있습니다. 앞서 기록한 “곡 음원 요청이 없었다”는 해석은 수정해야 합니다.
+
+소스 확인 결과 일반 진단 모드의 `ClaimVfsOpenTraceBudget()`는 전체 `CreateFileA` 요청과
+결과를 합쳐 1,024개 이벤트까지만 기록합니다. `20260913-230853-991.vfs.log`에는
+`create-file` 이벤트가 998줄에서 끊겼고, 이후에도 `songs/arcturus`의 `.str` 자산은
+별도 script trace budget으로 기록되었습니다. 즉 곡 시각 자산이 기록된 시점에는 일반
+`create-file` trace budget이 이미 소진되어, 뒤따른 `arcturus.ezw` 요청이 있었다면
+현재 로그에서 누락될 수 있습니다.
+
+`ReportVfsAssetOpen()`도 `.bmp`와 `.str`가 아닌 확장자는 일반 모드에서 기록하지 않으며,
+완전 진단 모드는 `--graphics-draw-diagnostics`로 활성화됩니다. 그러므로 이번 실행은
+EZW 로거 전체 고장을 입증하지 않으며, 오히려 곡 EZW 요청을 숨긴 bounded logging이
+가장 유력한 설명입니다.
+
+### 미확정
+
+현재 로그만으로 `arcturus.ezw`의 정확한 open/read 호출과 DirectSound buffer의 일대일
+연결은 아직 확인되지 않았습니다. 다만 CHD의 `arcturus.ezw` 정적 데이터 검증 결과와
+실제 음악 재생을 함께 고려하면, 다음 진단은 파일시스템 수정이 아니라 complete trace로
+곡 음원 요청을 포착하는 것이 우선입니다.
+## 2026-09-13 complete trace에서 JAM 음원 로딩 확인
+
+### 확인됨
+
+사용자가 실제 JAM 플레이를 포함해 다시 실행한
+"20260913-232223-242.jsonl"은 "graphics_draw_diagnostics":true를 포함하며,
+부속 ".vfs.log", ".audio.log", ".ddraw.log"가 모두 생성되었습니다. 따라서 이번 실행은
+일반 trace budget에 제한되지 않는 complete diagnostics 실행으로 분류합니다.
+
+VFS는 "songs\\jam"으로 current directory를 성공적으로 전환했습니다. 이어서 원본의
+CreateFileA 요청 "jam.ezw"가
+"chd://ez2dancer/songs/jam/jam.ezw"로 매핑되었고, open 결과는
+"success=1:error=0"입니다. 실제 음원 handle의 초기 read도 다음 세 번 모두 성공했습니다.
+
+| VFS event | requested bytes | transferred | error |
+| --- | ---: | ---: | ---: |
+| 2711 | 4,096 | 4,096 | 0 |
+| 2713 | 356,352 | 356,352 | 0 |
+| 2715 | 4,096 | 4,096 | 0 |
+
+초기 read 합계는 364,544바이트입니다. 이는 파일 전체가 한 번에 메모리에 적재되었다는
+뜻이 아니라, 스트리밍 시작에 관측된 read 구간의 합계입니다. 같은 실행에서 해당
+handle의 후속 22,528바이트 read들도 성공으로 기록됩니다.
+
+DirectSound에는 "1BD91C40" streaming buffer가 생성되었으며, 속성은 2채널,
+44.1 kHz, 16-bit, 360,448바이트입니다. 이 buffer는 looping play와 streaming start까지
+진행되었고, first-play 측정값은 peak "0.997924805", RMS "0.248371771"입니다.
+뒤따른 streaming unlock 측정값도 모두 0이 아닌 peak/RMS를 보입니다. "356,352 + 4,096"
+바이트라는 buffer 크기와 JAM read 구간의 크기·순서도 강하게 일치합니다.
+
+### 판단
+
+이번 complete trace에서는 "jam.ezw"가 CHD/FAT32/VFS 경계에서 누락되거나 read에
+실패했다는 증거가 없습니다. 파일 데이터는 성공적으로 읽혔고, 무음이 아닌 PCM이
+DirectSound streaming buffer에 전달되어 재생 큐에 들어갔습니다. 따라서 JAM이 여전히
+들리지 않는다면 원인은 파일시스템이나 EZW 원본 데이터보다는 read 이후의 오디오 출력
+경로, 예를 들어 SDL3/backend device 출력, stream mixer/lifecycle, 또는 이후 전환·페이드
+중 volume 상태에 있을 가능성이 큽니다.
+
+다만 현재 로그에는 VFS read와 DirectSound buffer를 연결하는 공통 correlation ID가
+없습니다. buffer 크기와 이벤트 순서에 근거한 JAM buffer 식별은 강한 추정이며, 일대일
+연결을 확정하려면 후속 코드 작업에서 요청·handle·buffer correlation logging을 추가해야
+합니다.
+
+이 절의 결론은 앞선 실행에서 JAM "jam.ezw" 요청이 보이지 않았다는 기록을 대체합니다.
+앞선 누락은 bounded trace budget 또는 실제 곡 시작 전 종료로 설명되었고, 이번 실행에서는
+complete trace가 실제 요청과 read를 직접 확인했습니다.
+
+## English
+
+## JAM audio loading confirmed by the 2026-09-13 complete trace
+
+### Confirmed
+
+The user-provided "20260913-232223-242.jsonl" run included an actual JAM play attempt and
+"graphics_draw_diagnostics":true; its companion ".vfs.log", ".audio.log", and ".ddraw.log"
+were all produced. This run is therefore classified as a complete-diagnostics run without
+the ordinary trace-budget limitation.
+
+The VFS successfully changed the current directory to "songs\\jam". The original then
+requested "jam.ezw" through CreateFileA, which mapped to
+"chd://ez2dancer/songs/jam/jam.ezw" with "success=1:error=0". The initial reads on the
+audio handle also all succeeded:
+
+| VFS event | requested bytes | transferred | error |
+| --- | ---: | ---: | ---: |
+| 2711 | 4,096 | 4,096 | 0 |
+| 2713 | 356,352 | 356,352 | 0 |
+| 2715 | 4,096 | 4,096 | 0 |
+
+The initial read total is 364,544 bytes. This is the observed streaming-start read range,
+not evidence that the entire file was loaded at once. Later successful 22,528-byte reads on
+the same handle also appear in the run.
+
+DirectSound created streaming buffer "1BD91C40" with two channels, 44.1 kHz, 16-bit samples,
+and 360,448 bytes. The buffer reached looping play and streaming start. Its first-play
+measurement was peak "0.997924805" and RMS "0.248371771"; subsequent streaming-unlock
+measurements also have non-zero peak/RMS values. The buffer size and ordering strongly match
+the "356,352 + 4,096" JAM read range.
+
+### Assessment
+
+This complete trace provides no evidence that "jam.ezw" was missing at the CHD/FAT32/VFS
+boundary or that its reads failed. File data was read successfully, non-silent PCM reached
+the DirectSound streaming buffer, and playback was queued. If JAM is still inaudible, the
+likely fault is after the file-read boundary: SDL3/backend device output, stream
+mixer/lifecycle handling, or a later volume state during transitions/fades.
+
+The current logs do not carry a shared correlation ID between VFS reads and DirectSound
+buffers. Identifying this buffer as JAM is therefore a strong inference from size and event
+ordering, not a one-to-one proof. A follow-up code task should add request/handle/buffer
+correlation logging if that proof is required.
+
+This section supersedes the earlier observation that no JAM "jam.ezw" request was visible.
+That absence was explained by the bounded trace budget or by ending before the actual song
+start; this complete trace directly captures the request and reads.

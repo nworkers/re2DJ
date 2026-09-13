@@ -32,4 +32,6 @@
 
 | [direct3d-cull-winding.md](direct3d-cull-winding.md) | Direct3D/OpenGL cull mode와 winding 변환 | Microsoft Direct3D 문서 기반 |
 
+| [directsound-play-state.md](directsound-play-state.md) | DirectSound 재생 중 Play, cursor 보존, 명시적 위치 변경 계약 | Microsoft Learn 기반 |
+
 *Update this table in the same task whenever a document is added or renamed.*

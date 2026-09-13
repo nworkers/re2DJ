@@ -138,6 +138,7 @@ volatile LONG g_vfs_image_trace_count = 0;
 volatile LONG g_vfs_script_trace_count = 0;
 volatile LONG g_vfs_device_trace_count = 0;
 volatile LONG g_vfs_io_port_trace_count = 0;
+volatile LONG g_dancer_coin_counter_trace = 0;
 volatile LONG g_vfs_open_trace_count = 0;
 volatile LONG g_vfs_file_trace_count = 0;
 volatile LONG g_dynamic_resolver_trace_count = 0;
@@ -1771,11 +1772,17 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
             if (initialized)
             {
                 InterlockedExchange(&g_keyboard_input_state, 1);
+                AppendVfsTraceMessage(profile_is_word
+                                          ? "re2dj:vfs:io-config:profile=ez2dancer:status=initialized\r\n"
+                                          : "re2dj:vfs:io-config:profile=ez2dj:status=initialized\r\n");
             }
             else
             {
                 const std::string message = "re2dj:io-config:" + error + "\n";
                 OutputDebugStringA(message.c_str());
+                AppendVfsTraceMessage(profile_is_word
+                                          ? "re2dj:vfs:io-config:profile=ez2dancer:status=error\r\n"
+                                          : "re2dj:vfs:io-config:profile=ez2dj:status=error\r\n");
                 InterlockedExchange(&g_keyboard_input_state, 2);
             }
         }
@@ -1819,6 +1826,21 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
                                       : static_cast<unsigned>(value),
                       handled ? 1u : 0u);
         AppendVfsTraceMessage(message);
+    }
+    if (is_read && profile_is_word && port == 0x0304)
+    {
+        const LONG previous = InterlockedExchange(
+            &g_dancer_coin_counter_trace, static_cast<LONG>(word_value));
+        if (static_cast<std::uint16_t>(previous) != word_value)
+        {
+            char message[128] = {};
+            std::snprintf(message,
+                          sizeof(message),
+                          "re2dj:vfs:io-coin:previous=0x%04x:value=0x%04x\r\n",
+                          static_cast<unsigned>(static_cast<std::uint16_t>(previous)),
+                          static_cast<unsigned>(word_value));
+            AppendVfsTraceMessage(message);
+        }
     }
     if (!handled)
     {

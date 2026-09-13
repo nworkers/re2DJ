@@ -8,7 +8,7 @@ namespace
 
 constexpr std::uint16_t kPlayer1Pads = 0x300;
 constexpr std::uint16_t kPlayer2Pads = 0x302;
-constexpr std::uint16_t kUnknownInput = 0x304;
+constexpr std::uint16_t kCoinCounter = 0x304;
 constexpr std::uint16_t kSensors = 0x306;
 
 constexpr std::uint16_t kPadOutput = 0x308;
@@ -76,6 +76,10 @@ bool Ez2DancerIoBoard::SetButton(Ez2DancerButton button, bool pressed)
     {
         return false;
     }
+    if (button == Ez2DancerButton::kCoin && pressed && !buttons_[index])
+    {
+        ++coin_counter_;
+    }
     buttons_[index] = pressed;
     return true;
 }
@@ -112,11 +116,11 @@ bool Ez2DancerIoBoard::ReadPort(std::uint16_t port, std::uint16_t* value) const
         case kPlayer2Pads:
             *value = pads(kPlayer2Zones);
             return true;
-        case kUnknownInput:
-            // Nothing is known about this port beyond that the guest reads it.
-            // Answering zero keeps the read from faulting without inventing a
-            // meaning for it.
-            *value = 0x0000;
+        case kCoinCounter:
+            // The real register semantics remain unresolved. The compatibility
+            // path models coin insertion as a rising-edge counter, matching
+            // the way the other EZ board exposes coin events.
+            *value = coin_counter_;
             return true;
         case kSensors:
         {
