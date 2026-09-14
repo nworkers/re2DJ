@@ -16,7 +16,7 @@
 
 ## 1. 현재 상태
 
-EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax 덤프 세 개를 확인했다. 정적 분석으로 확인할 수 있는 항목은 대부분 채워졌고, 실행해야 알 수 있는 항목이 남아 있다.
+EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax, 4th Trax, 5th, 6th 덤프와 EZ2Dancer 2nd MOVE(`ez2d2m`)를 확인했다. 입력 형태는 디렉터리 덤프와 MAME CHD 두 가지다. 정적 분석으로 확인할 수 있는 항목은 대부분 채워졌고, 보호 계층 응답과 실행해야 알 수 있는 항목이 남아 있다.
 
 상세 근거는 [HDD 레이아웃 분석](analysis/ez2dj-hdd-layout.md), [실행 파일 구조 분석](analysis/ez2dj-exe-structures.md), [import 표면 분석](analysis/ez2dj-import-surface.md)에 있다. 실행 파일별 PE 구조·보호 계층 해부·데이터 인벤토리는 구조 문서가 담당하며, 새 실행 파일이 확인될 때마다 그 문서에 섹션이 추가된다. 여기에는 결론만 둔다.
 
@@ -29,23 +29,24 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax 덤프 세 개를 확�
 | 항목 | 값 |
 | --- | --- |
 | 1st SE 게임 실행 파일 | **`ez2dj.exe`** — `System.ini`의 `shell=` 항목이 가리키는 것 (보호됨) |
-| 1st SE bring-up 빌드 | `ez2dj1.exe` (보호되지 않음). 캐비닛이 실행한 것은 아니다 |
 | 1st Tracks 대표 실행 파일 | **`Ez2DJ.exe`** — 사용자가 지정한 대표 파일 (`.protect`, 보호됨) |
 | 2nd Tracks 대표 실행 파일 | **`EZ2DJ.exe`** — 사용자가 제공한 대표 파일 (PE entry point는 `.text`, 보호 여부 미확정) |
-| 3rd 게임 실행 파일 | `EZ2DJ.EXE` (보호됨) |
+| 3rd 게임 실행 파일 | `EZ2DJ.EXE` (보호됨, `.protect`) |
+| 4th 게임 실행 파일 | `EZ2DJ.exe` (보호됨, `.protect`) |
+| EZ2Dancer 2nd MOVE 실행 파일 | `EZ2Dancer.exe` (보호됨, `.protect`) |
 | PE magic | PE32 (`0x10B`) — 전부 |
 | machine | i386 (`0x014C`) — 전부 |
 | image base | `0x00400000` — 전부 |
 | subsystem | Windows GUI (2) — 전부 |
-| `.reloc` | 섹션은 있으나 `ez2dj1.exe`의 base relocation data directory는 비어 있음 — 선호 주소 고정 |
-| 빌드 시각 | `ez2dj1.exe` 1999-12-24, `ez2dj.exe` 2000-01-01, 2nd `EZ2DJ.exe` 2004-10-01, `EZ2DJ.EXE` 2001-09-24 |
-| 보호 여부 | `ez2dj1.exe`만 보호되지 않음. 1st SE와 3rd는 진입점이 `.gtide` / `.protect`에 있고, 2nd는 `.text`에 있어 보호 여부가 미확정이다 |
+| base relocation | 1st SE `ez2dj.exe`는 `.reloc` 섹션이 있어도 data directory가 비어 있어 선호 주소 고정. 3rd·4th는 `.protect` 안에 실제 relocation directory가 있다 |
+| 빌드 시각 (PE TimeDateStamp) | `ez2dj.exe` 1999-12-24, 2nd `EZ2DJ.exe` 2004-07-18, 3rd `EZ2DJ.EXE` 2001-09-24(디렉터리)·2001-10-15(CHD), 4th `EZ2DJ.exe` 2002-07-18, `EZ2Dancer.exe` 2001-01-12 |
+| 보호 여부 | 1st SE·3rd·4th·`ez2d2m`은 진입점이 `.gtide` / `.protect`에 있어 보호됨. 2nd는 `.text`에 있어 미확정 |
 
-**`ez2dj1.exe`가 Stage 2·3의 첫 실행 대상이다.** 보호 계층을 실행하지 않고 진짜 게임 코드에 도달할 수 있는 유일한 빌드다.
+**정식 실행 파일을 직접 적재한다.** 보호 계층을 우회하는 별도 bring-up 빌드를 쓰지 않고, 캐비닛이 실제로 실행하는 빌드의 packer를 그대로 통과시킨다.
 
 ### 2.2 import 목록 — 확인됨
 
-`ez2dj1.exe` 기준 **7개 DLL, 144개 함수.** 전체 목록과 우선순위는 [import 표면 분석](analysis/ez2dj-import-surface.md)에 있다.
+정식 `ez2dj.exe` 기준 loader가 bind하는 표면은 **7개 DLL, 161개 함수**이며 그중 17개가 보호 계층의 것이다. 3rd·4th는 원본 `.idata`가 10 DLL / 159·161이다. 전체 수치와 우선순위는 [import 표면 분석](analysis/ez2dj-import-surface.md)에 있다.
 
 | 항목 | 값 |
 | --- | --- |
@@ -59,7 +60,7 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax 덤프 세 개를 확�
 | ordinal import | **사용함** (`DSOUND.dll #1`) |
 | delay import | 사용하지 않음 |
 
-3rd는 `DINPUT.dll`, `AVIFIL32.dll`, `WS2_32.dll`을 추가로 쓴다. 버전별 HLE 프로파일이 필요하다.
+3rd와 4th는 `DINPUT.dll`, `AVIFIL32.dll`, `WS2_32.dll`을 추가로 쓰고 `USER32` 표면도 21에서 32로 커진다. 그래픽 진입점도 `DirectDrawCreate`가 아니라 `DirectDrawCreateEx`다. 버전별 HLE 프로파일이 필요한 이유가 이 차이다.
 
 ### 2.3 자산과 런타임 경로 — 부분 확인
 
@@ -116,3 +117,19 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax 덤프 세 개를 확�
 **확인됨:** 보호 계층은 transform을 두 종류로 보낸다. 1블록 `function=0x000e` 11건과 7블록 `function=0x0011` 1건이다. 앞의 11건은 두 머신에서 값이 같다. `0x0011` 요청은 블록 5만 모든 관찰에서 같고, 블록 0·1·6은 re2DJ runtime 적재 주소를 따라 움직이며 블록 2–4는 머신마다 다르다.
 
 **추정:** 2EZConfig-V2의 상위 계약(사실 대조만 함)에 따르면 `0x000e`는 `API_CRYPT`, `0x0011`은 `API_CODE`다. `API_CODE`는 끝에서 두 번째 블록(블록 5)을 입력으로 한 번 계산해 payload 여러 위치에 쓰므로, 응답이 요청 전체의 함수다. 이에 맞춰 응답 표에 요청 행을 추가했다([설계 247](design/20260911-247-hardlock-payload-response-rows.md)). **미확정:** 유효한 `0x0011` 응답.
+
+## 2026-09-15 `roms/` 미분석 실행 파일 추가 (작업 287)
+
+**확인됨:** 사용자가 제공한 `roms/` 입력에서 구조 분석이 없던 게임 실행 파일을 모두 측정해 [실행 파일 구조 분석](analysis/ez2dj-exe-structures.md)에 6·7·8절로 넣었다. 실행 파일 식별에 크기·MD5·SHA-1·SHA-256을 함께 기록했다.
+
+**확인됨 — 5th.** `roms/ez2dj5th/ez2dj/EZ2DJ.exe`는 1,388,544바이트, PE TimeDateStamp `0x3f53377b`(2003-09-01)이고 진입점이 `.protect`에 있는 보호된 빌드다. 원본 `.idata`는 10 DLL / 161 함수이며 **4th와 DLL 목록·함수 이름 집합이 완전히 같다.** 따라서 5th는 4th 대비 새로운 Win32 API HLE를 요구하지 않는다. packed table도 4th와 같은 36항목 모양이고 DLL당 대표 stub 6개만 다르다.
+
+**확인됨 — 6th.** 6th는 실행 파일이 셋이고 셋 다 **보호 섹션이 없다.** 캐비닛이 실행하는 `EZ2DJ.EXE`(126,976바이트)는 launcher이고, 실제 게임은 자식 `EZ2DJ6th.EXE`(585,728바이트)다. bootstrap의 평문 문자열에는 자식 경로가 둘 있으며, `.\EZ2DJ6TH.EXE` 외에 `.\EZ2DJ1ST\EZ2DJ.EXE`도 있다. 게임 본체의 import는 7 DLL / 137 함수로, 4th·5th 대비 `ADVAPI32`·`AVIFIL32`·`WS2_32` 세 DLL이 전부 빠진다. 즉 6th는 AVI 재생과 Winsock 경계를 요구하지 않는다.
+
+**확인됨 — 6th 동봉 1st Tracks.** `6th.chd`의 `EZ2DJ/Ez2Dj1st/`에 완전한 1st Tracks 배치가 있고, 그 `Ez2DJ.exe`(360,448바이트, `0x411bbf5c`, 2004-08-12)는 **보호되지 않은 재빌드**다. import 6 DLL / 138 함수를 unpack 없이 그대로 읽을 수 있다. `EZ2DJ6th.EXE`와 함께, 게임 표면을 보호 해제 없이 정적으로 읽을 수 있는 유일한 입력이다.
+
+**확인됨 — 1st Tracks.** `roms/ez2dj1st/ez2dj/Ez2DJ.exe`(577,536바이트, `0x3862fd9d`)의 원본 `.idata`는 7 DLL / 141 함수이고, 1st SE 144개의 **진부분집합**이다. 1st SE가 더 가진 것은 `GDI32!BitBlt`, `GDI32!SetBkColor`, `KERNEL32!GetWindowsDirectoryA` 셋뿐이다. `ez2dj`와 `ez2dj1` 두 디렉터리의 실행 파일은 바이트 단위로 같다.
+
+**확인됨 — 1st SE는 두 빌드다.** 디렉터리 덤프(`.gtide` packer, 561,152바이트)와 CHD(`.protect` packer, 634,880바이트)는 PE TimeDateStamp가 같지만 다른 파일이다. 두 빌드의 `.text`·`.rdata`·`.data`·`.reloc`은 배치가 같고 내용이 다르며, `.idata`만 바이트 단위로 같다. packer는 원본 import table 섹션을 건드리지 않고 본체만 변환한다.
+
+**미확정:** 5th 디렉터리 배치가 `ez2dj5.chd`에서 나왔는지, 6th bootstrap이 두 자식 중 어느 쪽을 언제 고르는지, 6th `EZ2DJ.INI`가 평문이 아닌 이유와 소비 경로, 그리고 새로 확인한 세 제품의 Hardlock 응답 계약.

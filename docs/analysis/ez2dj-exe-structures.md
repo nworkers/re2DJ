@@ -18,60 +18,151 @@
 
 ## 공통 특성 / Common traits
 
-**확인됨.** 여섯 실행 파일 전부 `PE32 / i386 / Windows GUI (subsystem 2, 버전 4.0)`, image base `0x00400000`, section alignment `0x00001000`, file alignment `0x00001000`, size of headers `0x00001000`, `dll flags 0x0000`이다. `dll flags 0`은 `DYNAMIC_BASE`(ASLR)와 `NX_COMPAT`(DEP) 어느 쪽도 선호하지 않는다는 뜻이다.
+**확인됨.** 확인한 **게임·도구 실행 파일** 전부 `PE32 / i386 / Windows GUI (subsystem 2, 버전 4.0)`, image base `0x00400000`, section alignment `0x00001000`, file alignment `0x00001000`, size of headers `0x00001000`, `dll flags 0x0000`이다. `dll flags 0`은 `DYNAMIC_BASE`(ASLR)와 `NX_COMPAT`(DEP) 어느 쪽도 선호하지 않는다는 뜻이다. 예외는 9.4절의 `AllowIo.exe`(콘솔 subsystem, image base `0x01000000`)와 `PortTalk.sys`(native 커널 드라이버, image base `0x00010000`, alignment `0x20`) 둘뿐이며, 둘 다 게임 코드가 아니라 legacy I/O 접근 도구다.
 
-*Confirmed. All six executables are PE32 / i386 / Windows GUI (subsystem 2, version 4.0) at image base 0x00400000 with 0x1000 section/file alignment, 0x1000 header size, and dll flags 0x0000 — meaning no ASLR (`DYNAMIC_BASE`) and no DEP opt-in (`NX_COMPAT`).*
+*Confirmed. Every **game and tool executable** inspected is PE32 / i386 / Windows GUI (subsystem 2, version 4.0) at image base 0x00400000 with 0x1000 section/file alignment, 0x1000 header size, and dll flags 0x0000 — meaning no ASLR (`DYNAMIC_BASE`) and no DEP opt-in (`NX_COMPAT`). The only exceptions are the two legacy-I/O access tools in section 9.4 — `AllowIo.exe` (console subsystem, image base 0x01000000) and `PortTalk.sys` (native kernel driver, image base 0x00010000, 0x20 alignment) — neither of which is game code.*
 
-**확인됨.** `ez2dj1.exe`와 `ez2dj.exe`의 PE TimeDateStamp가 `0x3862df27`로 동일하다. 보호 처리가 타임스탬프를 보존했을 가능성과 함께, 두 파일이 같은 원본 빌드의 관계라는 기존 결론([HDD 레이아웃](ez2dj-hdd-layout.md) 3절)을 뒷받침한다.
+**확인됨 — 2026-09-15.** COFF characteristics의 `RELOCS_STRIPPED` 비트는 base relocation 데이터 디렉터리의 유무와 거의 일치한다. `0x010e`(비트 없음)인 파일은 실제 relocation 디렉터리를 갖고, `0x010f`(비트 있음)인 파일은 갖지 않는다. **예외가 정확히 둘 있고, 둘 다 packer가 헤더를 다시 쓴 빌드다.**
 
-*Confirmed. `ez2dj1.exe` and `ez2dj.exe` share the identical PE TimeDateStamp `0x3862df27`, supporting both timestamp preservation by the protection step and the earlier conclusion that the protected file wraps the same underlying build.*
+*Confirmed — 2026-09-15. The `RELOCS_STRIPPED` bit of the COFF characteristics almost always agrees with whether a base-relocation data directory exists: files at `0x010e` (bit clear) carry a real relocation directory and files at `0x010f` (bit set) do not. **There are exactly two exceptions, and both are builds whose header a packer rewrote.***
 
-| 파일 | 타임스탬프 | 덤프 |
-| --- | --- | --- |
-| `ez2dj1.exe` | `0x3862df27` | 1st SE |
-| `ez2dj.exe` | `0x3862df27` | 1st SE |
-| `Test.exe` | `0x38607297` | 1st SE |
-| `PlzPowerOff.exe` | `0x3700321a` | 1st SE |
-| `EZ2DJ.exe` | `0x40fa7af9` | 2nd |
-| `EZ2DJ.EXE` | `0x3baea943` | 3rd |
+| 파일 / file | characteristics | base relocation directory | 보호 / protection |
+| --- | --- | --- | --- |
+| 1st Tracks `Ez2DJ.exe` | `0x010e` | 있음 / present | `.protect` |
+| 1st SE `ez2dj.exe` (`.gtide`) | `0x010e` | **없음 / absent** | `.gtide` |
+| 1st SE `Ez2DJ.exe` (`.protect`) | `0x010e` | 있음 / present | `.protect` |
+| 2nd `EZ2DJ.exe` | `0x010e` | 있음 / present | 미확정 / unresolved |
+| 3rd `EZ2DJ.EXE` (두 빌드 / both) | `0x010e` | 있음 / present | `.protect` |
+| 4th `EZ2DJ.exe` | `0x010e` | 있음 / present | `.protect` |
+| 5th `EZ2DJ.exe` | `0x010e` | 있음 / present | `.protect` |
+| 6th `EZ2DJ.EXE`·`EZ2DJ6th.EXE`·동봉 1st | `0x010f` | 없음 / absent | 없음 / none |
+| `ez2d2m` `EZ2Dancer.exe` | `0x010f` | **있음 / present** | `.protect` |
+| 1st SE `Test.exe` | `0x010e` | 있음 / present | 없음 / none |
+| 1st Tracks `Test.exe`·`PlzPowerOff.exe`·`AllowIo.exe` | `0x010f` | 없음 / absent | 없음 / none |
+| `PortTalk.sys` | `0x010e` | 있음 / present | 없음 / none |
+
+1st SE `.gtide` 빌드는 비트를 지운 채 디렉터리를 비워 두어 선호 주소 고정을 강제하고, `ez2d2m`는 비트를 세운 채 디렉터리를 남겨 둔다. `RELOCS_STRIPPED`를 존중하는 loader는 후자의 relocation 데이터를 쓰지 않는다. 두 헤더가 왜 이렇게 어긋나 있는지는 **미확정**이며, 따라서 이 비트 하나로 재배치 가능 여부를 판단하지 않고 데이터 디렉터리를 함께 확인한다.
+
+*The 1st SE `.gtide` build clears the bit while leaving the directory empty, forcing the image to its preferred base, and `ez2d2m` sets the bit while leaving a directory behind — which a loader honoring `RELOCS_STRIPPED` will not use. Why the two headers disagree this way is **unresolved**, so relocatability is judged from the data directory rather than from the bit alone.*
+
+**확인됨 — 2026-09-14 재측정.** 아래는 PE header의 TimeDateStamp이며 파일시스템 날짜가 아니다. 두 값이 다른 경우가 있으므로 빌드 시점은 이 표를 따른다.
+
+*Confirmed — re-measured 2026-09-14. The table lists the PE header TimeDateStamp, not the filesystem date; the two differ for several files, so build time follows this table.*
+
+| 파일 / file | 타임스탬프 | UTC | 덤프 / dump | 입력 / input |
+| --- | --- | --- | --- | --- |
+| `Ez2DJ.exe` | `0x3862fd9d` | 1999-12-24 04:59:09 | 1st Tracks | 디렉터리 / directory |
+| `ez2dj.exe` | `0x3862df27` | 1999-12-24 02:49:11 | 1st SE | 디렉터리 / directory |
+| `Ez2DJ.exe` | `0x3862df27` | 1999-12-24 02:49:11 | 1st SE | CHD |
+| `Test.exe` | `0x38607297` | 1999-12-22 | 1st SE | 디렉터리 / directory |
+| `Test.exe` | `0x374d68b1` | 1999-05-27 | 1st Tracks | 디렉터리 / directory |
+| `PlzPowerOff.exe` | `0x3700321a` | 1999-03-30 | 1st SE·1st Tracks | 디렉터리 / directory |
+| `EZ2DJ.exe` | `0x40fa7af9` | 2004-07-18 | 2nd | 디렉터리 / directory |
+| `EZ2DJ.EXE` | `0x3baea943` | 2001-09-24 | 3rd | 디렉터리 / directory |
+| `EZ2DJ.EXE` | `0x3bca98a3` | 2001-10-15 | 3rd | CHD |
+| `EZ2DJ.exe` | `0x3d369bfd` | 2002-07-18 | 4th | CHD |
+| `EZ2DJ.exe` | `0x3f53377b` | 2003-09-01 | 5th | 디렉터리 / directory |
+| `EZ2DJ.EXE` (bootstrap) | `0x411646a8` | 2004-08-08 | 6th | 디렉터리·CHD |
+| `EZ2DJ6th.EXE` | `0x411f6d44` | 2004-08-15 | 6th | 디렉터리·CHD |
+| `Ez2DJ.exe` (동봉 1st / bundled 1st) | `0x411bbf5c` | 2004-08-12 | 6th | CHD |
+| `AllowIo.exe` | `0x3c3fc787` | 2002-01-12 | 1st Tracks·6th 동봉 | 디렉터리·CHD |
+| `PortTalk.sys` | `0x3c3fdf10` | 2002-01-12 | 1st Tracks·6th 동봉 | 디렉터리·CHD |
+| `EZ2Dancer.exe` | `0x3a5f074c` | 2001-01-12 | `ez2d2m` | 디렉터리·CHD |
+
+**확인됨 — 2026-09-15.** 1st Tracks 정식 실행 파일(`0x3862fd9d`)과 1st SE 정식 실행 파일(`0x3862df27`)의 TimeDateStamp는 같은 날 약 2시간 10분 차이다. 두 파일은 내용이 다르고 섹션 배치도 다르므로 같은 빌드가 아니다. 두 제품의 빌드 시각이 왜 이렇게 가까운지는 **미확정**이며, 이 값만으로 제품의 출시 순서를 판단하지 않는다.
+
+*Confirmed — 2026-09-15. The 1st Tracks canonical executable (`0x3862fd9d`) and the 1st SE canonical executable (`0x3862df27`) carry TimeDateStamps about two hours and ten minutes apart on the same day. The two files differ in content and section layout, so they are not the same build. Why the two products' build times sit this close is **unresolved**, and release order is not inferred from these values alone.*
+
+**확인됨.** 3rd는 입력에 따라 서로 다른 빌드다. 기존 디렉터리 덤프의 `EZ2DJ.EXE`는 `0x3baea943`이고, 현재 제품이 실행하는 `roms/ez2dj3rd` CHD의 `EZ2DJ.EXE`는 3주 뒤인 `0x3bca98a3`이다. 3rd 관찰을 인용할 때는 어느 입력에서 나온 것인지 함께 적는다.
+
+*Confirmed. 3rd is a different build depending on the input: the earlier directory dump's `EZ2DJ.EXE` is `0x3baea943`, while the `roms/ez2dj3rd` CHD the product actually runs carries `0x3bca98a3`, three weeks later. Cite which input a 3rd observation came from.*
+
+### 파일 해시 / File hashes
+
+**확인됨 — 2026-09-15.** 아래는 각 실행 파일의 크기와 해시다. 같은 제품이라도 입력(디렉터리 덤프 / CHD)에 따라 다른 빌드일 수 있으므로, 관찰을 인용할 때는 경로 대신 이 표의 해시로 대상을 특정한다. CHD 안의 파일은 `re2dj_chd_probe --dump`로 꺼낸 바이트에 대한 값이다.
+
+*Confirmed — 2026-09-15. Sizes and hashes per executable. The same product can be a different build depending on the input (directory dump vs CHD), so cite an observation's subject by the hash in this table rather than by path. Values for files inside a CHD are taken over the bytes extracted with `re2dj_chd_probe --dump`.*
+
+| 대상 / subject | 크기 / size | MD5 | SHA-1 |
+| --- | --- | --- | --- |
+| 1st Tracks `Ez2DJ.exe` | 577,536 | `3d858e6560dc629e1878da35a923e32b` | `9ad7d1cf0414165b9639126e04a8bd0bb3e9a0bf` |
+| 1st SE `ez2dj.exe` (`.gtide`, 디렉터리) | 561,152 | `41d6adc1397fe8eb653b8de624b5602a` | `12d365d0248cf15543f83761b14d990ba086dc2f` |
+| 1st SE `Ez2DJ.exe` (`.protect`, CHD) | 634,880 | `5760cfb4f556d70711f18f473457c57b` | `3f3f960542dd9573f529dc8fb45dacd0206baffe` |
+| 2nd `EZ2DJ.exe` | 1,028,155 | `4bfe2ac5367e7fa38fe02577d9624b78` | `166cd0d89d3006a8b3f5637db33aaaf58cc4cb64` |
+| 3rd `EZ2DJ.EXE` (디렉터리 덤프) | 1,216,512 | `58f38d14ffd50d79307775b44c26166a` | `3e8a17c5ef27d89ab8d95f5aed857900db4bf02a` |
+| 3rd `EZ2DJ.EXE` (CHD) | 1,216,512 | `bb447ee2581f77d340d416d2daf090ab` | `11c2061c2c022b5a8b44820eb72c8d052ed6d058` |
+| 4th `EZ2DJ.exe` (CHD) | 1,372,160 | `ed0284500b65019d2195e1a022a295de` | `995dffd262ad518321d2008a83722ee4945c96e4` |
+| 5th `EZ2DJ.exe` | 1,388,544 | `a3e99089536e7eeab5e8eb13f99309cd` | `4321452730cdef27172522a8a9d7a769a0dcaeea` |
+| 6th `EZ2DJ.EXE` (bootstrap) | 126,976 | `ce6d77d8303682636a7050a43215a140` | `0f86d71d7326a1ced7f6cd89ae77ddb24b950e72` |
+| 6th `EZ2DJ6th.EXE` (게임 본체 / game body) | 585,728 | `6acf3660802402498a8ea84bb721d3e5` | `887115b709df7358985e86937daf253c1eac84bd` |
+| 6th 동봉 1st `Ez2DJ.exe` / bundled 1st | 360,448 | `e0a9718c890c799076f8f084aeabe8eb` | `3a4380ff9c133bcac1badf0f1159da8e096237a4` |
+| `ez2d2m` `EZ2Dancer.exe` | 622,592 | `44ccb76d26f5dceb2e5d84d147a40390` | `a8eb2081a1c9f4e9ef36283304bcc9fa734e188b` |
+| 1st Tracks `Test.exe` | 266,240 | `799b3f62f1a46253e67f31cd9d571977` | `834d204c0d3eafcf8f27f84f190d0ddce6540e66` |
+| 1st SE `Test.exe` | 1,859,633 | `d32f1c4d90cd45cade649b633b06116a` | `0b735b94f0a811fa18eed0bce9f76a9536bc1575` |
+| 1st Tracks `PlzPowerOff.exe` | 98,304 | `987fa1a51c08ae23f77ccecdeba96f37` | `47d00f7343f6521d448ef0f19101a0c055ec3e47` |
+| 1st SE `PlzPowerOff.exe` | 98,304 | `f2ea5bce4991d702805a08ba4bf3bafe` | `c6826018b4bd50e86a3cc1ded818e2c06abf28e4` |
+| `AllowIo.exe` | 40,125 | `9ad64da441e1db7d4d9b83ffa9b23838` | `ef2d05323e590c4a9c6a9412e1074c898b078996` |
+| `PortTalk.sys` | 3,567 | `7d5a2d755b6c6579f63657b527d6ff1b` | `fd7d864b96bafa21a76128bfb02dcccb57eddad6` |
+
+**확인됨 — 2026-09-15.** `PlzPowerOff.exe`는 1st Tracks와 1st SE에서 크기(98,304)와 PE TimeDateStamp(`0x3700321a`)가 같지만 해시가 다르다. 같은 빌드 시각의 서로 다른 파일이므로, 두 덤프 사이에서 이 도구를 동일 파일로 취급하지 않는다. 차이의 원인은 **미확정**이다.
+
+*Confirmed — 2026-09-15. `PlzPowerOff.exe` has the same size (98,304) and PE TimeDateStamp (`0x3700321a`) in 1st Tracks and 1st SE but different hashes. They are different files carrying the same build time, so the tool is not treated as one file across the two dumps. The cause of the difference is **unresolved**.*
 
 ---
 
-## 1. `ez2dj1.exe` — 1st SE bring-up 빌드 (보호 없음)
+### 절 색인 / Section index
+
+세대순으로 읽으려면 이 표를 따른다. 절 번호는 문서에 추가된 순서이므로 세대순과 다르다.
+
+*Read in generation order by this table. Section numbers follow the order in which sections were added to the document, which is not generation order.*
+
+| 제품 / product | 절 / section |
+| --- | --- |
+| 1st Tracks | 6 |
+| 1st SE | 1 |
+| 2nd | 2 |
+| 3rd | 3 |
+| 4th | 4 |
+| 5th | 7 |
+| 6th (bootstrap·게임 본체·동봉 1st) | 8 |
+| EZ2Dancer 2nd MOVE | 5 |
+| 보조 도구 / auxiliary tools | 9 |
+| 새 실행 파일 추가 절차 / procedure | 10 |
+
+---
+
+## 1. `ez2dj.exe` — 1st SE 정식 실행 파일 (보호됨)
+
+### 1.0 1st SE는 보호 계열이 서로 다른 두 빌드로 존재한다 / 1st SE exists as two builds from different protector families — 확인됨
+
+**확인됨 — 2026-09-15.** 디렉터리 덤프 `roms/ez2dj1stse/ez2dj/ez2dj.exe`(561,152바이트)와 `roms/ez2dj1stse/ez2dj1stse.chd` 안의 `ez2dj/Ez2DJ.exe`(634,880바이트)는 PE TimeDateStamp가 `0x3862df27`로 같지만 서로 다른 파일이다. 앞의 것은 `.gtide`/`.gdata`/`.gidata` 8섹션 배치이고, 뒤의 것은 `.protect` 6섹션 배치다. 아래 1.1절부터의 값은 전부 디렉터리 덤프(`.gtide` 빌드) 기준이다.
+
+*Confirmed — 2026-09-15. The directory dump `roms/ez2dj1stse/ez2dj/ez2dj.exe` (561,152 bytes) and `ez2dj/Ez2DJ.exe` inside `roms/ez2dj1stse/ez2dj1stse.chd` (634,880 bytes) share the PE TimeDateStamp `0x3862df27` but are different files: the former is the eight-section `.gtide`/`.gdata`/`.gidata` arrangement, the latter a six-section `.protect` arrangement. Every value from 1.1 onward is measured on the directory dump — the `.gtide` build.*
+
+| 항목 / item | `.gtide` 빌드 (디렉터리) | `.protect` 빌드 (CHD) |
+| --- | --- | --- |
+| 크기 / size | 561,152 | 634,880 |
+| TimeDateStamp | `0x3862df27` | `0x3862df27` |
+| entry point RVA | `0x01ad23cf` | `0x01ad1240` |
+| SizeOfImage | `0x01ada000` | `0x01aec000` |
+| 섹션 수 / sections | 8 | 6 |
+| 보호 섹션 / protection sections | `.gtide` `.gdata` `.gidata` | `.protect` |
+| import directory RVA | `0x01ad8000` (`.gidata`) | `0x01aebbd0` (`.protect`) |
+| base relocation directory | `{0, 0}` | RVA `0x01ad2000` |
+
+**확인됨 — 2026-09-15.** 두 빌드의 `.text`·`.rdata`·`.data`·`.reloc` 섹션은 VA·VSize·raw offset·raw size가 모두 같지만 **내용은 다르다.** 반면 `.idata`(raw `0x69000`, 4,096바이트)는 두 빌드에서 바이트 단위로 같다. 즉 packer는 원본 import table 섹션을 그대로 두고 본체 섹션만 변환하며, 두 packer 계열이 서로 다른 변환을 적용한다.
+
+*Confirmed — 2026-09-15. The `.text`, `.rdata`, `.data` and `.reloc` sections of the two builds agree on VA, VSize, raw offset and raw size but **differ in content**, while `.idata` (raw `0x69000`, 4,096 bytes) is byte-identical between them. The packer leaves the original import-table section alone and transforms only the body sections, and the two packer families apply different transforms.*
+
+**미확정.** 같은 게임 빌드에 두 보호 계열이 적용된 이유와 시점, 그리고 `.protect` 빌드의 Hardlock 계약이 `.gtide` 빌드의 LPTDI 계약과 같은지는 확인되지 않았다. 상세는 [1st SE CHD 파일시스템 분석](ez2dj1stse-chd-filesystem.md)에 있다.
+
+*Unresolved: why and when two protector families were applied to the same game build, and whether the `.protect` build's Hardlock contract matches the `.gtide` build's LPTDI contract. Details are in the [1st SE CHD filesystem analysis](ez2dj1stse-chd-filesystem.md).*
 
 ### 1.1 헤더와 섹션 — 확인됨
 
-`re2dj_pe_analyzer`로 확인. entry point RVA `0x0003a640`은 `.text` 안에 있고, SizeOfImage는 `0x01ad1000`이다. import directory는 표준 위치 `.idata`(RVA `0x01aba000`, 크기 `0x00000fa4`)에 있다. base relocation data directory는 `{RVA 0, Size 0}`로 비어 있으므로 선호 주소 `0x00400000`에 고정 적재해야 한다.
+entry point RVA `0x01ad23cf`는 마지막 코드 섹션 `.gtide` 안에 있고, SizeOfImage는 `0x01ada000`이다. import directory는 `.gidata`(RVA `0x01ad8000`)로 옮겨져 있고 IAT directory도 `0x01ad80a0`에 있다. 원본 import table을 담은 `.idata`(RVA `0x01aba000`, 크기 `0x00000fa4`) 섹션은 그대로 남아 있다. base relocation data directory는 `{RVA 0, Size 0}`으로 비어 있으므로 선호 주소 `0x00400000`에 고정 적재해야 한다.
 
-*Verified with `re2dj_pe_analyzer`. The entry RVA 0x0003a640 lies in `.text`; SizeOfImage is 0x01ad1000; the import directory sits at the standard `.idata` (RVA 0x01aba000, size 0x00000fa4); and the base-relocation directory is empty, so the image must load at its preferred base.*
-
-| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
-| --- | --- | --- | --- | --- | --- |
-| `.text` | `0x00001000` | `0x00052540` | `0x00001000` | `0x00053000` | code, exec, read |
-| `.rdata` | `0x00054000` | `0x00007571` | `0x00054000` | `0x00008000` | data, read |
-| `.data` | `0x0005c000` | `0x01a5d2f8` | `0x0005c000` | `0x0000d000` | data, read, write |
-| `.idata` | `0x01aba000` | `0x00000fa4` | `0x00069000` | `0x00001000` | data, read, write |
-| `.reloc` | `0x01abb000` | `0x00015094` | `0x0006a000` | `0x00016000` | discardable |
-
-**추정.** `.data`는 raw 52 KB에 비해 가상 27 MB다. 파일에서 오지 않는 약 27 MB는 0으로 채워지는 정적 버퍼일 가능성이 높다(게임 자산용 추정). 실제 용도는 실행해야 확인된다.
-
-*Inferred. `.data` is 52 KB raw against ~27 MB virtual; the zero-filled remainder is likely a static buffer for game assets, pending a run.*
-
-### 1.2 import — 확인됨
-
-7개 DLL, 144개 함수. 전체 목록과 HLE 우선순위는 [import 표면 분석](ez2dj-import-surface.md) 1~8절.
-
-*Seven DLLs, 144 functions; see the import surface analysis.*
-
----
-
-## 2. `ez2dj.exe` — 1st SE 정식 실행 파일 (보호됨)
-
-### 2.1 헤더와 섹션 — 확인됨
-
-entry point RVA `0x01ad23cf`는 마지막 코드 섹션 `.gtide` 안에 있고, SizeOfImage는 `0x01ada000`이다. import directory는 `.gidata`(RVA `0x01ad8000`)로 옮겨져 있고 IAT directory도 `0x01ad80a0`에 있다. base relocation directory는 보이지 않는다(`ez2dj1.exe`와 마찬가지로 선호 주소 고정으로 추정 — 확인 방법: relocation directory 값을 직접 읽기).
-
-*The entry RVA 0x01ad23cf lies in the last code section `.gtide`; SizeOfImage is 0x01ada000; the import directory moved into `.gidata` (RVA 0x01ad8000) with the IAT directory at 0x01ad80a0; no base-relocation directory is visible (preferred-base load inferred, as with ez2dj1.exe — confirm by reading the relocation directory directly).*
+*The entry RVA 0x01ad23cf lies in the last code section `.gtide`; SizeOfImage is 0x01ada000; the import directory moved into `.gidata` (RVA 0x01ad8000) with the IAT directory at 0x01ad80a0. The `.idata` section holding the original import table (RVA 0x01aba000, size 0x00000fa4) is still present. The base-relocation data directory is `{RVA 0, Size 0}`, so the image must load at its preferred base 0x00400000.*
 
 | 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
 | --- | --- | --- | --- | --- | --- |
@@ -84,17 +175,18 @@ entry point RVA `0x01ad23cf`는 마지막 코드 섹션 `.gtide` 안에 있고, 
 | `.gdata` | `0x01ad7000` | `0x00000c00` | `0x00086000` | `0x00001000` | data, read, write |
 | `.gidata` | `0x01ad8000` | `0x00001100` | `0x00087000` | `0x00002000` | data, read, write |
 
-앞의 다섯 섹션은 `ez2dj1.exe`와 VA·크기가 정확히 같다. 보호 계층은 원본 이미지 뒤에 `.gtide`(코드 스텁), `.gdata`(보호 데이터), `.gidata`(import 재배치)를 덧붙인 형태다.
+앞의 다섯 섹션 `.text`·`.rdata`·`.data`·`.idata`·`.reloc`가 원본 이미지 레이아웃이고, 보호 계층은 그 뒤에 `.gtide`(코드 스텁), `.gdata`(보호 데이터), `.gidata`(import 재배치) 셋을 덧붙인다. 원본 섹션의 VA와 크기는 보호 처리에서 바뀌지 않으므로, `.text`의 RVA 기준 주소는 보호 전후가 같다.
 
-*The first five sections match `ez2dj1.exe` exactly; the protection appends `.gtide` (stub code), `.gdata` (protection data), and `.gidata` (relocated imports) behind the original image.*
+*The first five sections — `.text`, `.rdata`, `.data`, `.idata`, `.reloc` — are the original image layout, and the protection appends `.gtide` (stub code), `.gdata` (protection data), and `.gidata` (relocated imports) behind them. Protection does not change the VA or size of the original sections, so an RVA-based address in `.text` means the same thing before and after protection.*
 
-### 2.2 `.gidata` — import 재배치 — 확인됨
+### 1.2 `.gidata` — import 재배치 — 확인됨
 
-import directory(RVA `0x01ad8000`)와 IAT(RVA `0x01ad80a0`)를 직접 해석한 결과: KERNEL32(원본 97개급 전체 + 보호 특화 추가), USER32, GDI32, ADVAPI32(`RegFlushKey`), DSOUND(ordinal 1), WINMM, DDRAW. 보호 특화 추가 목록과 슬롯 VA는 [import 표면 분석](ez2dj-import-surface.md) 9절에 있다. 런타임에 관찰된 동적 해석은 `GetProcAddress(wsock32, "WSAGetLastError")` 하나뿐이다.
+**확인됨 — 2026-09-14 재측정.** import directory(RVA `0x01ad8000`)와 IAT(RVA `0x01ad80a0`)를 직접 해석하면 7 DLL / 161 함수다. 원본 `.idata`(RVA `0x01aba000`)를 같은 방식으로 해석하면 7 DLL / 144 함수이므로, 보호 계층이 더한 것은 정확히 17개다. DLL별로는 KERNEL32 97→113, USER32 21→22이고 GDI32 14, WINMM 8, DDRAW 2, DSOUND 1(ordinal `#1`), ADVAPI32 1(`RegFlushKey`)은 변하지 않는다. 추가 17개 목록과 슬롯 VA는 [import 표면 분석](ez2dj-import-surface.md) 9절에 있다. 런타임에 관찰된 동적 해석은 `GetProcAddress(wsock32, "WSAGetLastError")` 하나뿐이다.
 
-*Parsing the directory directly: KERNEL32 (the full original surface plus protection-flavored additions), USER32, GDI32, ADVAPI32, DSOUND ordinal 1, WINMM, DDRAW. The protection-specific additions and slot VAs are in the import surface analysis; the only dynamic resolution observed at runtime is GetProcAddress for WSAGetLastError.*
+*Confirmed — re-measured 2026-09-14. Parsing the import directory (RVA `0x01ad8000`) and IAT (RVA `0x01ad80a0`) directly yields 7 DLLs / 161 functions. Parsing the original `.idata` (RVA `0x01aba000`) the same way yields 7 DLLs / 144, so the protection layer adds exactly 17. Per DLL, KERNEL32 goes 97→113 and USER32 21→22, while GDI32 (14), WINMM (8), DDRAW (2), DSOUND (ordinal `#1`), and ADVAPI32 (`RegFlushKey`) are unchanged. The 17 additions and their slot VAs are in section 9 of the [import surface analysis](ez2dj-import-surface.md). The only dynamic resolution observed at runtime is `GetProcAddress(wsock32, "WSAGetLastError")`.*
 
-### 2.3 `.gtide` — 보호 스텁 해부 — 확인됨
+
+### 1.3 `.gtide` — 보호 스텁 해부 — 확인됨
 
 정적 덤프(파일 오프셋 `0x80000` 기준)에서 다음이 확인됐다.
 
@@ -115,7 +207,7 @@ import directory(RVA `0x01ad8000`)와 IAT(RVA `0x01ad80a0`)를 직접 해석한 
 
 *Unresolved: `.gtide` carries no write flag yet its runtime bytes changed. The modification route (environment that permits direct writes, modification before observation starts, or another bypass) is unknown; verify by checksumming `.gtide` against the file at the pre-entry stop and re-comparing at later points.*
 
-### 2.4 `.gdata` — 문자열·데이터 인벤토리 — 확인됨
+### 1.4 `.gdata` — 문자열·데이터 인벤토리 — 확인됨
 
 파일 오프셋 기준 `0x869b0`~`0x86aa0` 구간을 직접 읽었다. VA 변환은 `VA = 오프셋 + 0x01E51000`이다.
 
@@ -145,7 +237,7 @@ import directory(RVA `0x01ad8000`)와 IAT(RVA `0x01ad80a0`)를 직접 해석한 
 
 *Inferred: the MSVBVM50.DLL pairs, the magic compare, and the hash blobs look like dongle-response or license data, but the evidence is the string composition alone.*
 
-### 2.5 관찰된 런타임 흐름 — 확인됨
+### 1.5 관찰된 런타임 흐름 — 확인됨
 
 `--api-trace`와 언로드 종반 single-step(`--api-trace` 확장)으로 관찰한 흐름이다. caller 주소는 실행마다 동일했다. 근거는 [작업 로그 20260823-042](../work-logs/20260823-042-protected-api-observation-trace.md)와 [HDD 레이아웃 분석](ez2dj-hdd-layout.md) 3절이다.
 
@@ -295,19 +387,19 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 ---
 
-### 2.12 Music Select texture Load 경계 — 작업 088
+### 1.12 Music Select texture Load 경계 — 작업 088
 
 39. **확인됨 — Music Select 곡 BMP는 로드되며 texture Load HLE 결손은 해당 장면의 직접 원인이 아니었다.** 사용자 실행의 `20260829-013719-626.vfs.log`는 `System\MusicSelect\disc\_3week.bmp`를 포함한 곡 그림의 `LoadImageA` 성공을 기록했다. 작업 088은 당시 모든 호출에 `DDERR_UNSUPPORTED`를 반환하던 `IDirect3DTexture2::Load`에 동일 root·크기 RGB565 texture의 pixel row, source color key와 destination revision 복사를 구현했다. 그러나 사용자 재검증에서도 화면 변화가 없었고 최신 `20260829-015640-892.ddraw.log`의 `TextureLoad` 호출은 0회였다. 따라서 texture-copy 결손을 이 장면의 직접 원인으로 보았던 **이전 추정은 기각됨**이다. **확인됨:** 같은 로그에서 실패한 `DrawPrimitive`는 texture 114/115를 사용하는 `FVF 0x112` 14회와 texture 없는 `FVF 0x1e2` 50회이며 모두 `0x80004001`을 반환했다. **미확정:** 작업 089 수정 뒤 중앙 그림 표시 여부와 두 정점 형식 각각의 정확한 시각적 역할.
 
 *Confirmed — Music Select song BMPs load, and the missing texture Load HLE was not the direct cause of this scene defect. User-run log `20260829-013719-626.vfs.log` records successful `LoadImageA` calls for artwork including `System\MusicSelect\disc\_3week.bmp`. Task 088 implemented same-root, equal-sized RGB565 pixel-row, source-color-key, and destination-revision copying for the formerly unconditional `DDERR_UNSUPPORTED` `IDirect3DTexture2::Load`. However, user revalidation showed no visual change and latest log `20260829-015640-892.ddraw.log` records zero `TextureLoad` calls, so the prior direct-cause inference is rejected. Confirmed: failed draws in the same log comprise fourteen textured FVF `0x112` calls using textures 114/115 and fifty untextured FVF `0x1e2` calls, all returning `0x80004001`. Unresolved: center-artwork visibility after Task 089 and the exact visual role of each vertex format.*
 
-### 2.13 변환 전 Direct3D 정점 경계 — 작업 089
+### 1.13 변환 전 Direct3D 정점 경계 — 작업 089
 
 40. **확인됨 — Music Select 진행 중 32바이트 변환 전 정점 형식 두 종류가 중앙 곡 그림의 실제 미구현 draw 경계였다.** `FVF 0x112`는 `D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_TEX1`인 `D3DVERTEX`, `FVF 0x1e2`는 `D3DFVF_XYZ | D3DFVF_RESERVED1 | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1`인 `D3DLVERTEX`로 해석되며 둘 다 stride 32바이트다. 작업 089는 원본 정점 데이터를 바꾸지 않고 facade가 보존한 world/view/projection matrix와 `D3DVIEWPORT2`를 플랫폼 중립 decoder에 전달해 기존 XYZRHW 명령으로 변환한다. identity·matrix 합성·두 field layout·비정상 입력 단위 테스트와 Windows build, CTest 3/3이 통과했고 사용자가 중앙 그림 복구를 확인했다. **미확정:** `0x112` normal에 대한 lighting이 다른 장면에서 필요한지 여부.
 
 *Confirmed — two 32-byte untransformed vertex formats were the actual unsupported boundary for the Music Select center artwork. FVF `0x112` is `D3DVERTEX` with `D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_TEX1`; FVF `0x1e2` is `D3DLVERTEX` with `D3DFVF_XYZ | D3DFVF_RESERVED1 | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1`. Task 089 preserves original vertex data and passes facade-retained world/view/projection matrices and `D3DVIEWPORT2` into a platform-neutral decoder that produces the existing XYZRHW command. Unit tests cover identity, composed transforms, both field layouts, and invalid inputs; Windows builds and CTest 3/3 pass, and the user confirmed restoration of the center artwork. Unresolved: whether FVF `0x112` normals require lighting in other scenes.*
 
-### 2.15 Music Select 논리 좌표와 host viewport — 작업 097
+### 1.15 Music Select 논리 좌표와 host viewport — 작업 097
 
 45. **확인됨 — 최신 Music Select 유사 구간의 정적 논리 좌표는 자산 크기와 중앙 정렬에 맞는다.** 실행 `20260830-120003-655.ddraw.log`의 `frame=3327`에서 297x112 `CLUBMIX_PANEL`은 `x=172..469`로, 175x39 `DEMOPLAY`는 `x=232.5..407.5`로 그려졌다. 두 값 모두 논리 640x480 화면의 중앙 배치와 일치한다. 64x64 디스크와 128x128 마스크도 해당 장면의 좌측 carousel 영역 안에서 일관된 크기로 기록됐다. 따라서 이 trace만으로 원본 좌표 오프셋이나 z 정렬 오류는 확인되지 않는다.
 
@@ -333,7 +425,7 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 *Confirmed — candidate surface content exists, while only the central direct-draw path is observed. At `frame=603` in `20260830-141656-891.ddraw.log`, the non-key/non-zero area of `texture=20` is `(0,0)-(511,511)`, and the areas of `texture=21/22` are `(1,9)-(255,247)` and `(4,47)-(250,208)`. The candidate non-key counts are 48,147/25,534 and the direct draw results are `DD_OK`. Color-key discard therefore did not empty the surfaces; in the observed run they are drawn only through the logical-central path `x=195..451`, `y=3..259`. The upper-right path remains unresolved at the original animation/state-transition level. Only bounding-box summaries were recorded; original pixels were not stored.*
 
-### 2.14 Win32 창 닫기와 process lifetime — 작업 090
+### 1.14 Win32 창 닫기와 process lifetime — 작업 090
 
 41. **확인됨 — close 감지 뒤 `ExitProcess(0)` termination 교착과 self hard-termination 해결.** 제품 trace `20260829-112237-831`은 PID 41488, HWND `0x0002159a`에서 close message 2회, `visible=0`, `watcher-exit`을 기록했지만 process가 `HasExited=True`, thread 1개, handle 410개의 종료 중 상태로 남고 parent가 대기하는 것을 확인했다. HWND·watcher 실패 가설은 **기각됨**이고 termination sequence 미완료가 **확인됨**이다. **추정:** 남은 thread가 DLL/process detach lock을 기다렸으며 정확한 DLL과 lock은 미확정이다. 원본 WndProc 정리 뒤 current-process `TerminateProcess(..., 0)`을 사용한 실행 `20260829-112906-743`은 같은 close/watcher 경계 뒤 `runtime_detached_exit` code 0과 성공 outcome을 기록했다. Debug/Release CTest 3/3이 통과했고 사용자가 창 닫기 시 process 종료를 확인했다.
 
@@ -351,7 +443,7 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 *Confirmed — Task 095 attributes the execute-at-zero failure to a null `IDirect3DDevice3::DrawIndexedPrimitiveVB` slot. Exception thread 23292 in WER dump `ez2dj.exe.20768.dmp` records EIP zero, ESP `0x001af9d4`, and first stack return `0x004206a3`. Original code `0x00420670`–`0x004206a3` pushes flags zero, index count `0x258` (600), an index pointer, a vertex-buffer pointer, and primitive 4 before indirectly calling global device `[0x01eb7cc0]` at vtable offset `+0x8c`. In the DirectX 6 `IDirect3DDevice3` ABI that slot is exactly `DrawIndexedPrimitiveVB`, and primitive 4 is `D3DPT_TRIANGLELIST`. The facade vtable addressed by dump register EDX also has a null `+0x8c` slot. Confirmed: after implementing shared bounds-checked 16-bit index expansion, triangle-list commands, and the Win32 COM slot, Debug and Release CTest each pass 3/3. Product run `20260830-000841-620` remains responsive for roughly three minutes and exits both child and parent with code zero after a normal close; the former `0xc0000005` does not recur. Unresolved: that rerun contains no primitive-four draw marker, so actual entry into the same product call is verified only by the runtime probe. The original state condition that first selected the call path in the earlier run remains unknown.*
 
-### 2.16 호스트 표시 모드 요청 — 작업 183
+### 1.16 호스트 표시 모드 요청 — 작업 183
 
 45. **확인됨 — 원본은 실행마다 `ChangeDisplaySettingsExA`를 정확히 한 번 호출한다.** 제품 실행 `20260905-012007-893`과 `20260905-012235-527`은 각각 `entry=ChangeDisplaySettingsExA:device=default:flags=0x00000001:fields=0x001c0000:640x480x16:refresh=0` 한 줄을 남겼다. `flags=0x1`은 `CDS_UPDATEREGISTRY`, `fields=0x1c0000`은 `DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT`이며 주사율은 지정하지 않는다. 항목 18이 정적으로 기록한 `0x00437cba`의 요청과 일치하는 실행 증거다.
 
@@ -365,9 +457,9 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 ---
 
-## 3. `EZ2DJ.exe` — 2nd Trax 대표 실행 파일 (보호 여부 미확정)
+## 2. `EZ2DJ.exe` — 2nd Trax 대표 실행 파일 (보호 여부 미확정)
 
-### 3.1 헤더와 섹션 — 확인됨
+### 2.1 헤더와 섹션 — 확인됨
 
 `roms/ez2dj2nd/ez2dj/EZ2DJ.exe`를 `re2dj_pe_analyzer`로 확인했다. entry point RVA `0x00079550`은 `.text` 안에 있고, SizeOfImage는 `0x0047d000`이다. import directory는 `.idata`(RVA `0x00473000`, 크기 `0x0000162e`)에 있고, base relocation directory는 `.reloc`(RVA `0x00475000`, 크기 `0x00007ed4`)에 있다.
 
@@ -385,7 +477,7 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 *Unresolved. An entry point in `.text` means there is no protection-specific entry section like 1st SE's `.gtide`, but it does not rule out Hardlock or another runtime protection layer. Confirming that requires separate observation of the 2nd run's device/API boundary and self-modification behavior.*
 
-### 3.2 HDD sibling과 실행 경로 — 부분 확인
+### 2.2 HDD sibling과 실행 경로 — 부분 확인
 
 같은 `ez2dj` 디렉터리에는 `EZ2DJ.ini`, `bg`, `sound`, `system`이 있고 `System.ini`는 없다. `ez2dj2nd` target profile은 이 네 항목과 PE header를 fingerprint로 사용한다. 1st SE HLE 기본값을 복제한 것은 사용자의 요청에 따른 호환성 기준이며, 2nd 전용 legacy I/O 주소와 Hardlock 응답은 아직 확인되지 않았다.
 
@@ -393,9 +485,9 @@ fault 전에 `VirtualAlloc`·`VirtualProtect` 호출은 관찰되지 않았다. 
 
 ---
 
-## 4. `EZ2DJ.EXE` — 3rd Trax 정식 실행 파일 (보호됨)
+## 3. `EZ2DJ.EXE` — 3rd Trax 정식 실행 파일 (보호됨)
 
-### 4.1 헤더와 섹션 — 확인됨
+### 3.1 헤더와 섹션 — 확인됨
 
 entry point RVA `0x00642240`은 `.protect` 섹션 안에 있고, SizeOfImage는 `0x0067c000`이다. import directory RVA `0x0067af90`과 base relocation directory RVA `0x00643000`이 **모두 `.protect` 가상 범위 안**(`0x00642000` + `0x00039251`)에 있다. 즉 import와 reloc까지 패커 섹션이 소유한다.
 
@@ -418,7 +510,7 @@ entry point RVA `0x00642240`은 `.protect` 섹션 안에 있고, SizeOfImage는 
 
 *Inferred: `.data` is 84 KB raw against 5.5 MB virtual — the same zero-filled static-buffer pattern as 1st SE.*
 
-### 4.2 import와 런타임 — 부분 확인
+### 3.2 import와 런타임 — 부분 확인
 
 정적 import table을 `dumpbin /imports`로 확인하면 KERNEL32의 기본 파일 API(`CreateFileA`, `ReadFile`, `WriteFile`, `CloseHandle`, `GetFileSize` 등), `USER32!MessageBoxA`/`UpdateWindow`, `WINMM!mixerGetLineControlsA`, `DSOUND` ordinal `#1`, `DINPUT!DirectInputCreateA`, `DDRAW!DirectDrawCreateEx`, `AVIFIL32!AVIStreamInfoA`, `WS2_32` ordinal `#9`가 있다. 반면 현재 launcher가 제공하는 `DirectDrawCreate`, `ChangeDisplaySettingsExA`, `LoadImageA`, `GetPrivateProfileIntA`, `GetCommandLineA`, `GetWindowsDirectoryA`, `GetFileType` import는 3rd 정적 IAT에 없다. VFS의 선택적 import 처리는 이 차이를 허용하지만, 3rd 기본 정책에는 DirectDraw/display·command-line/Windows-directory·DemoVolume·legacy I/O hook을 넣지 않는다.
 
@@ -466,15 +558,356 @@ entry point RVA `0x00642240`은 `.protect` 섹션 안에 있고, SizeOfImage는 
 
 ---
 
-## 5. 보조 도구 / Auxiliary tools (1st SE)
+### 3.3 CHD 빌드는 디렉터리 덤프와 다른 빌드다 — 확인됨 / The CHD build differs from the directory dump — Confirmed
 
-### 5.1 `Test.exe` — 서비스·테스트 도구 — 확인됨
+**확인됨 — 2026-09-14.** 위 3.1의 값은 기존 디렉터리 덤프에서 측정한 것이다. 현재 제품이 실제로 실행하는 `roms/ez2dj3rd/ez2dj3rd.chd` 안의 `EZ2DJ/EZ2DJ.EXE`는 크기 1,216,512바이트, FAT 기록 시각 2001-10-15 17:07이며 PE TimeDateStamp가 `0x3bca98a3`(2001-10-15)로 디렉터리 덤프의 `0x3baea943`(2001-09-24)와 다르다. 섹션 레이아웃은 같은 형태이지만 크기가 다르다.
+
+*Confirmed — 2026-09-14. The values in 3.1 were measured on the earlier directory dump. `EZ2DJ/EZ2DJ.EXE` inside `roms/ez2dj3rd/ez2dj3rd.chd`, which the product actually runs, is 1,216,512 bytes with FAT write time 2001-10-15 17:07 and PE TimeDateStamp `0x3bca98a3` (2001-10-15), against `0x3baea943` (2001-09-24) for the directory dump. The section layout has the same shape but different sizes.*
+
+| 항목 / item | 디렉터리 덤프 / directory dump | CHD |
+| --- | --- | --- |
+| TimeDateStamp | `0x3baea943` | `0x3bca98a3` |
+| entry point RVA | `0x00642240` | `0x00642240` |
+| SizeOfImage | `0x0067c000` | `0x0067c000` |
+| import directory RVA | `0x0067af90` | `0x0067b480` |
+| `.text` VSize | `0x000c0c96` | `0x000c0e56` |
+| `.protect` VSize | `0x00039251` | `0x00039741` |
+
+3rd 관찰을 인용할 때는 어느 입력에서 나온 것인지 함께 적는다. 두 빌드의 RVA가 대부분 같으므로 주소 하나만으로는 구분되지 않는다.
+
+*Cite which input a 3rd observation came from. Most RVAs agree between the two builds, so an address alone does not distinguish them.*
+
+---
+
+## 4. `EZ2DJ.exe` — 4th Trax 정식 실행 파일 (보호됨) / 4th Trax canonical executable (protected)
+
+### 4.1 헤더와 섹션 — 확인됨 / Headers and sections — Confirmed
+
+**확인됨 — 2026-09-14.** `roms/ez2dj4th/ez2dj4th.chd`의 `EZ2DJ/EZ2DJ.exe`를 `re2dj_chd_probe --dump`로 꺼내 `re2dj_pe_analyzer`로 측정했다. 크기 1,372,160바이트, PE TimeDateStamp `0x3d369bfd`(2002-07-18)다. entry point RVA `0x006e0240`은 `.protect` 안에 있고, import directory RVA `0x007192b0`과 base relocation directory RVA `0x006e1000`도 `.protect` 가상 범위 안에 있다. 3rd와 같은 packer 배치다.
+
+*Confirmed — 2026-09-14. `EZ2DJ/EZ2DJ.exe` was extracted from `roms/ez2dj4th/ez2dj4th.chd` with `re2dj_chd_probe --dump` and measured with `re2dj_pe_analyzer`: 1,372,160 bytes, PE TimeDateStamp `0x3d369bfd` (2002-07-18). The entry RVA `0x006e0240` lies in `.protect`, and both the import directory (RVA `0x007192b0`) and the base-relocation directory (RVA `0x006e1000`) fall inside the `.protect` virtual range — the same packer arrangement as 3rd.*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x000db022` | `0x00001000` | `0x000dc000` | code, exec, read |
+| `.rdata` | `0x000dd000` | `0x0000c766` | `0x000dd000` | `0x0000d000` | data, read |
+| `.data` | `0x000ea000` | `0x005e66b0` | `0x000ea000` | `0x0001c000` | data, read, write |
+| `.idata` | `0x006d1000` | `0x0000171c` | `0x00106000` | `0x00002000` | data, read, write |
+| `.reloc` | `0x006d3000` | `0x0000c05d` | `0x00108000` | `0x0000d000` | data, read, write, discardable |
+| `.protect` | `0x006e0000` | `0x00039569` | `0x00115000` | `0x0003a000` | code, exec, read, write |
+
+**확인됨.** `.protect` 플래그는 3rd와 같은 `0xe0000020`이며 write 비트를 포함한다. SizeOfImage는 `0x0071a000`이다.
+
+*Confirmed. The `.protect` flags are `0xe0000020` as in 3rd, including the write bit. SizeOfImage is `0x0071a000`.*
+
+### 4.2 import — 확인됨 / Imports — Confirmed
+
+**확인됨 — 2026-09-14.** 원본 `.idata`(RVA `0x006d1000`)는 10 DLL / 161 함수이고, loader가 bind하는 `.protect` packed table은 36 항목이다. 3rd(10 DLL / 159)와 거의 같고 `WINMM` 표면만 8에서 10으로 늘었다. DLL별 수치는 [import 표면 분석](ez2dj-import-surface.md) 1절에 있다.
+
+*Confirmed — 2026-09-14. The original `.idata` (RVA `0x006d1000`) holds 10 DLLs / 161 functions, while the packed table in `.protect` that the loader binds holds 36 entries. This is nearly identical to 3rd (10 DLLs / 159); only the `WINMM` surface grows from 8 to 10. Per-DLL counts are in section 1 of the [import surface analysis](ez2dj-import-surface.md).*
+
+`.protect` packed table은 3rd와 항목 수가 같고 kernel32 대표 stub 하나만 다르다. 3rd는 `SetCurrentDirectoryA`, 4th는 `CreateThread`다. 나머지 35개 항목은 이름과 순서가 모두 같다.
+
+*The packed tables of 3rd and 4th hold the same number of entries and differ in exactly one kernel32 representative stub — `SetCurrentDirectoryA` for 3rd, `CreateThread` for 4th. The other 35 entries match in both name and order.*
+
+---
+
+## 5. `EZ2Dancer.exe` — EZ2Dancer 2nd MOVE 정식 실행 파일 (보호됨) / EZ2Dancer 2nd MOVE canonical executable (protected)
+
+**확인됨 — 2026-09-14.** 이 문서가 다루는 첫 비-EZ2DJ 제품이다. 크기 622,592바이트, PE TimeDateStamp `0x3a5f074c`(2001-01-12), entry point RVA `0x00401240`, SizeOfImage `0x0043b000`이다. 섹션은 `.text`, `.rdata`, `.data`, `.protect` 넷뿐이며 **`.idata`와 `.reloc` 섹션이 없다.** 원본 import table을 담은 별도 섹션이 없다는 점이 EZ2DJ 3rd·4th와 다르다. loader가 bind하는 packed table은 `.protect` 안 32 항목이다.
+
+*Confirmed — 2026-09-14. This is the first non-EZ2DJ product covered here: 622,592 bytes, PE TimeDateStamp `0x3a5f074c` (2001-01-12), entry RVA `0x00401240`, SizeOfImage `0x0043b000`. It has only four sections — `.text`, `.rdata`, `.data`, `.protect` — and **no `.idata` or `.reloc` section**, unlike EZ2DJ 3rd and 4th, which keep the original import table in its own section. The packed table the loader binds holds 32 entries inside `.protect`.*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x0004b93e` | `0x00001000` | `0x0004c000` | code, exec, read |
+| `.rdata` | `0x0004d000` | `0x00004c10` | `0x0004d000` | `0x00005000` | data, read, write |
+| `.data` | `0x00052000` | `0x003ae42c` | `0x00052000` | `0x0000c000` | data, read, write |
+| `.protect` | `0x00401000` | `0x000399cd` | `0x0005e000` | `0x0003a000` | code, exec, read, write |
+
+**미확정.** 원본 import table의 위치. `.idata` 섹션이 없으므로 보호 해제 뒤 어디에 재구성되는지는 런타임 관찰로 확인해야 한다.
+
+*Unresolved: where the original import table lives. With no `.idata` section, the location it is reconstructed at after unprotection must be established by runtime observation.*
+
+상세 관찰은 [ez2d2m CHD 파일시스템과 실행 파일 관찰](ez2d2m-chd-filesystem.md)에 있다.
+
+*Detailed observations are in the [ez2d2m CHD filesystem and executable analysis](ez2d2m-chd-filesystem.md).*
+
+---
+
+## 6. `Ez2DJ.exe` — 1st Tracks 정식 실행 파일 (보호됨) / 1st Tracks canonical executable (protected)
+
+### 6.1 헤더와 섹션 — 확인됨 / Headers and sections — Confirmed
+
+**확인됨 — 2026-09-15.** 크기 577,536바이트, PE TimeDateStamp `0x3862fd9d`(1999-12-24 04:59:09 UTC)다. entry point RVA `0x0199b240`은 `.protect` 안에 있고 SizeOfImage는 `0x019b6000`이다. import directory RVA `0x019b5620`과 base relocation directory RVA `0x0199c000`이 모두 `.protect` 가상 범위(`0x0199b000` + `0x0001a8c2`) 안에 있다. 3rd·4th·5th와 같은 packer 배치이며, 1st SE 디렉터리 덤프의 `.gtide`/`.gdata`/`.gidata` 배치와는 다르다.
+
+*Confirmed — 2026-09-15. 577,536 bytes, PE TimeDateStamp `0x3862fd9d` (1999-12-24 04:59:09 UTC). The entry RVA `0x0199b240` lies in `.protect`; SizeOfImage is `0x019b6000`; and both the import directory (RVA `0x019b5620`) and the base-relocation directory (RVA `0x0199c000`) fall inside the `.protect` virtual range (`0x0199b000` + `0x0001a8c2`). This is the same packer arrangement as 3rd, 4th and 5th, and differs from the `.gtide`/`.gdata`/`.gidata` arrangement of the 1st SE directory dump.*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x0004eec6` | `0x00001000` | `0x0004f000` | code, exec, read |
+| `.rdata` | `0x00050000` | `0x00006fe1` | `0x00050000` | `0x00007000` | data, read |
+| `.data` | `0x00057000` | `0x0192d3d8` | `0x00057000` | `0x00005000` | data, read, write |
+| `.idata` | `0x01985000` | `0x00000f5c` | `0x0005c000` | `0x00001000` | data, read, write |
+| `.reloc` | `0x01986000` | `0x000142f4` | `0x0005d000` | `0x00015000` | data, read, write, discardable |
+| `.protect` | `0x0199b000` | `0x0001a8c2` | `0x00072000` | `0x0001b000` | code, exec, read, write |
+
+**추정.** `.data`는 raw 20 KB에 비해 가상 25.3 MB로, 다른 모든 EZ2DJ 빌드에서 관찰한 0 채움 정적 버퍼 패턴과 같다.
+
+*Inferred: `.data` is 20 KB raw against 25.3 MB virtual — the same zero-filled static-buffer pattern observed in every other EZ2DJ build.*
+
+### 6.2 import — 확인됨 / Imports — Confirmed
+
+**확인됨 — 2026-09-15.** 원본 `.idata`(RVA `0x01985000`)는 7 DLL / 141 함수다. loader가 bind하는 packed table은 슬롯 30개이며 이름 기준 고유 항목은 22개다. `GetProcAddress`, `GetModuleHandleA`, `RtlUnwind` 세 이름이 두 번씩 나온다. `re2dj_pe_loader`가 보고하는 22와 직접 해석의 30은 이 중복 때문에 다르며, 두 경로는 모순되지 않는다.
+
+*Confirmed — 2026-09-15. The original `.idata` (RVA `0x01985000`) holds 7 DLLs / 141 functions. The packed table the loader binds has 30 slots resolving to 22 distinct names; `GetProcAddress`, `GetModuleHandleA` and `RtlUnwind` each appear twice. The 22 reported by `re2dj_pe_loader` and the 30 counted by the direct parse differ only because of those duplicates; the two paths do not disagree.*
+
+**확인됨 — 2026-09-15.** 1st Tracks의 141개는 1st SE 144개의 **진부분집합**이다. 1st SE가 더 가진 것은 `GDI32!BitBlt`, `GDI32!SetBkColor`, `KERNEL32!GetWindowsDirectoryA` 셋뿐이고, 1st Tracks에만 있는 이름은 없다. 두 제품의 그래픽 진입점은 모두 `DirectDrawCreate`이며 `DirectDrawCreateEx`가 아니다.
+
+*Confirmed — 2026-09-15. The 141 names of 1st Tracks form a **strict subset** of the 144 of 1st SE. 1st SE adds exactly three — `GDI32!BitBlt`, `GDI32!SetBkColor`, `KERNEL32!GetWindowsDirectoryA` — and nothing appears only in 1st Tracks. Both products enter graphics through `DirectDrawCreate`, not `DirectDrawCreateEx`.*
+
+**확인됨 — 2026-09-15.** 이 실행 파일의 평문 문자열에는 `HARDLOCK`, `FEnteDev`, `LPTDI`, `TDSD`가 없다. packer가 본체를 변환하므로 이것은 보호 장치를 쓰지 않는다는 근거가 아니다. 실제 장치 계약은 **미확정**이다.
+
+*Confirmed — 2026-09-15. The plaintext strings of this executable contain no `HARDLOCK`, `FEnteDev`, `LPTDI` or `TDSD`. Because the packer transforms the body, this is not evidence that it uses no protection device. Its actual device contract is **unresolved**.*
+
+### 6.3 두 디렉터리 배치 / Two directory layouts — 확인됨
+
+**확인됨 — 2026-09-15.** 사용자 입력의 `roms/ez2dj1st`에는 `ez2dj`와 `ez2dj1` 두 디렉터리가 있고, `Ez2DJ.exe`·`Test.exe`·`PlzPowerOff.exe` 세 파일이 둘 사이에서 바이트 단위로 같다. `ez2dj1` 쪽에만 `AllowIo.exe`, `PortTalk.sys`, `Cursor.cur`, `Icon.ico`, `Version.bmp`, `WarningMsg_Asia.bmp`, `WarningMsg_Japan.bmp`, `WarningMsg_Korea.bmp`가 더 있다. 따라서 두 디렉터리는 같은 실행 파일의 서로 다른 배치이며, 분석 대상으로는 하나로 취급한다.
+
+*Confirmed — 2026-09-15. The user input `roms/ez2dj1st` holds two directories, `ez2dj` and `ez2dj1`, whose `Ez2DJ.exe`, `Test.exe` and `PlzPowerOff.exe` are byte-identical to each other. Only `ez2dj1` additionally carries `AllowIo.exe`, `PortTalk.sys`, `Cursor.cur`, `Icon.ico`, `Version.bmp` and the three `WarningMsg_*.bmp` files. The two directories are therefore different layouts of the same executable and are treated as one analysis subject.*
+
+**확인됨 — 2026-09-15.** `ez2dj1`의 `AllowIo.exe`(40,125바이트, `0x3c3fc787`)와 `PortTalk.sys`(3,567바이트, `0x3c3fdf10`)는 둘 다 2002-01-12 빌드다. 1st Tracks 게임 실행 파일보다 2년 뒤이므로, 이 배치는 원래의 1999년 출하 구성 그대로가 아니다. `PortTalk.sys`는 `.text .rdata .data INIT .rsrc .reloc` 섹션을 가진 커널 드라이버로, legacy I/O port 접근을 사용자 모드에 열어 주는 공개 도구 계열이다. 8.4절에서 6th 동봉 배치와 같은 파일임을 확인한다.
+
+*Confirmed — 2026-09-15. `ez2dj1`'s `AllowIo.exe` (40,125 bytes, `0x3c3fc787`) and `PortTalk.sys` (3,567 bytes, `0x3c3fdf10`) are both 2002-01-12 builds — two years after the 1st Tracks game executable — so this layout is not the original 1999 shipping configuration. `PortTalk.sys` is a kernel driver with `.text .rdata .data INIT .rsrc .reloc` sections, of the well-known family that opens legacy I/O port access to user mode. Section 8.4 confirms these are the same files as in the 6th's bundled layout.*
+
+---
+
+## 7. `EZ2DJ.exe` — 5th Trax 정식 실행 파일 (보호됨) / 5th Trax canonical executable (protected)
+
+### 7.1 헤더와 섹션 — 확인됨 / Headers and sections — Confirmed
+
+**확인됨 — 2026-09-15.** `roms/ez2dj5th/ez2dj/EZ2DJ.exe`를 `re2dj_pe_analyzer`로 측정했다. 크기 1,388,544바이트, PE TimeDateStamp `0x3f53377b`(2003-09-01)다. entry point RVA `0x0070d240`은 `.protect` 안에 있고 SizeOfImage는 `0x00746000`이다. import directory RVA `0x007458e0`과 base relocation directory RVA `0x0070e000`이 모두 `.protect` 가상 범위(`0x0070d000` + `0x00038ba0`) 안에 있다. 3rd·4th와 같은 packer 배치다.
+
+*Confirmed — 2026-09-15. `roms/ez2dj5th/ez2dj/EZ2DJ.exe` measured with `re2dj_pe_analyzer`: 1,388,544 bytes, PE TimeDateStamp `0x3f53377b` (2003-09-01). The entry RVA `0x0070d240` lies in `.protect`; SizeOfImage is `0x00746000`; and both the import directory (RVA `0x007458e0`) and the base-relocation directory (RVA `0x0070e000`) fall inside the `.protect` virtual range (`0x0070d000` + `0x00038ba0`) — the same packer arrangement as 3rd and 4th.*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x000e19cb` | `0x00001000` | `0x000e2000` | code, exec, read |
+| `.rdata` | `0x000e3000` | `0x0000d5a1` | `0x000e3000` | `0x0000e000` | data, read |
+| `.data` | `0x000f1000` | `0x0060c3b0` | `0x000f1000` | `0x0001a000` | data, read, write |
+| `.idata` | `0x006fe000` | `0x0000171c` | `0x0010b000` | `0x00002000` | data, read, write |
+| `.reloc` | `0x00700000` | `0x0000c801` | `0x0010d000` | `0x0000d000` | data, read, write, discardable |
+| `.protect` | `0x0070d000` | `0x00038ba0` | `0x0011a000` | `0x00039000` | code, exec, read, write |
+
+**확인됨.** `.protect` 플래그는 3rd·4th와 같은 `0xe0000020`이며 write 비트를 포함한다. `.idata`의 VSize `0x0000171c`는 4th와 정확히 같다.
+
+*Confirmed. The `.protect` flags are `0xe0000020` as in 3rd and 4th, including the write bit. The `.idata` VSize `0x0000171c` is exactly the same as 4th's.*
+
+### 7.2 import — 4th와 같은 표면 / The same surface as 4th — 확인됨
+
+**확인됨 — 2026-09-15.** 원본 `.idata`(RVA `0x006fe000`)는 10 DLL / 161 함수다. 4th의 원본 `.idata`와 **DLL 목록과 함수 이름 집합이 완전히 같다.** 표에 나타나는 순서만 다르다. 두 빌드를 DLL별로 비교했을 때 한쪽에만 있는 이름은 없다.
+
+*Confirmed — 2026-09-15. The original `.idata` (RVA `0x006fe000`) holds 10 DLLs / 161 functions, and its **DLL list and function-name set are exactly the same as 4th's** original `.idata`; only the order in the table differs. A per-DLL comparison of the two builds finds no name present in one and absent in the other.*
+
+| DLL | 4th | 5th |
+| --- | --- | --- |
+| `KERNEL32.dll` | 88 | 88 |
+| `USER32.dll` | 32 | 32 |
+| `GDI32.dll` | 12 | 12 |
+| `WINMM.dll` | 10 | 10 |
+| `WS2_32.dll` | 9 | 9 |
+| `AVIFIL32.dll` | 5 | 5 |
+| `DDRAW.dll` | 2 | 2 |
+| `ADVAPI32.dll` | 1 | 1 |
+| `DSOUND.dll` | 1 | 1 |
+| `DINPUT.dll` | 1 | 1 |
+| 합계 / total | **161** | **161** |
+
+**확인됨 — 2026-09-15.** loader가 bind하는 packed table도 4th와 같은 모양이다. 슬롯 38개, 고유 이름 36개이며 `GetProcAddress`와 `GetModuleHandleA`가 두 번씩 나온다. 36개 항목 중 30개는 이름과 순서가 4th와 같고, DLL당 대표 stub 6개만 다르다.
+
+*Confirmed — 2026-09-15. The packed table the loader binds has the same shape as 4th's: 38 slots resolving to 36 distinct names, with `GetProcAddress` and `GetModuleHandleA` appearing twice. Thirty of the 36 match 4th in both name and order; only six per-DLL representative stubs differ.*
+
+| 슬롯 / slot | 4th | 5th |
+| --- | --- | --- |
+| `0xf00001a0` | `kernel32!CreateThread` | `kernel32!CompareStringW` |
+| `0xf00001b0` | `user32!UpdateWindow` | `user32!ScreenToClient` |
+| `0xf00001c0` | `gdi32!GetStockObject` | `gdi32!CreateCompatibleDC` |
+| `0xf00001e0` | `winmm!mixerGetLineControlsA` | `winmm!timeEndPeriod` |
+| `0xf0000210` | `ddraw!DirectDrawCreateEx` | `ddraw!DirectDrawEnumerateExA` |
+| `0xf0000220` | `avifil32!AVIStreamInfoA` | `avifil32!AVIStreamGetFrame` |
+| `0xf0000230` | `ws2_32!#9` | `ws2_32!#17` |
+
+**추정.** import 표면이 4th와 같다는 것은 5th가 4th 대비 새로운 Win32 API HLE를 요구하지 않는다는 뜻이다. 그러나 같은 API 집합이 같은 호출 순서와 같은 인자 계약을 뜻하지는 않으므로, 5th 실행 성공의 근거로 쓰지 않는다.
+
+*Inferred: an identical import surface means 5th demands no Win32 API beyond what 4th already needs from the HLE. It does not mean the same call order or the same argument contracts, so it is not treated as evidence that 5th will run.*
+
+### 7.3 입력 출처 / Input provenance — 미확정
+
+**미확정 — 2026-09-15.** `roms/ez2dj5th/ez2dj/`가 같은 디렉터리의 `ez2dj5.chd`에서 나온 것인지는 확인하지 못했다. 현재 `Fat32Volume`은 5th 이미지에서 in-range FAT32 partition을 찾지 못하므로([5th·6th CHD 파일시스템](ez2dj5th-6th-chd-filesystem.md)), CHD 안의 대응 파일과 해시를 비교할 수 없다. 확인하려면 5th 이미지의 파티션 종류와 파일시스템을 먼저 풀어야 한다.
+
+*Unresolved — 2026-09-15. Whether `roms/ez2dj5th/ez2dj/` was extracted from the `ez2dj5.chd` beside it is not established. `Fat32Volume` currently finds no in-range FAT32 partition in the 5th image (see [5th/6th CHD filesystem](ez2dj5th-6th-chd-filesystem.md)), so the corresponding file inside the CHD cannot be hashed for comparison. Resolving the 5th image's partition type and filesystem comes first.*
+
+**확인됨 — 2026-09-15.** 같은 디렉터리에 `EZ2DJ.INI`, `CACHE.REG`, `CACHE.TXT`, `FONTEN.DAT`, `FONTKR.DAT`, `BG`, `SOUND`, `SYSTEM`이 있다. `EZ2DJ.INI`는 평문이며 `UseIOCard = 1`, `FullScreen = 1`, 640×480 창 크기를 담는다. 3rd와 같은 `UseIOCard` 키이며, 5th가 이 값을 어떻게 소비하는지는 **미확정**이다.
+
+*Confirmed — 2026-09-15. The same directory holds `EZ2DJ.INI`, `CACHE.REG`, `CACHE.TXT`, `FONTEN.DAT`, `FONTKR.DAT`, `BG`, `SOUND` and `SYSTEM`. `EZ2DJ.INI` is plaintext and carries `UseIOCard = 1`, `FullScreen = 1` and a 640x480 window size — the same `UseIOCard` key as 3rd. How 5th consumes that value is **unresolved**.*
+
+---
+
+## 8. 6th Trax — bootstrap·게임 본체·동봉 1st Tracks / 6th Trax — bootstrap, game body, bundled 1st Tracks
+
+6th는 이 문서에서 처음 다루는 **두 프로세스 구조**다. 캐비닛이 실행하는 `EZ2DJ.EXE`는 게임이 아니라 launcher이고, 실제 게임은 그것이 만드는 자식 프로세스다. 세 실행 파일 모두 `.protect`나 `.gtide` 같은 보호 섹션이 없다.
+
+*6th is the first **two-process structure** covered here: the `EZ2DJ.EXE` the cabinet runs is a launcher, not the game, and the real game is the child process it creates. None of the three executables carries a protection section such as `.protect` or `.gtide`.*
+
+```mermaid
+flowchart TD
+    A["EZ2DJ.EXE<br/>bootstrap 126,976 B<br/>보호 없음 / unprotected"]
+    B["EZ2DJ6th.EXE<br/>6th 게임 본체 / game body<br/>585,728 B"]
+    C["EZ2DJ1ST 배치 Ez2DJ.exe<br/>동봉 1st Tracks / bundled 1st<br/>360,448 B"]
+    D["HARDLOCK.VXD<br/>FEnteDev"]
+    A -->|"CreateProcessA"| B
+    A -->|"CreateProcessA"| C
+    A -.->|"장치 문자열 보유 / carries device strings"| D
+    B -.-> D
+    C -.-> D
+```
+
+### 8.1 `EZ2DJ.EXE` — bootstrap — 확인됨 / Confirmed
+
+**확인됨 — 2026-09-15.** 크기 126,976바이트, PE TimeDateStamp `0x411646a8`(2004-08-08)다. entry point RVA `0x000153ff`는 `.text` 안에 있고 SizeOfImage는 `0x00021000`이다. 섹션은 `.text`, `.rdata`, `.data` 셋뿐이고 보호 섹션이 없다. import directory는 `.rdata`(RVA `0x0001a524`), IAT도 `.rdata`(RVA `0x0001a000`)에 있다. characteristics는 `0x010f`로 `RELOCS_STRIPPED` 비트를 포함하므로 재배치 정보가 없다.
+
+*Confirmed — 2026-09-15. 126,976 bytes, PE TimeDateStamp `0x411646a8` (2004-08-08). The entry RVA `0x000153ff` is in `.text`; SizeOfImage is `0x00021000`; there are only three sections — `.text`, `.rdata`, `.data` — and no protection section. The import directory sits in `.rdata` (RVA `0x0001a524`) with the IAT also in `.rdata` (RVA `0x0001a000`). Its characteristics `0x010f` include `RELOCS_STRIPPED`, so it carries no relocation information.*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x00018c3a` | `0x00001000` | `0x00019000` | code, exec, read |
+| `.rdata` | `0x0001a000` | `0x00000b28` | `0x0001a000` | `0x00001000` | data, read |
+| `.data` | `0x0001b000` | `0x0000533c` | `0x0001b000` | `0x00004000` | data, read, write |
+
+**확인됨 — 2026-09-15.** 보호가 없으므로 import table은 하나뿐이고, 그것이 곧 loader가 bind하는 표면이다. 2 DLL / 68 함수이며 `KERNEL32` 65개, `USER32` 3개(`GetForegroundWindow`, `MessageBoxA`, `GetKeyState`)다. 프로세스 생성 경계는 `CreateProcessA`, `WaitForSingleObject`, `GetExitCodeProcess`, `SetPriorityClass`, `TerminateProcess`, `SetCurrentDirectoryA`로 구성된다.
+
+*Confirmed — 2026-09-15. With no protection there is a single import table, and it is the surface the loader binds: 2 DLLs / 68 functions — 65 from `KERNEL32` and three from `USER32` (`GetForegroundWindow`, `MessageBoxA`, `GetKeyState`). Its process-creation boundary is `CreateProcessA`, `WaitForSingleObject`, `GetExitCodeProcess`, `SetPriorityClass`, `TerminateProcess` and `SetCurrentDirectoryA`.*
+
+**확인됨 — 2026-09-15.** 평문 문자열에 자식 경로가 **두 개** 있다. raw offset `0x1b0b0`의 `.\EZ2DJ6TH.EXE`와 `0x1b094`의 `.\EZ2DJ1ST\EZ2DJ.EXE`이며, `0x1b088`에는 `%s\EZ2DJ1ST`가 있다. 기존 [5th·6th CHD 파일시스템 문서](ez2dj5th-6th-chd-filesystem.md)는 첫 번째만 기록했다. 어떤 조건에서 어느 자식을 고르는지는 **미확정**이다.
+
+*Confirmed — 2026-09-15. The plaintext strings contain **two** child paths: `.\EZ2DJ6TH.EXE` at raw offset `0x1b0b0` and `.\EZ2DJ1ST\EZ2DJ.EXE` at `0x1b094`, with `%s\EZ2DJ1ST` at `0x1b088`. The existing [5th/6th CHD filesystem document](ez2dj5th-6th-chd-filesystem.md) recorded only the first. Under which condition each child is chosen is **unresolved**.*
+
+**확인됨 — 2026-09-15.** bootstrap은 `HARDLOCK.VXD`와 `FEnteDev` 장치 문자열을 raw offset `0x1b5c0`부터 담고 있다. 즉 Hardlock 경계는 자식만의 것이 아니라 launcher도 지난다. `RegOpenKeyA`·`RegCloseKey` 문자열도 있으나 `ADVAPI32` static import는 없으므로, 레지스트리 접근은 `LoadLibraryA`/`GetProcAddress`로 동적 해석된다.
+
+*Confirmed — 2026-09-15. The bootstrap carries the `HARDLOCK.VXD` and `FEnteDev` device strings from raw offset `0x1b5c0`, so the Hardlock boundary is crossed by the launcher too, not only by the child. It also carries `RegOpenKeyA` and `RegCloseKey` strings while importing no `ADVAPI32`, so registry access is resolved dynamically through `LoadLibraryA`/`GetProcAddress`.*
+
+### 8.2 `EZ2DJ6th.EXE` — 게임 본체 / game body — 확인됨
+
+**확인됨 — 2026-09-15.** 크기 585,728바이트, PE TimeDateStamp `0x411f6d44`(2004-08-15)다. entry point RVA `0x000667d4`는 `.text` 안에 있고 SizeOfImage는 `0x00e34000`이다. 섹션은 `.text`, `.rdata`, `.data` 셋뿐이며 보호 섹션이 없다. characteristics `0x010f`에 `RELOCS_STRIPPED`가 있다.
+
+*Confirmed — 2026-09-15. 585,728 bytes, PE TimeDateStamp `0x411f6d44` (2004-08-15). The entry RVA `0x000667d4` is in `.text`; SizeOfImage is `0x00e34000`; there are only three sections and no protection section; characteristics `0x010f` include `RELOCS_STRIPPED`.*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x000705c2` | `0x00001000` | `0x00071000` | code, exec, read |
+| `.rdata` | `0x00072000` | `0x0000abfa` | `0x00072000` | `0x0000b000` | data, read |
+| `.data` | `0x0007d000` | `0x00db6b9c` | `0x0007d000` | `0x00012000` | data, read, write |
+
+**확인됨 — 2026-09-15.** import는 7 DLL / 137 함수이며, 보호가 없으므로 이것이 원본이자 loader가 bind하는 표면이다. 지금까지 분석한 EZ2DJ 빌드 가운데 **게임 표면을 unpack 없이 읽을 수 있는 첫 번째 빌드**다.
+
+*Confirmed — 2026-09-15. Imports are 7 DLLs / 137 functions and, with no protection, this is both the original and the loader-bound surface. It is the **first EZ2DJ build analyzed here whose game surface can be read without unpacking**.*
+
+| DLL | 4th·5th | 6th |
+| --- | --- | --- |
+| `KERNEL32.dll` | 88 | 87 |
+| `USER32.dll` | 32 | 25 |
+| `GDI32.dll` | 12 | 11 |
+| `WINMM.dll` | 10 | 10 |
+| `DSOUND.dll` | 1 | 1 |
+| `DINPUT.dll` | 1 | 1 |
+| `DDRAW.dll` | 2 | 2 |
+| `ADVAPI32.dll` | 1 | — |
+| `AVIFIL32.dll` | 5 | — |
+| `WS2_32.dll` | 9 | — |
+| 합계 / total | **161** | **137** |
+
+**확인됨 — 2026-09-15.** 6th는 4th·5th 대비 `ADVAPI32`, `AVIFIL32`, `WS2_32` 세 DLL을 **전부** 뺀다. 따라서 6th 게임 본체는 AVI 재생과 Winsock 경계를 요구하지 않는다. 대신 `GetPrivateProfileIntA`, `WritePrivateProfileStringA`, `GetFullPathNameA`, `GetCurrentThread`, `GDI32!DeleteDC`가 새로 들어온다. 빠지는 `USER32` 이름에는 `ChangeDisplaySettingsExA`, `EnumDisplaySettingsA`, `ExitWindowsEx`, `ReleaseDC`, `SetCursor`, `RedrawWindow`, `DrawMenuBar`가 있다.
+
+*Confirmed — 2026-09-15. Against 4th and 5th, 6th drops `ADVAPI32`, `AVIFIL32` and `WS2_32` **entirely**, so the 6th game body requires neither AVI playback nor a Winsock boundary. It adds `GetPrivateProfileIntA`, `WritePrivateProfileStringA`, `GetFullPathNameA`, `GetCurrentThread` and `GDI32!DeleteDC`. The `USER32` names it drops include `ChangeDisplaySettingsExA`, `EnumDisplaySettingsA`, `ExitWindowsEx`, `ReleaseDC`, `SetCursor`, `RedrawWindow` and `DrawMenuBar`.*
+
+**확인됨 — 2026-09-15.** 이 실행 파일도 `HARDLOCK.VXD`와 `FEnteDev` 장치 문자열을 raw offset `0x8b748`부터 담는다. 또 동봉 1st Tracks 배치의 `bookkeeping.ini` 상대 경로를 raw `0x891f8`에서 참조하므로, 게임 본체 역시 그 배치를 알고 있다.
+
+*Confirmed — 2026-09-15. This executable also carries the `HARDLOCK.VXD` and `FEnteDev` device strings from raw offset `0x8b748`, and at raw `0x891f8` it references the bundled 1st Tracks layout's `bookkeeping.ini` by relative path, so the game body is aware of that layout as well.*
+
+### 8.3 입력 일치 / Input agreement — 확인됨
+
+**확인됨 — 2026-09-15.** `roms/ez2dj6th/extracted/EZ2DJ/`의 두 실행 파일은 `roms/ez2dj6th/6th.chd` 안의 같은 이름 파일과 바이트 단위로 같다. `re2dj_chd_probe --dump`로 꺼낸 바이트의 MD5·SHA-1·SHA-256이 디렉터리 쪽 값과 모두 일치한다. 따라서 6th는 3rd와 달리 입력에 따라 빌드가 갈리지 않는다. `roms/ez2d2m/extracted/ez2dancer/EZ2Dancer.exe`와 `ez2d2m.chd` 내부 파일도 같은 방식으로 일치를 확인했다.
+
+*Confirmed — 2026-09-15. Both executables under `roms/ez2dj6th/extracted/EZ2DJ/` are byte-identical to the same-named files inside `roms/ez2dj6th/6th.chd`: the MD5, SHA-1 and SHA-256 of the bytes extracted with `re2dj_chd_probe --dump` all match the directory-side values. Unlike 3rd, 6th therefore does not split into different builds by input. The same check confirms agreement between `roms/ez2d2m/extracted/ez2dancer/EZ2Dancer.exe` and its counterpart inside `ez2d2m.chd`.*
+
+### 8.4 동봉 1st Tracks — 보호되지 않은 2004년 재빌드 / Bundled 1st Tracks — an unprotected 2004 rebuild — 확인됨
+
+**확인됨 — 2026-09-15.** `6th.chd`의 `EZ2DJ/Ez2Dj1st/`에는 완전한 1st Tracks 배치가 들어 있다. `Ez2DJ.exe`, `EZ2DJ.INI`, `Test.exe`, `PlzPowerOff.exe`, `AllowIo.exe`, `PortTalk.sys`, `Cursor.cur`, `bookkeeping.ini`, `RANK_1.DAT`, `RANK_3.DAT`, `Version.abm`, `WarningMsg_Asia.abm`, `WarningMsg_Japan.abm`, `WarningMsg_Korea.abm`, `System`, `Songs` 열여섯 항목이다.
+
+*Confirmed — 2026-09-15. `EZ2DJ/Ez2Dj1st/` inside `6th.chd` holds a complete 1st Tracks layout — sixteen entries: `Ez2DJ.exe`, `EZ2DJ.INI`, `Test.exe`, `PlzPowerOff.exe`, `AllowIo.exe`, `PortTalk.sys`, `Cursor.cur`, `bookkeeping.ini`, `RANK_1.DAT`, `RANK_3.DAT`, `Version.abm`, the three `WarningMsg_*.abm` files, `System` and `Songs`.*
+
+**확인됨 — 2026-09-15.** 이 배치의 `Ez2DJ.exe`는 360,448바이트, PE TimeDateStamp `0x411bbf5c`(2004-08-12)이고 **보호 섹션이 없다.** entry point RVA `0x00036f30`은 `.text` 안에 있으며 섹션은 `.text`, `.rdata`, `.data` 셋뿐이다. SizeOfImage는 `0x01914000`이고 characteristics는 `0x010f`다. 즉 1999년 보호 빌드(6절)와 같은 게임의 2004년 **보호되지 않은 재빌드**다.
+
+*Confirmed — 2026-09-15. That layout's `Ez2DJ.exe` is 360,448 bytes with PE TimeDateStamp `0x411bbf5c` (2004-08-12) and **carries no protection section**: the entry RVA `0x00036f30` is in `.text`, there are only three sections — `.text`, `.rdata`, `.data` — SizeOfImage is `0x01914000`, and characteristics are `0x010f`. It is an **unprotected 2004 rebuild** of the same game as the 1999 protected build in section 6.*
+
+| 섹션 | VA | VSize | Raw Off | Raw Size | Flags |
+| --- | --- | --- | --- | --- | --- |
+| `.text` | `0x00001000` | `0x00048e5b` | `0x00001000` | `0x00049000` | code, exec, read |
+| `.rdata` | `0x0004a000` | `0x00004384` | `0x0004a000` | `0x00005000` | data, read |
+| `.data` | `0x0004f000` | `0x018c4628` | `0x0004f000` | `0x00009000` | data, read, write |
+
+**확인됨 — 2026-09-15.** import는 6 DLL / 138 함수이며 보호가 없으므로 이것이 전체 표면이다. 1999년 빌드의 141개와 비교하면 `ADVAPI32` 전체(`RegFlushKey` 하나)가 빠지고, `USER32`에서 `ChangeDisplaySettingsExA`, `EnumDisplaySettingsA`, `ExitWindowsEx`, `LoadImageA`가 빠지며, `KERNEL32`에서 `QueryPerformanceFrequency`가 들어오고 `GDI32!CreateDIBitmap`, `USER32!GetDC`, `USER32!MessageBoxA`가 추가된다.
+
+*Confirmed — 2026-09-15. Imports are 6 DLLs / 138 functions and, with no protection, that is the complete surface. Against the 141 of the 1999 build it drops all of `ADVAPI32` (a single `RegFlushKey`), drops `ChangeDisplaySettingsExA`, `EnumDisplaySettingsA`, `ExitWindowsEx` and `LoadImageA` from `USER32`, and adds `QueryPerformanceFrequency` to `KERNEL32` plus `GDI32!CreateDIBitmap`, `USER32!GetDC` and `USER32!MessageBoxA`.*
+
+| DLL | 1999 보호 빌드 / protected | 2004 동봉 빌드 / bundled |
+| --- | --- | --- |
+| `KERNEL32.dll` | 96 | 95 |
+| `USER32.dll` | 21 | 20 |
+| `GDI32.dll` | 12 | 13 |
+| `WINMM.dll` | 8 | 7 |
+| `DDRAW.dll` | 2 | 2 |
+| `DSOUND.dll` | 1 | 1 |
+| `ADVAPI32.dll` | 1 | — |
+| 합계 / total | **141** | **138** |
+
+**확인됨 — 2026-09-15.** 이 빌드도 `HARDLOCK.VXD`와 `FEnteDev` 장치 문자열을 raw offset `0x53f18`부터 담는다. 1999년 보호 빌드에는 이 문자열이 평문으로 없다. 따라서 동봉 빌드는 6th 캐비닛의 Hardlock 경계 위에서 동작하도록 만들어진 것이고, 1999년 빌드의 장치 계약과 같다고 볼 근거는 없다.
+
+*Confirmed — 2026-09-15. This build also carries the `HARDLOCK.VXD` and `FEnteDev` device strings from raw offset `0x53f18`, while the 1999 protected build carries neither as plaintext. The bundled build is therefore made to run on the 6th cabinet's Hardlock boundary, and there is no basis for treating its device contract as the same as the 1999 build's.*
+
+**확인됨 — 2026-09-15.** 이 배치의 `Test.exe`, `PlzPowerOff.exe`, `AllowIo.exe`, `PortTalk.sys` 네 파일은 `roms/ez2dj1st/ez2dj1/`의 같은 이름 파일과 SHA-256이 같다. 반면 `Ez2DJ.exe`는 다르다(360,448바이트 대 577,536바이트).
+
+*Confirmed — 2026-09-15. Four files of this layout — `Test.exe`, `PlzPowerOff.exe`, `AllowIo.exe`, `PortTalk.sys` — share their SHA-256 with the same-named files under `roms/ez2dj1st/ez2dj1/`, while `Ez2DJ.exe` does not (360,448 against 577,536 bytes).*
+
+**추정 — 2026-09-15.** 보조 도구 네 개가 일치하고 `Version`/`WarningMsg` 자산 이름이 확장자만 다른(`.abm` 대 `.bmp`) 점으로 보아, `roms/ez2dj1st/ez2dj1/`은 6th 캐비닛의 동봉 1st Tracks 배치와 같은 계보에서 나왔고 게임 실행 파일만 1999년 보호 빌드로 바뀐 상태로 보인다. 그러나 배치의 실제 출처는 **미확정**이며, 해시 일치만으로 두 디렉터리가 같은 덤프에서 나왔다고 확정하지 않는다.
+
+*Inferred — 2026-09-15. Four matching auxiliary tools, and `Version`/`WarningMsg` assets that differ only in extension (`.abm` against `.bmp`), suggest `roms/ez2dj1st/ez2dj1/` descends from the same lineage as the 6th cabinet's bundled 1st Tracks layout with only the game executable swapped for the 1999 protected build. The layout's actual provenance is **unresolved**, and matching hashes alone are not treated as proof that the two directories came from one dump.*
+
+### 8.5 `EZ2DJ.INI`는 평문이 아니다 / `EZ2DJ.INI` is not plaintext — 확인됨
+
+**확인됨 — 2026-09-15.** 6th의 `EZ2DJ/EZ2DJ.INI`(816바이트)는 읽을 수 있는 INI 텍스트가 아니다. 같은 디렉터리의 `bookkeeping.ini`(162바이트)는 평문이며 `[GAMEASSIGNMENTS]`와 `[STATISTICS]` 섹션을 담는다. `EZ2DJ6th.EXE`는 `GetPrivateProfileIntA`와 `WritePrivateProfileStringA`를 import하므로 평문 INI를 읽는 경로가 있으며, 그 경로가 `bookkeeping.ini`만 대상으로 하는지 아니면 `EZ2DJ.INI`가 실행 중에 복호화되는지는 **미확정**이다.
+
+*Confirmed — 2026-09-15. The 6th's `EZ2DJ/EZ2DJ.INI` (816 bytes) is not readable INI text, while `bookkeeping.ini` (162 bytes) in the same directory is plaintext and carries `[GAMEASSIGNMENTS]` and `[STATISTICS]` sections. `EZ2DJ6th.EXE` imports `GetPrivateProfileIntA` and `WritePrivateProfileStringA`, so a plaintext-INI path exists; whether that path targets only `bookkeeping.ini`, or `EZ2DJ.INI` is decrypted at runtime, is **unresolved**.*
+
+**미확정.** 5th와 그 이전 제품의 `EZ2DJ.INI`는 모두 평문이다. 6th에서 이 형식이 바뀐 시점과 이유, 그리고 HLE가 이 파일을 어떻게 다뤄야 하는지는 확인되지 않았다.
+
+*Unresolved. `EZ2DJ.INI` is plaintext in 5th and every earlier product. When and why the format changed in 6th, and how the HLE must handle the file, are not established.*
+
+---
+
+## 9. 보조 도구 / Auxiliary tools
+
+9.1과 9.2는 1st SE 덤프에서 측정한 값이고, 9.3부터는 2026-09-15에 1st Tracks 덤프와 6th 동봉 배치에서 추가로 측정한 것이다.
+
+*9.1 and 9.2 are measured on the 1st SE dump; 9.3 onward were added on 2026-09-15 from the 1st Tracks dump and the 6th's bundled layout.*
+
+### 9.1 `Test.exe` — 서비스·테스트 도구 — 확인됨
 
 entry RVA `0x0001ada0`(`.text`), SizeOfImage `0x001de000`, 섹션 여섯 개(`.text .rdata .data .idata .rsrc .reloc`). resource directory(`0x001c9000`)와 **비어 있지 않은** base relocation directory(`0x001ce000`, 크기 `0x0000c8d0`)가 있다. 즉 이 실행 파일은 재배치 가능하다. 캐비닛이 부팅에 쓰지 않는 서비스 도구다([HDD 레이아웃](ez2dj-hdd-layout.md) 5절).
 
 *Entry 0x0001ada0 in `.text`, SizeOfImage 0x001de000, six sections including `.rsrc`, and a non-empty base-relocation directory — this service tool is relocatable and is not the cabinet's boot target.*
 
-### 5.2 `PlzPowerOff.exe` — 종료 화면 — 확인됨
+### 9.2 `PlzPowerOff.exe` — 종료 화면 — 확인됨
 
 entry RVA `0x00001e6e`(`.text`), SizeOfImage `0x0001b000`, 섹션 네 개(`.text .rdata .data .rsrc`). characteristics가 `0x010f`로 다른 실행 파일(`0x010e`)과 다르다. 전원 종료 화면 표시용 소형 도구다.
 
@@ -482,9 +915,42 @@ entry RVA `0x00001e6e`(`.text`), SizeOfImage `0x0001b000`, 섹션 네 개(`.text
 
 ---
 
-## 6. 새 실행 파일 추가 절차 / Procedure for a new executable
+### 9.3 1st Tracks의 보조 도구 / The 1st Tracks auxiliary tools — 확인됨
 
-1. `re2dj_pe_analyzer <file>`로 헤더·섹션·데이터 디렉터리를 확보하고 이 문서에 섹션을 추가한다. 골격은 1~4절 중 보호 여부에 맞는 것을 따른다.
+**확인됨 — 2026-09-15.** 1st Tracks 덤프의 `Test.exe`는 266,240바이트, PE TimeDateStamp `0x374d68b1`(1999-05-27)이고 entry RVA `0x0000fa6c`(`.text`), SizeOfImage `0x00056000`, 섹션 넷(`.text .rdata .data .rsrc`)이다. 1st SE의 `Test.exe`(1,859,633바이트, `0x38607297`)와는 **다른 프로그램**이다. 크기가 7배 차이이고 섹션 수와 빌드 시각이 모두 다르므로, 두 제품의 서비스 도구를 같은 것으로 다루지 않는다.
+
+*Confirmed — 2026-09-15. The 1st Tracks dump's `Test.exe` is 266,240 bytes with PE TimeDateStamp `0x374d68b1` (1999-05-27), entry RVA `0x0000fa6c` in `.text`, SizeOfImage `0x00056000`, and four sections (`.text .rdata .data .rsrc`). It is a **different program** from the 1st SE `Test.exe` (1,859,633 bytes, `0x38607297`) — seven times the size apart, with a different section count and build time — so the two products' service tools are not treated as one.*
+
+**확인됨 — 2026-09-15.** 1st Tracks의 `PlzPowerOff.exe`는 1st SE 것과 크기(98,304)·PE TimeDateStamp(`0x3700321a`)·entry RVA(`0x00001e6e`)·섹션 구성이 모두 같지만 해시가 다르다. 공통 특성 절의 해시 표를 참조한다.
+
+*Confirmed — 2026-09-15. The 1st Tracks `PlzPowerOff.exe` matches the 1st SE copy in size (98,304), PE TimeDateStamp (`0x3700321a`), entry RVA (`0x00001e6e`) and section layout, but not in hash. See the hash table in the common-traits section.*
+
+### 9.4 `AllowIo.exe`와 `PortTalk.sys` — legacy I/O 접근 도구 / legacy I/O access tools — 확인됨
+
+**확인됨 — 2026-09-15.** 두 파일은 `roms/ez2dj1st/ez2dj1/`과 `6th.chd`의 `EZ2DJ/Ez2Dj1st/` 양쪽에 있고 바이트 단위로 같다. 이 문서가 다루는 실행 파일 가운데 image base가 `0x00400000`이 아닌 유일한 예이며, 콘솔 subsystem을 쓰는 것도 `AllowIo.exe`뿐이다.
+
+*Confirmed — 2026-09-15. Both files appear in `roms/ez2dj1st/ez2dj1/` and in `EZ2DJ/Ez2Dj1st/` inside `6th.chd`, byte-identical. `AllowIo.exe` is the only executable covered here whose image base is not `0x00400000`, and the only one using the console subsystem.*
+
+| 항목 / item | `AllowIo.exe` | `PortTalk.sys` |
+| --- | --- | --- |
+| 크기 / size | 40,125 | 3,567 |
+| TimeDateStamp | `0x3c3fc787` (2002-01-12) | `0x3c3fdf10` (2002-01-12) |
+| image base | `0x01000000` | `0x00010000` |
+| entry point RVA | `0x000021a0` | `0x00000328` |
+| SizeOfImage | `0x0000c000` | `0x00000c60` |
+| subsystem | 3 (console) 4.0 | 1 (native) 5.0 |
+| 섹션 / sections | `.text .data` | `.text .rdata .data INIT .rsrc .reloc` |
+| section / file alignment | `0x00001000` / `0x00000200` | `0x00000020` / `0x00000020` |
+
+**추정 — 2026-09-15.** `PortTalk.sys`는 커널 드라이버를 통해 사용자 모드 프로세스에 legacy I/O port 접근을 허용하는 공개 도구 계열이고, `AllowIo.exe`는 그 드라이버에 대상 프로세스를 등록하는 콘솔 도구로 보인다. 원본 게임 실행 파일이 이 경로를 실제로 요구하는지, 캐비닛 운영자가 나중에 더한 것인지는 **미확정**이다. 두 파일 모두 2002년 빌드로 1st Tracks(1999)와 6th(2004) 사이에 있다. HLE의 legacy port 경계는 [I/O port map](ez2dj-io-map.md)이 담당한다.
+
+*Inferred — 2026-09-15. `PortTalk.sys` belongs to the well-known family of kernel drivers that grant legacy I/O port access to a user-mode process, and `AllowIo.exe` appears to be the console tool that registers a target process with it. Whether the original game executables actually require this path, or a cabinet operator added it later, is **unresolved**. Both files are 2002 builds, between 1st Tracks (1999) and 6th (2004). The HLE's legacy-port boundary is owned by the [I/O port map](ez2dj-io-map.md).*
+
+---
+
+## 10. 새 실행 파일 추가 절차 / Procedure for a new executable
+
+1. `re2dj_pe_analyzer <file>`로 헤더·섹션·데이터 디렉터리를 확보하고 이 문서에 섹션을 추가한다. 골격은 기존 절 가운데 보호 여부가 같은 것을 따른다. 보호된 빌드는 1·3·4·6·7절, 보호되지 않은 빌드는 2·8절이다.
 2. 보호 섹션이 보이면 import directory의 위치(원본 `.idata` 유지 여부, 패커 섹션 이동 여부)를 확인하고, 필요하면 슬롯 VA까지 해석해 [import 표면 분석](ez2dj-import-surface.md)에 기록한다.
 3. 데이터 섹션의 문자열·blob 인벤토리를 VA와 함께 남긴다. 런타임 관찰 결과와 정적 값을 대조하는 열을 유지한다(2.4절 형식).
 4. 런타임 흐름은 launcher probe 관찰 후 이 문서에 요약하고 근거 작업 로그를 링크한다. 확인됨/추정/미확정 표기를 유지한다.

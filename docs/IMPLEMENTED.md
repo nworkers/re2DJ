@@ -40,9 +40,9 @@
 
   *Task 213 — completed EZ2DJ 3rd CHD profile and FAT32 volume support. Mounted `roms/ez2dj3rd/ez2dj3rd.chd` directly as a FAT32 volume, launching `EZ2DJ/EZ2DJ.EXE` and dynamically reading game assets. Evidence: [design](design/20260906-213-ez2dj3rd-chd-profile.md), [work order](work-orders/20260906-213-ez2dj3rd-chd-profile.md), and [work log](work-logs/20260906-213-ez2dj3rd-chd-profile.md).*
 
-- **작업 203 — EZ2DJ 5th/6th CHD 프로파일을 추가하고 1st SE unpacked 프로파일을 제거했습니다.** `ez2dj5th`와 `ez2dj6th`는 `ez2dj4th` 기반의 CHD/HLE 기본값과 각각의 `roms` shortcut을 사용합니다. `ez2dj1stse_unpacked`는 built-in 목록에서 사라졌으며, 실제 1st SE의 `ez2dj1.exe`는 `ez2dj1` detected 항목으로만 남습니다. 6th CHD의 FAT32 실행 파일 경로는 확인했지만, 현재 FAT32 reader가 5th CHD를 인식하지 못하므로 5th의 실제 실행 성공은 주장하지 않습니다. 근거: [설계](design/20260906-203-ez2dj5th-6th-profiles.md), [분석](analysis/ez2dj5th-6th-chd-filesystem.md), [작업 로그](work-logs/20260906-203-ez2dj5th-6th-profiles.md).
+- **작업 203 — EZ2DJ 5th/6th CHD 프로파일을 추가하고 1st SE unpacked 프로파일을 제거했습니다.** `ez2dj5th`와 `ez2dj6th`는 `ez2dj4th` 기반의 CHD/HLE 기본값과 각각의 `roms` shortcut을 사용합니다. `ez2dj1stse_unpacked`는 built-in 목록에서 사라졌고, 1st SE는 정식 실행 파일 프로파일만 남습니다. 6th CHD의 FAT32 실행 파일 경로는 확인했지만, 현재 FAT32 reader가 5th CHD를 인식하지 못하므로 5th의 실제 실행 성공은 주장하지 않습니다. 근거: [설계](design/20260906-203-ez2dj5th-6th-profiles.md), [분석](analysis/ez2dj5th-6th-chd-filesystem.md), [작업 로그](work-logs/20260906-203-ez2dj5th-6th-profiles.md).
 
-  *Task 203 — added the EZ2DJ 5th/6th CHD profiles and removed the 1st SE unpacked profile. `ez2dj5th` and `ez2dj6th` use the `ez2dj4th`-based CHD/HLE defaults with version-specific `roms` shortcuts. `ez2dj1stse_unpacked` is absent from the built-in list, while the real 1st SE `ez2dj1.exe` remains only as detected `ez2dj1`. The 6th FAT32 executable path is confirmed, but the current FAT32 reader does not recognize the 5th CHD, so successful 5th execution is not claimed. Evidence: [design](design/20260906-203-ez2dj5th-6th-profiles.md), [analysis](analysis/ez2dj5th-6th-chd-filesystem.md), and [work log](work-logs/20260906-203-ez2dj5th-6th-profiles.md).*
+  *Task 203 — added the EZ2DJ 5th/6th CHD profiles and removed the 1st SE unpacked profile. `ez2dj5th` and `ez2dj6th` use the `ez2dj4th`-based CHD/HLE defaults with version-specific `roms` shortcuts. `ez2dj1stse_unpacked` is absent from the built-in list, leaving 1st SE with only its canonical-executable profile. The 6th FAT32 executable path is confirmed, but the current FAT32 reader does not recognize the 5th CHD, so successful 5th execution is not claimed. Evidence: [design](design/20260906-203-ez2dj5th-6th-profiles.md), [analysis](analysis/ez2dj5th-6th-chd-filesystem.md), and [work log](work-logs/20260906-203-ez2dj5th-6th-profiles.md).*
 
 - **작업 141 — Hardlock 코드를 HLE 계층으로 정리하고 성격을 정의했습니다.** 흉내 코드가 `include/re2dj/hle/hardlock/`와 `src/hle/hardlock/`, namespace `re2dj::hle::hardlock`으로 이동했고 계층 표에 행이 생겼습니다. 계약을 알아내려고 만든 진단(XOR 인과 probe, challenge 기록, descriptor ID 기록, protocol tracker와 그 trace, 전용 descriptor probe)을 제거했습니다. 어떤 코드도 소비하지 않던 seed·module address 비밀 경로 전체와 `--hardlock-config`, `hardlock_secret_config_required`, ini의 `modad`/`seed1..3`도 함께 제거해 설정에는 re2DJ가 실제로 쓰는 값만 남습니다. `HardlockStubDevice`를 `HardlockDevice`로 바꿨습니다. 이 계층은 **네 IOCTL에 규격대로 답하는 장치 경계이며 암호 연산을 하지 않습니다.** 응답 값은 저장소 밖에서 계산하고, 고정된 challenge 집합 덕분에 오프라인 표 하나로 성립합니다. 두 제품 실행이 통과 지문을 그대로 재현했습니다. 근거: [설계](design/20260902-141-hardlock-hle-consolidation.md), [작업 지시](work-orders/20260902-141-hardlock-hle-consolidation.md), [작업 로그](work-logs/20260902-141-hardlock-hle-consolidation.md).
 
@@ -206,7 +206,7 @@
 
 ## Windows original process / 원본 프로세스
 
-- Windows loader preferred-base placement of `ez2dj1.exe` at `0x00400000`
+- Windows loader preferred-base placement of the canonical original EXE at `0x00400000`
 - Suspended and initial-breakpoint IAT observations
 - x86 entry stop using temporary child-memory `INT3`
 - x86 runtime DLL injection through same-bitness `LoadLibraryW`

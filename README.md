@@ -114,8 +114,6 @@ EZ2DJ The 1st Tracks Special Edition 덤프의 실제 구성은 다음과 같습
 
 ```text
 /path/to/ez2dj_hdd/
-├── ez2dj.exe          게임 (보호됨) / the game, protected
-├── ez2dj1.exe         같은 게임 (보호되지 않음) / same game, unprotected
 ├── Test.exe           서비스 도구 / service tool
 ├── ez2dj.ini          난이도·모드·곡 목록 / difficulty, modes, song lists
 ├── Songs/             68개 곡 디렉터리 / 68 song directories
@@ -163,14 +161,9 @@ targets:
 ```text
 targets:
   * ez2dj                  ez2dj.exe                detected
-    ez2dj1                 ez2dj1.exe               detected
     test                   Test.exe                 detected
     plzpoweroff            PlzPowerOff.exe          detected
 ```
-
-`ez2dj1.exe`는 더 이상 별도 built-in 프로파일이 아니며, 1st SE 덤프에 존재할 때 일반 detected 항목으로만 표시됩니다. 따라서 이 파일에서 관찰한 동작은 정식 캐비닛 실행 파일의 동작으로 자동 인용하지 않습니다.
-
-*`ez2dj1.exe` is no longer a separate built-in profile. When present in a 1st SE dump it appears only as a normal detected entry, so behavior observed through it is not automatically cited as the canonical cabinet behavior.*
 
 ### 6. 경로 해석 확인 / Check path resolution
 
@@ -196,7 +189,7 @@ PE 헤더, 섹션 테이블, data directory를 출력합니다. 이미지를 적
 ### 8. 이미지 적재 확인 / Verify image loading
 
 ```bash
-build/linux-x64-debug/bin/re2dj_pe_loader --hdd /path/to/ez2dj_hdd "EZ2DJ/ez2dj1.exe"
+build/linux-x64-debug/bin/re2dj_pe_loader --hdd /path/to/ez2dj_hdd "EZ2DJ/Ez2dj.exe"
 ```
 
 PE32 이미지를 게스트 주소 공간에 적재하고 진입점, TLS directory, import별 합성 gate 주소를 보고합니다. 원본 코드는 실행하지 않습니다. 마지막 인자로 `0x10000000` 같은 load base를 주면 재배치 가능 여부와 재배치 경로를 확인할 수 있습니다.
@@ -332,7 +325,7 @@ HLE/Hardlock boundary remains a runtime observation item.
 * [아키텍처](ARCHITECTURE.md) — 현재 subsystem과 실행 구조
 * [포팅 계획](docs/WIN32_HLE_PORTING_PLAN.md) — 장기 구현 단계
 * [바이너리 분석 색인](docs/analysis/README.md) — 확인된 사실과 미확정 질문
-* [EZ2DJ import 표면](docs/analysis/ez2dj-import-surface.md) — 원본이 실제로 호출하는 API 144개
+* [EZ2DJ import 표면](docs/analysis/ez2dj-import-surface.md) — 정식 빌드가 실제로 호출하는 Win32 API 집합
 * [기술 지식 기반](docs/kb/README.md) — PE, Win32, DirectX, x86 배경
 * [코딩 스타일](docs/CODING_STYLE.md) — C++20 스타일과 디렉터리 정책
 * [작업 규칙](AGENTS.md) — 설계 우선 개발, 문서화와 Git workflow

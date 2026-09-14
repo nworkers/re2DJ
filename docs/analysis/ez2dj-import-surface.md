@@ -4,29 +4,217 @@
 
 *Topic: the set of Win32 APIs the original executable actually calls. This is the document that fixes the HLE implementation scope.*
 
-측정 대상: `ez2dj1.exe` (The 1st Tracks Special Edition 덤프, 1999-12-24 빌드, 보호되지 않음). 측정 방법: PE import 디렉터리 직접 해석. 근거는 [HDD 레이아웃 분석](ez2dj-hdd-layout.md)에 있다.
+측정 대상: 각 제품의 **정식 실행 파일**이다. 1st Tracks는 `Ez2DJ.exe`, 1st SE는
+`ez2dj.exe`, 3rd는 `EZ2DJ.EXE`, 4th와 5th는 `EZ2DJ.exe`, EZ2Dancer 2nd MOVE는
+`EZ2Dancer.exe`이며 모두 보호된 빌드다. 6th는 예외로, `EZ2DJ.EXE` bootstrap과
+`EZ2DJ6th.EXE` 게임 본체 둘 다 보호되지 않는다. 측정 방법은 `re2dj_pe_analyzer`로
+섹션과 데이터 디렉터리를 읽고, `re2dj_pe_loader`와 별도 IMAGE_IMPORT_DESCRIPTOR 해석
+두 경로로 import table을 교차 확인하는 것이다. 두 경로의 1st SE 결과는 161개 항목이
+이름까지 일치했다.
 
-*Measured on `ez2dj1.exe`, the unprotected 1999-12-24 build in the 1st SE dump, by parsing the PE import directory directly.*
+*Measured on each product's **canonical executable** — 1st Tracks `Ez2DJ.exe`, 1st SE
+`ez2dj.exe`, 3rd `EZ2DJ.EXE`, 4th and 5th `EZ2DJ.exe`, and EZ2Dancer 2nd MOVE
+`EZ2Dancer.exe`, all protected builds. 6th is the exception: neither its `EZ2DJ.EXE`
+bootstrap nor its `EZ2DJ6th.EXE` game body is protected. Sections and
+data directories are read with `re2dj_pe_analyzer`, and the import tables are cross-checked
+through two independent paths, `re2dj_pe_loader` and a separate IMAGE_IMPORT_DESCRIPTOR
+parse. For 1st SE both paths agreed on all 161 entries including names.*
 
 ---
 
 ## 1. 확인됨: 전체 규모 / Confirmed: total size
 
-**7개 DLL, 144개 함수.**
+보호된 빌드는 import table을 **두 개** 가진다. 원본 `.idata` table과, PE 데이터 디렉터리가
+가리켜 Windows loader가 실제로 bind하는 packed table이다. HLE가 처음에 마주하는 것은
+후자다.
 
-| DLL | 함수 수 | 성격 |
+*A protected build carries **two** import tables: the original `.idata` table, and the packed
+table named by the PE data directory, which is what the Windows loader actually binds. The
+HLE meets the latter first.*
+
+| 제품 / product | 원본 `.idata` | loader가 bind하는 packed table | packer 섹션 |
+| --- | --- | --- | --- |
+| 1st Tracks `Ez2DJ.exe` | 7 DLL / 141 | **22 항목** (`.protect`) | `.protect` |
+| 1st SE `ez2dj.exe` | 7 DLL / 144 | **7 DLL / 161** (`.gidata`) | `.gtide` |
+| 3rd `EZ2DJ.EXE` | 10 DLL / 159 | **36 항목** (`.protect`) | `.protect` |
+| 4th `EZ2DJ.exe` | 10 DLL / 161 | **36 항목** (`.protect`) | `.protect` |
+| 5th `EZ2DJ.exe` | 10 DLL / 161 | **36 항목** (`.protect`) | `.protect` |
+| 6th `EZ2DJ.EXE` (bootstrap) | 2 DLL / 68 | 동일 / the same table | 없음 / none |
+| 6th `EZ2DJ6th.EXE` | 7 DLL / 137 | 동일 / the same table | 없음 / none |
+| 6th 동봉 1st `Ez2DJ.exe` | 6 DLL / 138 | 동일 / the same table | 없음 / none |
+| `ez2d2m` `EZ2Dancer.exe` | `.idata` 섹션 없음 | **32 항목** (`.protect`) | `.protect` |
+
+**확인됨 — 2026-09-15.** packed table의 "항목" 수는 이름 기준 고유 개수다. 직접
+IMAGE_IMPORT_DESCRIPTOR 해석은 thunk 슬롯을 세므로 더 큰 값이 나온다. 1st Tracks는 슬롯
+30개에 고유 22개(`GetProcAddress`, `GetModuleHandleA`, `RtlUnwind` 중복), 4th와 5th는 슬롯
+38개에 고유 36개(`GetProcAddress`, `GetModuleHandleA` 중복)다. 두 해석 경로는 이 중복
+때문에 다른 수를 보고하며 서로 모순되지 않는다.
+
+*Confirmed — 2026-09-15. The packed-table "entry" counts are distinct names. A direct
+IMAGE_IMPORT_DESCRIPTOR parse counts thunk slots and therefore reports more: 1st Tracks has
+30 slots for 22 distinct names (`GetProcAddress`, `GetModuleHandleA` and `RtlUnwind`
+duplicated), and 4th and 5th each have 38 slots for 36 distinct names (`GetProcAddress` and
+`GetModuleHandleA` duplicated). The two parse paths disagree only because of these
+duplicates.*
+
+**확인됨 — 2026-09-15.** 6th의 세 실행 파일은 보호 섹션이 없으므로 import table이 하나뿐이고,
+원본 표면이 곧 loader가 bind하는 표면이다. 특히 `EZ2DJ6th.EXE`와 6th 동봉 1st Tracks
+빌드는 **unpack 없이 게임 표면을 그대로 읽을 수 있는** 유일한 입력이다.
+
+*Confirmed — 2026-09-15. The 6th's three executables carry no protection section, so each has a
+single import table and its original surface is the loader-bound surface. `EZ2DJ6th.EXE` and
+the 6th's bundled 1st Tracks build are the only inputs whose **game surface can be read
+without unpacking**.*
+
+두 packer 계열이 다르게 동작한다. 1st SE의 `.gtide` packer는 원본 import table 전체를
+`.gidata`로 **옮겨 보존**하므로 packed table이 곧 게임의 전체 표면이다. 3rd·4th·`ez2d2m`의
+`.protect` packer는 DLL당 대표 stub 하나만 남기므로 packed table만으로는 게임 표면을 알 수
+없고, 원본 `.idata`를 따로 읽거나 런타임 `GetProcAddress` 해석을 추적해야 한다.
+
+*The two packer families behave differently. The 1st SE `.gtide` packer **relocates and
+preserves** the whole original import table into `.gidata`, so its packed table is the game's
+complete surface. The `.protect` packer used by 3rd, 4th and `ez2d2m` keeps only one
+representative stub per DLL, so the packed table alone does not reveal the game surface —
+the original `.idata` must be read separately, or runtime `GetProcAddress` resolution traced.*
+
+### 1st SE 정식 빌드 상세 / 1st SE canonical build detail
+
+| DLL | 원본 `.idata` | packed `.gidata` | 성격 |
+| --- | --- | --- | --- |
+| `KERNEL32.dll` | 97 | 113 | 대부분 MSVC CRT 시작 코드 |
+| `USER32.dll` | 21 | 22 | 창, 메시지 루프, 키보드, 디스플레이 모드 |
+| `GDI32.dll` | 14 | 14 | DIB 섹션과 블릿 |
+| `WINMM.dll` | 8 | 8 | 믹서 볼륨과 밀리초 타이머 |
+| `DDRAW.dll` | 2 | 2 | DirectDraw 생성과 열거 |
+| `DSOUND.dll` | 1 | 1 | ordinal `#1` = `DirectSoundCreate` |
+| `ADVAPI32.dll` | 1 | 1 | `RegFlushKey` |
+| 합계 | **144** | **161** | |
+
+161개는 예상보다 **훨씬 작다.** 이 프로젝트의 HLE 범위가 감당 가능한 크기라는 뜻이다.
+게다가 KERNEL32 항목 중 상당수가 CRT 시작 코드가 부르는 것이고 게임 로직이 직접 쓰는
+것이 아니다. 두 table의 차이 17개는 전부 보호 계층이 더한 것이며 9절에 정리한다.
+
+*161 is **far smaller** than one might assume, which keeps the HLE scope for this project
+tractable, and many KERNEL32 entries are called by CRT startup rather than by game logic.
+All 17 entries by which the two tables differ are added by the protection layer; they are
+listed in section 9.*
+
+### 3rd·4th 원본 `.idata` 상세 / 3rd and 4th original `.idata` detail
+
+| DLL | 3rd | 4th |
 | --- | --- | --- |
-| `KERNEL32.dll` | 97 | 대부분 MSVC CRT 시작 코드 |
-| `USER32.dll` | 21 | 창, 메시지 루프, 키보드, 디스플레이 모드 |
-| `GDI32.dll` | 14 | DIB 섹션과 블릿 |
-| `WINMM.dll` | 8 | 믹서 볼륨과 밀리초 타이머 |
-| `DDRAW.dll` | 2 | DirectDraw 생성과 열거 |
-| `DSOUND.dll` | 1 | ordinal `#1` = `DirectSoundCreate` |
-| `ADVAPI32.dll` | 1 | `RegFlushKey` |
+| `KERNEL32.dll` | 88 | 88 |
+| `USER32.dll` | 32 | 32 |
+| `GDI32.dll` | 12 | 12 |
+| `WINMM.dll` | 8 | 10 |
+| `WS2_32.dll` | 9 | 9 |
+| `AVIFIL32.dll` | 5 | 5 |
+| `DDRAW.dll` | 2 | 2 |
+| `ADVAPI32.dll` | 1 | 1 |
+| `DSOUND.dll` | 1 | 1 |
+| `DINPUT.dll` | 1 | 1 |
+| 합계 | **159** | **161** |
 
-144개는 예상보다 **훨씬 작다.** 이 프로젝트의 HLE 범위가 감당 가능한 크기라는 뜻이다. 게다가 97개의 KERNEL32 항목 중 상당수가 CRT 시작 코드가 부르는 것이고 게임 로직이 직접 쓰는 것이 아니다.
+1st SE 대비 `DINPUT.dll`, `AVIFIL32.dll`, `WS2_32.dll` 세 DLL이 늘고 `USER32` 표면이
+21에서 32로 커진다. 버전별 HLE 프로파일이 필요한 이유가 이 차이다. 두 빌드의 그래픽
+진입점은 `DirectDrawCreate`가 아니라 `DirectDrawCreateEx`다.
 
-*144 is **far smaller** than one might assume, which means the HLE scope for this project is tractable. Many of the 97 KERNEL32 entries are called by CRT startup rather than by game logic.*
+*Relative to 1st SE these builds add `DINPUT.dll`, `AVIFIL32.dll` and `WS2_32.dll`, and the
+`USER32` surface grows from 21 to 32. This difference is why per-version HLE profiles are
+needed. Both builds enter graphics through `DirectDrawCreateEx` rather than `DirectDrawCreate`.*
+
+### 1st Tracks 원본 `.idata` 상세 / 1st Tracks original `.idata` detail
+
+**확인됨 — 2026-09-15.** 1st Tracks 141개는 1st SE 144개의 **진부분집합**이다. 1st SE가 더
+가진 이름은 `GDI32!BitBlt`, `GDI32!SetBkColor`, `KERNEL32!GetWindowsDirectoryA` 셋뿐이고,
+1st Tracks에만 있는 이름은 없다.
+
+*Confirmed — 2026-09-15. The 141 names of 1st Tracks form a **strict subset** of the 144 of
+1st SE: 1st SE adds exactly `GDI32!BitBlt`, `GDI32!SetBkColor` and
+`KERNEL32!GetWindowsDirectoryA`, and nothing appears only in 1st Tracks.*
+
+| DLL | 1st Tracks | 1st SE |
+| --- | --- | --- |
+| `KERNEL32.dll` | 96 | 97 |
+| `USER32.dll` | 21 | 21 |
+| `GDI32.dll` | 12 | 14 |
+| `WINMM.dll` | 8 | 8 |
+| `DDRAW.dll` | 2 | 2 |
+| `DSOUND.dll` | 1 | 1 |
+| `ADVAPI32.dll` | 1 | 1 |
+| 합계 / total | **141** | **144** |
+
+두 제품 모두 `DirectDrawCreate`와 `DirectDrawEnumerateA`로 그래픽에 들어가며 `DINPUT`을
+쓰지 않는다. 따라서 1st Tracks는 1st SE HLE 표면 안에 완전히 들어간다. 다만 표면이 같다는
+것이 호출 순서와 인자 계약이 같다는 뜻은 아니다.
+
+*Both products enter graphics through `DirectDrawCreate` and `DirectDrawEnumerateA` and use no
+`DINPUT`, so 1st Tracks fits entirely inside the 1st SE HLE surface. An identical surface is
+still not an identical call order or argument contract.*
+
+### 5th 원본 `.idata` 상세 / 5th original `.idata` detail
+
+**확인됨 — 2026-09-15.** 5th의 원본 `.idata`는 4th와 **DLL 목록과 함수 이름 집합이 완전히
+같다.** 표에 나타나는 순서만 다르며, DLL별로 비교했을 때 한쪽에만 있는 이름은 없다. 따라서
+5th는 4th 대비 새로운 Win32 API HLE를 요구하지 않는다. 개별 수치는 위 3rd·4th 표의 4th 열과
+같다.
+
+*Confirmed — 2026-09-15. The 5th original `.idata` has **exactly the same DLL list and function-name
+set as 4th**; only the table order differs, and a per-DLL comparison finds no name present in
+one and absent in the other. 5th therefore demands no Win32 API beyond what 4th already needs.
+Its per-DLL numbers are the 4th column of the 3rd/4th table above.*
+
+### 6th 상세 / 6th detail
+
+**확인됨 — 2026-09-15.** 6th 게임 본체는 4th·5th 대비 `ADVAPI32`, `AVIFIL32`, `WS2_32` 세 DLL을
+**전부** 뺀다. 즉 6th는 AVI 재생 경계도 Winsock 경계도 요구하지 않는다.
+
+*Confirmed — 2026-09-15. Against 4th and 5th, the 6th game body drops `ADVAPI32`, `AVIFIL32` and
+`WS2_32` **entirely**: 6th requires neither an AVI-playback boundary nor a Winsock boundary.*
+
+| DLL | 4th·5th | 6th `EZ2DJ6th.EXE` | 6th 동봉 1st / bundled 1st | 6th bootstrap |
+| --- | --- | --- | --- | --- |
+| `KERNEL32.dll` | 88 | 87 | 95 | 65 |
+| `USER32.dll` | 32 | 25 | 20 | 3 |
+| `GDI32.dll` | 12 | 11 | 13 | — |
+| `WINMM.dll` | 10 | 10 | 7 | — |
+| `DDRAW.dll` | 2 | 2 | 2 | — |
+| `DSOUND.dll` | 1 | 1 | 1 | — |
+| `DINPUT.dll` | 1 | 1 | — | — |
+| `ADVAPI32.dll` | 1 | — | — | — |
+| `AVIFIL32.dll` | 5 | — | — | — |
+| `WS2_32.dll` | 9 | — | — | — |
+| 합계 / total | **161** | **137** | **138** | **68** |
+
+6th가 새로 더하는 이름은 `KERNEL32!GetPrivateProfileIntA`, `KERNEL32!WritePrivateProfileStringA`,
+`KERNEL32!GetFullPathNameA`, `KERNEL32!GetCurrentThread`, `GDI32!DeleteDC`다. 빼는 `USER32`
+이름에는 `ChangeDisplaySettingsExA`, `EnumDisplaySettingsA`, `ExitWindowsEx`, `ReleaseDC`,
+`SetCursor`, `RedrawWindow`, `DrawMenuBar`가 있다. bootstrap은 게임이 아니라 launcher이므로
+`CreateProcessA`, `WaitForSingleObject`, `GetExitCodeProcess`, `SetPriorityClass`,
+`TerminateProcess`, `SetCurrentDirectoryA`가 표면의 중심이고 그래픽·사운드 DLL을 쓰지 않는다.
+
+*The names 6th adds are `KERNEL32!GetPrivateProfileIntA`, `KERNEL32!WritePrivateProfileStringA`,
+`KERNEL32!GetFullPathNameA`, `KERNEL32!GetCurrentThread` and `GDI32!DeleteDC`. The `USER32`
+names it drops include `ChangeDisplaySettingsExA`, `EnumDisplaySettingsA`, `ExitWindowsEx`,
+`ReleaseDC`, `SetCursor`, `RedrawWindow` and `DrawMenuBar`. The bootstrap is a launcher rather
+than a game, so its surface centers on `CreateProcessA`, `WaitForSingleObject`,
+`GetExitCodeProcess`, `SetPriorityClass`, `TerminateProcess` and `SetCurrentDirectoryA`, and it
+uses no graphics or sound DLL.*
+
+**확인됨 — 2026-09-15.** 6th 동봉 1st Tracks 빌드(138)는 1999년 보호 빌드(141)와 다르다.
+`ADVAPI32` 전체와 `USER32!ChangeDisplaySettingsExA`·`EnumDisplaySettingsA`·`ExitWindowsEx`·
+`LoadImageA`가 빠지고, `KERNEL32!QueryPerformanceFrequency`, `GDI32!CreateDIBitmap`,
+`USER32!GetDC`, `USER32!MessageBoxA`가 들어온다. display mode 변경 API가 빠진 것은 6th 캐비닛이
+mode 전환을 launcher 쪽에서 처리하거나 아예 하지 않는다는 뜻일 수 있으나, 이는 **추정**이며
+런타임 관찰로 확인해야 한다.
+
+*Confirmed — 2026-09-15. The 6th's bundled 1st Tracks build (138) differs from the 1999 protected
+build (141): it drops all of `ADVAPI32` plus `USER32!ChangeDisplaySettingsExA`,
+`EnumDisplaySettingsA`, `ExitWindowsEx` and `LoadImageA`, and adds
+`KERNEL32!QueryPerformanceFrequency`, `GDI32!CreateDIBitmap`, `USER32!GetDC` and
+`USER32!MessageBoxA`. The absent display-mode APIs may mean the 6th cabinet handles mode
+switching in the launcher or not at all, but that is **inferred** and needs runtime
+confirmation.*
 
 ---
 
@@ -168,21 +356,58 @@ ADVAPI32.dll  RegFlushKey
 
 ## 9. 확인됨: 보호 빌드의 정적 import 표면 / Confirmed: the protected build's static import surface
 
-**확인됨 — 2026-08-23.** 보호된 `ez2dj.exe`의 import directory는 `.gidata`(RVA `0x01ad8000`)로 옮겨져 있으며, 내용은 8절의 원본 표면 전체에 보호 특화 API를 더한 집합이다. `.gidata`의 IMAGE_IMPORT_DESCRIPTOR와 IAT를 직접 해석해 슬롯 VA까지 확정했다.
+**확인됨 — 2026-08-23, 2026-09-14 재측정.** 보호된 `ez2dj.exe`의 import directory는
+`.gidata`(RVA `0x01ad8000`)로 옮겨져 있으며, 내용은 원본 `.idata`(RVA `0x01aba000`) 표면
+144개 전체에 보호 특화 API 17개를 더한 161개다. 두 table을 같은 파일 안에서 각각 해석해
+차집합을 구했으므로, 어떤 이름이 보호 계층의 것인지 이름 단위로 확정된다.
 
-추가된 보호 특화 import:
+보호 계층이 추가한 import 17개 — 이것이 `.gidata`와 `.idata`의 차집합 전체다.
 
 ```text
-KERNEL32.dll  DeviceIoControl, _lopen, _lread, _lclose, _lcreat, _llseek, _lwrite,
-              OpenFile, DeleteFileA, MoveFileA, lstrcmpiA, lstrcpyA, lstrlenA,
-              DebugBreak, OutputDebugStringA, FatalAppExitA, UnhandledExceptionFilter,
-              RaiseException, RtlUnwind, IsBadReadPtr, IsBadWritePtr, HeapValidate,
-              CreateMutexA, ReleaseMutex
+KERNEL32.dll  DeviceIoControl, CreateMutexA, ReleaseMutex, FreeLibrary,
+              OpenFile, _lopen, _lread, _lwrite, _lclose, _lcreat, _llseek,
+              DeleteFileA, MoveFileA, lstrcmpiA, lstrcpyA, lstrlenA
+USER32.dll    MessageBoxA
 ```
 
-`.gdata`에는 `\\.\TDSD.VXD`, `\\.\LPTDI0`, `MSVBVM50.DLL`(2회), EUC-KR 메시지 바이트, 해시성 blob이 있다. 런타임 관찰([HDD 레이아웃 분석](ez2dj-hdd-layout.md))에서 `CreateFileA("\\.\LPTDI1")` 병렬포트 열기와 `GetProcAddress(wsock32, "WSAGetLastError")`가 확인됐다. 즉 보호 계층의 동적 해석은 최소화되어 있고(관찰된 것은 WSAGetLastError 하나), 하드웨어·환경 검사는 정적 import와 문자열로 구성된다.
+**정정 — 2026-09-14.** 이전 판은 `DebugBreak`, `OutputDebugStringA`, `FatalAppExitA`,
+`UnhandledExceptionFilter`, `RaiseException`, `RtlUnwind`, `IsBadReadPtr`, `IsBadWritePtr`,
+`HeapValidate` 아홉 개도 보호 계층이 추가한 것으로 적었다. 재측정 결과 아홉 개 모두 원본
+`.idata`에 이미 있는 MSVC CRT import이며 보호 계층과 무관하다.
 
-*Confirmed — 2026-08-23. The protected `ez2dj.exe` moves its import directory into `.gidata` (RVA 0x01ad8000) and its content is the full original surface of section 8 plus protection-flavored APIs: DeviceIoControl, the `_l*`/OpenFile legacy file family, DeleteFileA, MoveFileA, lstrcmpiA/lstrcpyA/lstrlenA, DebugBreak, OutputDebugStringA, FatalAppExitA, UnhandledExceptionFilter, RaiseException, RtlUnwind, IsBadReadPtr/IsBadWritePtr, HeapValidate, and mutex APIs. .gdata holds `\\.\TDSD.VXD`, `\\.\LPTDI0`, `MSVBVM50.DLL` (twice), EUC-KR message bytes, and hash-like blobs. Runtime observation (see the HDD layout analysis) confirms a `CreateFileA("\\.\LPTDI1")` parallel-port open and GetProcAddress for only WSAGetLastError, so dynamic resolution is minimal and hardware/environment checks are built from static imports plus strings.*
+`DeviceIoControl`이 보호 계층 전용이라는 점은 이 제품군의 동글 경계와 직접 이어진다. 게임
+본체는 장치 IOCTL을 하지 않으며, `\.\LPTDI1`·`\.\FEnteDev`·`\.\NTICE` 경로의 IOCTL
+왕복은 전부 보호 계층의 것이다.
+
+`.gdata`에는 `\.\TDSD.VXD`, `\.\LPTDI0`, `MSVBVM50.DLL`(2회), EUC-KR 메시지 바이트,
+해시성 blob이 있다. 런타임 관찰([HDD 레이아웃 분석](ez2dj-hdd-layout.md))에서
+`CreateFileA("\.\LPTDI1")` 병렬포트 열기와 `GetProcAddress(wsock32, "WSAGetLastError")`가
+확인됐다. 즉 보호 계층의 동적 해석은 최소화되어 있고(관찰된 것은 `WSAGetLastError` 하나),
+하드웨어·환경 검사는 정적 import와 문자열로 구성된다.
+
+*Confirmed — 2026-08-23, re-measured 2026-09-14. The protected `ez2dj.exe` moves its import
+directory into `.gidata` (RVA 0x01ad8000), holding 161 entries: the complete 144-entry
+original `.idata` surface (RVA 0x01aba000) plus 17 protection-specific APIs. Both tables were
+parsed inside the same file and differenced, so the protection-layer names are established
+individually: `DeviceIoControl`, `CreateMutexA`, `ReleaseMutex`, `FreeLibrary`, the
+`OpenFile`/`_l*` legacy file family, `DeleteFileA`, `MoveFileA`, `lstrcmpiA`, `lstrcpyA`,
+`lstrlenA`, and `MessageBoxA`.*
+
+*Corrected — 2026-09-14. An earlier revision also attributed `DebugBreak`,
+`OutputDebugStringA`, `FatalAppExitA`, `UnhandledExceptionFilter`, `RaiseException`,
+`RtlUnwind`, `IsBadReadPtr`, `IsBadWritePtr` and `HeapValidate` to the protection layer.
+Re-measurement shows all nine are MSVC CRT imports already present in the original `.idata`
+and unrelated to the protection layer.*
+
+*That `DeviceIoControl` belongs only to the protection layer connects directly to this
+product family's dongle boundary: the game body issues no device IOCTL, and all IOCTL
+round trips over `\.\LPTDI1`, `\.\FEnteDev` and `\.\NTICE` belong to the protection layer.*
+
+*`.gdata` holds `\.\TDSD.VXD`, `\.\LPTDI0`, `MSVBVM50.DLL` (twice), EUC-KR message bytes,
+and hash-like blobs. Runtime observation (see the HDD layout analysis) confirms a
+`CreateFileA("\.\LPTDI1")` parallel-port open and `GetProcAddress` for only
+`WSAGetLastError`, so dynamic resolution is minimal and hardware/environment checks are built
+from static imports plus strings.*
 
 ---
 

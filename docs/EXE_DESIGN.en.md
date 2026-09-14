@@ -16,7 +16,7 @@ Nothing goes in without evidence. When an item is confirmed, its marker changes 
 
 ## 1. Current state
 
-Three dumps have been inspected: EZ2DJ The 1st Tracks Special Edition, 2nd Trax, and 3rd Trax. Most of what static analysis can settle is now settled, and what remains needs a run.
+Inspected so far: EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax, 4th Trax, 5th and 6th, plus EZ2Dancer 2nd MOVE (`ez2d2m`). Inputs come in two shapes — directory dumps and MAME CHD images. Most of what static analysis can settle is now settled; protection-layer responses and what needs a run remain.
 
 The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layout.md), the [executable structures analysis](analysis/ez2dj-exe-structures.md), and the [import surface analysis](analysis/ez2dj-import-surface.md). The structures document owns per-executable PE structure, protection anatomy, and data inventories, and gains a section whenever a new executable is identified. Only conclusions are kept here.
 
@@ -29,23 +29,24 @@ The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layo
 | Item | Value |
 | --- | --- |
 | 1st SE game executable | **`ez2dj.exe`** — named by the `shell=` entry in `System.ini` (protected) |
-| 1st SE bring-up build | `ez2dj1.exe` (not protected). Not what the cabinet ran |
 | 1st Tracks representative executable | **`Ez2DJ.exe`** — user-designated representative (`.protect`, protected) |
 | 2nd Tracks representative executable | **`EZ2DJ.exe`** — user-provided representative (entry point is in `.text`; protection status unresolved) |
-| 3rd game executable | `EZ2DJ.EXE` (protected) |
+| 3rd game executable | `EZ2DJ.EXE` (protected, `.protect`) |
+| 4th game executable | `EZ2DJ.exe` (protected, `.protect`) |
+| EZ2Dancer 2nd MOVE executable | `EZ2Dancer.exe` (protected, `.protect`) |
 | PE magic | PE32 (`0x10B`) throughout |
 | Machine | i386 (`0x014C`) throughout |
 | Image base | `0x00400000` throughout |
 | Subsystem | Windows GUI (2) throughout |
-| `.reloc` | Section present, but `ez2dj1.exe` has an empty base-relocation data directory and is fixed to its preferred base |
-| Build timestamps | `ez2dj1.exe` 1999-12-24, `ez2dj.exe` 2000-01-01, 2nd `EZ2DJ.exe` 2004-10-01, `EZ2DJ.EXE` 2001-09-24 |
-| Protection | Only `ez2dj1.exe` is unprotected. 1st SE and 3rd place their entry points in `.gtide` / `.protect`; 2nd's entry is in `.text`, so its protection status is unresolved |
+| Base relocation | 1st SE `ez2dj.exe` has a `.reloc` section but an empty data directory, so it is fixed to its preferred base. 3rd and 4th carry a real relocation directory inside `.protect` |
+| Build timestamps (PE TimeDateStamp) | `ez2dj.exe` 1999-12-24, 2nd `EZ2DJ.exe` 2004-07-18, 3rd `EZ2DJ.EXE` 2001-09-24 (directory) / 2001-10-15 (CHD), 4th `EZ2DJ.exe` 2002-07-18, `EZ2Dancer.exe` 2001-01-12 |
+| Protection | 1st SE, 3rd, 4th and `ez2d2m` place their entry points in `.gtide` / `.protect` and are protected; 2nd's entry is in `.text`, so its status is unresolved |
 
-**`ez2dj1.exe` is the bring-up target for Stages 2 and 3** — the one build that reaches real game code without executing a protection layer first.
+**The canonical executables are loaded directly.** No separate bring-up build is used to sidestep the protection layer; the packer of the build the cabinet actually ran is carried through as-is.
 
 ### 2.2 Import list — confirmed
 
-**7 DLLs and 144 functions** for `ez2dj1.exe`. The full list and priority order are in the [import surface analysis](analysis/ez2dj-import-surface.md).
+The surface the canonical `ez2dj.exe` presents to the loader is **7 DLLs and 161 functions**, 17 of which belong to the protection layer. For 3rd and 4th the original `.idata` holds 10 DLLs / 159 and 161. The full counts and priority order are in the [import surface analysis](analysis/ez2dj-import-surface.md).
 
 | Item | Value |
 | --- | --- |
@@ -59,7 +60,7 @@ The detailed evidence lives in the [HDD layout analysis](analysis/ez2dj-hdd-layo
 | Ordinal imports | **Used** (`DSOUND.dll #1`) |
 | Delay imports | Not used |
 
-The 3rd build additionally uses `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, so per-version HLE profiles are required.
+The 3rd and 4th builds additionally use `DINPUT.dll`, `AVIFIL32.dll`, and `WS2_32.dll`, grow the `USER32` surface from 21 to 32, and enter graphics through `DirectDrawCreateEx` rather than `DirectDrawCreate`, so per-version HLE profiles are required.
 
 ### 2.3 Assets and runtime paths — partly confirmed
 
@@ -117,3 +118,19 @@ The detailed evidence is in [ez2d2m CHD filesystem and executable observations](
 **Confirmed:** the protection sends two kinds of transform — eleven one-block `function=0x000e` requests and one seven-block `function=0x0011` request. The first eleven carry identical values on two machines. In the `0x0011` request only block 5 is identical in every capture; blocks 0, 1 and 6 move with the re2DJ runtime's load address, and blocks 2 to 4 differ between machines.
 
 **Inferred:** by 2EZConfig-V2's high-level contract, consulted for facts only, `0x000e` is `API_CRYPT` and `0x0011` is `API_CODE`. `API_CODE` computes once from the second-to-last block — block 5 — and writes several places in the payload, so its answer is a function of the whole request. The response table gained request rows to match ([design 247](design/20260911-247-hardlock-payload-response-rows.md)). **Unresolved:** a valid `0x0011` answer.
+
+## 2026-09-15 Unanalyzed `roms/` executables added (task 287)
+
+**Confirmed:** every game executable in the user-supplied `roms/` input that had no structural analysis was measured and added to the [executable structures analysis](analysis/ez2dj-exe-structures.md) as sections 6, 7 and 8. Size, MD5, SHA-1 and SHA-256 are now recorded alongside each executable identification.
+
+**Confirmed — 5th.** `roms/ez2dj5th/ez2dj/EZ2DJ.exe` is 1,388,544 bytes with PE TimeDateStamp `0x3f53377b` (2003-09-01), a protected build whose entry point lies in `.protect`. Its original `.idata` holds 10 DLLs / 161 functions and its **DLL list and function-name set are exactly those of 4th**, so 5th demands no Win32 API beyond what 4th already needs from the HLE. Its packed table has the same 36-entry shape as 4th's, differing only in six per-DLL representative stubs.
+
+**Confirmed — 6th.** 6th has three executables and none of them carries a protection section. The `EZ2DJ.EXE` the cabinet runs (126,976 bytes) is a launcher; the real game is its `EZ2DJ6th.EXE` child (585,728 bytes). The bootstrap's plaintext strings hold two child paths — `.\EZ2DJ6TH.EXE` and also `.\EZ2DJ1ST\EZ2DJ.EXE`. The game body imports 7 DLLs / 137 functions, dropping `ADVAPI32`, `AVIFIL32` and `WS2_32` entirely against 4th and 5th, so 6th requires neither an AVI-playback nor a Winsock boundary.
+
+**Confirmed — the 6th's bundled 1st Tracks.** `EZ2DJ/Ez2Dj1st/` inside `6th.chd` holds a complete 1st Tracks layout whose `Ez2DJ.exe` (360,448 bytes, `0x411bbf5c`, 2004-08-12) is an **unprotected rebuild**: its 6 DLLs / 138 functions read directly without unpacking. Together with `EZ2DJ6th.EXE` it is the only input whose game surface can be read statically without defeating protection.
+
+**Confirmed — 1st Tracks.** The original `.idata` of `roms/ez2dj1st/ez2dj/Ez2DJ.exe` (577,536 bytes, `0x3862fd9d`) holds 7 DLLs / 141 functions, a **strict subset** of the 144 of 1st SE; 1st SE adds only `GDI32!BitBlt`, `GDI32!SetBkColor` and `KERNEL32!GetWindowsDirectoryA`. The executables in the `ez2dj` and `ez2dj1` directories are byte-identical.
+
+**Confirmed — 1st SE is two builds.** The directory dump (`.gtide` packer, 561,152 bytes) and the CHD copy (`.protect` packer, 634,880 bytes) share a PE TimeDateStamp but are different files. Their `.text`, `.rdata`, `.data` and `.reloc` share layout but differ in content, while `.idata` alone is byte-identical: the packer transforms only the body and leaves the original import-table section untouched.
+
+**Unresolved:** whether the 5th directory layout came from `ez2dj5.chd`; when the 6th bootstrap selects each of its two children; why the 6th `EZ2DJ.INI` is not plaintext and how it is consumed; and the Hardlock response contracts of the three newly covered products.

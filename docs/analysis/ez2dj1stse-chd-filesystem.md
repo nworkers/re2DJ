@@ -50,6 +50,19 @@ CHD 내부 `ez2dj/Ez2DJ.exe`는 기존 `roms/ez2dj1stse/ez2dj/ez2dj.exe`와 **�
 
 **추정.** CHD 쪽 `.protect` 빌드도 런타임에 같은 `.text` 이미지를 복원한다면 같은 RVA에 같은 helper가 존재합니다. 두 파일의 `.text` 섹션 배치가 완전히 같다는 점이 근거이지만, 디스크의 `.text`가 암호화되어 있어 정적으로는 확인할 수 없습니다. 확인 방법: CHD 빌드를 실행해 privileged-instruction fault 주소를 기록하고 이 RVA와 비교합니다.
 
+**확인됨 — 2026-09-15, 두 빌드의 섹션 대조.** 두 빌드는 PE TimeDateStamp가 `0x3862df27`로 같습니다. `.text`(raw `0x1000`, `0x53000`바이트), `.rdata`(raw `0x54000`, `0x8000`), `.data`(raw `0x5c000`, `0xd000`), `.idata`(raw `0x69000`, `0x1000`), `.reloc`(raw `0x6a000`, `0x16000`)는 VA·VSize·raw offset·raw size가 모두 같습니다. 그러나 내용을 대조하면 `.text`·`.rdata`·`.data`·`.reloc`은 다르고 **`.idata`만 바이트 단위로 같습니다.** 즉 두 packer 계열은 원본 import table 섹션을 건드리지 않고 본체 섹션에 서로 다른 변환을 적용합니다. PE header(`0x0`~`0x1000`)도 다릅니다.
+
+*Confirmed — 2026-09-15, section-by-section comparison. The two builds share the PE TimeDateStamp `0x3862df27`, and their `.text` (raw `0x1000`, `0x53000` bytes), `.rdata` (raw `0x54000`, `0x8000`), `.data` (raw `0x5c000`, `0xd000`), `.idata` (raw `0x69000`, `0x1000`) and `.reloc` (raw `0x6a000`, `0x16000`) agree on VA, VSize, raw offset and raw size. Comparing content, however, `.text`, `.rdata`, `.data` and `.reloc` differ while **`.idata` alone is byte-identical**: the two packer families leave the original import-table section untouched and apply different transforms to the body sections. The PE header (`0x0`–`0x1000`) differs as well.*
+
+| 항목 / item | `.gtide` 빌드 (디렉터리) | `.protect` 빌드 (CHD) |
+| --- | --- | --- |
+| 크기 / size | 561,152 | 634,880 |
+| MD5 | `41d6adc1397fe8eb653b8de624b5602a` | `5760cfb4f556d70711f18f473457c57b` |
+| SHA-1 | `12d365d0248cf15543f83761b14d990ba086dc2f` | `3f3f960542dd9573f529dc8fb45dacd0206baffe` |
+| entry point RVA | `0x01ad23cf` | `0x01ad1240` |
+| SizeOfImage | `0x01ada000` | `0x01aec000` |
+| base relocation directory | `{0, 0}` | RVA `0x01ad2000` |
+
 **미확정.** `.protect` 빌드의 Hardlock 장치 이름, IOCTL 시퀀스, 유효 응답, 그리고 `.gtide` 빌드에서 확인한 LPTDI mock target state `0900000000000000`이 이 빌드에도 성립하는지는 확인되지 않았습니다. `.protect` 섹션 이름과 RWX 플래그는 3rd/4th(`docs/analysis/ez2dj-exe-structures.md`)와 같은 계열이지만, 계열이 같다는 것이 계약이 같다는 뜻은 아닙니다.
 
 ### CHD 빌드 첫 실행 결과 — 확인됨

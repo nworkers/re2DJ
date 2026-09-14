@@ -60,25 +60,26 @@ PE32 이미지를 게스트 주소 공간에 매핑한다.
 
 *Map the PE32 image into the guest address space: commit pages, copy sections, apply base relocations, bind imports to gate addresses, and note the TLS directory. Done when the full import list is enumerated, every relocation applies, and the entry-point address is computed and reported. Nothing executes yet.*
 
-구현 결과 `re2dj_pe_loader`가 `ez2dj1.exe`를 선호 주소 `0x00400000`에 적재하고 진입점 `0x0043a640`, TLS directory 없음, 7개 DLL의 import 144개와 gate 주소를 보고한다. 이 파일은 `.reloc` 섹션 이름은 갖지만 base relocation data directory가 비어 있어 다른 주소로 재배치할 수 없다. 로더의 `HIGHLOW` 재배치 경로는 synthetic PE32 테스트로 검증한다.
+구현 결과 `re2dj_pe_loader`가 정식 `ez2dj.exe`를 선호 주소 `0x00400000`에 적재하고 진입점 `0x01ad23cf`, TLS directory 없음, 7개 DLL의 import 161개와 gate 주소를 보고한다. 이 파일은 `.reloc` 섹션 이름은 갖지만 base relocation data directory가 비어 있어 다른 주소로 재배치할 수 없다. 로더의 `HIGHLOW` 재배치 경로는 synthetic PE32 테스트로 검증한다.
 
-*The implemented `re2dj_pe_loader` maps `ez2dj1.exe` at its preferred `0x00400000` base and reports entry point `0x0043a640`, no TLS directory, and 144 gated imports from seven DLLs. The file has a section named `.reloc` but an empty base-relocation data directory, so it cannot be rebased. The loader's `HIGHLOW` relocation path is verified with a synthetic PE32 test.*
+*The implemented `re2dj_pe_loader` maps the canonical `ez2dj.exe` at its preferred `0x00400000` base and reports entry point `0x01ad23cf`, no TLS directory, and 161 gated imports from seven DLLs. The file has a section named `.reloc` but an empty base-relocation data directory, so it cannot be rebased. The loader's `HIGHLOW` relocation path is verified with a synthetic PE32 test.*
+
 
 > import 목록이 나오는 순간 **어떤 API를 구현해야 하는지가 확정된다.** Stage 4 이후의 범위는 추측이 아니라 이 목록에서 나온다.
 >
 > *The import list is what fixes **which APIs must be implemented.** The scope of Stage 4 onward comes from that list rather than from guesswork.*
 
 > [!NOTE]
-> 이 목록은 **이미 확보되었다.** 원본 덤프의 import 테이블을 정적으로 해석해 얻었으므로, 로더가 완성되기 전에 Stage 4 이후의 범위가 확정된 상태다. `ez2dj1.exe` 기준 7개 DLL, 144개 함수다. 전체 목록은 [EZ2DJ import 표면](analysis/ez2dj-import-surface.md)에 있다.
+> 이 목록은 **이미 확보되었다.** 원본 덤프의 import 테이블을 정적으로 해석해 얻었으므로, 로더가 완성되기 전에 Stage 4 이후의 범위가 확정된 상태다. 정식 `ez2dj.exe` 기준 7개 DLL, 161개 함수다. 전체 목록은 [EZ2DJ import 표면](analysis/ez2dj-import-surface.md)에 있다.
 >
 > Stage 2가 여전히 필요한 이유는 범위 확정이 아니라 **적재 자체** 때문이다. 섹션 매핑, 재배치, gate 주소 배정은 코드로 해야 한다.
 >
-> *This list is **already in hand**, obtained by statically parsing the original's import table, so the Stage 4 scope is fixed before the loader exists: 7 DLLs and 144 functions for `ez2dj1.exe`, listed in [EZ2DJ Import Surface](analysis/ez2dj-import-surface.md). Stage 2 is still required not for scoping but for **loading itself** — section mapping, relocation, and gate assignment have to be built.*
+> *This list is **already in hand**, obtained by statically parsing the original's import table, so the Stage 4 scope is fixed before the loader exists: 7 DLLs and 161 functions for the canonical `ez2dj.exe`, listed in [EZ2DJ Import Surface](analysis/ez2dj-import-surface.md). Stage 2 is still required not for scoping but for **loading itself** — section mapping, relocation, and gate assignment have to be built.*
 
 > [!IMPORTANT]
-> 첫 적재 대상은 **`ez2dj1.exe`**다. 1st SE 덤프에서 유일하게 보호되지 않은 빌드이므로 언패킹 스텁을 실행하지 않고 진짜 게임 코드에 도달한다. 보호된 `ez2dj.exe`와 3rd의 `EZ2DJ.EXE`는 자기 수정 코드를 안전하게 처리하는 backend가 확인된 뒤로 미룬다.
+> 첫 적재 대상은 1st SE의 정식 실행 파일 **`ez2dj.exe`**다. 캐비닛이 실제로 실행한 빌드이므로, 보호 계층의 자기 수정 스텁을 통과시키는 것까지가 처음부터 범위에 들어간다.
 >
-> *The first load target is **`ez2dj1.exe`**, the only unprotected build in the 1st SE dump, which reaches real game code without running an unpacking stub. The protected builds wait until a backend that safely handles self-modifying code has been validated.*
+> *The first load target is 1st SE's canonical **`ez2dj.exe`**, the build the cabinet actually ran, so carrying its protection layer's self-modifying stub through is in scope from the start.*
 
 ---
 
@@ -114,9 +115,9 @@ Web 실행 엔진과 라이선스 조사를 완료했고 v86 CPU 분리성 spike
 
 *The Web execution-engine and license survey is complete, including the v86 CPU-separability spike. v86 is BSD-2-Clause and has the needed instruction coverage, but lacks a CPU-only build boundary and couples CPU operation to PC devices, MMIO, and browser timer/IRQ services. Its default synthetic gate, `0xF0000000`, is also non-executable mapped/MMIO. It therefore cannot connect to `ExecutionBackend` without a substantial fork and will not be adopted. A TinyEMU-family engine is reconsidered only if the publication boundary of its current Web x86 source is confirmed; GPL/LGPL candidates are excluded. A custom interpreter remains deferred.*
 
-Windows x86 launcher는 `DEBUG_ONLY_THIS_PROCESS` child의 entry `0x0043a640`에서 temporary `INT3` breakpoint로 멈춰 `0x00400000` main image와 loader-resolved IAT 7 DLL·144 slot을 확인했다. 이 입력에서 DR0 hardware breakpoint는 context에 남았지만 event가 전달되지 않아 별도 조사 대상으로 남긴다. 다음 Windows 작업은 같은 x86 child에 runtime DLL을 적재하고 IAT handoff를 검증하는 것이다.
+Windows x86 launcher는 `DEBUG_ONLY_THIS_PROCESS` child의 entry에서 temporary `INT3` breakpoint로 멈춰 `0x00400000` main image와 loader-resolved IAT slot 전체를 확인했다. 이 입력에서 DR0 hardware breakpoint는 context에 남았지만 event가 전달되지 않아 별도 조사 대상으로 남긴다. 다음 Windows 작업은 같은 x86 child에 runtime DLL을 적재하고 IAT handoff를 검증하는 것이다.
 
-*The Windows x86 launcher stopped a `DEBUG_ONLY_THIS_PROCESS` child at entry `0x0043a640` with a temporary `INT3` breakpoint and confirmed the `0x00400000` main image plus seven DLLs and 144 loader-resolved IAT slots. For this input, the DR0 hardware breakpoint remained in context but delivered no event, so it remains a separate investigation. The next Windows task loads the runtime DLL into the same x86 child and verifies IAT handoff.*
+*The Windows x86 launcher stopped a `DEBUG_ONLY_THIS_PROCESS` child at its entry with a temporary `INT3` breakpoint and confirmed the `0x00400000` main image plus the full set of loader-resolved IAT slots. For this input, the DR0 hardware breakpoint remained in context but delivered no event, so it remains a separate investigation. The next Windows task loads the runtime DLL into the same x86 child and verifies IAT handoff.*
 
 같은 정지점에서 primary thread를 suspend한 뒤 remote `LoadLibraryW` thread로 최소 x86 runtime DLL을 적재했고 module base `0x7c130000`을 확인했다. 이제 runtime이 원본 IAT를 HLE thunk로 교체하고 첫 import 호출을 host와 교환하는 handoff를 검증한다.
 
@@ -126,9 +127,9 @@ Windows x86 launcher는 `DEBUG_ONLY_THIS_PROCESS` child의 entry `0x0043a640`에
 
 *After replacing the `GetCommandLineA` IAT slot with a runtime log-and-forward thunk, entry was resumed in a limited run and the expected debugger output event was received. The thunk tail-jumps to the original target, so this observation step does not alter API results or caller stack cleanup. The next task selects the first minimal HLE API instead of simple forwarding and continues observing original behavior.*
 
-사용자 결정으로 첫 실제 HLE API는 `GetCommandLineA`로 정했다. launcher는 target basename `ez2dj1.exe`를 runtime의 process-lifetime ANSI buffer에 쓰고 IAT를 HLE thunk로 교체했다. 제한 실행에서 HLE output event를 수신했으므로, 원본 import가 host 정책의 값을 반환하는 runtime 경로까지 확인됐다.
+사용자 결정으로 첫 실제 HLE API는 `GetCommandLineA`로 정했다. launcher는 target basename을 runtime의 process-lifetime ANSI buffer에 쓰고 IAT를 HLE thunk로 교체했다. 제한 실행에서 HLE output event를 수신했으므로, 원본 import가 host 정책의 값을 반환하는 runtime 경로까지 확인됐다.
 
-*By user decision, `GetCommandLineA` is the first real HLE API. The launcher writes target basename `ez2dj1.exe` into the runtime's process-lifetime ANSI buffer and replaces the IAT with the HLE thunk. The limited run received the HLE output event, confirming the runtime path through which an original import returns a host-policy value.*
+*By user decision, `GetCommandLineA` is the first real HLE API. The launcher writes the target basename into the runtime's process-lifetime ANSI buffer and replaces the IAT with the HLE thunk. The limited run received the HLE output event, confirming the runtime path through which an original import returns a host-policy value.*
 
 ---
 
@@ -203,7 +204,7 @@ Windows에서 검증한 것과 같은 코드가 Linux에서도 같은 결과를 
 
 **완료 기준:** 같은 덤프로 Windows와 Linux가 같은 진행 지점에 도달한다.
 
-bring-up은 보호되지 않은 `ez2dj1.exe`의 entry와 첫 import에서 시작해 CRT/WinMain, 창·첫 자산, callback/thread, DirectX/audio/input 순서로 진행한다. 그 뒤 보호된 `ez2dj.exe`의 self-modifying code, LPTDI 환경과 raw I/O 경계를 추가한다. 세부 설계는 [Linux 원본 실행 경로](design/20260827-077-linux-original-execution.md)에 둔다.
+bring-up은 정식 `ez2dj.exe`의 entry와 첫 import에서 시작해 CRT/WinMain, 창·첫 자산, callback/thread, DirectX/audio/input 순서로 진행하며, 같은 경로에서 보호 계층의 self-modifying code, LPTDI 환경과 raw I/O 경계를 함께 다룬다. 세부 설계는 [Linux 원본 실행 경로](design/20260827-077-linux-original-execution.md)에 둔다.
 
 *Confirm the same code produces the same result on Linux through an i386 native helper, a shared x86-64-hosted Win32 import/COM dispatcher, SDL services, case-insensitive paths, and cross-host log/frame comparison. Bring-up proceeds from the unprotected entry and first import through CRT/WinMain, window/assets, callbacks/threads, and DirectX/audio/input before adding the protected executable's self-modification, LPTDI environment, and raw I/O. Done when the same dump reaches the same point on Windows and Linux.*
 

@@ -8,7 +8,7 @@
 
 ### 확인된 설정 경로
 
-**확인됨.** 대응 unprotected `ez2dj1.exe`의 VA `0x004371a6` 부근은 IAT slot `0x01eba38c`를 통해 `GetPrivateProfileIntA`를 호출하며 다음 의미의 인자를 전달한다.
+**확인됨 — 2026-09-14 재확인.** 정식 `ez2dj.exe`의 `.text` VA `0x004371a6`에 `ff 15 8c a3 eb 01`, 곧 `call dword ptr [0x01eba38c]`가 있다. 이 IAT slot은 `GetPrivateProfileIntA`이며, 직전 push 네 개가 다음 의미의 인자를 전달하고 반환 `EAX`는 `mov [0x01c3ecb4], eax`로 전역 demo-volume index에 저장된다.
 
 | 인자 | 확인된 값 |
 | --- | --- |
@@ -79,7 +79,7 @@ This document records the 1st SE title/demo `DemoVolume` setting, the original D
 
 ### Confirmed configuration path
 
-**Confirmed.** Near VA `0x004371a6`, the corresponding unprotected `ez2dj1.exe` calls `GetPrivateProfileIntA` through IAT slot `0x01eba38c` with section `GAMEASSIGNMENTS`, key `DemoVolume`, and default `3`, storing the result as the global demo-volume index. The user-supplied HDD's actual `ez2dj.ini` contains `DemoVolume=0` in that section. The file was inspected read-only and was not added to the repository.
+**Confirmed — re-verified 2026-09-14.** The canonical `ez2dj.exe` carries `ff 15 8c a3 eb 01` — `call dword ptr [0x01eba38c]` — in `.text` at VA `0x004371a6`. That IAT slot is `GetPrivateProfileIntA`, the four preceding pushes supply section `GAMEASSIGNMENTS`, key `DemoVolume`, default `3`, and the INI path, and the returned `EAX` is stored into the global demo-volume index by `mov [0x01c3ecb4], eax`. The user-supplied HDD's actual `ez2dj.ini` contains `DemoVolume=0` in that section. The file was inspected read-only and was not added to the repository.
 
 ### Confirmed volume table
 

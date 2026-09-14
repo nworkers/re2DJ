@@ -87,9 +87,10 @@ re2dj --hdd /path/to/ez2dj_hdd
 | `ez2dj5th` | `EZ2DJ/EZ2DJ.EXE` | 4th 기반 shortcut; 현재 reader가 파일시스템을 인식하지 못함 |
 | `ez2dj6th` | `EZ2DJ/EZ2DJ6th.EXE` | FAT32 CHD shortcut; `EZ2DJ.EXE`는 bootstrap |
 
-목록의 `built-in` 표시는 확인된 덤프, `detected` 표시는 스캔으로만 찾은 실행 파일입니다. 1st SE의 `ez2dj1.exe`는 별도 built-in이 아니라 detected 항목이며, 원본 캐비닛 실행 파일의 동작으로 자동 간주하지 않습니다.
+목록의 `built-in` 표시는 확인된 덤프, `detected` 표시는 스캔으로만 찾은 실행 파일입니다. detected 항목은 정식 캐비닛 실행 파일로 자동 간주하지 않습니다.
 
-*In the list, `built-in` marks a recognised dump and `detected` marks an executable found only by scanning. The 1st SE `ez2dj1.exe` is detected rather than a separate built-in profile and must not be treated as canonical cabinet behavior automatically.*
+*In the list, `built-in` marks a recognised dump and `detected` marks an executable found only by scanning. A detected entry is not automatically treated as the canonical cabinet executable.*
+
 
 프로파일에 기본 HDD 경로가 있으면 저장소 root에서 profile ID만으로 실행할 수 있다. 3rd 덤프를 `roms/ez2dj3rd`에 둔 경우 Windows에서는 다음 명령이 `ez2dj/EZ2DJ.EXE`를 선택하고 실행한다. 다른 위치의 HDD는 `--hdd`로 shortcut 경로를 덮어쓴다.
 

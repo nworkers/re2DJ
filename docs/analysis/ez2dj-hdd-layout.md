@@ -35,7 +35,6 @@
 ```text
 <root>/
 ├── ez2dj.exe          561,152 B  2000-01-01  보호됨 / protected
-├── ez2dj1.exe         524,288 B  1999-12-24  보호되지 않음 / not protected
 ├── Test.exe         1,859,633 B  1999-12-22  서비스·테스트 도구 / service tool
 ├── PlzPowerOff.exe     98,304 B  1999-03-30  종료 화면 / shutdown screen
 ├── Tdsd.vxd111         30,278 B  2000-01-19  Windows 9x VxD
@@ -102,6 +101,34 @@
 
 ---
 
+### 3.3 5th Trax 대표 실행 파일 / 5th Trax representative executable
+
+**확인됨 — 2026-09-15.** `roms/ez2dj5th/ez2dj/`에 5th의 디렉터리 배치가 있다. `EZ2DJ.exe`(1,388,544바이트), `EZ2DJ.INI`, `CACHE.REG`, `CACHE.TXT`, `FONTEN.DAT`, `FONTKR.DAT`, `BG`, `SOUND`, `SYSTEM`이며 `System.ini`는 없다. `EZ2DJ.exe`는 진입점이 `.protect`에 있는 보호된 빌드다. 구조 상세는 [실행 파일 구조 분석](ez2dj-exe-structures.md) 7절에 있다.
+
+*Confirmed — 2026-09-15. `roms/ez2dj5th/ez2dj/` holds a 5th directory layout: `EZ2DJ.exe` (1,388,544 bytes), `EZ2DJ.INI`, `CACHE.REG`, `CACHE.TXT`, `FONTEN.DAT`, `FONTKR.DAT`, `BG`, `SOUND` and `SYSTEM`, with no `System.ini`. `EZ2DJ.exe` is a protected build whose entry point lies in `.protect`. Structural detail is in section 7 of the [executable structures analysis](ez2dj-exe-structures.md).*
+
+**미확정 — 2026-09-15.** 이 디렉터리가 같은 위치의 `ez2dj5.chd`에서 나온 것인지는 확인되지 않았다. 현재 `Fat32Volume`이 5th 이미지의 파일시스템을 열지 못하므로 CHD 안의 대응 파일과 해시를 비교할 수 없다. 게스트 드라이브 문자와 부트 shell 경로도 `System.ini` 부재로 **미확정**이다.
+
+*Unresolved — 2026-09-15. Whether this directory came from the `ez2dj5.chd` beside it is not established: `Fat32Volume` cannot currently open the 5th image's filesystem, so the corresponding file inside the CHD cannot be hashed for comparison. The guest drive letter and boot-shell path are also **unresolved**, since there is no `System.ini`.*
+
+---
+
+### 3.4 6th Trax는 실행 파일이 셋이다 / 6th Trax has three executables
+
+**확인됨 — 2026-09-15.** 6th의 `EZ2DJ` 디렉터리에는 캐비닛이 실행하는 `EZ2DJ.EXE` bootstrap과 그것이 만드는 자식 `EZ2DJ6th.EXE`가 있고, 그 아래 `Ez2Dj1st/` 디렉터리에 동봉 1st Tracks 배치가 또 있다. 셋 다 보호 섹션이 없다. 따라서 6th 프로파일의 fingerprint와 실행 경로는 단일 실행 파일 전제로 만들 수 없다.
+
+*Confirmed — 2026-09-15. The 6th `EZ2DJ` directory holds the `EZ2DJ.EXE` bootstrap the cabinet runs and the `EZ2DJ6th.EXE` child it creates, and beneath it an `Ez2Dj1st/` directory carrying a complete bundled 1st Tracks layout. None of the three carries a protection section, so the 6th profile's fingerprint and execution path cannot assume a single executable.*
+
+**확인됨 — 2026-09-15.** `roms/ez2dj6th/extracted/EZ2DJ/`의 두 실행 파일은 `6th.chd` 안의 같은 이름 파일과 해시가 같다. 디렉터리 덤프와 CHD가 갈리는 3rd와 달리, 6th는 어느 입력을 써도 같은 빌드다. 다만 추출된 디렉터리에는 `Ez2Dj1st/`가 없으므로 그 배치는 CHD에서만 읽을 수 있다.
+
+*Confirmed — 2026-09-15. Both executables under `roms/ez2dj6th/extracted/EZ2DJ/` hash identically to their counterparts inside `6th.chd`. Unlike 3rd, whose directory dump and CHD diverge, 6th is the same build from either input. The extracted directory does not include `Ez2Dj1st/`, so that layout is readable only from the CHD.*
+
+**추정 — 2026-09-15.** `roms/ez2dj1st/ez2dj1/`의 `Test.exe`, `PlzPowerOff.exe`, `AllowIo.exe`, `PortTalk.sys`는 6th 동봉 배치의 같은 이름 파일과 해시가 같다. 게임 실행 파일만 다르다. 두 배치가 같은 계보에서 나왔을 가능성이 높지만, 실제 출처는 **미확정**이다.
+
+*Inferred — 2026-09-15. `Test.exe`, `PlzPowerOff.exe`, `AllowIo.exe` and `PortTalk.sys` under `roms/ez2dj1st/ez2dj1/` hash identically to the same-named files in the 6th's bundled layout; only the game executable differs. The two layouts most likely share a lineage, but the actual provenance is **unresolved**.*
+
+---
+
 ## 4. 확인됨: 실행 파일 PE 특성 / Confirmed: executable PE characteristics
 
 모든 실행 파일이 `PE32 / i386 / Windows GUI / ImageBase 0x00400000`이다.
@@ -110,18 +137,32 @@
 
 | 파일 | 진입점 RVA | 진입점이 놓인 섹션 | SizeOfImage | 보호 |
 | --- | --- | --- | --- | --- |
-| `ez2dj1.exe` (1st SE) | `0x0003a640` | `.text` | `0x01ad1000` | **없음** |
-| `ez2dj.exe` (1st SE) | `0x01ad23cf` | `.gtide` | `0x01ada000` | **있음** |
+| `Ez2DJ.exe` (1st Tracks) | `0x0199b240` | `.protect` | `0x019b6000` | **있음** |
+| `ez2dj.exe` (1st SE, 디렉터리) | `0x01ad23cf` | `.gtide` | `0x01ada000` | **있음** |
+| `Ez2DJ.exe` (1st SE, CHD) | `0x01ad1240` | `.protect` | `0x01aec000` | **있음** |
 | `EZ2DJ.exe` (2nd) | `0x00079550` | `.text` | `0x0047d000` | **미확정** |
 | `EZ2DJ.EXE` (3rd) | `0x00642240` | `.protect` | `0x0067c000` | **있음** |
-| `Test.exe` (1st SE) | `0x0001ada0` | `.text` | — | 없음 |
-| `PlzPowerOff.exe` (1st SE) | `0x00001e6e` | `.text` | — | 없음 |
+| `EZ2DJ.exe` (4th, CHD) | `0x006e0240` | `.protect` | `0x0071a000` | **있음** |
+| `EZ2DJ.exe` (5th) | `0x0070d240` | `.protect` | `0x00746000` | **있음** |
+| `EZ2DJ.EXE` (6th bootstrap) | `0x000153ff` | `.text` | `0x00021000` | 없음 |
+| `EZ2DJ6th.EXE` (6th 게임 본체) | `0x000667d4` | `.text` | `0x00e34000` | 없음 |
+| `Ez2DJ.exe` (6th 동봉 1st, CHD) | `0x00036f30` | `.text` | `0x01914000` | 없음 |
+| `EZ2Dancer.exe` (`ez2d2m`) | `0x00401240` | `.protect` | `0x0043b000` | **있음** |
+| `Test.exe` (1st SE) | `0x0001ada0` | `.text` | `0x001de000` | 없음 |
+| `Test.exe` (1st Tracks) | `0x0000fa6c` | `.text` | `0x00056000` | 없음 |
+| `PlzPowerOff.exe` (1st SE·1st Tracks) | `0x00001e6e` | `.text` | `0x0001b000` | 없음 |
+| `AllowIo.exe` | `0x000021a0` | `.text` | `0x0000c000` | 없음 |
+| `PortTalk.sys` | `0x00000328` | `INIT` | `0x00000c60` | 없음 |
 
-### 확인됨: ez2dj1.exe는 선호 주소에 고정되어 있다
+`AllowIo.exe`는 image base가 `0x01000000`, `PortTalk.sys`는 `0x00010000`으로 다른 항목과 다르다. 나머지는 모두 `0x00400000`이다. 파일 해시는 [실행 파일 구조 분석](ez2dj-exe-structures.md)의 공통 특성 절에 있다.
 
-`ez2dj1.exe`에는 이름이 `.reloc`인 섹션이 있지만 optional header의 base relocation data directory는 `{RVA 0, Size 0}`이다. Stage 2 로더로 선호 주소 `0x00400000` 적재는 성공하고 다른 주소 적재는 재배치 정보 부재로 거부된다. 따라서 이 bring-up 빌드는 현재 확인된 형태 그대로라면 선호 주소에 고정해서 적재해야 한다.
+*`AllowIo.exe` is based at `0x01000000` and `PortTalk.sys` at `0x00010000`; every other entry is at `0x00400000`. File hashes live in the common-traits section of the [executable structures analysis](ez2dj-exe-structures.md).*
 
-*Confirmed: `ez2dj1.exe` has a section named `.reloc`, but its optional-header base-relocation data directory is `{RVA 0, Size 0}`. The Stage 2 loader maps it successfully at preferred base `0x00400000` and rejects a different base because no relocation records are advertised. This bring-up build must therefore be loaded at its preferred base in the form inspected.*
+### 확인됨: 1st SE 정식 빌드는 선호 주소에 고정되어 있다 / Confirmed: the 1st SE canonical build is fixed to its preferred base
+
+**확인됨 — 2026-09-14.** `ez2dj.exe`에는 이름이 `.reloc`인 섹션이 있지만 optional header의 base relocation data directory는 `{RVA 0, Size 0}`이다. 재배치 레코드가 광고되지 않으므로 이 이미지는 선호 주소 `0x00400000`에만 적재할 수 있다. 반면 3rd와 4th는 base relocation directory가 `.protect` 안에 실제로 존재한다.
+
+*Confirmed — 2026-09-14. `ez2dj.exe` has a section named `.reloc`, but its optional-header base-relocation data directory is `{RVA 0, Size 0}`. No relocation records are advertised, so the image can only load at its preferred base `0x00400000`. 3rd and 4th, by contrast, do carry a real base-relocation directory inside `.protect`.*
 
 ### 확인됨: ez2dj.exe와 EZ2DJ.EXE는 보호되어 있다
 
@@ -251,27 +292,6 @@
 
 *Inferred — 2026-08-24. Public HASP4 HaspCode takes a seed and returns four 16-bit codes, matching the first LPTDI IOCTL's four-to-eight-byte shape. However, Aladdin driver material and an independent compatibility study describe classic HASP as `\\.\HASP` with a 28-byte packet family, not LPTDI's 4/24→8/104 interface. External identification of EZ2DJ's parallel dongle as HASP is a strong direction, but current binary evidence does not confirm the vendor protocol.*
 
-### 확인됨: ez2dj1.exe는 같은 프로그램의 보호되지 않은 빌드다
-
-두 파일의 섹션 배치가 앞부분에서 정확히 일치한다.
-
-| 섹션 | ez2dj1.exe | ez2dj.exe |
-| --- | --- | --- |
-| `.text` | va `0x00001000` vs `0x00052540` | 동일 |
-| `.rdata` | va `0x00054000` vs `0x00007571` | 동일 |
-| `.data` | va `0x0005c000` vs `0x01a5d2f8` | 동일 |
-| `.idata` | va `0x01aba000` vs `0x00000fa4` | 동일 |
-| `.reloc` | va `0x01abb000` vs `0x00015094` | 동일 |
-
-import 목록도 사실상 같다(아래 4절). `ez2dj.exe`는 이 이미지에 보호 계층을 씌운 것이다.
-
-*The two share their first five sections byte-for-byte in layout and share essentially the same import list, so `ez2dj.exe` is this image with a protection layer wrapped around it.*
-
-> [!IMPORTANT]
-> **`ez2dj1.exe`가 Stage 2·3의 첫 실행 대상이다.** 보호되지 않았으므로 로더가 언패킹 스텁을 실행하지 않고도 진짜 게임 코드에 도달한다. 보호된 빌드는 자기 수정 코드를 실행할 수 있어야 하므로 인터프리터 backend가 성숙한 뒤로 미룬다.
->
-> ***`ez2dj1.exe` is the bring-up target for Stages 2 and 3.** Being unprotected, the loader reaches real game code without executing an unpacking stub. The protected builds need an execution backend that tolerates self-modifying code, so they wait until the interpreter is mature.*
-
 ### 추정: `.data`의 거대한 가상 크기
 
 `.data`는 RawSize `0x0000d000`(52 KB)인데 VirtualSize가 `0x01a5d2f8`(약 27 MB)이다. 27 MB는 파일에서 오는 것이 아니라 0으로 채워지는 영역이다. 게임 자산을 담을 정적 버퍼로 추정한다. 근거는 크기와 `.data`라는 위치뿐이며, 실제 용도는 실행해 봐야 확인된다.
@@ -296,9 +316,9 @@ Windows 9x는 `[boot]`의 `shell=` 항목이 가리키는 프로그램을 Explor
 
 드라이브 문자와 작업 디렉터리는 이 문서와 `docs/EXE_DESIGN.*`에서 미확정으로 남아 있던 항목이다.
 
-**`ez2dj1.exe`는 캐비닛이 실행한 것이 아니다.** 보호되지 않아 로더 개발에 유용할 뿐이므로, 그것으로 관찰한 동작을 원본 동작으로 인용하면 안 된다. 이 구분은 타깃 프로파일에 `bring_up_target` 플래그로 기록되어 있다.
+이 구분은 타깃 프로파일에 기록되어 있으며, 정식 실행 파일이 아닌 항목은 built-in 프로파일이 아니라 일반 detected 항목으로만 표시된다.
 
-*Confirmed: the cabinet runs `ez2dj.exe`. The `[boot]` section of `System.ini` reads `shell=d:\ez2dj\ez2dj.exe`, and Windows 9x launches whatever `shell=` names in place of Explorer, so that single line defines the cabinet's post-boot entry point and fixes the canonical executable, the guest drive letter `D:`, and the guest directory `\ez2dj` at once. The latter two had been unresolved. **`ez2dj1.exe` is not what the cabinet ran** — it is merely unprotected and therefore useful for loader development, so behavior observed through it must not be cited as original behavior. That distinction is recorded on the target profile as a `bring_up_target` flag.*
+*Confirmed: the cabinet runs `ez2dj.exe`. The `[boot]` section of `System.ini` reads `shell=d:\ez2dj\ez2dj.exe`, and Windows 9x launches whatever `shell=` names in place of Explorer, so that single line defines the cabinet's post-boot entry point and fixes the canonical executable, the guest drive letter `D:`, and the guest directory `\ez2dj` at once. The latter two had been unresolved. The distinction is recorded on the target profiles: anything that is not the canonical executable appears only as a normal detected entry rather than a built-in profile.*
 
 ### 확인됨: 3rd는 I/O 카드를 쓴다
 
@@ -312,13 +332,19 @@ Windows 9x는 `[boot]`의 `shell=` 항목이 가리키는 프로그램을 Explor
 
 *Unresolved: the 3rd dump has no `System.ini`, so its guest drive letter and working directory are not confirmed. The 1st SE values are not copied across.*
 
-### 미확정: Tdsd.vxd111
+### 부분 확인: Tdsd.vxd111 / Partially confirmed: Tdsd.vxd111
 
-`Tdsd.vxd111` 파일이 1st SE 덤프에 있다. VxD는 Windows 9x 전용 커널 드라이버이므로 아케이드 I/O 보드 접근 경로일 가능성이 있다. 다만 `ez2dj1.exe`의 import에는 `DeviceIoControl`이 없고, 파일 이름의 `111` 확장자는 이 덤프에서 드라이버가 **비활성화되어 있음**을 시사한다.
+`Tdsd.vxd111` 파일이 1st SE 덤프에 있다. VxD는 Windows 9x 전용 커널 드라이버이므로 아케이드 I/O 보드 접근 경로일 가능성이 있다. 파일 이름의 `111` 확장자는 이 덤프에서 드라이버가 **비활성화되어 있음**을 시사한다.
 
-**확인 방법:** 실행 중 `CreateFileA`가 요청하는 경로를 추적한다. `\\.\`로 시작하는 이름이 나오면 드라이버 경로다.
+**확인됨 — 2026-09-14.** 정식 `ez2dj.exe`는 `DeviceIoControl`을 import한다. 다만 그 import는 원본 `.idata`가 아니라 보호 계층이 더한 `.gidata` 전용 항목이며([import 표면 분석](ez2dj-import-surface.md) 9절), 보호 계층의 `.gdata`에 `\.\TDSD.VXD` 문자열이 있다. 즉 이 VxD를 여는 주체는 게임 본체가 아니라 보호 계층이다.
 
-*Unresolved: `Tdsd.vxd111` is a Windows 9x kernel driver and could be the arcade I/O path, but `ez2dj1.exe` imports no `DeviceIoControl` and the `111` suffix suggests the driver is disabled in this dump. Confirm by tracing the paths `CreateFileA` asks for during a run; a name starting with `\\.\` is a driver path.*
+**미확정.** 이 덤프에서 드라이버가 비활성화된 상태로 보호 계층이 어떤 경로를 택하는지. 확인 방법은 실행 중 `CreateFileA`가 요청하는 경로를 추적하는 것이다. `\.\`로 시작하는 이름이 나오면 드라이버 경로다. 런타임에 실제로 관찰된 것은 `\.\LPTDI1`이다.
+
+*`Tdsd.vxd111` sits in the 1st SE dump. A VxD is a Windows 9x kernel driver and could be the arcade I/O path, and the `111` suffix suggests the driver is disabled in this dump.*
+
+*Confirmed — 2026-09-14. The canonical `ez2dj.exe` does import `DeviceIoControl`, but only as a `.gidata` entry added by the protection layer rather than one in the original `.idata` (see section 9 of the [import surface analysis](ez2dj-import-surface.md)), and the protection layer's `.gdata` carries the string `\.\TDSD.VXD`. Whatever opens this VxD is therefore the protection layer, not the game body.*
+
+*Unresolved: which path the protection layer takes while the driver is disabled in this dump. Confirm by tracing the paths `CreateFileA` asks for during a run; a name starting with `\.\` is a driver path. The path actually observed at runtime is `\.\LPTDI1`.*
 
 ---
 
@@ -336,7 +362,7 @@ Windows 9x는 `[boot]`의 `shell=` 항목이 가리키는 프로그램을 Explor
 
 *Confirmed — 2026-08-25, Task 61. In two final runs with `DirectDrawCreate` replaced by the Windows x86 COM facade, all five DirectDraw, Direct3D, surface, device, and graphics-state stages return zero. Markers become 0x4000 and 0x400, and every DirectDraw4, Direct3D3, primary/back-surface, Direct3DDevice3, and viewport global is populated. The AV at 0x00422f39 no longer occurs. Both runs first fail afterward with privileged-instruction exception 0xc0000096 at original `0x00438987: in al,dx`, reading port 0x103. The caller would then read ports 0x104 and 0x105, but execution stops on the first read. Device meaning and returned-bit semantics remain unresolved.*
 
-## 4. import 목록 / Import list
+## 5. import 목록 / Import list
 
 별도 문서로 분리했다: [EZ2DJ import 표면](ez2dj-import-surface.md)
 
@@ -344,7 +370,7 @@ Windows 9x는 `[boot]`의 `shell=` 항목이 가리키는 프로그램을 Explor
 
 ---
 
-## 5. 도구의 결함 / Defects in the tooling
+## 6. 도구의 결함 / Defects in the tooling
 
 **해결됨 — 기본 타깃 선택.** `re2dj --hdd <1st SE dump>`가 기본 타깃으로 `Test.exe`를 골랐다. 후보 순위가 파일 크기 내림차순이라 서비스 도구(1.86 MB)가 게임(561 KB)보다 먼저 왔기 때문이다.
 
