@@ -42,6 +42,9 @@ struct BootstrapChildHandoffOptions
     bool message_box = false;
     bool hle_d3d3 = false;
     bool graphics_draw_diagnostics = false;
+    // Present synchronization policy for the child: 0 vertical sync,
+    // 1 immediate, 2 adaptive. Zero is the runtime's own default.
+    unsigned long present_sync = 0;
     bool fullscreen = false;
     bool hle_directsound = false;
     bool hle_io_ports = false;

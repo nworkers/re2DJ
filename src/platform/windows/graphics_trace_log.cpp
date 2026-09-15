@@ -19,6 +19,13 @@ extern "C" __declspec(dllexport) char g_re2dj_graphics_trace_path[MAX_PATH] = {}
 // path, and it keeps this exact name for the same reason as the path above.
 extern "C" __declspec(dllexport) unsigned long g_re2dj_graphics_draw_diagnostics = 0;
 
+// The launcher resolves this export by name and writes the present
+// synchronization policy into it: 0 vertical sync, 1 immediate, 2 adaptive.
+// Zero is both the default and the behavior the product had before the policy
+// became explicit, so a launcher that never writes it changes nothing. It
+// keeps this exact name because the launcher looks it up by name.
+extern "C" __declspec(dllexport) unsigned long g_re2dj_present_sync = 0;
+
 namespace re2dj::platform::windows
 {
 namespace
@@ -117,6 +124,22 @@ bool AreCompleteDiagnosticsEnabled()
     // correlated VFS trace uses the same request so later file reads cannot
     // disappear while the draw trace remains enabled.
     return AreGraphicsDrawDiagnosticsEnabled();
+}
+
+re2dj::graphics::PresentSync SelectedPresentSync()
+{
+    switch (g_re2dj_present_sync)
+    {
+    case 1:
+        return re2dj::graphics::PresentSync::kImmediate;
+    case 2:
+        return re2dj::graphics::PresentSync::kAdaptive;
+    default:
+        // An unrecognized word is treated as the default rather than rejected:
+        // the word is written by another process into this one, so the safe
+        // reading of a value this build does not know is the old behavior.
+        return re2dj::graphics::PresentSync::kVerticalSync;
+    }
 }
 
 void ReportUnimplementedGraphicsCall(const char* interface_name,

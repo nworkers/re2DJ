@@ -23,10 +23,14 @@
 #include "re2dj/graphics/legacy_texture.h"
 #include "re2dj/graphics/legacy_transform.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
+#include "re2dj/graphics/present_interval_histogram.h"
+
+#include "guest_wait_accounting.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 #include "directdraw_legacy_interop.h"
 #include "graphics_trace_log.h"
 #include "host_window_shell.h"
+#include "timer_resolution_probe.h"
 #include "window_mode.h"
 
 namespace
@@ -481,8 +485,133 @@ struct RootFacade
     LARGE_INTEGER fps_frequency = {};
     LARGE_INTEGER fps_interval_start = {};
     std::uint32_t fps_interval_frames = 0;
+    // Spacing between presents, so a run records the shape of the guest's
+    // pacing and not only its one-second average. Kept here rather than in
+    // SurfaceFlip because 3rd presents through Blt and never calls Flip.
+    re2dj::graphics::PresentIntervalHistogram present_intervals;
+    // Time spent inside the backend's Present. Read against the interval
+    // above, this says how much of a guest's frame period the HLE itself
+    // occupies, which an interval alone cannot separate from guest work.
+    re2dj::graphics::PresentIntervalHistogram present_costs;
+    LARGE_INTEGER present_previous_counter = {};
+    std::uint32_t present_interval_summaries = 0;
     re2dj::graphics::Sdl3OpenGlBackend* render_backend = nullptr;
 };
+
+// Calls the backend's Present and records how long it took. Every present site
+// goes through here so the cost series covers Flip and both Blt paths.
+bool PresentAndRecordCost(RootFacade* root, std::string* error)
+{
+    LARGE_INTEGER started = {};
+    const bool timed = root->fps_frequency.QuadPart > 0 &&
+                       QueryPerformanceCounter(&started) != FALSE;
+    const bool presented = root->render_backend->Present(error);
+    LARGE_INTEGER finished = {};
+    if (timed && QueryPerformanceCounter(&finished) != FALSE)
+    {
+        root->present_costs.Add(1000.0 *
+                                static_cast<double>(finished.QuadPart - started.QuadPart) /
+                                static_cast<double>(root->fps_frequency.QuadPart));
+    }
+    return presented;
+}
+
+// One line per closed FPS window. Formatting happens here rather than on the
+// present path, which only increments a bucket.
+void ReportPresentIntervalSummary(RootFacade* root)
+{
+    constexpr std::uint32_t kMaximumPresentIntervalSummaries = 120;
+    if (root->present_intervals.samples() == 0)
+    {
+        return;
+    }
+    if (!re2dj::platform::windows::AreCompleteDiagnosticsEnabled() &&
+        root->present_interval_summaries >= kMaximumPresentIntervalSummaries)
+    {
+        root->present_intervals.Reset();
+        return;
+    }
+    ++root->present_interval_summaries;
+    const auto summary = root->present_intervals.Summarize();
+    char buckets[160] = {};
+    int written = 0;
+    for (const auto& bucket : summary.top_buckets)
+    {
+        if (bucket.count == 0)
+        {
+            break;
+        }
+        const int added = std::snprintf(buckets + written,
+                                        sizeof(buckets) - static_cast<std::size_t>(written),
+                                        "%s%.2f=%u",
+                                        written == 0 ? "" : ",",
+                                        bucket.lower_milliseconds,
+                                        bucket.count);
+        if (added <= 0 || static_cast<std::size_t>(written + added) >= sizeof(buckets))
+        {
+            break;
+        }
+        written += added;
+    }
+    const auto cost = root->present_costs.Summarize();
+    re2dj::platform::windows::WriteGraphicsTraceFormat(
+        "re2dj:hle:present-interval:frames=%u:mean=%.2f:min=%.2f:p50=%.2f:p95=%.2f:max=%.2f"
+        ":top=%s:cost_mean=%.2f:cost_p50=%.2f:cost_p95=%.2f:cost_max=%.2f",
+        summary.samples,
+        summary.mean_milliseconds,
+        summary.minimum_milliseconds,
+        summary.median_milliseconds,
+        summary.percentile95_milliseconds,
+        summary.maximum_milliseconds,
+        buckets,
+        cost.mean_milliseconds,
+        cost.median_milliseconds,
+        cost.percentile95_milliseconds,
+        cost.maximum_milliseconds);
+    root->present_intervals.Reset();
+    root->present_costs.Reset();
+
+    // Reported in the same window as the intervals above, so the wait time is
+    // attributable to the frames it was measured across. Stays silent when the
+    // wrappers were never patched in, rather than printing zeroes that would
+    // read as "the guest does not wait".
+    re2dj::platform::windows::GuestWaitSummary waits;
+    if (re2dj::platform::windows::TakeGuestWaitSummary(&waits))
+    {
+        re2dj::platform::windows::WriteGraphicsTraceFormat(
+            "re2dj:hle:guest-wait:sleep_calls=%u:sleep_ms=%.2f:sleep_requested_ms=%.2f"
+            ":sleep_p50=%.2f:sleep_max=%.2f:wait_calls=%u:wait_ms=%.2f:wait_p50=%.2f"
+            ":wait_max=%.2f:time_calls=%u",
+            waits.sleep_calls,
+            waits.sleep_milliseconds,
+            waits.requested_sleep_milliseconds,
+            waits.sleep_durations.median_milliseconds,
+            waits.sleep_durations.maximum_milliseconds,
+            waits.wait_calls,
+            waits.wait_milliseconds,
+            waits.wait_durations.median_milliseconds,
+            waits.wait_durations.maximum_milliseconds,
+            waits.time_query_calls);
+    }
+
+    re2dj::platform::windows::GuestSleepModelSummary model;
+    if (re2dj::platform::windows::TakeGuestSleepModelSummary(&model))
+    {
+        re2dj::platform::windows::WriteGraphicsTraceFormat(
+            "re2dj:hle:guest-sleep-model:pairs=%u:req_mean=%.2f:req_sd=%.2f:awake_mean=%.2f"
+            ":awake_sd=%.2f:period_mean=%.2f:period_sd=%.2f:corr=%.3f",
+            model.pairs,
+            model.requested_mean_milliseconds,
+            model.requested_deviation_milliseconds,
+            model.awake_mean_milliseconds,
+            model.awake_deviation_milliseconds,
+            model.period_mean_milliseconds,
+            model.period_deviation_milliseconds,
+            model.correlation);
+    }
+
+    re2dj::platform::windows::NoteTimerResolution("frame-window");
+}
 
 void RecordPresentedFrame(RootFacade* root)
 {
@@ -501,6 +630,16 @@ void RecordPresentedFrame(RootFacade* root)
         root->fps_interval_start = now;
     }
     ++root->fps_interval_frames;
+    // The first present of a run has no predecessor, so it starts the series
+    // instead of contributing a meaningless interval from zero.
+    if (root->present_previous_counter.QuadPart != 0)
+    {
+        root->present_intervals.Add(
+            1000.0 *
+            static_cast<double>(now.QuadPart - root->present_previous_counter.QuadPart) /
+            static_cast<double>(root->fps_frequency.QuadPart));
+    }
+    root->present_previous_counter = now;
     const LONGLONG elapsed_ticks = now.QuadPart - root->fps_interval_start.QuadPart;
     if (elapsed_ticks < root->fps_frequency.QuadPart)
     {
@@ -510,6 +649,7 @@ void RecordPresentedFrame(RootFacade* root)
                        static_cast<double>(root->fps_frequency.QuadPart) /
                        static_cast<double>(elapsed_ticks);
     Re2djUpdateWindowTitle(root->window, fps);
+    ReportPresentIntervalSummary(root);
     root->fps_interval_start = now;
     root->fps_interval_frames = 0;
 }
@@ -2589,7 +2729,7 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
             if (surface->root->render_backend != nullptr)
             {
                 std::string error;
-                const bool presented = surface->root->render_backend->Present(&error);
+                const bool presented = PresentAndRecordCost(surface->root, &error);
                 Re2djExitIfWindowClosed(surface->root->window);
                 if (!presented)
                 {
@@ -2707,7 +2847,7 @@ HRESULT WINAPI SurfaceBltFast(IDirectDrawSurface4* self,
         if (destination_surface->root->render_backend != nullptr)
         {
             std::string error;
-            const bool presented = destination_surface->root->render_backend->Present(&error);
+            const bool presented = PresentAndRecordCost(destination_surface->root, &error);
             Re2djExitIfWindowClosed(destination_surface->root->window);
             if (!presented)
             {
@@ -2796,7 +2936,7 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
     if (surface->root->render_backend != nullptr)
     {
         std::string error;
-        const bool presented = surface->root->render_backend->Present(&error);
+        const bool presented = PresentAndRecordCost(surface->root, &error);
         Re2djExitIfWindowClosed(surface->root->window);
         if (!presented)
         {
@@ -3663,6 +3803,10 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     if (root->render_backend == nullptr)
     {
+        // Sampled on both sides of backend creation because that is where SDL
+        // initializes, which makes it the first suspect for raising the
+        // resolution the guest depends on without asking for it.
+        re2dj::platform::windows::NoteTimerResolution("pre-backend");
         auto* const backend = new (std::nothrow) re2dj::graphics::Sdl3OpenGlBackend;
         const re2dj::graphics::Sdl3OpenGlWindowConfig window_config = {
             root->window,
@@ -3670,7 +3814,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
             root->height,
             "re2DJ",
             re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled(),
-            root->presentation_retains_frames};
+            root->presentation_retains_frames,
+            re2dj::platform::windows::SelectedPresentSync()};
         const bool input_suspended = SuspendRe2djGuestWindowInput(root->window);
         const bool backend_initialized =
             input_suspended && backend != nullptr && backend->Initialize(window_config, &error);
@@ -3691,6 +3836,14 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
             return DDERR_GENERIC;
         }
         root->render_backend = backend;
+        // The driver can refuse the requested interval, so the record is the
+        // value that actually applied. This is the only place the present
+        // policy becomes observable in a detached product run.
+        re2dj::platform::windows::WriteGraphicsTraceFormat(
+            "re2dj:hle:present-sync:requested=%u:applied_interval=%d",
+            static_cast<unsigned>(window_config.present_sync),
+            backend->applied_swap_interval());
+        re2dj::platform::windows::NoteTimerResolution("post-backend");
     }
     if (root->pending_render_target_clear)
     {

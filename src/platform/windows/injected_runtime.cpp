@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include <windows.h>
+#include <mmsystem.h>
 
 #include <algorithm>
 #include <cctype>
@@ -22,6 +23,8 @@
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/storage/guest_path.h"
 #include "direct3d3_com_facade.h"
+#include "guest_wait_accounting.h"
+#include "timer_resolution_probe.h"
 #include "directdraw7_com_facade.h"
 #include "display_mode_boundary.h"
 #include "ez2dancer_keyboard_input.h"
@@ -2479,6 +2482,82 @@ void ReportVfsGetFullPathName(const char* requested,
 // changes: the wrapper exists because this executable resolves ExitProcess
 // through GetProcAddress, so the launcher's static IAT breakpoint never sees
 // the call.
+// Wait accounting wrappers. Each brackets the original call with one
+// performance-counter pair and forwards it unchanged, so the guest's behavior
+// is identical with and without them. They exist to attribute frame time that
+// a frame interval alone cannot: an interval says how long a frame took, not
+// whether the guest spent it computing or blocked.
+//
+// The launcher patches these slots only when its wait-trace option is passed,
+// so the product path never reaches them.
+// Set by the launcher when its wait-trace option is passed, so the dynamic
+// resolver hands out the accounting wrappers only for that investigation. A
+// protected build can resolve these through GetProcAddress instead of its
+// import table, in which case the static slot patch never sees the call.
+extern "C" __declspec(dllexport) unsigned long g_re2dj_guest_wait_trace = 0;
+
+// When the previous sleep returned, so the wrapper can also measure what the
+// guest did between sleeps. A guest that sleeps once per frame has its whole
+// non-sleeping frame segment in that gap, and pairing it with the request is
+// what separates a fixed-constant sleep from a target-minus-elapsed limiter.
+//
+// Written and read only from the sleeping thread. If the guest ever sleeps on
+// two threads the gap stops being one thread's frame, which the pair count
+// against the frame count in the same window would show.
+volatile LONG64 g_previous_sleep_finished = 0;
+
+extern "C" __declspec(dllexport) void WINAPI Re2djWaitSleep(DWORD milliseconds)
+{
+    LARGE_INTEGER frequency = {};
+    LARGE_INTEGER started = {};
+    const bool timed = QueryPerformanceFrequency(&frequency) != FALSE &&
+                       frequency.QuadPart > 0 && QueryPerformanceCounter(&started) != FALSE;
+    const LONG64 previous_finished = g_previous_sleep_finished;
+    Sleep(milliseconds);
+    LARGE_INTEGER finished = {};
+    if (timed && QueryPerformanceCounter(&finished) != FALSE)
+    {
+        const double scale = 1000.0 / static_cast<double>(frequency.QuadPart);
+        // Negative for the first sleep of a run, which has no predecessor and
+        // so contributes no pair.
+        const double awake_milliseconds =
+            previous_finished == 0
+                ? -1.0
+                : static_cast<double>(started.QuadPart - previous_finished) * scale;
+        re2dj::platform::windows::RecordGuestSleep(
+            static_cast<double>(finished.QuadPart - started.QuadPart) * scale,
+            static_cast<unsigned>(milliseconds),
+            awake_milliseconds);
+        g_previous_sleep_finished = finished.QuadPart;
+    }
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djWaitForSingleObject(HANDLE handle,
+                                                                      DWORD milliseconds)
+{
+    LARGE_INTEGER frequency = {};
+    LARGE_INTEGER started = {};
+    const bool timed = QueryPerformanceFrequency(&frequency) != FALSE &&
+                       frequency.QuadPart > 0 && QueryPerformanceCounter(&started) != FALSE;
+    const DWORD result = WaitForSingleObject(handle, milliseconds);
+    LARGE_INTEGER finished = {};
+    if (timed && QueryPerformanceCounter(&finished) != FALSE)
+    {
+        re2dj::platform::windows::RecordGuestWait(
+            1000.0 * static_cast<double>(finished.QuadPart - started.QuadPart) /
+            static_cast<double>(frequency.QuadPart));
+    }
+    return result;
+}
+
+// Counted, not timed: reading a clock is not a wait. The call rate is what
+// distinguishes a polling loop from a one-read-per-frame limiter.
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djWaitTimeGetTime()
+{
+    re2dj::platform::windows::RecordGuestTimeQuery();
+    return timeGetTime();
+}
+
 extern "C" __declspec(dllexport) void WINAPI Re2djHleExitProcess(UINT code)
 {
     InterlockedExchange(&g_exit_wrapper_fired, 1);
@@ -3664,6 +3743,30 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
                 name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
             return result;
         }
+        if (g_re2dj_guest_wait_trace != 0)
+        {
+            if (_stricmp(name, "Sleep") == 0)
+            {
+                const FARPROC result = reinterpret_cast<FARPROC>(&Re2djWaitSleep);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "WaitForSingleObject") == 0)
+            {
+                const FARPROC result = reinterpret_cast<FARPROC>(&Re2djWaitForSingleObject);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "timeGetTime") == 0)
+            {
+                const FARPROC result = reinterpret_cast<FARPROC>(&Re2djWaitTimeGetTime);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+        }
         if (g_re2dj_vfs_dynamic_resolver != 0)
         {
             if (_stricmp(name, "CreateFileA") == 0)
@@ -3976,6 +4079,12 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(module);
+        // The earliest point in this process that any of our code runs, which
+        // is what makes it the baseline: a resolution already raised here was
+        // not raised by anything we load. The sample is held rather than
+        // written, since the launcher has not yet armed the trace switch and
+        // the loader lock is no place to open a file.
+        re2dj::platform::windows::NoteTimerResolution("process-attach");
         if (AddVectoredExceptionHandler(1, HandleLegacyIoPortException) == nullptr)
         {
             return FALSE;

@@ -22,6 +22,7 @@
 #include "re2dj/hdd/hdd_scan.h"
 #include "re2dj/storage/guest_path.h"
 #include "re2dj/storage/fat32_chd.h"
+#include "re2dj/graphics/present_sync.h"
 #include "re2dj/target/target_profile.h"
 #include "re2dj/version.h"
 
@@ -53,8 +54,11 @@ struct Options
     bool audio_gain_explicit = false;
     bool demo_volume_explicit = false;
     bool fullscreen_explicit = false;
+    bool present_sync_explicit = false;
     bool audio_volume_trace = false;
+    bool guest_wait_trace = false;
     bool fullscreen = false;
+    re2dj::graphics::PresentSync present_sync = re2dj::graphics::PresentSync::kVerticalSync;
     bool list_targets = false;
     bool run = false;
     bool positional_target = false;
@@ -238,10 +242,17 @@ void PrintUsage()
         "                      Windows output gain (-24..+18, default 0).\n"
         "  --demo-volume <0..3>\n"
         "                      Windows title/demo profile (default 3 = 0 dB).\n"
+        "  --guest-wait-trace  Account the guest's Sleep, WaitForSingleObject, and\n"
+        "                      timeGetTime calls per frame window (diagnostic).\n"
         "  --audio-volume-trace\n"
         "                      Record bounded DirectSound/WINMM volume evidence.\n"
         "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
         "  --windowed          Override a profile's fullscreen default on Windows.\n"
+        "  --vsync <on|off|adaptive>\n"
+        "                      When a present returns. 'on' waits for the display's\n"
+        "                      refresh (default), 'off' never waits and allows\n"
+        "                      tearing, 'adaptive' waits only for frames that met\n"
+        "                      the deadline. A driver may refuse 'adaptive'.\n"
         "  --io-config <path>  Windows keyboard I/O mapping INI for the selected target.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
@@ -355,6 +366,10 @@ bool ParseOptions(int argc, char** argv, Options* options)
             }
             options->demo_volume_explicit = true;
         }
+        else if (argument == "--guest-wait-trace")
+        {
+            options->guest_wait_trace = true;
+        }
         else if (argument == "--fullscreen")
         {
             options->fullscreen = true;
@@ -364,6 +379,32 @@ bool ParseOptions(int argc, char** argv, Options* options)
         {
             options->fullscreen = false;
             options->fullscreen_explicit = true;
+        }
+        else if (argument == "--vsync")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            if (value == "on")
+            {
+                options->present_sync = re2dj::graphics::PresentSync::kVerticalSync;
+            }
+            else if (value == "off")
+            {
+                options->present_sync = re2dj::graphics::PresentSync::kImmediate;
+            }
+            else if (value == "adaptive")
+            {
+                options->present_sync = re2dj::graphics::PresentSync::kAdaptive;
+            }
+            else
+            {
+                std::fprintf(stderr, "error: --vsync must be on, off or adaptive\n");
+                return false;
+            }
+            options->present_sync_explicit = true;
         }
         else if (argument == "--io-config")
         {
@@ -603,6 +644,14 @@ int RunChdTarget(const Options& options,
     {
         run_options.profile_defaults.fullscreen = options.fullscreen;
     }
+    if (options.present_sync_explicit)
+    {
+        run_options.profile_defaults.present_sync = options.present_sync;
+    }
+    if (options.guest_wait_trace)
+    {
+        run_options.profile_defaults.guest_wait_trace = true;
+    }
     run_options.audio_volume_trace = options.audio_volume_trace;
     run_options.io_config = NormalizeIoConfigForProfile(
         options.io_config, run_options.profile_defaults, profile.id);
@@ -641,7 +690,8 @@ int main(int argc, char** argv)
     }
 #if !defined(_WIN32)
     if (options.audio_gain_explicit || options.demo_volume_explicit ||
-        options.audio_volume_trace || options.fullscreen_explicit ||
+        options.audio_volume_trace || options.guest_wait_trace || options.fullscreen_explicit ||
+        options.present_sync_explicit ||
         !options.io_config.empty())
     {
         std::fprintf(stderr, "error: selected execution options are currently supported only on Windows\n");
@@ -924,6 +974,14 @@ int main(int argc, char** argv)
     if (options.fullscreen_explicit)
     {
         run_options.profile_defaults.fullscreen = options.fullscreen;
+    }
+    if (options.present_sync_explicit)
+    {
+        run_options.profile_defaults.present_sync = options.present_sync;
+    }
+    if (options.guest_wait_trace)
+    {
+        run_options.profile_defaults.guest_wait_trace = true;
     }
     run_options.audio_volume_trace = options.audio_volume_trace;
     run_options.io_config = NormalizeIoConfigForProfile(

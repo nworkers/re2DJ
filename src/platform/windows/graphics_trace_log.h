@@ -1,5 +1,7 @@
 #pragma once
 
+#include "re2dj/graphics/present_sync.h"
+
 namespace re2dj::platform::windows
 {
 
@@ -48,5 +50,11 @@ bool AreGraphicsDrawDiagnosticsEnabled();
 // Whether an explicit investigation requested complete diagnostic capture.
 // Complete capture bypasses the bounded records used by the product path.
 bool AreCompleteDiagnosticsEnabled();
+
+// The present synchronization policy the launcher selected, read out of the
+// exported g_re2dj_present_sync word. An unwritten or unrecognized word means
+// vertical sync, which is the behavior the product had before the policy
+// became explicit, so a launcher that never writes it changes nothing.
+re2dj::graphics::PresentSync SelectedPresentSync();
 
 }  // namespace re2dj::platform::windows

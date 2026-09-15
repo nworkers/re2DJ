@@ -633,6 +633,12 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                     result->runtime_base + rva,
                                     TRUE,
                                     error))) &&
+                   (options.present_sync == 0 ||
+                    (find_export("g_re2dj_present_sync", &rva) &&
+                     WriteRemoteU32(result->process,
+                                    result->runtime_base + rva,
+                                    static_cast<DWORD>(options.present_sync),
+                                    error))) &&
                    patch_iat("DDRAW.dll",
                              "DirectDrawCreate",
                              "_Re2djHleDirectDrawCreate@12") &&

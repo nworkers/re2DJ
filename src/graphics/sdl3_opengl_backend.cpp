@@ -169,6 +169,9 @@ struct Sdl3OpenGlBackend::Impl
     // part of the screen then alternates between two diverging images, which
     // reads as a 30 Hz flicker the original does not have.
     bool retain_between_frames = false;
+    // What SDL reported after the present-sync policy was applied. Reported to
+    // the host rather than logged here, since this layer has no log.
+    int applied_swap_interval = 0;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
     bool frame_started = false;
     std::uint32_t logical_width = 0;
@@ -508,6 +511,50 @@ Sdl3OpenGlBackend::~Sdl3OpenGlBackend()
     delete impl_;
 }
 
+namespace
+{
+
+// Requests the policy's swap interval and reports what the driver granted.
+//
+// Failing to set an interval is deliberately not an initialization failure:
+// the context still draws, and a host that cannot get the interval it asked
+// for is better off running at the driver's than not running at all. The
+// caller reads back the applied value rather than assuming the request took.
+void ApplyPresentSync(PresentSync present_sync, int* applied_interval)
+{
+    switch (present_sync)
+    {
+    case PresentSync::kImmediate:
+        SDL_GL_SetSwapInterval(0);
+        break;
+    case PresentSync::kAdaptive:
+        // Late-swap tearing is commonly refused; vertical sync is the
+        // conservative fallback because it is what the policy degrades to.
+        if (!SDL_GL_SetSwapInterval(-1))
+        {
+            SDL_GL_SetSwapInterval(1);
+        }
+        break;
+    case PresentSync::kVerticalSync:
+    default:
+        SDL_GL_SetSwapInterval(1);
+        break;
+    }
+    int interval = 0;
+    if (!SDL_GL_GetSwapInterval(&interval))
+    {
+        interval = 0;
+    }
+    *applied_interval = interval;
+}
+
+}  // namespace
+
+int Sdl3OpenGlBackend::applied_swap_interval() const
+{
+    return impl_ == nullptr ? 0 : impl_->applied_swap_interval;
+}
+
 bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::string* error)
 {
     if (impl_ != nullptr || error == nullptr || config.width == 0 || config.height == 0 ||
@@ -592,6 +639,8 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
     {
         return false;
     }
+
+    ApplyPresentSync(config.present_sync, &impl->applied_swap_interval);
 
     const bool loaded =
         LoadGlFunction("glCreateShader", &impl->create_shader) &&

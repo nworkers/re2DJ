@@ -10,6 +10,7 @@
 #include "../../audio/sdl3_mixer_audio_backend.h"
 #include "re2dj/audio/legacy_audio_buffer.h"
 #include "audio_volume_trace.h"
+#include "timer_resolution_probe.h"
 
 extern "C" __declspec(dllexport) volatile float g_re2dj_audio_master_gain = 1.0f;
 
@@ -325,7 +326,13 @@ extern "C" HRESULT WINAPI Re2djHleDirectSoundCreate(GUID*, LPDIRECTSOUND* direct
     if (!direct_sound) return DSERR_INVALIDPARAM;
     *direct_sound = nullptr;
     if (outer) return DSERR_NOAGGREGATION;
+    // Brackets SDL's audio initialization, which the first Instance() call
+    // performs. The guest depends on a timer resolution it never asks for, and
+    // this is one of the two places in the process where a library could be
+    // raising it on the guest's behalf.
+    re2dj::platform::windows::NoteTimerResolution("pre-audio");
     auto& backend = Sdl3MixerAudioBackend::Instance();
+    re2dj::platform::windows::NoteTimerResolution("post-audio");
     backend.SetDiagnosticCallback(&ForwardBackendTrace, nullptr);
     OutputDebugStringA("re2dj:audio:DirectSoundCreate");
     if (!backend.has_playback_device())

@@ -201,6 +201,8 @@ add_library(re2dj_legacy_graphics STATIC
     src/graphics/legacy_texture.cpp
     src/graphics/legacy_transform.cpp
     src/graphics/legacy_vertex_buffer.cpp
+    src/graphics/present_interval_histogram.cpp
+    src/graphics/present_sync.cpp
     src/graphics/presentation_filter.cpp
 )
 target_include_directories(re2dj_legacy_graphics PUBLIC include)
@@ -341,9 +343,11 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/graphics_trace_log.cpp
         src/platform/windows/host_window_shell.cpp
         src/platform/windows/ini_profile_hle.cpp
+        src/platform/windows/guest_wait_accounting.cpp
         src/platform/windows/injected_runtime.cpp
         src/platform/windows/keyboard_input_common.cpp
         src/platform/windows/message_box_boundary.cpp
+        src/platform/windows/timer_resolution_probe.cpp
         src/platform/windows/window_mode.cpp
         src/platform/windows/winmm_mixer_trace.cpp
     )
@@ -536,6 +540,8 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/pe_loader_test.cpp
         tests/unit/synthetic_pe32.cpp
         tests/unit/temporary_tree.cpp
+        tests/unit/present_interval_histogram_test.cpp
+        tests/unit/present_sync_test.cpp
         tests/unit/target_profile_test.cpp
         tests/unit/vfs_file_table_test.cpp
     )

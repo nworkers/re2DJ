@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "re2dj/config/hardlock_secret_config.h"
+#include "re2dj/graphics/present_sync.h"
 #include "re2dj/hle/hardlock/device.h"
 #include "re2dj/hle/hardlock/handshake_response.h"
 #include "re2dj/hle/hardlock/api_descriptor.h"
@@ -130,7 +131,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics] [--present-sync <vsync|immediate|adaptive>] [--guest-wait-trace]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -8623,6 +8624,13 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     // whole texture surfaces and format long records, so the product path
     // leaves them off and only a draw-level investigation asks for them.
     bool graphics_draw_diagnostics = false;
+    // Accounts the guest's blocking calls. It patches guest import slots, so
+    // it stays off unless an investigation asks for it.
+    bool guest_wait_trace = false;
+    // Present synchronization policy written into the injected runtime:
+    // 0 vertical sync, 1 immediate, 2 adaptive. Zero is the runtime's own
+    // default, so nothing is written unless an option asked for another one.
+    unsigned long present_sync = 0;
     bool ksnd_load_trace = false;
     bool device_mock_lptdi = false;
     bool device_mock_lptdi_ioctl_success = false;
@@ -8885,6 +8893,28 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             hle_d3d3 = true;
             inject_runtime = true;
             software_breakpoint = true;
+        }
+        else if (option == "--guest-wait-trace")
+        {
+            guest_wait_trace = true;
+            inject_runtime = true;
+            software_breakpoint = true;
+        }
+        else if (option == "--present-sync")
+        {
+            if (index + 1 >= argc)
+            {
+                std::fprintf(stderr, "error: --present-sync requires a value\n");
+                return 2;
+            }
+            re2dj::graphics::PresentSync parsed = re2dj::graphics::PresentSync::kVerticalSync;
+            if (!re2dj::graphics::ParsePresentSyncName(argv[++index], &parsed))
+            {
+                std::fprintf(stderr,
+                             "error: --present-sync must be vsync, immediate or adaptive\n");
+                return 2;
+            }
+            present_sync = static_cast<unsigned long>(parsed);
         }
         else if (option == "--ksnd-load-trace")
         {
@@ -9829,7 +9859,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"hle_message_box\":%s,\"run_detached\":%s,\"follow_child\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u,\"graphics_draw_diagnostics\":%s}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"hle_message_box\":%s,\"run_detached\":%s,\"follow_child\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u,\"graphics_draw_diagnostics\":%s,\"present_sync\":%lu}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      chd_path.generic_string().c_str(),
@@ -9864,7 +9894,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      lptdi_post_ioctl_trace_steps,
                      lptdi_post_ioctl_trace_code,
                      diagnostic_idle_timeout_ms,
-                     graphics_draw_diagnostics ? "true" : "false");
+                     graphics_draw_diagnostics ? "true" : "false",
+                     present_sync);
     if (hardlock_cfg_replay || hardlock_cfg_tail || hardlock_cfg_map)
     {
         // Records which material a profile default applied, never its values.
@@ -10162,6 +10193,22 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                     reinterpret_cast<const std::uint8_t*>(&draw_diagnostics_value),
                                     sizeof(draw_diagnostics_value),
                                     &error);
+            }
+
+            // Same reasoning as the diagnostics word: the runtime defaults to
+            // vertical sync, so only a non-default policy is written.
+            if (d3d3_prepared && present_sync != 0)
+            {
+                std::uint32_t present_sync_rva = 0;
+                const DWORD present_sync_value = static_cast<DWORD>(present_sync);
+                d3d3_prepared =
+                    re2dj::platform::windows::FindPe32ExportRva(
+                        runtime_path, "g_re2dj_present_sync", &present_sync_rva, &error) &&
+                    WriteRemoteBytes(child.hProcess,
+                                     runtime_base + present_sync_rva,
+                                     reinterpret_cast<const std::uint8_t*>(&present_sync_value),
+                                     sizeof(present_sync_value),
+                                     &error);
             }
 
             if (d3d3_prepared && has_create)
@@ -10907,6 +10954,61 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                            main_image_base + slot_rva,
                                            runtime_base + export_rva,
                                            &error));
+        }
+        // The wait wrappers ride the same IAT patching as the VFS wrappers
+        // because they need the same thing: the guest's import table after the
+        // protection has rebuilt it. Absent imports are not an error, so a
+        // product that never calls one of these simply keeps its own slot.
+        if (vfs_prepared && guest_wait_trace)
+        {
+            // Also armed for the dynamic resolver: a protected build can
+            // resolve these through GetProcAddress rather than its import
+            // table, so the slot patch alone can miss every call.
+            std::uint32_t wait_trace_rva = 0;
+            const DWORD wait_trace_value = TRUE;
+            vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                               runtime_path, "g_re2dj_guest_wait_trace", &wait_trace_rva, &error) &&
+                           WriteRemoteBytes(child.hProcess,
+                                            runtime_base + wait_trace_rva,
+                                            reinterpret_cast<const std::uint8_t*>(&wait_trace_value),
+                                            sizeof(wait_trace_value),
+                                            &error);
+            const char* const wait_exports[] = {"_Re2djWaitSleep@4",
+                                                "_Re2djWaitForSingleObject@8",
+                                                "_Re2djWaitTimeGetTime@0"};
+            const char* const wait_imports[] = {"Sleep", "WaitForSingleObject", "timeGetTime"};
+            const char* const wait_modules[] = {"KERNEL32.dll", "KERNEL32.dll", "WINMM.dll"};
+            for (std::size_t index = 0; vfs_prepared && index < std::size(wait_exports); ++index)
+            {
+                std::uint32_t export_rva = 0;
+                std::uint32_t slot_rva = 0;
+                bool import_present = false;
+                vfs_prepared = re2dj::platform::windows::FindPe32ExportRva(
+                                   runtime_path, wait_exports[index], &export_rva, &error) &&
+                               FindOptionalIatSlotByName(info,
+                                                         file.data(),
+                                                         file.size(),
+                                                         wait_modules[index],
+                                                         wait_imports[index],
+                                                         &slot_rva,
+                                                         &import_present,
+                                                         &error) &&
+                               (!import_present ||
+                                WriteRemoteU32(child.hProcess,
+                                               main_image_base + slot_rva,
+                                               runtime_base + export_rva,
+                                               &error));
+                RecordDiagnostic(
+                    "{\"event\":\"guest_wait_wrapper\",\"import\":\"%s!%s\",\"present\":%s,\"prepared\":%s}",
+                    wait_modules[index],
+                    wait_imports[index],
+                    import_present ? "true" : "false",
+                    vfs_prepared ? "true" : "false");
+            }
+            if (!vfs_prepared)
+            {
+                error = "guest wait wrapper setup: " + error;
+            }
         }
         if (!vfs_prepared)
         {
@@ -11704,6 +11806,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.message_box = child_hle_message_box;
         child_follow_options.hle_d3d3 = child_hle_d3d3;
         child_follow_options.graphics_draw_diagnostics = graphics_draw_diagnostics;
+        child_follow_options.present_sync = present_sync;
         child_follow_options.fullscreen = child_fullscreen;
         child_follow_options.hle_directsound = child_hle_directsound;
         child_follow_options.hle_io_ports = child_hle_io_ports;

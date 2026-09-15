@@ -194,6 +194,7 @@
 
 ## 다음 작업 / Next work
 
+- [ ] [작업 291 — ez2dj3rd 타이머 해상도 의존성 규명](work-orders/20260915-291-timer-resolution-dependency.md) — 지시서만 작성됨, 미착수
 - [ ] 작업 119 — Windows x86 4th dynamic <code>GetProcAddress</code> VFS HLE
 - [ ] Windows x86 INI API HLE (`GetPrivateProfile*`, `WritePrivateProfileStringA`)
 - [ ] Windows x86 directory enumeration (`FindFirstFileA`, `FindNextFileA`, `FindClose`)

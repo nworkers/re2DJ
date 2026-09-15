@@ -217,6 +217,11 @@ re2dj --hdd <directory> [options]
                       DirectSound/WINMM 음량 증거를 별도 로그에 기록.
   --fullscreen        Windows에서 monitor 크기 borderless fullscreen 사용.
   --windowed          프로파일의 fullscreen 기본값을 끄기.
+  --vsync <on|off|adaptive>
+                      present가 언제 반환할지 고릅니다. on은 디스플레이 refresh를
+                      기다리고(기본값), off는 기다리지 않아 tearing을 허용하며,
+                      adaptive는 마감을 지킨 프레임만 기다립니다. 드라이버가
+                      adaptive를 거부하면 on으로 내려갑니다.
   --io-config <path>  선택한 타깃용 Windows 키보드 I/O mapping INI.
   --version           버전 출력.
   --help              도움말 출력.

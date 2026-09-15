@@ -32,6 +32,8 @@ int main()
     RunLegacyIoPortBusTests(context);
     RunLegacyDrawCommandTests(context);
     RunPresentationFilterTests(context);
+    RunPresentIntervalHistogramTests(context);
+    RunPresentSyncTests(context);
     RunLegacyTextureTests(context);
     RunLegacyTransformTests(context);
     RunLegacyVertexBufferTests(context);

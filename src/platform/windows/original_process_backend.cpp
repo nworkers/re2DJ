@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "re2dj/graphics/present_sync.h"
+
 
 namespace re2dj::platform::windows
 {
@@ -204,9 +206,20 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     {
         arguments->push_back("--audio-volume-trace");
     }
+    if (defaults.guest_wait_trace)
+    {
+        arguments->push_back("--guest-wait-trace");
+    }
     if (defaults.fullscreen)
     {
         arguments->push_back("--fullscreen");
+    }
+    // Only a non-default policy is passed. Leaving the argument out keeps an
+    // older launcher, which does not know the option, working unchanged.
+    if (defaults.present_sync != re2dj::graphics::PresentSync::kVerticalSync)
+    {
+        arguments->push_back("--present-sync");
+        arguments->push_back(re2dj::graphics::PresentSyncName(defaults.present_sync));
     }
     if (!options.io_config.empty())
     {

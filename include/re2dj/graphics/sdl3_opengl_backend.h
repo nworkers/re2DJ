@@ -6,6 +6,7 @@
 
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/present_sync.h"
 
 namespace re2dj::graphics
 {
@@ -27,6 +28,10 @@ struct Sdl3OpenGlWindowConfig
     // guest that presents by copying a whole surface over the screen overwrites
     // everything each time and starts from nothing.
     bool retain_between_frames = false;
+    // When a present returns. The default keeps the behavior the product had
+    // before this became explicit, so a caller that leaves it alone sees no
+    // change.
+    PresentSync present_sync = PresentSync::kVerticalSync;
 };
 
 class Sdl3OpenGlBackend
@@ -47,6 +52,12 @@ public:
     // guest clear that does not arrive as a draw command.
     bool ClearRenderTarget(std::uint16_t rgb565_color, std::string* error);
     bool Present(std::string* error);
+    // The swap interval the driver actually applied, read back after the
+    // policy was requested: 1 for vertical sync, 0 for immediate, -1 for
+    // adaptive. A driver can refuse a request, so this is the value to report
+    // rather than the one in the config. Zero before Initialize succeeds.
+    // This layer keeps no log of its own, so the host reads it and records it.
+    int applied_swap_interval() const;
 
 private:
     struct Impl;

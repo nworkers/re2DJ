@@ -21,6 +21,7 @@
 | [ez2dj-io-map.md](ez2dj-io-map.md) | legacy I/O port 범위와 공개 구현 교차 확인 의미 | 원본 확인/외부 추정/미확정 분리 |
 | [ez2dj-demo-volume.md](ez2dj-demo-volume.md) | `DemoVolume` INI 경로, 원본 DirectSound profile table과 실제 실행 귀속 | 1st SE 정식 빌드 `.text` 정적 분석과 실제 실행으로 확인됨 |
 | [win32-caption-dpi.md](win32-caption-dpi.md) | DWM caption 결손과 DPI frame 계산 순서 | 1st SE 실제 제품 실행으로 확인됨 |
+| [ez2dj3rd-frame-pacing.md](ez2dj3rd-frame-pacing.md) | 3rd의 sleep 기반 프레임 리미터, 목표 주기 피드백, SDL3 타이머 해상도 의존 | 3rd 실제 실행 계정과 원본 `.idata`로 확인됨. 원본 목표 주기 상수는 미확정 |
 
 새 분석 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 

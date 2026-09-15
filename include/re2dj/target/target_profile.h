@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "re2dj/graphics/present_sync.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
 
@@ -96,6 +97,14 @@ struct TargetRunDefaults
     // game child before applying the HLE boundary.
     bool follow_child_process = false;
     bool run_detached = false;
+    // When a present returns. No profile overrides this yet: the default is
+    // the behavior every profile had before the policy became explicit, and a
+    // product-specific value needs its own runtime evidence first.
+    graphics::PresentSync present_sync = graphics::PresentSync::kVerticalSync;
+    // Accounts the guest's blocking calls so frame time that is neither
+    // computation nor presentation can be attributed. Off by default: it
+    // patches guest import slots that the product path leaves alone.
+    bool guest_wait_trace = false;
 };
 
 // How a built-in profile recognises the dump it belongs to.
