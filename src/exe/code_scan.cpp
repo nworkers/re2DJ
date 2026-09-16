@@ -1,6 +1,7 @@
 #include "re2dj/exe/code_scan.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace re2dj::exe {
 
@@ -195,4 +196,122 @@ std::vector<RelativeBranchSite> ScanRelativeBranches(const std::uint8_t* bytes,
     return sites;
 }
 
+
+namespace
+{
+
+struct PortHelperSignature
+{
+    PortHelperKind kind;
+    const std::uint8_t* bytes;
+    std::size_t size;
+    // Distance from the first signature byte to the `in`/`out` instruction.
+    std::size_t opcode_offset;
+};
+
+// Confirmed against the 1st SE canonical build's plaintext `.text`, where the
+// two byte-width helpers sit at RVA 0x00038987 and 0x000389ab and agree with
+// the target profile. Entries are added only from bytes read out of a real
+// build, never by inference from another compiler's output.
+constexpr std::uint8_t kInPortByteBytes[] = {
+    0x33, 0xc0, 0x66, 0x8b, 0x54, 0x24, 0x04, 0xec, 0xc3};
+constexpr std::uint8_t kInPortWordBytes[] = {
+    0x66, 0x8b, 0x54, 0x24, 0x04, 0x66, 0xed, 0xc3};
+constexpr std::uint8_t kInPortDwordBytes[] = {
+    0x66, 0x8b, 0x54, 0x24, 0x04, 0xed, 0xc3};
+constexpr std::uint8_t kOutPortByteBytes[] = {
+    0x66, 0x8b, 0x54, 0x24, 0x04, 0x8a, 0x44, 0x24, 0x08, 0xee, 0xc3};
+constexpr std::uint8_t kOutPortWordBytes[] = {
+    0x66, 0x8b, 0x54, 0x24, 0x04, 0x66, 0x8b, 0x44, 0x24, 0x08, 0x66, 0xef, 0xc3};
+
+constexpr PortHelperSignature kPortHelperSignatures[] = {
+    {PortHelperKind::kOutPortWord, kOutPortWordBytes, sizeof(kOutPortWordBytes), 10},
+    {PortHelperKind::kOutPortByte, kOutPortByteBytes, sizeof(kOutPortByteBytes), 9},
+    {PortHelperKind::kInPortByte, kInPortByteBytes, sizeof(kInPortByteBytes), 7},
+    {PortHelperKind::kInPortWord, kInPortWordBytes, sizeof(kInPortWordBytes), 5},
+    {PortHelperKind::kInPortDword, kInPortDwordBytes, sizeof(kInPortDwordBytes), 5},
+};
+
+}  // namespace
+
+const char* PortHelperKindName(PortHelperKind kind)
+{
+    switch (kind)
+    {
+    case PortHelperKind::kInPortByte:
+        return "inportb";
+    case PortHelperKind::kInPortWord:
+        return "inportw";
+    case PortHelperKind::kInPortDword:
+        return "inportl";
+    case PortHelperKind::kOutPortByte:
+        return "outportb";
+    case PortHelperKind::kOutPortWord:
+        return "outportw";
+    }
+    return "unknown";
+}
+
+std::vector<PortHelperSite> ScanPortHelpers(const std::uint8_t* bytes,
+                                            std::size_t size,
+                                            std::uint32_t base_address,
+                                            std::size_t max_sites,
+                                            bool* capped,
+                                            std::size_t* total_sites)
+{
+    std::vector<PortHelperSite> sites;
+    std::size_t total = 0;
+    if (capped != nullptr)
+    {
+        *capped = false;
+    }
+    if (bytes == nullptr || size == 0)
+    {
+        if (total_sites != nullptr)
+        {
+            *total_sites = total;
+        }
+        return sites;
+    }
+    for (std::size_t index = 0; index < size; ++index)
+    {
+        // No two current signatures can match at one offset, since they all
+        // diverge before either ends. The table is still ordered longest
+        // first so that a future overlapping entry resolves to the longest.
+        for (const PortHelperSignature& signature : kPortHelperSignatures)
+        {
+            if (size - index < signature.size)
+            {
+                continue;
+            }
+            if (std::memcmp(bytes + index, signature.bytes, signature.size) != 0)
+            {
+                continue;
+            }
+            ++total;
+            if (sites.size() >= max_sites)
+            {
+                if (capped != nullptr)
+                {
+                    *capped = true;
+                }
+                break;
+            }
+            PortHelperSite site;
+            site.kind = signature.kind;
+            site.signature_offset = static_cast<std::uint32_t>(index);
+            // The opcode address wraps within 32 bits like the branch targets
+            // above, which keeps a dump loaded near the top of the space sane.
+            site.opcode_address = base_address + static_cast<std::uint32_t>(index) +
+                                  static_cast<std::uint32_t>(signature.opcode_offset);
+            sites.push_back(site);
+            break;
+        }
+    }
+    if (total_sites != nullptr)
+    {
+        *total_sites = total;
+    }
+    return sites;
+}
 }  // namespace re2dj::exe

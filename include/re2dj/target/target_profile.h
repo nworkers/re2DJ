@@ -105,6 +105,13 @@ struct TargetRunDefaults
     // computation nor presentation can be attributed. Off by default: it
     // patches guest import slots that the product path leaves alone.
     bool guest_wait_trace = false;
+    // Saves the main image the protection decrypted in place, at the restored
+    // entry and again once the guest has been running. Off by default: the
+    // image runs to tens of megabytes and only an analysis run wants it.
+    bool image_dump = false;
+    // Milliseconds between resuming the guest and the second dump. Zero leaves
+    // the launcher's own default in place.
+    unsigned image_dump_delay_ms = 0;
 };
 
 // How a built-in profile recognises the dump it belongs to.

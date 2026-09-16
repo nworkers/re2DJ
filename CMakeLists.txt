@@ -430,6 +430,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/tools/windows_original_process_probe/iat_verifier.cpp
         src/platform/windows/injected_runtime_loader.cpp
         src/platform/windows/original_process_backend.cpp
+        src/platform/windows/process_image_dump.cpp
         src/platform/windows/runtime_export_locator.cpp
         src/tools/windows_x86_launcher_probe/remote_module_exports.cpp
         src/tools/windows_x86_launcher_probe/null_context_object_state.cpp
@@ -437,6 +438,9 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/tools/windows_x86_launcher_probe/main.cpp
     )
     target_include_directories(re2dj_windows_original_process_backend PUBLIC include)
+    target_compile_definitions(re2dj_windows_original_process_backend PRIVATE
+        RE2DJ_VERSION="${RE2DJ_VERSION}"
+    )
     target_link_libraries(re2dj_windows_original_process_backend
         PRIVATE re2dj_core re2dj_warnings
     )
@@ -495,6 +499,11 @@ add_executable(re2dj_code_score
 )
 target_link_libraries(re2dj_code_score PRIVATE re2dj_core re2dj_warnings)
 
+add_executable(re2dj_port_helper_scan
+    src/tools/port_helper_scan/main.cpp
+)
+target_link_libraries(re2dj_port_helper_scan PRIVATE re2dj_core re2dj_warnings)
+
 add_executable(re2dj_pe_loader
     src/tools/pe_loader/main.cpp
 )
@@ -518,6 +527,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/hardlock_transform_responses_test.cpp
         tests/unit/hardlock_engine_test.cpp
         tests/unit/code_scan_test.cpp
+        tests/unit/port_helper_scan_test.cpp
         tests/unit/immediate_scan_test.cpp
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp

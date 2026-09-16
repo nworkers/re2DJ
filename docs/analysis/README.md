@@ -18,10 +18,11 @@
 | [ez2dj-exe-structures.md](ez2dj-exe-structures.md) | 실행 파일별 PE 구조, 보호 계층 해부, 데이터 인벤토리, 런타임 흐름, 파일 해시 | 1st Tracks·1st SE 두 빌드·2nd·3rd·4th·5th·6th 세 실행 파일·`ez2d2m` 헤더로 확인됨 |
 | [ez2dj-import-surface.md](ez2dj-import-surface.md) | 원본이 실제로 호출하는 Win32 API 집합과 HLE 우선순위 | 정식 빌드의 원본 `.idata`와 packed table로 확인됨 (1st Tracks·1st SE·3rd·4th·5th·6th·`ez2d2m`) |
 | [ez2dj-asset-loading-path.md](ez2dj-asset-loading-path.md) | 자산 검색 경로 테이블, BMP `LoadImageA` 경계, `.str` 스크립트 참조, 이중 IAT 구조 | 1st SE `ez2dj.exe` 정적 분석과 detached 실행 로그로 확인됨 |
-| [ez2dj-io-map.md](ez2dj-io-map.md) | legacy I/O port 범위와 공개 구현 교차 확인 의미 | 원본 확인/외부 추정/미확정 분리 |
+| [ez2dj-io-map.md](ez2dj-io-map.md) | legacy I/O port 범위, 공개 구현 교차 확인 의미, helper 시그니처와 프로파일 RVA 확인 상태 | 원본 확인/외부 추정/미확정 분리. 보호 빌드의 helper RVA는 덤프 대조 미완료 |
 | [ez2dj-demo-volume.md](ez2dj-demo-volume.md) | `DemoVolume` INI 경로, 원본 DirectSound profile table과 실제 실행 귀속 | 1st SE 정식 빌드 `.text` 정적 분석과 실제 실행으로 확인됨 |
 | [win32-caption-dpi.md](win32-caption-dpi.md) | DWM caption 결손과 DPI frame 계산 순서 | 1st SE 실제 제품 실행으로 확인됨 |
 | [ez2dj3rd-frame-pacing.md](ez2dj3rd-frame-pacing.md) | 3rd의 sleep 기반 프레임 리미터, 목표 주기 피드백, SDL3 타이머 해상도 의존 | 3rd 실제 실행 계정과 원본 `.idata`로 확인됨. 원본 목표 주기 상수는 미확정 |
+| [protected-build-runtime-decryption.md](protected-build-runtime-decryption.md) | `.protect` 빌드의 런타임 복호화 시점, 실행 중 이미지 덤프, 자체 INI 파서 | 3rd 두 시점 덤프 비교로 확인됨. 단계적 복호화 여부와 타 빌드는 미확정 |
 
 새 분석 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 

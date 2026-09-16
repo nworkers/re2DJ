@@ -196,6 +196,17 @@ PE32 이미지를 게스트 주소 공간에 적재하고 진입점, TLS directo
 
 *It maps the PE32 image into guest memory and reports the entry point, TLS directory, and synthetic gate address for every import. Original code is not executed. An optional final load base such as `0x10000000` exercises relocation or reports that the image cannot be rebased.*
 
+### 9. legacy I/O helper 위치 확인 / Locate the legacy port-I/O helpers
+
+```bash
+build/windows-x86/bin/Debug/re2dj_port_helper_scan /path/to/ez2dj_hdd/ez2dj.exe
+build/windows-x86/bin/Debug/re2dj_port_helper_scan dump.image.bin 0x00400000
+```
+
+게스트가 트랩되지 않은 `in`/`out`으로 privileged fault를 낼 때 런타임이 쓰는 helper 주소를 시그니처로 찾습니다. 입력은 `.text`가 평문인 디스크 파일이거나 `--image-dump`가 만든 복호화 덤프이며, 둘 다 파일 오프셋이 곧 RVA입니다. 두 번째 인자로 image base를 주면 RVA 대신 VA를 출력합니다. 탐색은 구문적이므로 결과는 후보이며, 아무것도 찾지 못하는 것은 보호 빌드를 디스크에서 읽었을 때의 정상 결과입니다.
+
+*It finds, by signature, the helper addresses the runtime uses when the guest raises a privileged fault on an untrapped `in`/`out`. The input is either a disk file whose `.text` is plaintext or a decrypted dump from `--image-dump`; a file offset is the RVA in both. A second argument supplies an image base to print VAs instead of RVAs. The search is syntactic, so each hit is a candidate, and finding nothing is the correct result for a protected build read off disk.*
+
 ---
 
 ## 명령행 / Command line

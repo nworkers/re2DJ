@@ -57,6 +57,8 @@ struct Options
     bool present_sync_explicit = false;
     bool audio_volume_trace = false;
     bool guest_wait_trace = false;
+    bool image_dump = false;
+    unsigned image_dump_delay_ms = 0;
     bool fullscreen = false;
     re2dj::graphics::PresentSync present_sync = re2dj::graphics::PresentSync::kVerticalSync;
     bool list_targets = false;
@@ -244,6 +246,10 @@ void PrintUsage()
         "                      Windows title/demo profile (default 3 = 0 dB).\n"
         "  --guest-wait-trace  Account the guest's Sleep, WaitForSingleObject, and\n"
         "                      timeGetTime calls per frame window (diagnostic).\n"
+        "  --image-dump        Save the decrypted main image at the restored entry and\n"
+        "                      again after the guest has run (diagnostic; tens of MB).\n"
+        "  --image-dump-delay <milliseconds>\n"
+        "                      Wait before the second image dump (default 5000).\n"
         "  --audio-volume-trace\n"
         "                      Record bounded DirectSound/WINMM volume evidence.\n"
         "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
@@ -369,6 +375,16 @@ bool ParseOptions(int argc, char** argv, Options* options)
         else if (argument == "--guest-wait-trace")
         {
             options->guest_wait_trace = true;
+        }
+        else if (argument == "--image-dump")
+        {
+            options->image_dump = true;
+        }
+        else if (argument == "--image-dump-delay" && index + 1 < argc)
+        {
+            options->image_dump_delay_ms =
+                static_cast<unsigned>(std::strtoul(argv[++index], nullptr, 10));
+            options->image_dump = true;
         }
         else if (argument == "--fullscreen")
         {
@@ -652,6 +668,11 @@ int RunChdTarget(const Options& options,
     {
         run_options.profile_defaults.guest_wait_trace = true;
     }
+    if (options.image_dump)
+    {
+        run_options.profile_defaults.image_dump = true;
+        run_options.profile_defaults.image_dump_delay_ms = options.image_dump_delay_ms;
+    }
     run_options.audio_volume_trace = options.audio_volume_trace;
     run_options.io_config = NormalizeIoConfigForProfile(
         options.io_config, run_options.profile_defaults, profile.id);
@@ -690,7 +711,8 @@ int main(int argc, char** argv)
     }
 #if !defined(_WIN32)
     if (options.audio_gain_explicit || options.demo_volume_explicit ||
-        options.audio_volume_trace || options.guest_wait_trace || options.fullscreen_explicit ||
+        options.audio_volume_trace || options.guest_wait_trace || options.image_dump ||
+        options.fullscreen_explicit ||
         options.present_sync_explicit ||
         !options.io_config.empty())
     {
@@ -982,6 +1004,11 @@ int main(int argc, char** argv)
     if (options.guest_wait_trace)
     {
         run_options.profile_defaults.guest_wait_trace = true;
+    }
+    if (options.image_dump)
+    {
+        run_options.profile_defaults.image_dump = true;
+        run_options.profile_defaults.image_dump_delay_ms = options.image_dump_delay_ms;
     }
     run_options.audio_volume_trace = options.audio_volume_trace;
     run_options.io_config = NormalizeIoConfigForProfile(

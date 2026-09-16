@@ -210,6 +210,15 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     {
         arguments->push_back("--guest-wait-trace");
     }
+    if (defaults.image_dump)
+    {
+        arguments->push_back("--image-dump");
+        if (defaults.image_dump_delay_ms != 0)
+        {
+            arguments->push_back("--image-dump-delay");
+            arguments->push_back(std::to_string(defaults.image_dump_delay_ms));
+        }
+    }
     if (defaults.fullscreen)
     {
         arguments->push_back("--fullscreen");

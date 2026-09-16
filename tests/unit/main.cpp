@@ -9,6 +9,7 @@ int main()
     RunAddressSpaceTests(context);
     RunCodeRegionScoreTests(context);
     RunCodeScanTests(context);
+    RunPortHelperScanTests(context);
     RunImmediateScanTests(context);
     RunExecutionBackendTests(context);
     RunGuestPathTests(context);

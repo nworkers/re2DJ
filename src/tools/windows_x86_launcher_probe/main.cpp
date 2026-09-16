@@ -37,6 +37,7 @@
 #include "re2dj/target/target_profile.h"
 
 #include "../../platform/windows/injected_runtime_loader.h"
+#include "../../platform/windows/process_image_dump.h"
 #include "../../platform/windows/runtime_export_locator.h"
 #include "../windows_original_process_probe/iat_verifier.h"
 #include "re2dj/exe/code_scan.h"
@@ -131,7 +132,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics] [--present-sync <vsync|immediate|adaptive>] [--guest-wait-trace]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics] [--present-sync <vsync|immediate|adaptive>] [--guest-wait-trace]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--image-dump [path]] [--image-dump-delay <milliseconds>] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -8618,6 +8619,15 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     bool hle_io_port_range_fallback = false;
     std::filesystem::path io_config_path;
     bool run_detached = false;
+    // Saves the main image the protection decrypted in place. Off unless asked
+    // for: the image runs to tens of megabytes, and nothing in a normal run
+    // needs it.
+    bool image_dump = false;
+    std::filesystem::path image_dump_path;
+    // How long the guest runs before the second dump. The point is only that
+    // the guest has certainly executed its own code by then, and it is
+    // adjustable because moving it later is how staged decryption would show.
+    unsigned image_dump_delay_ms = 5000;
     bool hle_message_box = false;
     bool d3d_init_trace = false;
     // Turns on the diagnostics that live inside the per-draw path. They scan
@@ -9027,6 +9037,20 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             }
             hardlock_reject_function_enabled = true;
             hardlock_reject_function = static_cast<std::uint16_t>(parsed);
+        }
+        else if (option == "--image-dump")
+        {
+            image_dump = true;
+            // The path is optional: the next argument is only consumed when it
+            // is not itself an option, so "--image-dump --trace" still works.
+            if (index + 1 < argc && argv[index + 1][0] != '-')
+            {
+                image_dump_path = argv[++index];
+            }
+        }
+        else if (option == "--image-dump-delay" && index + 1 < argc)
+        {
+            image_dump_delay_ms = static_cast<unsigned>(std::strtoul(argv[++index], nullptr, 10));
         }
         else if (option == "--hardlock-descriptor-dump" && index + 1 < argc)
         {
@@ -10003,6 +10027,55 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                                entry,
                                                                original_entry_byte,
                                                                &error);
+    // One dump of the guest's main image. The attribution is assembled here
+    // rather than inside the writer because only this scope knows which build
+    // was launched, and a dump that cannot be tied to a build is not evidence.
+    const auto take_image_dump = [&](const char* point, unsigned delay_ms) {
+        if (!image_dump || main_image_base == 0)
+        {
+            return;
+        }
+        std::filesystem::path base =
+            image_dump_path.empty() ? diagnostic_log.path() : image_dump_path;
+        base.replace_extension(std::string(".") + point + ".image.bin");
+        std::filesystem::path sidecar = base;
+        sidecar.replace_extension(".json");
+        re2dj::platform::windows::ProcessImageDumpAttribution attribution;
+        attribution.target_id = target->id;
+        attribution.executable_path = executable.generic_string();
+        attribution.timestamp = info.timestamp;
+        attribution.size_of_image = info.size_of_image;
+        attribution.entry_point_rva = info.entry_point_rva;
+        attribution.file_size = static_cast<std::uint64_t>(file.size());
+        attribution.file_digest =
+            re2dj::platform::windows::ComputeImageFileDigest(file.data(), file.size());
+        attribution.re2dj_version = RE2DJ_VERSION;
+        attribution.delay_milliseconds = delay_ms;
+        re2dj::platform::windows::ProcessImageDumpResult dump_result;
+        std::string dump_error;
+        const bool dumped = re2dj::platform::windows::WriteProcessImageDump(child.hProcess,
+                                                                           main_image_base,
+                                                                           info.size_of_image,
+                                                                           point,
+                                                                           base,
+                                                                           sidecar,
+                                                                           attribution,
+                                                                           &dump_result,
+                                                                           &dump_error);
+        RecordDiagnostic(
+            "{\"event\":\"image_dump\",\"point\":\"%s\",\"written\":%s,\"path\":\"%s\""
+            ",\"bytes_read\":%u,\"gaps\":%u,\"error\":\"%s\"}",
+            point,
+            dumped ? "true" : "false",
+            base.generic_string().c_str(),
+            dump_result.bytes_read,
+            static_cast<unsigned>(dump_result.gaps.size()),
+            dumped ? "" : dump_error.c_str());
+    };
+    // The first dump point, taken while the process is still stopped at its
+    // restored entry. Whether the packer has decrypted by here is exactly the
+    // open question, and comparing this against the resumed dump answers it.
+    take_image_dump("entry", 0);
     std::uint32_t runtime_base = 0;
     const bool runtime_loaded = !inject_runtime ||
                                 (reached && entry_restored &&
@@ -11763,6 +11836,24 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         }
         RecordDiagnostic("{\"event\":\"runtime_detached\",\"process_id\":%u}",
                          static_cast<unsigned>(child.dwProcessId));
+        // The second dump point. Timed from the resume rather than hung off an
+        // HLE boundary, because which boundaries a profile enables varies and
+        // no in-process boundary is reached under every profile. If the guest
+        // has already exited, there is nothing to read and the skip is
+        // recorded rather than reported as a dump.
+        if (image_dump)
+        {
+            if (WaitForSingleObject(child.hProcess, image_dump_delay_ms) == WAIT_TIMEOUT)
+            {
+                take_image_dump("resumed", image_dump_delay_ms);
+            }
+            else
+            {
+                RecordDiagnostic(
+                    "{\"event\":\"image_dump\",\"point\":\"resumed\",\"written\":false"
+                    ",\"error\":\"process exited before the dump delay elapsed\"}");
+            }
+        }
         if (WaitForSingleObject(child.hProcess, INFINITE) != WAIT_OBJECT_0)
         {
             error = "cannot wait for detached original process";

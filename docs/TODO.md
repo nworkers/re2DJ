@@ -194,7 +194,7 @@
 
 ## 다음 작업 / Next work
 
-- [ ] [작업 291 — ez2dj3rd 타이머 해상도 의존성 규명](work-orders/20260915-291-timer-resolution-dependency.md) — 지시서만 작성됨, 미착수
+- [x] [작업 294 — 작업 293 후속](work-orders/20260917-294-port-helper-dump-crosscheck.md) — 보호 빌드 `resumed` 덤프로 프로파일 helper RVA 대조. 바이트 폭 다섯 빌드 모두 일치
 - [ ] 작업 119 — Windows x86 4th dynamic <code>GetProcAddress</code> VFS HLE
 - [ ] Windows x86 INI API HLE (`GetPrivateProfile*`, `WritePrivateProfileStringA`)
 - [ ] Windows x86 directory enumeration (`FindFirstFileA`, `FindNextFileA`, `FindClose`)

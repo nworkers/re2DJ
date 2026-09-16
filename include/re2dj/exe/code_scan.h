@@ -75,6 +75,50 @@ std::vector<RelativeBranchSite> ScanRelativeBranches(const std::uint8_t* bytes,
                                                      bool* capped,
                                                      std::size_t* total_sites);
 
+
+// A legacy port-I/O helper found by signature. These are the compiler
+// runtime's `inp`/`outp` family: a build places them at its own address but
+// keeps the same shape, so a fixed byte sequence locates them.
+enum class PortHelperKind
+{
+    kInPortByte,
+    kInPortWord,
+    kInPortDword,
+    kOutPortByte,
+    kOutPortWord,
+};
+
+// Returns the helper's stable name, for diagnostics and tool output.
+const char* PortHelperKindName(PortHelperKind kind);
+
+// One helper candidate. Like the rest of this header the match is syntactic:
+// the same bytes can occur inside another instruction or in data embedded in
+// code, so a hit is a candidate, not a proven helper. `opcode_address` is the
+// address of the `in`/`out` instruction itself, which is what a privileged
+// fault reports and what a target profile stores.
+struct PortHelperSite
+{
+    PortHelperKind kind = PortHelperKind::kInPortByte;
+    // Offset of the first signature byte within `bytes`.
+    std::uint32_t signature_offset = 0;
+    // Address of the `in`/`out` instruction, already resolved against the base.
+    std::uint32_t opcode_address = 0;
+};
+
+// Finds legacy port-I/O helpers in `bytes`, where `base_address` is the address
+// `bytes[0]` is mapped at. Pass 0 to get offsets, or the image base to get
+// virtual addresses. Callers hand this either a build whose `.text` is
+// plaintext on disk or a decrypted run-time image dump; in both the file offset
+// is the RVA. When several signatures match at one offset only the longest is
+// reported. Collecting stops after `max_sites` while counting continues, so
+// `total_sites` stays complete; both out parameters may be null.
+std::vector<PortHelperSite> ScanPortHelpers(const std::uint8_t* bytes,
+                                            std::size_t size,
+                                            std::uint32_t base_address,
+                                            std::size_t max_sites,
+                                            bool* capped,
+                                            std::size_t* total_sites);
+
 }  // namespace re2dj::exe
 
 #endif

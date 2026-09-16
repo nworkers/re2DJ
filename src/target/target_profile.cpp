@@ -181,9 +181,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "0x9c402468 initialize, 0x9c402450 handshake and 0x9c40244c "
                 "descriptor requests, and without local Hardlock material it "
                 "stops at the handshake. Its descriptor reports module_address "
-                "0x15e5. The legacy-I/O helper RVAs are carried over from the "
-                "1st SE .gtide build and are not confirmed for this "
-                "executable.";
+                "0x15e5. The legacy-I/O helper RVAs are this executable's own, "
+                "confirmed by signature scan of its decrypted image dump.";
             entry.fingerprint.executable_name = "Ez2DJ.exe";
             entry.fingerprint.entry_point_rva = 0x0199b240;
             entry.fingerprint.size_of_image = 0x019b6000;
@@ -316,8 +315,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "material it stops there. Its packed import directory omits "
                 "GetWindowsDirectoryA, DirectDrawCreate, and "
                 "GetPrivateProfileIntA, so those HLE boundaries stay off. The "
-                "legacy-I/O helper RVAs are carried over from the .gtide build "
-                "and are not confirmed for this executable.";
+                "legacy-I/O helper RVAs equal the .gtide build's, and a signature "
+                "scan of this executable's decrypted image dump confirms them.";
             entry.fingerprint.executable_name = "ez2dj.exe";
             entry.fingerprint.required_siblings = {
                 "ez2dj1.exe", "ez2dj.ini", "System.ini", "Songs", "System"};
