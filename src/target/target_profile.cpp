@@ -342,6 +342,13 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000a9887;
             entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000a98bb;
+            // The game's own autoplay flag, set by its demo routine and flipped
+            // by input slot 0x1b. Writing it to 1 before a song starts makes that
+            // song play itself, with no demo side effects; the value is latched
+            // at song start. Confirmed by reading and writing it in this build
+            // (tasks 295 and 296), so it is bound to this build's timestamp.
+            entry.profile.game_controls.autoplay_flag_rva = 0x00629508;
+            entry.profile.game_controls.build_timestamp = 0x3bca98a3;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             // This zero-state probe is separate from 1st SE and is not a
@@ -723,6 +730,17 @@ const TargetProfile* FindTargetProfileById(const std::vector<TargetProfile>& pro
         }
     }
     return nullptr;
+}
+
+std::uint32_t ArmedAutoplayFlagRva(const GameControls& controls,
+                                   std::uint32_t executable_timestamp)
+{
+    if (controls.autoplay_flag_rva == 0 || controls.build_timestamp == 0 ||
+        controls.build_timestamp != executable_timestamp)
+    {
+        return 0;
+    }
+    return controls.autoplay_flag_rva;
 }
 
 std::string_view ExecutableFormatHintName(ExecutableFormatHint format_hint)

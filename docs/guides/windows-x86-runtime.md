@@ -98,3 +98,21 @@ For keyboard I/O, copy and edit [`config/ez2dj-io.example.ini`](../../config/ez2
 Without modifying the original HDD's `ez2dj.ini`, the product overrides only `GAMEASSIGNMENTS/DemoVolume` to profile 3 by default. Profiles 0..3 map to the original DirectSound values `-10000`, `-2222`, `-1111`, and `0`; use `--demo-volume 0..3` to compare them. SDL final master gain now defaults to 0 dB. Use `--audio-gain-db` only for device-specific adjustment within `-24..+18 dB`, checking positive values for clipping.
 
 Use the diagnostic launcher entry shown above when detailed access-violation or API-boundary options are required. Debugger mode incurs a first-chance exception round trip for every legacy I/O instruction and is not a performance baseline. Original HDD data remains the read-only source; guest writes use the overlay policy, and diagnostic logs remain uncommitted.
+
+## OSD / On-screen display
+
+관련 설계: [Dear ImGui OSD와 autoplay 토글](../design/20260917-297-imgui-osd-autoplay.md)
+
+실행 중 **백틱(`` ` ``) 키**로 OSD를 켜고 끈다. 기본은 꺼져 있다. 창 위쪽에 가로 전체로 다음 정보가 보인다.
+
+```
+re2DJ v0.0.47 Sep 17 2026
+Target Profile : ez2dj3rd
+Executable : EZ2DJ.EXE
+```
+
+타깃 프로파일이 게임 제어를 선언했고 실행 파일이 그 빌드와 일치하면 아래에 토글이 나타난다. 현재는 `ez2dj3rd`(TimeDateStamp `0x3bca98a3`)의 **Autoplay** 하나다. 마우스로 체크한다. 게임은 이 값을 곡 시작 때 읽으므로 **곡을 시작하기 전에** 체크해야 그 곡에 적용된다. 무장 여부는 실행 로그의 `osd_controls` 줄에서 확인할 수 있다.
+
+백틱은 예제 `config/ez2dj-io.example.ini`에서 쓰지 않는 키다. 게임은 키 상태를 직접 읽으므로 io-config에 백틱을 배정하면 OSD 토글과 게임 입력이 함께 일어난다.
+
+*Press **backtick (`` ` ``)** while running to show or hide the OSD, which starts hidden. It spans the top of the window with the version and build date, the target profile and the executable name. When the target profile declares a game control and the executable matches that build, a toggle appears below — today only **Autoplay** for `ez2dj3rd` (TimeDateStamp `0x3bca98a3`), ticked with the mouse. The game reads it at song start, so tick it **before starting a song** for that song to play itself. The run log's `osd_controls` line shows whether it was armed. Backtick is unused in the example `config/ez2dj-io.example.ini`; the game reads key state directly, so binding backtick in an io-config would trigger the OSD and game input together.*

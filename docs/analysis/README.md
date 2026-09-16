@@ -23,6 +23,7 @@
 | [win32-caption-dpi.md](win32-caption-dpi.md) | DWM caption 결손과 DPI frame 계산 순서 | 1st SE 실제 제품 실행으로 확인됨 |
 | [ez2dj3rd-frame-pacing.md](ez2dj3rd-frame-pacing.md) | 3rd의 sleep 기반 프레임 리미터, 목표 주기 피드백, SDL3 타이머 해상도 의존 | 3rd 실제 실행 계정과 원본 `.idata`로 확인됨. 원본 목표 주기 상수는 미확정 |
 | [protected-build-runtime-decryption.md](protected-build-runtime-decryption.md) | `.protect` 빌드의 런타임 복호화 시점, 실행 중 이미지 덤프, 자체 INI 파서 | 3rd 두 시점 덤프 비교로 확인됨. 단계적 복호화 여부와 타 빌드는 미확정 |
+| [ez2dj3rd-demo-play.md](ez2dj3rd-demo-play.md) | 3rd 설정 키-주소 레지스트리, 데모 플레이 플래그와 시작 루틴, 입력 매니저 바인딩 | 덤프 정적 해석과 런타임 읽기로 확인됨. 노트 자동 판정 지점은 미확정 |
 
 새 분석 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 

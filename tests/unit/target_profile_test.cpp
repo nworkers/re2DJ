@@ -749,4 +749,44 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                     re2dj::target::FindBuiltInTargetProfileById("EZ2DJ3RD") != nullptr);
         RE2DJ_CHECK(context, Find(profiles, "missing") == nullptr);
     }
+
+    // The 3rd autoplay control is bound to the one build it was confirmed in,
+    // and nothing else offers one.
+    {
+        const auto* third = re2dj::target::FindBuiltInTargetProfileById("ez2dj3rd");
+        RE2DJ_CHECK(context, third != nullptr);
+        if (third != nullptr)
+        {
+            const re2dj::target::GameControls& controls = third->profile.game_controls;
+            RE2DJ_CHECK_EQ(context, controls.autoplay_flag_rva, std::uint32_t{0x00629508});
+            RE2DJ_CHECK_EQ(context, controls.build_timestamp, std::uint32_t{0x3bca98a3});
+            RE2DJ_CHECK_EQ(context,
+                           re2dj::target::ArmedAutoplayFlagRva(controls, 0x3bca98a3),
+                           std::uint32_t{0x00629508});
+            // A different build of the same product must never be armed.
+            RE2DJ_CHECK_EQ(context,
+                           re2dj::target::ArmedAutoplayFlagRva(controls, 0x3bca98a4),
+                           std::uint32_t{0});
+        }
+        for (const char* id : {"ez2dj1st", "ez2dj1stse", "ez2dj2nd", "ez2dj4th", "ez2dj5th",
+                               "ez2dj6th", "ez2d2m"})
+        {
+            const auto* other = re2dj::target::FindBuiltInTargetProfileById(id);
+            RE2DJ_CHECK(context, other != nullptr);
+            if (other != nullptr)
+            {
+                RE2DJ_CHECK_EQ(context, other->profile.game_controls.autoplay_flag_rva,
+                               std::uint32_t{0});
+            }
+        }
+        // A declaration missing either half arms nothing.
+        re2dj::target::GameControls no_timestamp;
+        no_timestamp.autoplay_flag_rva = 0x00629508;
+        RE2DJ_CHECK_EQ(context, re2dj::target::ArmedAutoplayFlagRva(no_timestamp, 0),
+                       std::uint32_t{0});
+        re2dj::target::GameControls no_rva;
+        no_rva.build_timestamp = 0x3bca98a3;
+        RE2DJ_CHECK_EQ(context, re2dj::target::ArmedAutoplayFlagRva(no_rva, 0x3bca98a3),
+                       std::uint32_t{0});
+    }
 }

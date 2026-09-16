@@ -1,5 +1,23 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.47 (2026-09-17)
+
+### 한국어
+
+- **Dear ImGui 기반 On-Screen Display(OSD) 추가**: 실행 중 백틱(`` ` ``) 키로 토글할 수 있는 가벼운 OSD를 도입했습니다. 숨김 상태에서는 ImGui 프레임을 구성하지 않아 렌더링 비용이 발생하지 않습니다. 화면 상단에 버전, 빌드 일시, 타깃 프로파일, 실행 파일 이름을 표시합니다.
+- **EZ2DJ 3rd Trax 자율 연주(Autoplay) 토글 지원**: 복호화 덤프 분석으로 확인된 내부 autoplay 플래그 주소(`0x00629508`)를 타깃 프로파일의 `game_controls`에 등록했습니다. 런처는 실행 파일의 빌드 timestamp(`0x3bca98a3`)가 일치할 때만 주소를 주입 런타임에 전달해 안전하게 무장하며, 곡 시작 전에 OSD에서 체크하면 해당 곡이 자동으로 연주됩니다. 데모 오버레이나 음소거 등 데모 플레이 부작용이 없습니다.
+- **마우스 커서 표시 복구**: 3rd가 커서를 숨기더라도 클라이언트 영역 위에서 마우스 커서가 유지되어 OSD를 조작할 수 있도록 했습니다.
+
+---
+
+### English
+
+- **Dear ImGui On-Screen Display (OSD)**: Introduced a lightweight OSD toggled with backtick (`` ` ``). No ImGui frame is built while hidden, incurring zero rendering overhead. Displays version, build timestamp, target profile, and executable name across the top of the window.
+- **Autoplay Toggle for EZ2DJ 3rd Trax**: Registered the internal autoplay flag address (`0x00629508`) in target profile `game_controls`. Armed only when the executable build timestamp (`0x3bca98a3`) matches. Ticking Autoplay before song start plays the song autonomously without demo-play side effects.
+- **Mouse Cursor Restoration**: Restored the arrow cursor over the client area to ensure easy interaction with the OSD despite 3rd hiding the cursor.
+
+---
+
 ## v0.0.31 (2026-09-07)
 
 ### 한국어

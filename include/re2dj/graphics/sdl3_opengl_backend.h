@@ -6,6 +6,7 @@
 
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/present_overlay.h"
 #include "re2dj/graphics/present_sync.h"
 
 namespace re2dj::graphics
@@ -52,6 +53,11 @@ public:
     // guest clear that does not arrive as a draw command.
     bool ClearRenderTarget(std::uint16_t rgb565_color, std::string* error);
     bool Present(std::string* error);
+    // Installs what Present draws over each composited frame, or removes it
+    // when null. Takes effect only after Initialize succeeds, since that is
+    // where the backend's state comes into being. The backend does not own the
+    // overlay, which must outlive it or be removed first.
+    void SetPresentOverlay(PresentOverlay* overlay);
     // The swap interval the driver actually applied, read back after the
     // policy was requested: 1 for vertical sync, 0 for immediate, -1 for
     // adaptive. A driver can refuse a request, so this is the value to report

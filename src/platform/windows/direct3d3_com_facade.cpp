@@ -30,6 +30,7 @@
 #include "directdraw_legacy_interop.h"
 #include "graphics_trace_log.h"
 #include "host_window_shell.h"
+#include "osd_host.h"
 #include "timer_resolution_probe.h"
 #include "window_mode.h"
 
@@ -506,6 +507,7 @@ bool PresentAndRecordCost(RootFacade* root, std::string* error)
     const bool timed = root->fps_frequency.QuadPart > 0 &&
                        QueryPerformanceCounter(&started) != FALSE;
     const bool presented = root->render_backend->Present(error);
+    re2dj::platform::windows::ReportOsdState();
     LARGE_INTEGER finished = {};
     if (timed && QueryPerformanceCounter(&finished) != FALSE)
     {
@@ -3836,6 +3838,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
             return DDERR_GENERIC;
         }
         root->render_backend = backend;
+        re2dj::platform::windows::InstallProcessOsd(backend);
         // The driver can refuse the requested interval, so the record is the
         // value that actually applied. This is the only place the present
         // policy becomes observable in a detached product run.

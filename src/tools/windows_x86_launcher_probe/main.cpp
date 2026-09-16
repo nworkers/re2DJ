@@ -10086,6 +10086,66 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                                                 runtime_path,
                                                                                 &runtime_base,
                                                                                 &error));
+    // What the on-screen display offers this run. None of it is needed to run
+    // the guest, so a failure here is recorded and the run goes on.
+    if (inject_runtime && runtime_loaded && runtime_base != 0)
+    {
+        std::string osd_error;
+        std::uint32_t target_id_rva = 0;
+        char osd_target_id[32] = {};
+        std::snprintf(osd_target_id, sizeof(osd_target_id), "%s", target->id.c_str());
+        std::uint32_t executable_name_rva = 0;
+        char osd_executable_name[64] = {};
+        std::snprintf(osd_executable_name,
+                      sizeof(osd_executable_name),
+                      "%s",
+                      executable.filename().string().c_str());
+        const bool target_id_written =
+            re2dj::platform::windows::FindPe32ExportRva(
+                runtime_path, "g_re2dj_target_id", &target_id_rva, &osd_error) &&
+            WriteRemoteBytes(child.hProcess,
+                             runtime_base + target_id_rva,
+                             reinterpret_cast<const std::uint8_t*>(osd_target_id),
+                             sizeof(osd_target_id),
+                             &osd_error) &&
+            re2dj::platform::windows::FindPe32ExportRva(
+                runtime_path, "g_re2dj_executable_name", &executable_name_rva, &osd_error) &&
+            WriteRemoteBytes(child.hProcess,
+                             runtime_base + executable_name_rva,
+                             reinterpret_cast<const std::uint8_t*>(osd_executable_name),
+                             sizeof(osd_executable_name),
+                             &osd_error);
+        // Armed only for the exact build the address was confirmed in. A
+        // declared control whose build does not match is reported, because a
+        // user expecting it would otherwise see nothing and not know why.
+        const std::uint32_t autoplay_rva =
+            re2dj::target::ArmedAutoplayFlagRva(target->game_controls, info.timestamp);
+        bool autoplay_written = autoplay_rva == 0;
+        if (autoplay_rva != 0)
+        {
+            std::uint32_t autoplay_address_rva = 0;
+            autoplay_written =
+                re2dj::platform::windows::FindPe32ExportRva(runtime_path,
+                                                            "g_re2dj_autoplay_flag_address",
+                                                            &autoplay_address_rva,
+                                                            &osd_error) &&
+                WriteRemoteU32(child.hProcess,
+                               runtime_base + autoplay_address_rva,
+                               static_cast<std::uint32_t>(main_image_base + autoplay_rva),
+                               &osd_error);
+        }
+        RecordDiagnostic(
+            "{\"event\":\"osd_controls\",\"target_id_written\":%s,\"autoplay_declared\":%s"
+            ",\"build_timestamp\":\"0x%08x\",\"executable_timestamp\":\"0x%08x\""
+            ",\"autoplay_armed\":%s,\"autoplay_written\":%s,\"error\":\"%s\"}",
+            target_id_written ? "true" : "false",
+            target->game_controls.autoplay_flag_rva != 0 ? "true" : "false",
+            static_cast<unsigned>(target->game_controls.build_timestamp),
+            static_cast<unsigned>(info.timestamp),
+            autoplay_rva != 0 ? "true" : "false",
+            autoplay_written ? "true" : "false",
+            osd_error.c_str());
+    }
     const bool handoff_requested = probe_handoff || hle_command_line || hle_windows_directory;
     std::uint32_t original_target = 0;
     std::uint32_t hook_slot_rva = 0;

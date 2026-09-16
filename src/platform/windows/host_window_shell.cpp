@@ -1,5 +1,6 @@
 #include "host_window_shell.h"
 
+#include "osd_host.h"
 #include "window_mode.h"
 
 #include <cstdlib>
@@ -110,6 +111,35 @@ bool IsDoubleClick(ClickState* state, LPARAM lparam)
     return double_click;
 }
 
+// Keeps the mouse cursor visible over the game.
+//
+// The guest hides the cursor, as a cabinet program would, through its window
+// class and ShowCursor. That leaves nothing to point with on a desktop, and the
+// on-screen display is operated with the mouse. The cursor is presentation,
+// not game logic, so it is restored here at the window boundary whenever
+// Windows asks which cursor to show over the client area; the frame keeps its
+// own resize cursors.
+bool HandleCursorMessage(UINT message, LPARAM lparam)
+{
+    if (message != WM_SETCURSOR || LOWORD(lparam) != HTCLIENT)
+    {
+        return false;
+    }
+    SetCursor(LoadCursorA(nullptr, IDC_ARROW));
+    // ShowCursor keeps a per-thread display count that the guest may have
+    // driven below zero. This runs on the window's own thread, the one whose
+    // count decides, and stops once the count is back at zero or above.
+    CURSORINFO cursor = {};
+    cursor.cbSize = sizeof(cursor);
+    if (GetCursorInfo(&cursor) != FALSE && (cursor.flags & CURSOR_SHOWING) == 0)
+    {
+        for (int attempt = 0; attempt < 64 && ShowCursor(TRUE) < 0; ++attempt)
+        {
+        }
+    }
+    return true;
+}
+
 bool HandleScaleShortcut(HWND guest_window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     const bool alt_key_message =
@@ -131,6 +161,16 @@ LRESULT CALLBACK GuestWindowProcedure(HWND window, UINT message, WPARAM wparam, 
         return DefWindowProcA(window, message, wparam, lparam);
     }
 
+    // Ahead of every other shortcut, so a message the OSD takes never also
+    // resizes the window or reaches the guest.
+    if (re2dj::platform::windows::HandleOsdWindowMessage(message, wparam, lparam))
+    {
+        return 0;
+    }
+    if (HandleCursorMessage(message, lparam))
+    {
+        return TRUE;
+    }
     if (HandleScaleShortcut(window, message, wparam, lparam))
     {
         return 0;
@@ -221,6 +261,18 @@ LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wparam, L
 {
     const HWND guest_window = reinterpret_cast<HWND>(GetPropA(window, kGuestWindowProperty));
     if ((message == WM_SETTEXT || message == WM_SETICON) && !g_host_caption_update)
+    {
+        return TRUE;
+    }
+    // Keyboard focus stays on this top-level window, not the guest child, so
+    // key messages for the OSD arrive here. Mouse messages over the guest area
+    // go to the child and are routed there instead.
+    if (guest_window != nullptr &&
+        re2dj::platform::windows::HandleOsdWindowMessage(message, wparam, lparam))
+    {
+        return 0;
+    }
+    if (guest_window != nullptr && HandleCursorMessage(message, lparam))
     {
         return TRUE;
     }

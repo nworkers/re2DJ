@@ -10,6 +10,7 @@
 | --- | --- | --- | --- |
 | SDL | 3.4.14 (`147a8ee3`) | zlib | [upstream license](https://github.com/libsdl-org/SDL/blob/release-3.4.14/LICENSE.txt) |
 | SDL_mixer | 3.2.4 (`72a81869`) | zlib | [upstream license](https://github.com/libsdl-org/SDL_mixer/blob/release-3.2.4/LICENSE.txt) |
+| Dear ImGui | 1.92.9 (`01380c57`) | MIT | [upstream license](https://github.com/ocornut/imgui/blob/v1.92.9/LICENSE.txt) |
 | libchdr | current master snapshot (`rtissera/libchdr`) | BSD-3-Clause; codec dependencies listed below | [upstream license](https://github.com/rtissera/libchdr/blob/master/LICENSE.txt) |
 | LZMA decoder (libchdr dependency) | 26.02 | Public domain | [`third_party/libchdr/deps/lzma-26.02/LICENSE`](third_party/libchdr/deps/lzma-26.02/LICENSE) |
 | miniz (libchdr dependency) | 3.1.2 | Public domain / Unlicense terms in source | [`third_party/libchdr/deps/miniz-3.1.2/miniz.h`](third_party/libchdr/deps/miniz-3.1.2/miniz.h) |

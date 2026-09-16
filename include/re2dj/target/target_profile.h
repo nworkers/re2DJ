@@ -136,6 +136,28 @@ struct TargetFingerprint
 
 // Everything that differs between EZ2DJ versions, kept out of the loader and
 // the HLE layer so both stay version-neutral.
+// Controls over the guest's own state that the on-screen display may offer.
+//
+// Each one names a variable inside the original executable, so it is valid for
+// exactly one build. The build is identified by its PE timestamp, and a control
+// is armed only when the running executable carries that timestamp: an address
+// confirmed in one build means nothing in another, and writing it there could
+// corrupt unrelated state.
+struct GameControls
+{
+    // RVA of a 32-bit flag that makes the game hit notes by itself when
+    // non-zero. Zero means this profile offers no autoplay control.
+    std::uint32_t autoplay_flag_rva = 0;
+    // PE TimeDateStamp of the build the RVA was confirmed in.
+    std::uint32_t build_timestamp = 0;
+};
+
+// The autoplay flag RVA to arm for an executable with `executable_timestamp`,
+// or zero when the profile declares none or the build is not the one it was
+// confirmed in.
+std::uint32_t ArmedAutoplayFlagRva(const GameControls& controls,
+                                   std::uint32_t executable_timestamp);
+
 struct TargetProfile
 {
     // Short identifier chosen on the command line.
@@ -160,6 +182,7 @@ struct TargetProfile
     // profiles exist.
     std::string hle_profile_id;
     TargetRunDefaults run_defaults;
+    GameControls game_controls;
     ExecutableFormatHint format_hint = ExecutableFormatHint::kWin32Pe32;
 
     // True when the profile came from a scan rather than the built-in table.

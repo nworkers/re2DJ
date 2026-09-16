@@ -173,6 +173,8 @@ struct Sdl3OpenGlBackend::Impl
     // the host rather than logged here, since this layer has no log.
     int applied_swap_interval = 0;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
+    // Drawn over the composited frame just before the swap. Not owned.
+    PresentOverlay* present_overlay = nullptr;
     bool frame_started = false;
     std::uint32_t logical_width = 0;
     std::uint32_t logical_height = 0;
@@ -1099,6 +1101,14 @@ bool Sdl3OpenGlBackend::ClearRenderTarget(std::uint16_t rgb565_color, std::strin
     return true;
 }
 
+void Sdl3OpenGlBackend::SetPresentOverlay(PresentOverlay* overlay)
+{
+    if (impl_ != nullptr)
+    {
+        impl_->present_overlay = overlay;
+    }
+}
+
 bool Sdl3OpenGlBackend::Present(std::string* error)
 {
     if (impl_ == nullptr || error == nullptr)
@@ -1234,6 +1244,12 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     {
         *error = "OpenGL RGB565 render-target presentation failed";
         return false;
+    }
+    // After the error check, so a failure inside the overlay is never reported
+    // as a failure of the guest's own frame.
+    if (impl_->present_overlay != nullptr)
+    {
+        impl_->present_overlay->DrawOverlay(pixel_width, pixel_height);
     }
     if (!SDL_GL_SwapWindow(impl_->window))
     {

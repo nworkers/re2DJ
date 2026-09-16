@@ -695,6 +695,8 @@ launcher probe의 bounded 진단 debug-event loop는 `--diagnostic-idle-timeout 
 | `re2dj_core` | 공용 코어 정적 라이브러리 |
 | `re2dj_windows_original_process_backend` | Win32 제품 CLI와 진단 launcher가 공유하는 원본-process 실행 engine |
 | `re2dj_sdl3_opengl_backend` | Win32·Linux·Web 공용 SDL3/OpenGL 렌더 backend |
+| `re2dj_imgui` | Dear ImGui 코어와 OpenGL3 렌더러 backend. 플랫폼 backend는 포함하지 않음 |
+| `re2dj_osd` | 공용 on-screen display. 입력 큐를 받아 backend의 present overlay 지점에 그림 |
 | `re2dj` | 명령행 호스트 |
 | `re2dj_hdd_probe` | HDD 디렉터리 스캔 도구 |
 | `re2dj_chd_probe` | MAME CHD header·metadata·sector와 FAT32/PE 판독 도구. `--extract`로 하위 트리를 호스트에 펼침 |
@@ -952,3 +954,24 @@ restores committed-snapshot comparison. Initial Play supplies the whole ring and
 snapshot. Later Unlock calls append only circular ranges that differ from the snapshot; an
 unchanged ring leaves the existing queue intact. Stopped-track recreation and initial-ring
 prequeue policy remain.
+
+## 2026-09-17 on-screen display / On-screen display
+
+관련 설계: [Dear ImGui OSD와 autoplay 토글](docs/design/20260917-297-imgui-osd-autoplay.md)
+
+```mermaid
+flowchart LR
+    hostproc["HostWindowProcedure<br/>백틱 / backtick"] --> osd["ui::Osd"]
+    guestproc["GuestWindowProcedure<br/>마우스 / mouse"] --> osd
+    launcher["런처 / launcher<br/>ArmedAutoplayFlagRva"] -- "g_re2dj_autoplay_flag_address" --> controls["game_controls"]
+    controls -- "정보·토글 / info, toggle" --> osd
+    backend["Sdl3OpenGlBackend::Present"] -- "PresentOverlay::DrawOverlay" --> osd
+```
+
+`include/re2dj/graphics/present_overlay.h`의 `PresentOverlay`는 backend가 게스트 이미지를 창에 합성한 뒤·swap 직전에 부르는 인터페이스다. backend는 ImGui를 모른다. 공용 `ui::Osd`(`include/re2dj/ui/osd.h`, `src/ui/osd.cpp`)가 이를 구현하며, ImGui 플랫폼 backend 대신 자체 입력 큐를 받으므로 공용 코어에 창 API가 들어오지 않는다. 숨겨져 있으면 UI 프레임을 만들지 않는다.
+
+Windows 쪽 `src/platform/windows/osd_host.*`는 프로세스당 하나인 OSD를 backend 생성 시 설치하고 창 메시지를 넘긴다. 키보드 포커스는 최상위 호스트 창에 있으므로 백틱은 `HostWindowProcedure`에서, 마우스는 자식인 게스트 창의 `GuestWindowProcedure`에서 받는다. `src/platform/windows/game_controls.*`는 런처가 써 준 대상 id·실행 파일 이름과 autoplay 주소로 정보 줄과 토글을 등록한다.
+
+게임 제어 주소는 `TargetProfile::game_controls`에 빌드 timestamp와 함께 선언되고, 런처가 `ArmedAutoplayFlagRva`로 실행 파일 timestamp와 대조해 일치할 때만 런타임에 넘긴다. 다른 빌드에서는 토글이 나타나지 않는다.
+
+*`PresentOverlay` in `include/re2dj/graphics/present_overlay.h` is what the backend calls after compositing the guest image to the window and before swapping; the backend knows nothing of ImGui. The shared `ui::Osd` (`include/re2dj/ui/osd.h`, `src/ui/osd.cpp`) implements it and takes its own input queue instead of an ImGui platform backend, keeping window APIs out of the shared core, and builds no UI frame while hidden. On Windows, `src/platform/windows/osd_host.*` installs the process's single OSD when the backend is created and routes window messages: keyboard focus stays on the top-level host window, so backtick arrives in `HostWindowProcedure`, while mouse input arrives in the child guest window's `GuestWindowProcedure`. `src/platform/windows/game_controls.*` registers the information lines and toggle from the target id, executable name and autoplay address the launcher wrote. Game-control addresses are declared in `TargetProfile::game_controls` with a build timestamp, and the launcher passes one to the runtime only when `ArmedAutoplayFlagRva` matches it against the executable's timestamp, so a different build shows no toggle.*
