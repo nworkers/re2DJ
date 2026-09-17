@@ -197,7 +197,8 @@
 - [x] [작업 294 — 작업 293 후속](work-orders/20260917-294-port-helper-dump-crosscheck.md) — 보호 빌드 `resumed` 덤프로 프로파일 helper RVA 대조. 바이트 폭 다섯 빌드 모두 일치
 - [ ] 3rd present 비용 변화 원인 — 2026-09-17 01:25~01:49 사이 실행 환경 변화 뒤 present가 약 15 ms 블록되고 60 fps로 바뀜. OSD 코드와 무관함은 A/B로 확인([작업 297 로그](work-logs/20260917-297-imgui-osd-autoplay.md))
 - [ ] `ez2dj3rd` 입력 슬롯 `0x1b`의 물리 바인딩 — 게임 내장 autoplay 토글([분석](analysis/ez2dj3rd-demo-play.md))
-- [ ] 3rd 외 타깃의 `game_controls` — 빌드별 autoplay 플래그 확인
+- [ ] 나머지 타깃의 `game_controls` — `game-state-hunt` 스킬로 빌드별 autoplay 플래그 확인. 완료: `ez2dj3rd`(작업 297), `ez2dj4th`(작업 300), `ez2dj5th`(작업 301), `ez2dj1stse`(작업 302). `ez2d2m`(작업 305). 변수 없음: `ez2dj1st`(작업 304, 데모 전용 플레이어 장면). 남은 후보: `ez2dj2nd`(덤프 미수집), `ez2dj6th`(자식 프로세스 구조로 현재 덤프 불가)
+- [x] [작업 303](work-logs/20260918-303-directsound-static-oneshot.md) — `ez2dj1stse`·`ez2dj1st` 효과음 무한 반복. `STATIC` 효과음을 스트리밍에서 제외하고 스트리밍 경로가 `DSBPLAY_LOOPING`을 따르게 함. 사용자 청취 확인
 - [ ] OSD 입력 공급의 Linux·Web 경로
 - [ ] `re2dj_windows_vfs_runtime_probe` hang 원인
 - [ ] 작업 119 — Windows x86 4th dynamic <code>GetProcAddress</code> VFS HLE

@@ -41,6 +41,28 @@ secondary buffer 생성 뒤 일반적인 upload는 `IDirectSoundBuffer::Lock`으
 - [SDL_AudioStream — SDL Wiki](https://wiki.libsdl.org/SDL3/SDL_AudioStream)
 - [MIX_SetTrackAudioStream — SDL_mixer Wiki](https://wiki.libsdl.org/SDL3_mixer/MIX_SetTrackAudioStream)
 
+## 반복 재생과 `DSBCAPS_STATIC`
+
+`IDirectSoundBuffer::Play`의 `DSBPLAY_LOOPING`은 버퍼 끝에 도달하면 처음부터 다시 재생하고 명시적으로 멈출 때까지 계속하라는 뜻이다. 이 플래그 없이 재생한 버퍼는 끝에 도달하면 스스로 멈춘다. 생성 플래그와 무관한 재생 계약이므로, HLE가 링 순환 경로로 재생하는 버퍼라도 반복 없이 재생됐다면 한 바퀴 뒤 멈춰야 한다.
+
+- [IDirectSoundBuffer::Play — Microsoft Learn](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/mt708933%28v%3Dvs.85%29)
+- [Filling and Playing Static Buffers — Microsoft Learn](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ee417553%28v%3Dvs.85%29)
+
+`DSBCAPS_STATIC`은 "버퍼가 사운드 카드 메모리에 있다"는 배치 요청일 뿐이다. Microsoft는 "static buffer"(한 번 채워 재생하는 버퍼)가 반드시 이 플래그로 만든 버퍼는 아니라고 따로 적는다. 반대로 `DSBCAPS_GETCURRENTPOSITION2`는 에뮬레이션 장치에서 재생 커서를 더 정확히 돌려받겠다는 요청이며, 스트리밍 여부를 뜻하지 않는다.
+
+- [DSBCAPS — Microsoft Learn](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ee416818%28v%3Dvs.85%29)
+
+따라서 생성 플래그만으로 링 버퍼와 일회성 버퍼를 가르는 규칙은 API 계약이 아니라 **관찰에 맞춘 휴리스틱**이다. 작업 303에서 확인한 빌드별 조합은 다음과 같다.
+
+| 빌드 | 링 버퍼 (360,448 바이트, 반복 재생) | 일회성 효과음 (반복 없음) |
+| --- | --- | --- |
+| 1st Tracks | `0x140c6` (LOCHARDWARE·STATIC·GETPOS2 포함) | `0x140c2` (STATIC·GETPOS2 포함) |
+| 1st SE | `0x140c6` | `0x140e2` (STATIC·GETPOS2 포함) |
+| 2nd, 3rd, 4th, 5th | `0x140c0` (GETPOS2 포함) | `0x40e0` (둘 다 없음) |
+| EZ2Dancer 2nd MOVE | `0x140c0` | `0x40c0` |
+
+HLE는 크기 360,448을 먼저 링으로 보고, 그 밖에는 `LOCHARDWARE` 또는 `GETCURRENTPOSITION2`가 있으면서 `STATIC`이 없을 때만 링으로 본다. 규칙이 다시 어긋나더라도 반복 없이 재생된 스트리밍 버퍼는 한 바퀴 뒤 멈추므로 끝없는 반복으로 번지지 않는다.
+
 ---
 
 # Legacy DirectSound Secondary-Buffer Contract
@@ -58,3 +80,21 @@ from consumption alone replays the initial segment every 1–2 seconds when the 
 refreshed that range. Identical PCM writes need an explicit write range or synchronized pull
 contract. SDL3 `SDL_AudioStream` connected through `MIX_SetTrackAudioStream` supplies the
 streaming PCM input.
+
+`DSBPLAY_LOOPING` on `IDirectSoundBuffer::Play` restarts the buffer from its beginning at the
+end and keeps playing until explicitly stopped; a buffer played without it stops by itself at
+the end. That is a play-time contract independent of creation flags, so a buffer the HLE plays
+through its ring-cycling path must still stop after one pass when played without looping.
+`DSBCAPS_STATIC` only requests on-board sound card memory, and Microsoft notes that a "static
+buffer" (filled once, then played) is not necessarily one created with that flag, while
+`DSBCAPS_GETCURRENTPOSITION2` only asks for a more accurate play cursor on emulated devices.
+Telling rings from one-shot buffers by creation flags is therefore a **heuristic fitted to
+observation**, not an API contract. In task 303, 1st Tracks and 1st SE rings were `0x140c6`
+with effects `0x140c2` and `0x140e2` (both STATIC with GETCURRENTPOSITION2); 2nd through 5th
+rings `0x140c0` with effects `0x40e0`; EZ2Dancer 2nd MOVE rings `0x140c0` with effects
+`0x40c0`. The HLE treats the 360,448-byte size as a ring first, and otherwise only a buffer with
+`LOCHARDWARE` or `GETCURRENTPOSITION2` and without `STATIC`. Should that rule drift again, a
+non-looping streaming play still stops after one pass instead of repeating forever.
+[IDirectSoundBuffer::Play](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/mt708933%28v%3Dvs.85%29),
+[Filling and Playing Static Buffers](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ee417553%28v%3Dvs.85%29),
+[DSBCAPS](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ee416818%28v%3Dvs.85%29).

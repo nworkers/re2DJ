@@ -66,6 +66,9 @@
 /cfg*/
 
 
+# Python bytecode caches written when the analysis scripts under .agents/ run.
+__pycache__/
+
 # Local diagnostics: whole-run captures regenerated on demand.
 /logs/
 re2dj_*.log

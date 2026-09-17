@@ -8,6 +8,7 @@
 #include <new>
 
 #include "../../audio/sdl3_mixer_audio_backend.h"
+#include "re2dj/audio/directsound_buffer_policy.h"
 #include "re2dj/audio/legacy_audio_buffer.h"
 #include "audio_volume_trace.h"
 #include "timer_resolution_probe.h"
@@ -250,8 +251,8 @@ public:
         {
             return false;
         }
-        return (flags_ & (DSBCAPS_LOCHARDWARE | DSBCAPS_GETCURRENTPOSITION2)) != 0 ||
-               buffer_.byte_count() == 360448;
+        return re2dj::audio::IsStreamingBufferDescription(
+            static_cast<std::uint32_t>(flags_), static_cast<std::uint32_t>(buffer_.byte_count()));
     }
     DWORD flags() const { return flags_; }
     DWORD byte_count() const { return static_cast<DWORD>(buffer_.byte_count()); }

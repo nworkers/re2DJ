@@ -38,6 +38,14 @@ public:
         std::size_t stream_read_position = 0;
         std::size_t stream_block_align = 1;
         std::vector<std::byte> stream_ring;
+        // Set when a streaming voice was played without DSBPLAY_LOOPING. Such a
+        // play delivers the ring once, from its start position to the end of
+        // the buffer, and then lets the track run dry and halt, which is what
+        // DirectSound does with a non-looping play regardless of how the buffer
+        // was created. Written before the track starts and read on the audio
+        // thread, hence atomic.
+        std::atomic<bool> stream_once{false};
+        std::atomic<std::size_t> stream_once_remaining{0};
         std::atomic<bool> cooked_trace_armed{false};
         std::atomic<unsigned> cooked_trace_count{0};
         std::atomic<bool> last_play_continued{false};

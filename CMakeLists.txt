@@ -260,6 +260,7 @@ endif()
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
     src/analysis/code_region_score.cpp
+    src/audio/directsound_buffer_policy.cpp
     src/audio/legacy_audio_buffer.cpp
     src/config/hardlock_secret_config.cpp
     src/hle/hardlock/handshake_response.cpp
@@ -399,6 +400,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     )
     if(RE2DJ_ENABLE_SDL3_AUDIO)
         target_sources(re2dj_windows_injected_runtime PRIVATE
+            src/audio/directsound_buffer_policy.cpp
             src/audio/legacy_audio_buffer.cpp
             src/audio/sdl3_mixer_audio_backend.cpp
             src/platform/windows/directsound_com_facade.cpp
@@ -578,6 +580,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/legacy_texture_test.cpp
         tests/unit/legacy_transform_test.cpp
         tests/unit/legacy_vertex_buffer_test.cpp
+        tests/unit/directsound_buffer_policy_test.cpp
         tests/unit/legacy_audio_buffer_test.cpp
         tests/unit/mame_chd_test.cpp
         tests/unit/fat32_chd_test.cpp

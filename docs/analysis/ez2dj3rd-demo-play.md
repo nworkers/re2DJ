@@ -33,9 +33,11 @@
 | `0x00431914` | 2 | 문자열 쓰기 / string write |
 | `0x00431b47` | 2 | 문자열 계열 / string family |
 
-묶인 키는 INI 파일의 25개 키와 **정확히 같은 집합**이다. autoplay·demo에 해당하는 키는 없다. 따라서 **autoplay는 저장되는 설정이 아니다.** [보호 빌드의 런타임 복호화](protected-build-runtime-decryption.md) 4절의 "`AutoPlay`는 INI 키가 아니다"를 레지스트리 수준에서 다시 확인한 것이다.
+묶인 키는 INI 파일의 25개 키 중 **24개**이며, autoplay·demo에 해당하는 키는 없다. 따라서 **autoplay는 저장되는 설정이 아니다.** 나머지 하나인 `UseIOCard`는 코드가 참조하지 않는다. 덤프에 있는 `UseIOCard` 문자열은 참조 없는 런타임 사본뿐이다.
 
-*The bound keys are **exactly the same set** as the INI file's 25 keys, with nothing for autoplay or demo. **Autoplay is not a stored setting**, which reconfirms at the registry level section 4 of [runtime decryption in protected builds](protected-build-runtime-decryption.md).*
+**정정 (작업 300).** 처음에는 "INI의 25개 키와 정확히 같은 집합"이라고 적었다. 작업 300에서 `settings_registry.py`로 전수 수집하자 24개였고 `UseIOCard`가 빠져 있었다. autoplay에 대한 결론은 바뀌지 않는다. [보호 빌드의 런타임 복호화](protected-build-runtime-decryption.md) 4절의 "`AutoPlay`는 INI 키가 아니다"를 레지스트리 수준에서 다시 확인한 것이다.
+
+*The bound keys are **24** of the INI file's 25, with nothing for autoplay or demo; the remaining `UseIOCard` is not referenced by code, and the only `UseIOCard` string in the dump is an unreferenced run-time copy. Correction (task 300): this first read "exactly the same set as the INI's 25 keys"; collecting them exhaustively with `settings_registry.py` in task 300 gave 24 with `UseIOCard` missing, which leaves the autoplay conclusion unchanged. **Autoplay is not a stored setting**, which reconfirms at the registry level section 4 of [runtime decryption in protected builds](protected-build-runtime-decryption.md).*
 
 부수적으로 확인된 변수 주소다. / *Variable addresses confirmed along the way:*
 

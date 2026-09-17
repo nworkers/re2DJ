@@ -144,10 +144,50 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax, 4th Trax, 5th, 6th 덤
 
 **확인됨 — 3rd는 MSVC 디버그 구성이다.** 지역 변수 `0xcccccccc` 채움, 스택 검사, incremental-link thunk가 있어 함수 경계와 호출 대상이 정적으로 드러난다.
 
-**확인됨 — 3rd의 INI는 자체 파서이고 설정은 키-주소 레지스트리다.** 섹션 없는 따옴표 키 형식이며, 설정 객체 `[0x004edbc8]`에 묶인 키는 INI의 25개 키와 정확히 같다. `AutoPlay` 키는 없다.
+**확인됨 — 3rd의 INI는 자체 파서이고 설정은 키-주소 레지스트리다.** 섹션 없는 따옴표 키 형식이며, 설정 객체 `[0x004edbc8]`에 묶인 키는 INI의 25개 키 중 24개이고, 나머지 `UseIOCard`는 코드가 참조하지 않는다. `AutoPlay` 키는 없다. (작업 300에서 "25개와 정확히 같다"를 정정)
 
 **확인됨 — 3rd의 데모와 autoplay는 별개 플래그다.** 데모 시작 루틴 `0x0048aa31`은 게임 장면을 동기 실행하며 데모 플래그 `[0x00a2946c]`(오버레이·입력 해제·음소거·입력 시 종료)와 autoplay 플래그 `[0x00a29508]`를 짝으로 세운다. autoplay 플래그만 1로 쓰면 데모 부작용 없이 게임이 노트를 치며, 값은 **곡 시작 때 고정**된다. 입력 매니저는 매 프레임 슬롯 `0x1b`로 이 값을 뒤집는다. 슬롯 `0x1b`의 물리 바인딩은 **미확정**이다.
 
 **확인됨 — 3rd의 프레임 루프는 `목표 - 경과` sleep 피드백이다.** 목표 주기는 약 17 ms로 **추정**되며 원본 상수는 **미확정**이다. 현재 프레임률은 정적 링크된 SDL3의 기본 `timeBeginPeriod(1)`에 의존한다.
 
 **확인됨 — 3rd는 마우스 커서를 숨긴다.** `ShowCursor`·`SetCursor`를 import 한다. re2DJ는 창 경계에서 커서를 되살린다.
+
+## 2026-09-18 4th 데모와 autoplay 플래그 (작업 300)
+
+근거 분석: [4th 데모 플레이와 autoplay 플래그](analysis/ez2dj4th-demo-play.md)
+
+**확인됨 — 4th는 3rd와 같은 구조다.** TimeDateStamp `0x3d369bfd` 빌드에서 설정 레지스트리 `[0x005111e0]`(24개 키, `AutoPlay` 없음), 데모 플래그 `[0x00ac290c]`, 데모 시작 루틴 `0x004a4430`, autoplay 플래그 `[0x00ac29b0]`(setter `0x00437600`, getter `0x004375f0`)가 3rd와 같은 방식으로 연결된다. 어트랙트에서 두 플래그가 데모 구간에만 함께 1이 되고, OSD로 autoplay를 켜 곡이 자동 연주됨을 사용자가 확인했다. 노트 판정 계열 getter 호출처가 두 벌이어서 게임 모드가 둘인 것으로 **추정**한다.
+
+## 2026-09-18 5th 데모와 autoplay 플래그 (작업 301)
+
+근거 분석: [5th 데모 플레이와 autoplay 플래그](analysis/ez2dj5th-demo-play.md)
+
+**확인됨 — 5th도 3rd·4th와 같은 구조다.** TimeDateStamp `0x3f53377b` 빌드에서 설정 레지스트리 `[0x00516350]`(26개 키, `AutoPlay` 없음), 데모 플래그 `[0x00aee194]`, 데모 시작 루틴 `0x004aabf7`, autoplay 플래그 `[0x00aee238]`(setter `0x00437790`, getter `0x00437780`)가 같은 방식으로 연결된다. 어트랙트에서 두 플래그가 데모 구간에만 함께 1이 되고, OSD로 autoplay를 켜 곡이 자동 연주됨을 사용자가 확인했다.
+
+**추정 — 5th는 부분 자동 설정을 새로 갖는다.** 4th에 없던 `AutoScratch`·`AutoPedal` 키가 레지스트리에 묶이며, 첫 판정 계열의 노트 데이터 필드가 12바이트 뒤(`+0x1d8`)로 밀렸다. 실제 동작은 미확정이다.
+
+## 2026-09-18 1st SE 장면 엔진과 autoplay 플래그 (작업 302)
+
+근거 분석: [1st SE 자동 플레이 장면과 autoplay 플래그](analysis/ez2dj1stse-demo-play.md)
+
+**확인됨 — 1st SE CHD 빌드는 장면 엔진이다.** TimeDateStamp `0x3862df27` 빌드는 등록 함수 `0x00423670`으로 60개 장면을 등록하며, 데모는 전용 장면 `DemoGame`·`ClubMixDemoGame`, 오버레이는 `ShowDemoPlay` 장면이다. 3rd~5th의 "데모 플래그 + 일반 게임 장면" 구조와 다르다.
+
+**확인됨 — autoplay 플래그는 `[0x01c3f3a4]`이다.** 스스로 플레이하는 세 장면(`DemoGame`, `ClubMixDemoGame`, `HowToPlayGame`)이 초기화 콜백에서 1, 종료 콜백에서 0으로 쓰고, 플레이어 장면들이 자동·수동 분기와 입력 처리에 읽으며, 곡 재생기 시작에 인자로 넘긴다. 어트랙트 읽기 폴링과 사용자의 OSD 확인으로 동작을 확인했다.
+
+**확인됨 — 효과음 버퍼 생성 플래그는 `0x000140e2`(`DSBCAPS_STATIC | GETCURRENTPOSITION2` 등)이다.** 현재 DirectSound HLE가 이를 스트리밍으로 분류하는 것은 원본 구조가 아니라 re2DJ 쪽 문제다.
+
+## 2026-09-18 1st Tracks 데모 전용 플레이어 장면 (작업 304)
+
+근거 분석: [1st Tracks 자동 플레이 장면](analysis/ez2dj1st-demo-play.md)
+
+**확인됨 — 1st Tracks도 장면 엔진이지만 데모 전용 플레이어 장면이 있다.** TimeDateStamp `0x3862fd9d` 빌드는 등록 함수 `0x00424280`으로 53개 장면을 등록하고, 일반 `player`와 별도로 `DemoPlayer`·`ClubMixDemoPlayer`를 둔다. 곡 재생기 `0x0041af60`에 데모 장면만 상수 1을 넘기며, 그 값이 저장되는 `[0x0055bc4c]`는 곡 진행 모듈만 읽는다. 곡 도중 1로 써도 변화가 없었다.
+
+**추정 — 1st Tracks에는 전환 가능한 autoplay 변수가 없다.** 자동 연주는 데모 플레이어 장면의 복제된 코드에 있다고 보며, `game_controls`로 표현하지 않는다.
+
+## 2026-09-18 EZ2Dancer 2nd MOVE 데모와 autoplay 플래그 (작업 305)
+
+근거 분석: [EZ2Dancer 2nd MOVE 데모와 autoplay 플래그](analysis/ez2d2m-demo-play.md)
+
+**확인됨 — `ez2d2m`은 클래스 쌍 구조다.** TimeDateStamp `0x3a5f074c` 빌드는 장면 등록 함수 없이 `NormalGame`·`DemoGame`처럼 클래스마다 `OnCreateGame`·`OnDestroyGame`과 Director를 두고, 각 함수가 자기 이름 문자열을 로그 함수에 넘긴다.
+
+**확인됨 — autoplay 플래그는 `[0x007fa424]`다.** `NormalGame::OnCreateGame`이 이 값이 1일 때만 채널 3~`0x12`를 자동으로 설정하고, 데모는 같은 값을 상수로 쓴다. 게임에 내장된 토글이 입력 슬롯 `0xc`로 이 값을 뒤집는다. 데모가 이 플래그를 쓰지 않으므로 어트랙트 폴링으로는 확인할 수 없고, OSD 토글로 자동 연주를 확인했다.

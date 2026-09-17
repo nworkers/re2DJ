@@ -278,6 +278,14 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // correctness for this executable is still unconfirmed.
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x00038987;
             entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000389ab;
+            // Autoplay flag of this CHD build. 1st SE is a scene engine rather than
+            // 3rd's flat routines: the self-playing scenes (DemoGame,
+            // ClubMixDemoGame, HowToPlayGame) set it in their init callback and
+            // clear it in their destroy callback, and the player scenes read it.
+            // Confirmed in this build's resumed dump and by read-only polling
+            // during attract (task 302).
+            entry.profile.game_controls.autoplay_flag_rva = 0x0183f3a4;
+            entry.profile.game_controls.build_timestamp = 0x3862df27;
             // Confirmed by the device trace: this build opens \\.\NTICE, fails,
             // then opens \\.\FEnteDev. It never opens the \\.\LPTDI device the
             // extracted .gtide build used, so the LPTDI target-state probe has
@@ -396,6 +404,12 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // of an untrapped `out dx, al` once graphics initialization got
             // past device creation.
             entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000c384b;
+            // The game's own autoplay flag, found the same way as 3rd's: the demo
+            // start routine sets it paired with the demo flag, and the note
+            // path reads it through a getter. Confirmed in this build's
+            // resumed dump and by read-only polling during attract (task 300).
+            entry.profile.game_controls.autoplay_flag_rva = 0x006c29b0;
+            entry.profile.game_controls.build_timestamp = 0x3d369bfd;
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix =
                 "\\\\.\\FEnteDev";
@@ -441,6 +455,12 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // faulting instruction address, so these are the opcode bytes.
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000ca067;
             entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x000ca09b;
+            // The game's own autoplay flag, paired with the demo flag in the demo
+            // start routine and read on note arrival and note end, as in 3rd and
+            // 4th. Confirmed in this build's resumed dump and by read-only polling
+            // during attract (task 301).
+            entry.profile.game_controls.autoplay_flag_rva = 0x006ee238;
+            entry.profile.game_controls.build_timestamp = 0x3f53377b;
             table.push_back(std::move(entry));
         }
 
@@ -526,6 +546,14 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // first and execution stopped there. Zero leaves that direction to
             // opcode matching, which the pinned width makes unambiguous.
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0;
+            // Autoplay flag of this build. Unlike the EZ2DJ builds the demo never
+            // sets it: DemoGame::OnCreateGame puts every channel in automatic mode
+            // with constants, while NormalGame::OnCreateGame does so only when this
+            // flag is 1, so it takes effect when the next song starts. Confirmed in
+            // this build's resumed dump and by a write test in a normal song
+            // (task 305).
+            entry.profile.game_controls.autoplay_flag_rva = 0x003fa424;
+            entry.profile.game_controls.build_timestamp = 0x3a5f074c;
             entry.profile.run_defaults.run_detached = true;
             // The image is a Windows 98 SE boot disk whose MSDOS.SYS reads
             // HostWinBootDrv=C, and the game sits at that volume's root.

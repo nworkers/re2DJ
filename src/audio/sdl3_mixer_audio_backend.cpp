@@ -167,6 +167,13 @@ void Sdl3MixerAudioBackend::StreamingGetCallback(void* userdata,
     const std::size_t align = (std::max<std::size_t>)(1, voice->stream_block_align);
     std::size_t remaining = static_cast<std::size_t>(additional_amount);
     remaining = ((remaining + align - 1) / align) * align;
+    const bool once = voice->stream_once.load();
+    if (once)
+    {
+        // A non-looping play stops feeding at the end of the buffer; the track
+        // then drains what is queued and halts on its own.
+        remaining = (std::min)(remaining, voice->stream_once_remaining.load());
+    }
     while (remaining != 0)
     {
         const std::size_t available = voice->stream_ring.size() - voice->stream_read_position;
@@ -177,6 +184,10 @@ void Sdl3MixerAudioBackend::StreamingGetCallback(void* userdata,
         voice->stream_read_position =
             (voice->stream_read_position + bytes) % voice->stream_ring.size();
         remaining -= bytes;
+        if (once)
+        {
+            voice->stream_once_remaining.store(voice->stream_once_remaining.load() - bytes);
+        }
     }
 }
 bool Sdl3MixerAudioBackend::SetMasterGain(float gain)
@@ -294,6 +305,9 @@ bool Sdl3MixerAudioBackend::Play(Voice* voice, const LegacyAudioBuffer& buffer, 
         voice->stream_block_align =
             (std::max<std::uint16_t>)(1, buffer.format().block_align);
         voice->stream_ring.assign(buffer.samples().begin(), buffer.samples().end());
+        voice->stream_once_remaining.store(buffer.looping() ? 0 :
+            buffer.samples().size() - voice->stream_read_position);
+        voice->stream_once.store(!buffer.looping());
     }
     else
     {
@@ -317,7 +331,7 @@ bool Sdl3MixerAudioBackend::Play(Voice* voice, const LegacyAudioBuffer& buffer, 
                               streaming ? 0 : (buffer.looping() ? -1 : 0)) &&
         (!streaming || SDL_SetBooleanProperty(options,
                                                MIX_PROP_PLAY_HALT_WHEN_EXHAUSTED_BOOLEAN,
-                                               false));
+                                               !buffer.looping()));
     const bool played = configured && MIX_PlayTrack(voice->track, options);
     SDL_DestroyProperties(options);
     if (played && streaming) voice->cooked_trace_count.store(0);

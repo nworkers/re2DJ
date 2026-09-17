@@ -86,6 +86,20 @@ Read and update the relevant documents before making architectural changes.
 
 ---
 
+## 에이전트 스킬
+
+반복되는 조사·작업 절차는 `.agents/skills/<name>/SKILL.md`에 스킬로 둔다. 특정 에이전트 전용 경로가 아니므로 모든 에이전트가 같은 스킬을 쓴다. 요청이 스킬의 설명에 해당하면 먼저 그 `SKILL.md`를 읽고 따른다.
+
+* `game-state-hunt` — 원본 실행 파일에서 autoplay 같은 게임 상태 변수를 찾아 빌드 한정 `game_controls`로 연결하는 절차와 분석 스크립트
+
+## Agent Skills
+
+Repeated investigation and work procedures live as skills in `.agents/skills/<name>/SKILL.md`. The path is not tied to any one agent, so every agent uses the same skills. When a request matches a skill's description, read and follow its `SKILL.md` first.
+
+* `game-state-hunt` — the procedure and analysis scripts for finding a game-state variable such as autoplay in an original executable and wiring it in as a build-bound `game_controls` entry
+
+---
+
 ## 핵심 원칙
 
 1. 사용자 요구사항을 받으면 바로 구현하지 말고 먼저 설계를 작성하거나 기존 설계를 갱신한다.

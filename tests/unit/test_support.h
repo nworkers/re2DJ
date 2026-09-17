@@ -89,6 +89,7 @@ void RunLegacyTextureTests(re2dj::test::Context& context);
 void RunLegacyTransformTests(re2dj::test::Context& context);
 void RunLegacyVertexBufferTests(re2dj::test::Context& context);
 void RunLegacyAudioBufferTests(re2dj::test::Context& context);
+void RunDirectSoundBufferPolicyTests(re2dj::test::Context& context);
 void RunMameChdTests(re2dj::test::Context& context);
 void RunFat32ChdTests(re2dj::test::Context& context);
 void RunChdHunkCacheTests(re2dj::test::Context& context);

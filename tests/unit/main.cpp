@@ -39,6 +39,7 @@ int main()
     RunLegacyTransformTests(context);
     RunLegacyVertexBufferTests(context);
     RunLegacyAudioBufferTests(context);
+    RunDirectSoundBufferPolicyTests(context);
     RunMameChdTests(context);
     RunFat32ChdTests(context);
     RunChdHunkCacheTests(context);

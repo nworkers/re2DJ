@@ -78,6 +78,35 @@ int main()
         !backend.IsPlaying(voice))
         passed = false;
     backend.Stop(voice);
+
+    // A streaming buffer played without DSBPLAY_LOOPING plays once and halts,
+    // as DirectSound does; before task 303 it cycled forever.
+    {
+        LegacyAudioBuffer once({2, 44100, 16, 4}, 4410);
+        LegacyAudioLock once_lock;
+        if (!once.Lock(0, 0, true, &once_lock)) return 6;
+        std::memset(once_lock.first.data(), 0x10, once_lock.first.size());
+        auto* once_voice = backend.CreateVoice();
+        if (once_voice == nullptr) return 7;
+        once.set_playing(true, false);
+        if (!backend.Play(once_voice, once, true) || !backend.IsPlaying(once_voice))
+        {
+            std::fprintf(stderr, "Non-looping streaming play did not start\n");
+            passed = false;
+        }
+        bool halted = false;
+        for (int tick = 0; tick < 100 && !halted; ++tick)
+        {
+            SDL_Delay(10);
+            halted = !backend.IsPlaying(once_voice);
+        }
+        if (!halted)
+        {
+            std::fprintf(stderr, "Non-looping streaming play never halted\n");
+            passed = false;
+        }
+        backend.DestroyVoice(once_voice);
+    }
     backend.DestroyVoice(voice);
     return passed ? 0 : 4;
 }

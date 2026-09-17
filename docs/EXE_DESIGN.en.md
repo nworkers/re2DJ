@@ -145,10 +145,50 @@ Analysis: [runtime decryption in protected builds](analysis/protected-build-runt
 
 **Confirmed — 3rd is an MSVC debug configuration**, with `0xcccccccc` local fills, stack checks and incremental-link thunks, so function boundaries and call targets read out statically.
 
-**Confirmed — 3rd parses its own INI, and its settings are a key-to-address registry.** The format is sectionless with quoted keys, and the keys bound to the settings object `[0x004edbc8]` are exactly the INI's 25 keys. There is no `AutoPlay` key.
+**Confirmed — 3rd parses its own INI, and its settings are a key-to-address registry.** The format is sectionless with quoted keys, and 24 of the INI's 25 keys are bound to the settings object `[0x004edbc8]`, the remaining `UseIOCard` being unreferenced by code. There is no `AutoPlay` key. (Corrected in task 300 from "exactly the INI's 25 keys".)
 
 **Confirmed — 3rd's demo and autoplay are separate flags.** The demo start routine `0x0048aa31` runs the game scene synchronously and sets, as a pair, the demo flag `[0x00a2946c]` (overlay, unbound input, muting, ending on input) and the autoplay flag `[0x00a29508]`. Writing only the autoplay flag to 1 makes the game hit notes without demo side effects, and the value is **latched at song start**. The input manager flips it every frame slot `0x1b` is pressed; that slot's physical binding is **unresolved**.
 
 **Confirmed — 3rd's frame loop is a `target - elapsed` sleep feedback.** The target period is **inferred** at about 17 ms with the original constant **unresolved**, and today's frame rate depends on statically linked SDL3's default `timeBeginPeriod(1)`.
 
 **Confirmed — 3rd hides the mouse cursor**, importing `ShowCursor` and `SetCursor`; re2DJ restores it at the window boundary.
+
+## 2026-09-18 4th demo and autoplay flags (task 300)
+
+Analysis: [4th demo play and the autoplay flag](analysis/ez2dj4th-demo-play.md)
+
+**Confirmed — 4th shares 3rd's structure.** In the TimeDateStamp `0x3d369bfd` build the settings registry `[0x005111e0]` (24 keys, no `AutoPlay`), the demo flag `[0x00ac290c]`, the demo start routine `0x004a4430` and the autoplay flag `[0x00ac29b0]` (setter `0x00437600`, getter `0x004375f0`) connect exactly as in 3rd. Both flags are 1 together only during demos in attract, and the user confirmed that turning autoplay on in the OSD makes a song play itself. The note-judgement getter sites come in two sets, **inferred** to be two game modes.
+
+## 2026-09-18 5th demo and autoplay flags (task 301)
+
+Analysis: [5th demo play and the autoplay flag](analysis/ez2dj5th-demo-play.md)
+
+**Confirmed — 5th shares the 3rd and 4th structure.** In the TimeDateStamp `0x3f53377b` build the settings registry `[0x00516350]` (26 keys, no `AutoPlay`), the demo flag `[0x00aee194]`, the demo start routine `0x004aabf7` and the autoplay flag `[0x00aee238]` (setter `0x00437790`, getter `0x00437780`) connect the same way. Both flags are 1 together only during demos in attract, and the user confirmed that turning autoplay on in the OSD makes a song play itself.
+
+**Inferred — 5th adds partial-auto settings.** `AutoScratch` and `AutoPedal`, absent in 4th, are bound in the registry, and the first judgement set's note-data field moved 12 bytes later (`+0x1d8`). Their actual behavior is unresolved.
+
+## 2026-09-18 1st SE scene engine and autoplay flag (task 302)
+
+Analysis: [1st SE self-playing scenes and the autoplay flag](analysis/ez2dj1stse-demo-play.md)
+
+**Confirmed — the 1st SE CHD build is a scene engine.** The TimeDateStamp `0x3862df27` build registers 60 scenes through `0x00423670`; the demo is the dedicated scenes `DemoGame` and `ClubMixDemoGame`, and the overlay is the `ShowDemoPlay` scene, unlike 3rd-5th's demo flag over a normal game scene.
+
+**Confirmed — the autoplay flag is `[0x01c3f3a4]`.** The three self-playing scenes (`DemoGame`, `ClubMixDemoGame`, `HowToPlayGame`) write it to 1 in their init callback and 0 in their destroy callback, the player scenes read it for their auto/manual branch and input handling, and it is passed into the chart player when a song starts. A read-only attract poll and the user's OSD check confirmed it.
+
+**Confirmed — sound-effect buffers are created with `0x000140e2`** (`DSBCAPS_STATIC | GETCURRENTPOSITION2` and others). That the DirectSound HLE currently classifies them as streaming is a re2DJ problem, not the original's structure.
+
+## 2026-09-18 1st Tracks dedicated demo player scenes (task 304)
+
+Analysis: [1st Tracks self-playing scenes](analysis/ez2dj1st-demo-play.md)
+
+**Confirmed — 1st Tracks is also a scene engine, but with dedicated demo player scenes.** The TimeDateStamp `0x3862fd9d` build registers 53 scenes through `0x00424280` and keeps `DemoPlayer` and `ClubMixDemoPlayer` apart from the normal `player`. Only the demo scenes pass a constant 1 to the chart player `0x0041af60`; the value it stores, `[0x0055bc4c]`, is read only by the chart module, and writing 1 mid-song changed nothing.
+
+**Inferred — 1st Tracks has no switchable autoplay variable.** Automatic play is taken to live in the demo player scenes' duplicated code, and it is not expressed as `game_controls`.
+
+## 2026-09-18 EZ2Dancer 2nd MOVE demo and autoplay flag (task 305)
+
+Analysis: [EZ2Dancer 2nd MOVE demo and the autoplay flag](analysis/ez2d2m-demo-play.md)
+
+**Confirmed — `ez2d2m` is built from paired classes.** The TimeDateStamp `0x3a5f074c` build has no scene registration function; each class such as `NormalGame` and `DemoGame` carries its own `OnCreateGame`, `OnDestroyGame` and Director, and each function passes its own name string to the logging function.
+
+**Confirmed — the autoplay flag is `[0x007fa424]`.** `NormalGame::OnCreateGame` puts channels 3-`0x12` in automatic mode only when it is 1, where the demo writes the same values as constants, and a toggle built into the game flips it from input slot `0xc`. Because the demo does not use the flag, attract polling cannot confirm it; the OSD toggle did.
