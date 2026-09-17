@@ -15,54 +15,98 @@ struct ButtonBinding
 {
     const char* name;
     re2dj::input::Ez2DjButton button;
+    // The key this binding carries with no configuration file, written the way
+    // an INI would write it so both go through the same interpretation. These
+    // match config/ez2dj-io.example.ini, which a unit test enforces.
+    const char* default_key;
 };
 
 constexpr ButtonBinding kButtonBindings[] = {
-    {"p1_start", re2dj::input::Ez2DjButton::kPlayer1Start},
-    {"p2_start", re2dj::input::Ez2DjButton::kPlayer2Start},
-    {"effector1", re2dj::input::Ez2DjButton::kEffector1},
-    {"effector2", re2dj::input::Ez2DjButton::kEffector2},
-    {"effector3", re2dj::input::Ez2DjButton::kEffector3},
-    {"effector4", re2dj::input::Ez2DjButton::kEffector4},
-    {"service", re2dj::input::Ez2DjButton::kService},
-    {"test", re2dj::input::Ez2DjButton::kTest},
-    {"coin", re2dj::input::Ez2DjButton::kCoin},
-    {"p1_1", re2dj::input::Ez2DjButton::kPlayer1Key1},
-    {"p1_2", re2dj::input::Ez2DjButton::kPlayer1Key2},
-    {"p1_3", re2dj::input::Ez2DjButton::kPlayer1Key3},
-    {"p1_4", re2dj::input::Ez2DjButton::kPlayer1Key4},
-    {"p1_5", re2dj::input::Ez2DjButton::kPlayer1Key5},
-    {"p1_pedal", re2dj::input::Ez2DjButton::kPlayer1Pedal},
-    {"p2_1", re2dj::input::Ez2DjButton::kPlayer2Key1},
-    {"p2_2", re2dj::input::Ez2DjButton::kPlayer2Key2},
-    {"p2_3", re2dj::input::Ez2DjButton::kPlayer2Key3},
-    {"p2_4", re2dj::input::Ez2DjButton::kPlayer2Key4},
-    {"p2_5", re2dj::input::Ez2DjButton::kPlayer2Key5},
-    {"p2_pedal", re2dj::input::Ez2DjButton::kPlayer2Pedal},
+    {"p1_start", re2dj::input::Ez2DjButton::kPlayer1Start, "1"},
+    {"p2_start", re2dj::input::Ez2DjButton::kPlayer2Start, "2"},
+    {"effector1", re2dj::input::Ez2DjButton::kEffector1, "Q"},
+    {"effector2", re2dj::input::Ez2DjButton::kEffector2, "W"},
+    {"effector3", re2dj::input::Ez2DjButton::kEffector3, "E"},
+    {"effector4", re2dj::input::Ez2DjButton::kEffector4, "R"},
+    {"service", re2dj::input::Ez2DjButton::kService, "F2"},
+    {"test", re2dj::input::Ez2DjButton::kTest, "F1"},
+    {"coin", re2dj::input::Ez2DjButton::kCoin, "F5"},
+    {"p1_1", re2dj::input::Ez2DjButton::kPlayer1Key1, "Z"},
+    {"p1_2", re2dj::input::Ez2DjButton::kPlayer1Key2, "S"},
+    {"p1_3", re2dj::input::Ez2DjButton::kPlayer1Key3, "X"},
+    {"p1_4", re2dj::input::Ez2DjButton::kPlayer1Key4, "D"},
+    {"p1_5", re2dj::input::Ez2DjButton::kPlayer1Key5, "C"},
+    {"p1_pedal", re2dj::input::Ez2DjButton::kPlayer1Pedal, "SPACE"},
+    {"p2_1", re2dj::input::Ez2DjButton::kPlayer2Key1, "NUMPAD1"},
+    {"p2_2", re2dj::input::Ez2DjButton::kPlayer2Key2, "NUMPAD2"},
+    {"p2_3", re2dj::input::Ez2DjButton::kPlayer2Key3, "NUMPAD3"},
+    {"p2_4", re2dj::input::Ez2DjButton::kPlayer2Key4, "NUMPAD4"},
+    {"p2_5", re2dj::input::Ez2DjButton::kPlayer2Key5, "NUMPAD5"},
+    {"p2_pedal", re2dj::input::Ez2DjButton::kPlayer2Pedal, "DECIMAL"},
 };
+
+struct TurntableBinding
+{
+    const char* name;
+    const char* default_key;
+};
+
+constexpr TurntableBinding kTurntableBindings[] = {
+    {"p1_negative", "LSHIFT"},
+    {"p1_positive", "TAB"},
+    {"p2_negative", "ENTER"},
+    {"p2_positive", "RSHIFT"},
+};
+
+constexpr std::uint8_t kDefaultTurntableStep = 4;
 
 }  // namespace
 
 bool Ez2DjKeyboardInput::Initialize(const char* path, std::string* error)
 {
-    if (path == nullptr || path[0] == '\0' || error == nullptr)
+    if (error == nullptr)
     {
         return false;
     }
+    const bool has_file = path != nullptr && path[0] != '\0';
     for (const ButtonBinding& binding : kButtonBindings)
     {
         int key = 0;
-        if (!ReadKeyboardKeyBinding(path, "buttons", binding.name, &key, error)) return false;
+        if (!ParseKeyboardKeyName(binding.default_key, &key))
+        {
+            *error = std::string("built-in default is not a key name: ") + binding.default_key;
+            return false;
+        }
+        bool present = false;
+        if (has_file &&
+            !ReadKeyboardKeyBinding(path, "buttons", binding.name, &key, &present, error))
+        {
+            return false;
+        }
         button_keys_[static_cast<std::size_t>(binding.button)] = key;
     }
-    constexpr const char* kTurntableNames[] = {
-        "p1_negative", "p1_positive", "p2_negative", "p2_positive"};
     for (std::size_t index = 0; index < turntable_keys_.size(); ++index)
     {
-        if (!ReadKeyboardKeyBinding(path, "turntables", kTurntableNames[index],
-                                    &turntable_keys_[index], error)) return false;
+        const TurntableBinding& binding = kTurntableBindings[index];
+        int key = 0;
+        if (!ParseKeyboardKeyName(binding.default_key, &key))
+        {
+            *error = std::string("built-in default is not a key name: ") + binding.default_key;
+            return false;
+        }
+        bool present = false;
+        if (has_file &&
+            !ReadKeyboardKeyBinding(path, "turntables", binding.name, &key, &present, error))
+        {
+            return false;
+        }
+        turntable_keys_[index] = key;
     }
-    const UINT step = GetPrivateProfileIntA("turntables", "step", 4, path);
+    UINT step = kDefaultTurntableStep;
+    if (has_file)
+    {
+        step = GetPrivateProfileIntA("turntables", "step", kDefaultTurntableStep, path);
+    }
     if (step < 1 || step > 32)
     {
         *error = "turntables.step must be between 1 and 32";

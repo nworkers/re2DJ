@@ -1764,20 +1764,36 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
     const std::uint16_t port = static_cast<std::uint16_t>(exception->ContextRecord->Edx);
     std::uint8_t value = static_cast<std::uint8_t>(exception->ContextRecord->Eax);
     std::uint16_t word_value = static_cast<std::uint16_t>(exception->ContextRecord->Eax);
-    if (is_read && g_re2dj_io_config_path[0] != '\0')
+    // The built-in mapping stands on its own, so a run that traps legacy I/O
+    // gets keyboard input whether or not a configuration file was passed; a
+    // file, when there is one, overrides the entries it lists.
+    if (is_read)
     {
+        const bool has_config_file = g_re2dj_io_config_path[0] != '\0';
         if (g_keyboard_input_state == 0)
         {
             std::string error;
+            const char* const config_path = has_config_file ? g_re2dj_io_config_path : nullptr;
             const bool initialized = profile_is_word
-                ? g_ez2dancer_keyboard_input.Initialize(g_re2dj_io_config_path, &error)
-                : g_ez2dj_keyboard_input.Initialize(g_re2dj_io_config_path, &error);
+                ? g_ez2dancer_keyboard_input.Initialize(config_path, &error)
+                : g_ez2dj_keyboard_input.Initialize(config_path, &error);
             if (initialized)
             {
                 InterlockedExchange(&g_keyboard_input_state, 1);
-                AppendVfsTraceMessage(profile_is_word
-                                          ? "re2dj:vfs:io-config:profile=ez2dancer:status=initialized\r\n"
-                                          : "re2dj:vfs:io-config:profile=ez2dj:status=initialized\r\n");
+                if (profile_is_word)
+                {
+                    AppendVfsTraceMessage(
+                        has_config_file
+                            ? "re2dj:vfs:io-config:profile=ez2dancer:source=file:status=initialized\r\n"
+                            : "re2dj:vfs:io-config:profile=ez2dancer:source=default:status=initialized\r\n");
+                }
+                else
+                {
+                    AppendVfsTraceMessage(
+                        has_config_file
+                            ? "re2dj:vfs:io-config:profile=ez2dj:source=file:status=initialized\r\n"
+                            : "re2dj:vfs:io-config:profile=ez2dj:source=default:status=initialized\r\n");
+                }
             }
             else
             {

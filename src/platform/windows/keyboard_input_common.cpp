@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 namespace re2dj::platform::windows
@@ -65,19 +66,35 @@ int ParseKey(const std::string& input)
 
 }  // namespace
 
+bool ParseKeyboardKeyName(const char* name, int* key)
+{
+    if (name == nullptr || key == nullptr) return false;
+    *key = ParseKey(name);
+    return *key >= 0;
+}
+
 bool ReadKeyboardKeyBinding(const char* path,
                             const char* section,
                             const char* name,
                             int* key,
+                            bool* present,
                             std::string* error)
 {
     if (path == nullptr || section == nullptr || name == nullptr || key == nullptr ||
-        error == nullptr)
+        present == nullptr || error == nullptr)
     {
         return false;
     }
+    // No key name parses to this, so reading it back means the file has no such
+    // entry and the caller's default stands.
+    constexpr const char* kAbsent = "\x01";
     char value[32] = {};
-    GetPrivateProfileStringA(section, name, "NONE", value, sizeof(value), path);
+    GetPrivateProfileStringA(section, name, kAbsent, value, sizeof(value), path);
+    *present = std::strcmp(value, kAbsent) != 0;
+    if (!*present)
+    {
+        return true;
+    }
     *key = ParseKey(value);
     if (*key >= 0)
     {

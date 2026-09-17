@@ -233,7 +233,8 @@ re2dj --hdd <directory> [options]
                       기다리고(기본값), off는 기다리지 않아 tearing을 허용하며,
                       adaptive는 마감을 지킨 프레임만 기다립니다. 드라이버가
                       adaptive를 거부하면 on으로 내려갑니다.
-  --io-config <path>  선택한 타깃용 Windows 키보드 I/O mapping INI.
+  --io-config <path>  선택한 타깃용 Windows 키보드 I/O mapping INI. 적힌 항목만
+                      내장 기본 매핑을 덮어씁니다.
   --version           버전 출력.
   --help              도움말 출력.
 ```
@@ -296,9 +297,9 @@ HLE/Hardlock boundary remains a runtime observation item.
 
 *The default is a normal resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. The original 640x480 logical display starts at exactly 2x in both dimensions. Add `--fullscreen` to select fullscreen without changing the original INI.*
 
-키보드 입력은 선택한 제품의 예제 파일을 복사·수정하고 `--io-config <path>`로 주입한다. EZ2DJ는 `config/ez2dj-io.example.ini`, EZ2Dancer 2nd MOVE는 `config/ez2dancer-io.example.ini`를 사용한다. EZ2Dancer 예제의 `coin=F5`는 원본 배선이 확정되지 않은 호환 입력이며, 키를 누를 때마다 `0x304` counter를 1 증가시킨다. 옵션을 생략하면 I/O board는 idle 상태를 유지한다.
+키보드 입력은 옵션 없이도 동작한다. 기본 매핑이 실행 파일에 내장되어 있으며 EZ2DJ는 `config/ez2dj-io.example.ini`, EZ2Dancer 2nd MOVE는 `config/ez2dancer-io.example.ini`와 같은 값이다. 바꾸고 싶은 항목만 INI에 적어 `--io-config <path>`로 주면 그 항목만 덮어쓰고, 나머지는 기본값을 유지한다. 키를 끄려면 그 항목에 `NONE`을 적는다. EZ2Dancer의 `coin=F5`는 원본 배선이 확정되지 않은 호환 입력이며, 키를 누를 때마다 `0x304` counter를 1 증가시킨다.
 
-*For keyboard input, copy and edit the example for the selected product, then inject it with `--io-config <path>`. EZ2DJ uses `config/ez2dj-io.example.ini`; EZ2Dancer 2nd MOVE uses `config/ez2dancer-io.example.ini`. The EZ2Dancer example's `coin=F5` is a compatibility mapping because the original cabinet wiring is not confirmed; each press increments the `0x304` counter. Omitting the option leaves the I/O board idle.*
+*Keyboard input works with no option: the default mapping is built into the executable and matches `config/ez2dj-io.example.ini` for EZ2DJ and `config/ez2dancer-io.example.ini` for EZ2Dancer 2nd MOVE. Passing `--io-config <path>` overrides only the entries the file lists and leaves the rest at their defaults; write `NONE` for an entry to unbind that key. EZ2Dancer's `coin=F5` is a compatibility mapping because the original cabinet wiring is not confirmed; each press increments the `0x304` counter.*
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe ez2d2m --io-config .\config\ez2dancer-io.example.ini

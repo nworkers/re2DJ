@@ -73,6 +73,66 @@ int main()
         RE2DJ_CHECK(context, true);
     }
 
+    // Test 2b: With no configuration file the built-in mapping binds
+    // everything, and it is the example INI's mapping: the two must not drift
+    // apart.
+    {
+        re2dj::platform::windows::Ez2DjKeyboardInput defaults;
+        re2dj::platform::windows::Ez2DjKeyboardInput from_example;
+        std::string error;
+        RE2DJ_CHECK(context, defaults.Initialize(nullptr, &error));
+        const std::filesystem::path path =
+            std::filesystem::absolute("config/ez2dj-io.example.ini");
+        RE2DJ_CHECK(context, from_example.Initialize(path.string().c_str(), &error));
+        for (std::size_t index = 0;
+             index < static_cast<std::size_t>(re2dj::input::Ez2DjButton::kCount); ++index)
+        {
+            const auto button = static_cast<re2dj::input::Ez2DjButton>(index);
+            RE2DJ_CHECK(context, defaults.button_key(button) != 0);
+            RE2DJ_CHECK_EQ(context, defaults.button_key(button), from_example.button_key(button));
+        }
+        for (std::size_t index = 0; index < 4; ++index)
+        {
+            RE2DJ_CHECK(context, defaults.turntable_key(index) != 0);
+            RE2DJ_CHECK_EQ(context, defaults.turntable_key(index),
+                           from_example.turntable_key(index));
+        }
+        RE2DJ_CHECK_EQ(context, defaults.turntable_step(), from_example.turntable_step());
+        // An empty path means the same as none at all.
+        re2dj::platform::windows::Ez2DjKeyboardInput empty_path;
+        RE2DJ_CHECK(context, empty_path.Initialize("", &error));
+        RE2DJ_CHECK_EQ(context, empty_path.button_key(re2dj::input::Ez2DjButton::kCoin),
+                       defaults.button_key(re2dj::input::Ez2DjButton::kCoin));
+    }
+
+    // Test 2c: A file overrides the entries it lists and leaves the rest at
+    // their defaults; NONE is how an entry gives up its default.
+    {
+        const re2dj::test::TemporaryTree tree;
+        tree.WriteText("partial.ini",
+                       "[buttons]\n"
+                       "p1_1=G\n"
+                       "coin=NONE\n"
+                       "\n"
+                       "[turntables]\n"
+                       "p1_positive=H\n"
+                       "step=7\n");
+        re2dj::platform::windows::Ez2DjKeyboardInput input;
+        re2dj::platform::windows::Ez2DjKeyboardInput defaults;
+        std::string error;
+        const std::filesystem::path path = tree.root() / "partial.ini";
+        RE2DJ_CHECK(context, input.Initialize(path.string().c_str(), &error));
+        RE2DJ_CHECK(context, defaults.Initialize(nullptr, &error));
+        RE2DJ_CHECK_EQ(context, input.button_key(re2dj::input::Ez2DjButton::kPlayer1Key1),
+                       static_cast<int>('G'));
+        RE2DJ_CHECK_EQ(context, input.button_key(re2dj::input::Ez2DjButton::kCoin), 0);
+        RE2DJ_CHECK_EQ(context, input.button_key(re2dj::input::Ez2DjButton::kPlayer1Key2),
+                       defaults.button_key(re2dj::input::Ez2DjButton::kPlayer1Key2));
+        RE2DJ_CHECK_EQ(context, input.turntable_key(1), static_cast<int>('H'));
+        RE2DJ_CHECK_EQ(context, input.turntable_key(0), defaults.turntable_key(0));
+        RE2DJ_CHECK_EQ(context, input.turntable_step(), std::uint8_t{7});
+    }
+
     // Test 3: Invalid step value (< 1 or > 32).
     {
         const re2dj::test::TemporaryTree tree;

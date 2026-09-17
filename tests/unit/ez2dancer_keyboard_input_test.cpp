@@ -65,6 +65,48 @@ int main()
         RE2DJ_CHECK(context, value == 0x00ff);
     }
 
+    // With no configuration file the built-in mapping binds everything, and it
+    // is the example INI's mapping: the two must not drift apart.
+    {
+        re2dj::platform::windows::Ez2DancerKeyboardInput defaults;
+        re2dj::platform::windows::Ez2DancerKeyboardInput from_example;
+        std::string error;
+        RE2DJ_CHECK(context, defaults.Initialize(nullptr, &error));
+        const std::filesystem::path path =
+            std::filesystem::absolute("config/ez2dancer-io.example.ini");
+        RE2DJ_CHECK(context, from_example.Initialize(path.string().c_str(), &error));
+        for (std::size_t index = 0;
+             index < static_cast<std::size_t>(re2dj::input::Ez2DancerButton::kCount); ++index)
+        {
+            const auto button = static_cast<re2dj::input::Ez2DancerButton>(index);
+            RE2DJ_CHECK(context, defaults.button_key(button) != 0);
+            RE2DJ_CHECK_EQ(context, defaults.button_key(button), from_example.button_key(button));
+        }
+        // An empty path means the same as none at all.
+        re2dj::platform::windows::Ez2DancerKeyboardInput empty_path;
+        RE2DJ_CHECK(context, empty_path.Initialize("", &error));
+        RE2DJ_CHECK_EQ(context, empty_path.button_key(re2dj::input::Ez2DancerButton::kCoin),
+                       defaults.button_key(re2dj::input::Ez2DancerButton::kCoin));
+    }
+
+    // A file overrides the entries it lists and leaves the rest at their
+    // defaults, and NONE is how an entry gives up its default.
+    {
+        const re2dj::test::TemporaryTree tree;
+        tree.WriteText("partial.ini", "[buttons]\np1_left=G\ncoin=NONE\n");
+        re2dj::platform::windows::Ez2DancerKeyboardInput input;
+        re2dj::platform::windows::Ez2DancerKeyboardInput defaults;
+        std::string error;
+        const std::filesystem::path path = tree.root() / "partial.ini";
+        RE2DJ_CHECK(context, input.Initialize(path.string().c_str(), &error));
+        RE2DJ_CHECK(context, defaults.Initialize(nullptr, &error));
+        RE2DJ_CHECK_EQ(context, input.button_key(re2dj::input::Ez2DancerButton::kPlayer1Left),
+                       static_cast<int>('G'));
+        RE2DJ_CHECK_EQ(context, input.button_key(re2dj::input::Ez2DancerButton::kCoin), 0);
+        RE2DJ_CHECK_EQ(context, input.button_key(re2dj::input::Ez2DancerButton::kPlayer2Right),
+                       defaults.button_key(re2dj::input::Ez2DancerButton::kPlayer2Right));
+    }
+
     {
         const re2dj::test::TemporaryTree tree;
         std::string invalid = kIdleBindings;

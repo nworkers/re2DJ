@@ -260,6 +260,8 @@ void PrintUsage()
         "                      tearing, 'adaptive' waits only for frames that met\n"
         "                      the deadline. A driver may refuse 'adaptive'.\n"
         "  --io-config <path>  Windows keyboard I/O mapping INI for the selected target.\n"
+        "                      Overrides only the entries it lists; the built-in\n"
+        "                      mapping covers the rest.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
         "\n"
