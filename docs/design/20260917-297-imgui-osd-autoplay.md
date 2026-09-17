@@ -151,7 +151,7 @@ Windows에서는 기존 `GuestWindowProcedure`가 다음을 처리한다.
 
 ### 미확정
 
-* `imgui_impl_opengl3`이 이 GL 2.1 compatibility 컨텍스트에서 VAO 없이 문제없이 그리는지.
+* ~~`imgui_impl_opengl3`이 이 GL 2.1 compatibility 컨텍스트에서 VAO 없이 문제없이 그리는지.~~ **해소:** 작업 297 실행에서 OSD가 정상 표시됨을 사용자가 확인했다.
 * 게스트 창 프로시저와 `Present`가 같은 스레드인지. 다르더라도 lock으로 처리하지만 실제 구성을 확인한다.
 
 ## English
@@ -225,5 +225,5 @@ These changed through the user's checks and take precedence over the original te
 
 ### Unresolved
 
-* Whether `imgui_impl_opengl3` draws correctly without VAOs on this GL 2.1 compatibility context.
+* ~~Whether `imgui_impl_opengl3` draws correctly without VAOs on this GL 2.1 compatibility context.~~ **Resolved:** the user confirmed the OSD displays correctly in task 297's runs.
 * Whether the guest window procedure and `Present` share a thread; a lock covers either case, but the actual arrangement is to be checked.

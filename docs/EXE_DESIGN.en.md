@@ -134,3 +134,21 @@ The detailed evidence is in [ez2d2m CHD filesystem and executable observations](
 **Confirmed — 1st SE is two builds.** The directory dump (`.gtide` packer, 561,152 bytes) and the CHD copy (`.protect` packer, 634,880 bytes) share a PE TimeDateStamp but are different files. Their `.text`, `.rdata`, `.data` and `.reloc` share layout but differ in content, while `.idata` alone is byte-identical: the packer transforms only the body and leaves the original import-table section untouched.
 
 **Unresolved:** whether the 5th directory layout came from `ez2dj5.chd`; when the 6th bootstrap selects each of its two children; why the 6th `EZ2DJ.INI` is not plaintext and how it is consumed; and the Hardlock response contracts of the three newly covered products.
+
+## 2026-09-17 Protected-build decryption and 3rd game state (tasks 291-297)
+
+Analysis: [runtime decryption in protected builds](analysis/protected-build-runtime-decryption.md), [I/O port map](analysis/ez2dj-io-map.md), [3rd frame pacing](analysis/ez2dj3rd-frame-pacing.md), [3rd demo play and the settings registry](analysis/ez2dj3rd-demo-play.md)
+
+**Confirmed — a `.protect` build's entry breakpoint precedes decryption.** In all six builds (1st Tracks, 1st SE CHD, 3rd, 4th, 5th, `ez2d2m`) a dump taken right after the entry is restored holds none of the original strings or port helpers, which appear in a dump taken once the guest has run for a few seconds; for 3rd the two dumps differ across 36.3% of the image. Static analysis uses the resumed dump (`--image-dump`'s `resumed`).
+
+**Confirmed — each build's legacy-I/O helper RVAs are its own.** Searching resumed dumps by the byte signatures of the compiler runtime's `inp`/`outp` block finds `inportb` and `outportb` exactly at the profile values in all five byte-width builds. The block's output-side gap differs between 1st/1st SE and 3rd/4th/5th. `ez2d2m` inlines its port I/O into game code and is outside the signatures.
+
+**Confirmed — 3rd is an MSVC debug configuration**, with `0xcccccccc` local fills, stack checks and incremental-link thunks, so function boundaries and call targets read out statically.
+
+**Confirmed — 3rd parses its own INI, and its settings are a key-to-address registry.** The format is sectionless with quoted keys, and the keys bound to the settings object `[0x004edbc8]` are exactly the INI's 25 keys. There is no `AutoPlay` key.
+
+**Confirmed — 3rd's demo and autoplay are separate flags.** The demo start routine `0x0048aa31` runs the game scene synchronously and sets, as a pair, the demo flag `[0x00a2946c]` (overlay, unbound input, muting, ending on input) and the autoplay flag `[0x00a29508]`. Writing only the autoplay flag to 1 makes the game hit notes without demo side effects, and the value is **latched at song start**. The input manager flips it every frame slot `0x1b` is pressed; that slot's physical binding is **unresolved**.
+
+**Confirmed — 3rd's frame loop is a `target - elapsed` sleep feedback.** The target period is **inferred** at about 17 ms with the original constant **unresolved**, and today's frame rate depends on statically linked SDL3's default `timeBeginPeriod(1)`.
+
+**Confirmed — 3rd hides the mouse cursor**, importing `ShowCursor` and `SetCursor`; re2DJ restores it at the window boundary.

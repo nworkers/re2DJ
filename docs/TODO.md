@@ -195,6 +195,11 @@
 ## 다음 작업 / Next work
 
 - [x] [작업 294 — 작업 293 후속](work-orders/20260917-294-port-helper-dump-crosscheck.md) — 보호 빌드 `resumed` 덤프로 프로파일 helper RVA 대조. 바이트 폭 다섯 빌드 모두 일치
+- [ ] 3rd present 비용 변화 원인 — 2026-09-17 01:25~01:49 사이 실행 환경 변화 뒤 present가 약 15 ms 블록되고 60 fps로 바뀜. OSD 코드와 무관함은 A/B로 확인([작업 297 로그](work-logs/20260917-297-imgui-osd-autoplay.md))
+- [ ] `ez2dj3rd` 입력 슬롯 `0x1b`의 물리 바인딩 — 게임 내장 autoplay 토글([분석](analysis/ez2dj3rd-demo-play.md))
+- [ ] 3rd 외 타깃의 `game_controls` — 빌드별 autoplay 플래그 확인
+- [ ] OSD 입력 공급의 Linux·Web 경로
+- [ ] `re2dj_windows_vfs_runtime_probe` hang 원인
 - [ ] 작업 119 — Windows x86 4th dynamic <code>GetProcAddress</code> VFS HLE
 - [ ] Windows x86 INI API HLE (`GetPrivateProfile*`, `WritePrivateProfileStringA`)
 - [ ] Windows x86 directory enumeration (`FindFirstFileA`, `FindNextFileA`, `FindClose`)

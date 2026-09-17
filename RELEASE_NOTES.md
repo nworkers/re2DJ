@@ -1,5 +1,19 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.48 (2026-09-18)
+
+### 한국어
+
+- **문서 보완**: 작업 291~297에서 확인한 원본 분석 결과(보호 빌드 복호화 시점, helper RVA 대조, 3rd 설정 레지스트리·데모·autoplay 플래그, 프레임 pacing)를 `EXE_DESIGN`에 누적하고, Win32 커서·자식 창 입력 배경 문서와 후속 TODO를 추가했습니다. 코드 변경은 없습니다.
+
+---
+
+### English
+
+- **Documentation**: Accumulated the original-analysis findings of tasks 291-297 (protected-build decryption timing, helper RVA cross-check, 3rd settings registry, demo and autoplay flags, frame pacing) into `EXE_DESIGN`, and added a background topic on Win32 cursor and child-window input plus follow-up TODO entries. No code change.
+
+---
+
 ## v0.0.47 (2026-09-17)
 
 ### 한국어

@@ -133,3 +133,21 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax, 4th Trax, 5th, 6th 덤
 **확인됨 — 1st SE는 두 빌드다.** 디렉터리 덤프(`.gtide` packer, 561,152바이트)와 CHD(`.protect` packer, 634,880바이트)는 PE TimeDateStamp가 같지만 다른 파일이다. 두 빌드의 `.text`·`.rdata`·`.data`·`.reloc`은 배치가 같고 내용이 다르며, `.idata`만 바이트 단위로 같다. packer는 원본 import table 섹션을 건드리지 않고 본체만 변환한다.
 
 **미확정:** 5th 디렉터리 배치가 `ez2dj5.chd`에서 나왔는지, 6th bootstrap이 두 자식 중 어느 쪽을 언제 고르는지, 6th `EZ2DJ.INI`가 평문이 아닌 이유와 소비 경로, 그리고 새로 확인한 세 제품의 Hardlock 응답 계약.
+
+## 2026-09-17 보호 빌드 복호화와 3rd 게임 상태 (작업 291~297)
+
+근거 분석: [보호 빌드의 런타임 복호화](analysis/protected-build-runtime-decryption.md), [I/O 포트 맵](analysis/ez2dj-io-map.md), [3rd 프레임 pacing](analysis/ez2dj3rd-frame-pacing.md), [3rd 데모 플레이와 설정 레지스트리](analysis/ez2dj3rd-demo-play.md)
+
+**확인됨 — `.protect` 빌드의 진입점 breakpoint는 복호화 이전이다.** 1st Tracks·1st SE(CHD)·3rd·4th·5th·`ez2d2m` 여섯 빌드에서 진입점 복원 직후 덤프에는 원본 문자열과 port helper가 0건이고, 게스트가 몇 초 실행된 뒤의 덤프에는 나타난다. 3rd는 두 덤프가 이미지의 36.3%에서 다르다. 정적 분석에는 재개 후 덤프(`--image-dump`의 `resumed`)를 쓴다.
+
+**확인됨 — legacy I/O helper RVA는 각 빌드 자신의 값이다.** 컴파일러 런타임 `inp`/`outp` 묶음의 바이트 시그니처로 재개 후 덤프를 탐색한 결과, 바이트 폭 다섯 빌드의 `inportb`·`outportb`가 프로파일 값과 정확히 일치한다. 묶음의 출력 쪽 간격은 1st·1st SE와 3rd·4th·5th가 다르다. `ez2d2m`은 port I/O를 게임 코드에 인라인해 시그니처 대상이 아니다.
+
+**확인됨 — 3rd는 MSVC 디버그 구성이다.** 지역 변수 `0xcccccccc` 채움, 스택 검사, incremental-link thunk가 있어 함수 경계와 호출 대상이 정적으로 드러난다.
+
+**확인됨 — 3rd의 INI는 자체 파서이고 설정은 키-주소 레지스트리다.** 섹션 없는 따옴표 키 형식이며, 설정 객체 `[0x004edbc8]`에 묶인 키는 INI의 25개 키와 정확히 같다. `AutoPlay` 키는 없다.
+
+**확인됨 — 3rd의 데모와 autoplay는 별개 플래그다.** 데모 시작 루틴 `0x0048aa31`은 게임 장면을 동기 실행하며 데모 플래그 `[0x00a2946c]`(오버레이·입력 해제·음소거·입력 시 종료)와 autoplay 플래그 `[0x00a29508]`를 짝으로 세운다. autoplay 플래그만 1로 쓰면 데모 부작용 없이 게임이 노트를 치며, 값은 **곡 시작 때 고정**된다. 입력 매니저는 매 프레임 슬롯 `0x1b`로 이 값을 뒤집는다. 슬롯 `0x1b`의 물리 바인딩은 **미확정**이다.
+
+**확인됨 — 3rd의 프레임 루프는 `목표 - 경과` sleep 피드백이다.** 목표 주기는 약 17 ms로 **추정**되며 원본 상수는 **미확정**이다. 현재 프레임률은 정적 링크된 SDL3의 기본 `timeBeginPeriod(1)`에 의존한다.
+
+**확인됨 — 3rd는 마우스 커서를 숨긴다.** `ShowCursor`·`SetCursor`를 import 한다. re2DJ는 창 경계에서 커서를 되살린다.
