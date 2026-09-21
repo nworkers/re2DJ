@@ -16,7 +16,7 @@ namespace re2dj::hdd
 //
 // The class exists mostly for one reason: the guest was compiled for Windows
 // and opens files with whatever case its source happened to use, while Linux
-// and Web hosts have case-sensitive file systems. Resolve() bridges that gap.
+// Linux hosts have case-sensitive file systems. Resolve() bridges that gap.
 class HddRoot
 {
 public:

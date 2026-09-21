@@ -191,3 +191,11 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax, 4th Trax, 5th, 6th 덤
 **확인됨 — `ez2d2m`은 클래스 쌍 구조다.** TimeDateStamp `0x3a5f074c` 빌드는 장면 등록 함수 없이 `NormalGame`·`DemoGame`처럼 클래스마다 `OnCreateGame`·`OnDestroyGame`과 Director를 두고, 각 함수가 자기 이름 문자열을 로그 함수에 넘긴다.
 
 **확인됨 — autoplay 플래그는 `[0x007fa424]`다.** `NormalGame::OnCreateGame`이 이 값이 1일 때만 채널 3~`0x12`를 자동으로 설정하고, 데모는 같은 값을 상수로 쓴다. 게임에 내장된 토글이 입력 슬롯 `0xc`로 이 값을 뒤집는다. 데모가 이 플래그를 쓰지 않으므로 어트랙트 폴링으로는 확인할 수 없고, OSD 토글로 자동 연주를 확인했다.
+
+### 2.5 Linux resolver-continuation trace — 확인됨
+
+Linux i386 최소 진단에서 GetProcAddress(kernel32, GetVersion)의 return 0x00af0b99 뒤를 37 frame 추적했습니다. 중간의 두 번째 GetProcAddress 요청은 CreateFileA이고 return 0x00af09f6에서 EAX=0을 반환했습니다. 그 값은 0x00af0c22의 MOV CL, byte ptr [EAX]까지 0으로 유지되어 null read가 발생했습니다. 이는 현재 최소 진단에서 CreateFileA 동적 resolver가 다음 구현·검증 경계임을 확인하지만, CreateFileA만으로 전체 보호 초기화가 성공한다는 근거는 아닙니다.
+
+### 2.6 Linux 첫 CreateFileA 동적 호출 — 확인됨
+
+Linux i386 진단에서 GetProcAddress(kernel32, CreateFileA)가 executable thunk를 반환하면 원본은 이를 실제 호출합니다. 첫 경로는 `\\.\NTICE`, desired access `0xc0000000`, share mode `3`, creation disposition `3`, flags/attributes `0`이며 security attributes와 template handle은 null입니다. caller return은 `0x00aeffbc`이고 stdcall cleanup은 28바이트입니다. 실패 handle 이후의 장치 계약은 미확정입니다.

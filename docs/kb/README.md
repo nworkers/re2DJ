@@ -37,3 +37,7 @@
 | [directsound-play-state.md](directsound-play-state.md) | DirectSound 재생 중 Play, cursor 보존, 명시적 위치 변경 계약 | Microsoft Learn 기반 |
 
 *Update this table in the same task whenever a document is added or renamed.*
+
+- [WSL Linux 검증 범위 / WSL Linux validation scope](wsl-linux-validation.md): WSL 개발 환경과 x86/x64 사용자 공간 검증의 한계 / WSL development and limits of x86/x64 userspace validation.
+
+| [x86-page-fault-error-code.md](x86-page-fault-error-code.md) | x86 page-fault error code의 read/write, present, privilege bits | Intel SDM 기반 |

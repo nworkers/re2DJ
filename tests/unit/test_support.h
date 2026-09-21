@@ -63,6 +63,8 @@ void RunImmediateScanTests(re2dj::test::Context& context);
 void RunGuestPathTests(re2dj::test::Context& context);
 void RunAddressSpaceTests(re2dj::test::Context& context);
 void RunExecutionBackendTests(re2dj::test::Context& context);
+void RunImportDispatcherTests(re2dj::test::Context& context);
+void RunImportEventLoopTests(re2dj::test::Context& context);
 void RunPeImageTests(re2dj::test::Context& context);
 void RunPeLoaderTests(re2dj::test::Context& context);
 void RunHddRootTests(re2dj::test::Context& context);

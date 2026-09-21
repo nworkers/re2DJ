@@ -69,7 +69,7 @@ void AppendLongNameSlot(const std::uint8_t* entry, std::vector<std::uint16_t>* p
 {
     constexpr std::array<std::pair<std::size_t, std::size_t>, 3> ranges = {
         {{1, 5}, {14, 6}, {28, 2}}};
-    for (const auto [offset, count] : ranges)
+    for (const auto& [offset, count] : ranges)
     {
         for (std::size_t index = 0; index < count; ++index)
         {
@@ -166,4 +166,3 @@ bool FatLongNameAssembler::Decode(const std::uint8_t* short_entry, std::string* 
 }
 
 }  // namespace re2dj::storage
-

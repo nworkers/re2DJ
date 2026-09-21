@@ -1,5 +1,8 @@
 #include "test_support.h"
 
+#include <algorithm>
+#include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>

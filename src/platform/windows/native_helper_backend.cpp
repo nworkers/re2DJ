@@ -334,6 +334,32 @@ public:
         return true;
     }
 
+    bool AllocateGuestMemory(std::uint32_t,
+                             runtime::GuestMemoryAccess,
+                             runtime::GuestAddress*,
+                             std::uint32_t*,
+                             std::string* error)
+    {
+        SetError(error, "Windows native helper guest-memory lifecycle is not implemented");
+        return false;
+    }
+
+    bool ProtectGuestMemory(runtime::GuestAddress,
+                            std::uint32_t,
+                            runtime::GuestMemoryAccess,
+                            runtime::GuestMemoryAccess*,
+                            std::string* error)
+    {
+        SetError(error, "Windows native helper guest-memory lifecycle is not implemented");
+        return false;
+    }
+
+    bool FreeGuestMemory(runtime::GuestAddress, std::string* error)
+    {
+        SetError(error, "Windows native helper guest-memory lifecycle is not implemented");
+        return false;
+    }
+
     bool CompleteImport(const runtime::ImportCompletion& completion,
                         std::string* error)
     {
@@ -731,6 +757,29 @@ bool NativeHelperBackend::WriteMemory(runtime::GuestAddress address,
                                       std::string* error)
 {
     return impl_->WriteMemory(address, bytes, error);
+}
+
+bool NativeHelperBackend::AllocateGuestMemory(std::uint32_t size,
+                                              runtime::GuestMemoryAccess access,
+                                              runtime::GuestAddress* address,
+                                              std::uint32_t* allocated_size,
+                                              std::string* error)
+{
+    return impl_->AllocateGuestMemory(size, access, address, allocated_size, error);
+}
+
+bool NativeHelperBackend::ProtectGuestMemory(runtime::GuestAddress address,
+                                             std::uint32_t size,
+                                             runtime::GuestMemoryAccess access,
+                                             runtime::GuestMemoryAccess* previous_access,
+                                             std::string* error)
+{
+    return impl_->ProtectGuestMemory(address, size, access, previous_access, error);
+}
+
+bool NativeHelperBackend::FreeGuestMemory(runtime::GuestAddress address, std::string* error)
+{
+    return impl_->FreeGuestMemory(address, error);
 }
 
 bool NativeHelperBackend::CompleteImport(const runtime::ImportCompletion& completion,

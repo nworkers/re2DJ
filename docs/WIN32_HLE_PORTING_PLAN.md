@@ -1,8 +1,14 @@
 # Win32 HLE 포팅 계획 / Win32 HLE Porting Plan
 
-이 문서는 원본 EZ2DJ 실행 파일을 Linux / 64-bit Windows / Web에서 실행하기까지의 장기 구현 단계를 정리한다. 각 단계는 그 자체로 검증 가능한 결과물을 남긴다.
+## Stage 8 현재 작업 계획 / Updated plan
 
-*This document lays out the long-term implementation stages needed to run the original EZ2DJ executable on Linux, 64-bit Windows, and the Web. Each stage leaves a result that can be verified on its own.*
+Stage 8은 WSL에서 Linux x86·x64 제품 호스트를 함께 지원하는 목표로 확장한다. 기존 helper 검증을 재현한 뒤 양쪽 제품 빌드, 공용 ABI/HLE, callback/thread/window, graphics/audio/input 순으로 진행한다. 과거 단계 설명보다 작업 307의 순서와 완료 기준을 우선한다. [계획 / Plan](work-orders/20260918-307-linux-x86-x64-wsl.md).
+
+*Stage 8 now targets both Linux x86 and x64 product hosts under WSL. Reproduce helper bootstrap checks, then deliver both product builds, shared ABI/HLE, callback/thread/window support, and graphics/audio/input. Task 307 supersedes the historical sequence and acceptance criteria above.*
+
+이 문서는 원본 EZ2DJ 실행 파일을 Linux와 64비트 Windows에서 실행하기까지의 장기 구현 단계를 정리한다. 각 단계는 그 자체로 검증 가능한 결과물을 남긴다.
+
+*This document lays out the long-term implementation stages needed to run the original EZ2DJ executable on Linux and 64-bit Windows. Each stage leaves a result that can be verified on its own.*
 
 ---
 
@@ -18,8 +24,6 @@ S3 --> S4["Stage 4<br/>Windows-first kernel32 / user32 HLE"]
     S5 --> S6["Stage 6<br/>Graphics HLE"]
     S6 --> S7["Stage 7<br/>Audio and input"]
     S7 --> S8["Stage 8<br/>Linux host"]
-    S8 --> S9["Stage 9<br/>Web execution backend"]
-    S9 -.if required.-> I["Deferred custom<br/>x86-32 interpreter"]
 ```
 
 ---
@@ -95,13 +99,13 @@ PE32 이미지를 게스트 주소 공간에 매핑한다.
 * gate 주소 진입 시 HLE dispatcher로 전달하는 최소 prototype
 * 처음부터 멀티스레드 게스트 context를 분리할 수 있는 구조
 
-**완료 기준:** synthetic PE32가 데스크톱 네이티브 helper에서 gate 하나를 호출하고 정확한 종료 코드로 끝나며, Web 실행 엔진 후보와 라이선스 검토 결과가 문서화된다.
+**완료 기준:** synthetic PE32가 데스크톱 네이티브 helper에서 gate 하나를 호출하고 정확한 종료 코드로 끝난다.
 
-*Define the replaceable `ExecutionBackend` boundary before building a custom interpreter. The primary Windows route is now a same-bitness Win32 launcher and original child; the separate 32-bit helper remains validation evidence for Linux x86-64, while Windows x64 is deferred. Done when a synthetic PE32 calls one gate and exits correctly through the native helper, and Web execution-engine candidates and their licenses are documented.*
+*Define the replaceable `ExecutionBackend` boundary before building a custom interpreter. The primary Windows route is now a same-bitness Win32 launcher and original child; the separate 32-bit helper remains validation evidence and production infrastructure for Linux x86/x86-64. Done when a synthetic PE32 calls one gate and exits correctly through the native helper.*
 
-**후순위:** Web에서는 x86 코드를 직접 실행할 수 없으므로 재사용 가능한 허용 라이선스 실행 엔진을 우선 검토한다. 적합한 엔진이 없을 때 직접 인터프리터를 같은 `ExecutionBackend` 인터페이스 뒤에 구현한다.
+**범위 제외:** 브라우저용 x86 실행 엔진과 직접 인터프리터는 현재 제품 지원 범위에 포함하지 않는다.
 
-*Deferred: Web cannot execute x86 code directly, so a reusable execution engine with a permitted license is evaluated first. A custom interpreter is implemented behind the same `ExecutionBackend` interface only if no suitable engine exists.*
+*Out of scope: browser x86 execution engines and a custom interpreter are not part of the current product support scope.*
 
 현재 `ExecutionBackend` event/reply·memory 경계와 desktop `NativeHelperBackend` adapter가 구현되었다. protocol v3에서 helper는 요청된 non-preferred base에 PE32를 mapping하고 `HIGHLOW` relocation을 적용한 뒤 이름/ordinal native import thunk와 metadata를 구성한다. Linux i386 helper는 guard-page guest stack, 최소 TEB/PEB와 FS selector에서 process-attach TLS callback과 entry를 실행하고, alternate signal stack에서 수집한 signal/EIP/ESP를 구조화된 fault event로 보고한다. synthetic probe는 preferred `0x10000000` image를 `0x11000000`에 적재하고 FS self·stack bounds를 확인한 callback state 7과 두 import 결과 44를 더한 result 51을 확인한다. Linux 전용 fixture는 PEB image base를 확인한 뒤 `UD2`의 `SIGILL`과 정확한 EIP/ESP를 검증한다. TLS raw storage/index와 thread callback은 멀티스레드 backend 단계에 남아 있다.
 
@@ -111,9 +115,9 @@ Linux에서도 x86-64 host가 별도 i386 helper를 `fork`/`exec`하고 공용 p
 
 *Linux now also has a minimal prototype in which an x86-64 host launches a separate i386 helper with `fork`/`exec` and handles a real `__stdcall` gate event over shared protocol v3. The host reads and writes argument 41 on the helper stack, replies with EAX 42, and observes process result 42 plus child exit zero. PE32 mapping and an `ExecutionBackend` adapter are the next Linux tasks.*
 
-Web 실행 엔진과 라이선스 조사를 완료했고 v86 CPU 분리성 spike도 끝냈다. v86은 BSD-2-Clause와 필요한 명령 범위를 갖지만 CPU-only build 경계가 없고 PC 장치·MMIO·browser timer/IRQ에 결합되어 있다. 또한 기본 synthetic gate `0xF0000000`은 실행 불가 mapped/MMIO 범위다. 따라서 대규모 fork 없이 `ExecutionBackend`에 연결할 수 없어 채택하지 않는다. TinyEMU 계열은 현재 Web x86 소스의 공개 경계가 확인될 때만 재평가하며, GPL/LGPL 후보는 제외했다. 직접 인터프리터는 후순위로 유지한다.
+브라우저용 실행 계층은 성능 목표와 검증 범위에 맞지 않아 현재 지원 범위에서 제거했다. 과거 조사 결과는 역사적 근거로 보존하되, 후속 제품 작업으로 재개하지 않는다.
 
-*The Web execution-engine and license survey is complete, including the v86 CPU-separability spike. v86 is BSD-2-Clause and has the needed instruction coverage, but lacks a CPU-only build boundary and couples CPU operation to PC devices, MMIO, and browser timer/IRQ services. Its default synthetic gate, `0xF0000000`, is also non-executable mapped/MMIO. It therefore cannot connect to `ExecutionBackend` without a substantial fork and will not be adopted. A TinyEMU-family engine is reconsidered only if the publication boundary of its current Web x86 source is confirmed; GPL/LGPL candidates are excluded. A custom interpreter remains deferred.*
+*The browser execution layer was removed from the active scope because its performance target and verification boundary do not fit this project. The former survey remains as historical evidence and is not a follow-up product task.*
 
 Windows x86 launcher는 `DEBUG_ONLY_THIS_PROCESS` child의 entry에서 temporary `INT3` breakpoint로 멈춰 `0x00400000` main image와 loader-resolved IAT slot 전체를 확인했다. 이 입력에서 DR0 hardware breakpoint는 context에 남았지만 event가 전달되지 않아 별도 조사 대상으로 남긴다. 다음 Windows 작업은 같은 x86 child에 runtime DLL을 적재하고 IAT handoff를 검증하는 것이다.
 
@@ -172,11 +176,11 @@ Windows x86 launcher는 `DEBUG_ONLY_THIS_PROCESS` child의 entry에서 temporary
 * 사용 API 확인은 Stage 2의 import 목록과 COM 인터페이스 사용 흔적에서 나온다
 * 표면 생성, 잠금/해제, 블릿, 페이지 플립
 * 텍스처 업로드와 픽셀 포맷 변환
-* 플랫폼 backend: OpenGL(Windows/Linux), WebGL(Web)
+* 플랫폼 backend: OpenGL(Windows/Linux)
 
 **완료 기준:** 첫 프레임이 화면에 나오고, 참조 스크린샷과 픽셀 단위로 비교 가능한 캡처를 남긴다.
 
-*Connect the graphics API the original uses to the platform backend: surfaces, lock/unlock, blit, page flip, texture upload, and format conversion, over OpenGL and WebGL. Done when the first frame reaches the screen and a capture exists for pixel comparison.*
+*Connect the graphics API the original uses to the platform backend: surfaces, lock/unlock, blit, page flip, texture upload, and format conversion over desktop OpenGL. Done when the first frame reaches the screen and a capture exists for pixel comparison.*
 
 ---
 
@@ -207,20 +211,6 @@ Windows에서 검증한 것과 같은 코드가 Linux에서도 같은 결과를 
 bring-up은 정식 `ez2dj.exe`의 entry와 첫 import에서 시작해 CRT/WinMain, 창·첫 자산, callback/thread, DirectX/audio/input 순서로 진행하며, 같은 경로에서 보호 계층의 self-modifying code, LPTDI 환경과 raw I/O 경계를 함께 다룬다. 세부 설계는 [Linux 원본 실행 경로](design/20260827-077-linux-original-execution.md)에 둔다.
 
 *Confirm the same code produces the same result on Linux through an i386 native helper, a shared x86-64-hosted Win32 import/COM dispatcher, SDL services, case-insensitive paths, and cross-host log/frame comparison. Bring-up proceeds from the unprotected entry and first import through CRT/WinMain, window/assets, callbacks/threads, and DirectX/audio/input before adding the protected executable's self-modification, LPTDI environment, and raw I/O. Done when the same dump reaches the same point on Windows and Linux.*
-
----
-
-## Stage 9 — Web 호스트 / Web host
-
-브라우저는 동기 파일 I/O도, 블로킹 메인 루프도 허용하지 않는다. 이 제약은 실행 backend와 파일 시스템 계층에 구조적 영향을 주므로, 별도 설계 문서를 먼저 쓴다.
-
-* 자산 전달 방식: 사용자가 브라우저에서 디렉터리를 선택하거나 패키징된 자산을 사용
-* 메인 루프를 `requestAnimationFrame` 콜백으로 분해
-* 파일 I/O를 비동기 또는 사전 적재 모델로 전환
-
-**완료 기준:** 브라우저에서 Stage 6과 같은 첫 프레임이 나온다.
-
-*Browsers allow neither synchronous file I/O nor a blocking main loop, and that constrains the execution backend and the file-system layer structurally, so this stage starts with its own design note. Done when a browser reaches the same first frame as Stage 6.*
 
 ---
 

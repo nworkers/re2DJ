@@ -4,9 +4,9 @@
 
 *This file contains only active work and unresolved items. Completed items are moved to [Implemented](IMPLEMENTED.md).*
 
-작업 086의 `DemoVolume` HLE로 확인된 title 음량 저하 원인은 제거됐다. 실제 전체 곡·효과음 청취 정확성은 작업 072의 사용자 재검증 항목으로 유지하며 Linux 작업 077은 사용자 결정에 따라 잠시 보류한다.
+작업 086의 `DemoVolume` HLE로 확인된 title 음량 저하 원인은 제거됐다. 실제 전체 곡·효과음 청취 정확성은 작업 072의 사용자 재검증 항목으로 유지한다. Linux 작업 077은 WSL x86/x64 제품 host와 공통 i386 helper를 기준으로 계속 진행한다.
 
-*Task 086's `DemoVolume` HLE removes the confirmed title-volume attenuation. Audible accuracy across complete songs and effects remains a user-revalidation item under Task 072; Linux Task 077 remains temporarily paused by user decision.*
+*Task 086's `DemoVolume` HLE removes the confirmed title-volume attenuation. Audible accuracy across complete songs and effects remains a user-revalidation item under Task 072; Linux Task 077 continues against the WSL x86/x64 product hosts and shared i386 helper.*
 
 ## 현재 진행 / In progress
 
@@ -135,12 +135,23 @@
   - [x] X11·Wayland SDL3/OpenGL 공용 backend build 검증
   - [x] production i386 helper와 Linux `re2dj --run`을 연결해 원본 첫 import/fault/exit 보고
   - [x] guest stack·TEB/PEB·FS와 signal fault 경계 구현
-  - [ ] 공용 Win32 import dispatcher, ABI marshalling, guest memory·handle·module service 구현
+  - [x] 공용 Win32 import dispatcher, ABI marshalling, 64KiB guest-memory transport와 pending import `kStop` 제어 구현
+  - [x] Linux i386 pseudo module/resolver와 첫 동적 `CreateFileA("\\.\NTICE")` 호출 ABI 검증
+    *Validated the Linux i386 pseudo module/resolver and first dynamic `CreateFileA("\\.\NTICE")` call ABI.*
+  - [ ] guest handle·module service 구현
   - [ ] kernel32·USER32·VFS·INI·GDI HLE로 창과 첫 자산 접근 도달
   - [ ] guest callback, nested import, thread·TLS·동기화 구현
   - [ ] 공용 DirectDraw/Direct3D/DirectSound COM facade를 SDL graphics/audio/input에 연결
   - [x] 보호된 `ez2dj.exe` self-modifying code·LPTDI 환경·의미 기반 I/O board 지원
   - [ ] helper 자동 탐색, overlay CLI, synthetic CI와 Linux 원본 실행 가이드 완성
+
+- [ ] 작업 311 — Linux guest memory transport 확장
+  - [x] import gate pending stack window를 유지하면서 매핑된 PE image read/write 허용
+  - [x] host/helper memory transfer 상한을 64KiB로 고정
+  - [x] 공용 import dispatcher와 x86 ABI marshalling 연결(작업 312), pending import `kStop` terminal 제어(작업 313)
+  - [ ] 원본 import 표면 근거의 실제 Win32 API binding 등록
+
+  *Task 311 — Expand Linux guest memory transport. The pending import stack window and mapped PE image reads/writes are available, the host/helper transfer limit is fixed at 64 KiB, Task 312 connects the shared import dispatcher and x86 ABI marshalling, and Task 313 makes pending-import `kStop` a terminal host action. Actual Win32 API bindings remain next.*
 
   *Task 077 — Execute the original x86 PE32 in a Linux i386 helper behind the shared Win32 HLE and x86-64 SDL services. Bring up the unprotected build first, then add the protected cabinet executable's environment boundaries.*
 
@@ -199,12 +210,11 @@
 - [ ] `ez2dj3rd` 입력 슬롯 `0x1b`의 물리 바인딩 — 게임 내장 autoplay 토글([분석](analysis/ez2dj3rd-demo-play.md))
 - [ ] 나머지 타깃의 `game_controls` — `game-state-hunt` 스킬로 빌드별 autoplay 플래그 확인. 완료: `ez2dj3rd`(작업 297), `ez2dj4th`(작업 300), `ez2dj5th`(작업 301), `ez2dj1stse`(작업 302). `ez2d2m`(작업 305). 변수 없음: `ez2dj1st`(작업 304, 데모 전용 플레이어 장면). 남은 후보: `ez2dj2nd`(덤프 미수집), `ez2dj6th`(자식 프로세스 구조로 현재 덤프 불가)
 - [x] [작업 303](work-logs/20260918-303-directsound-static-oneshot.md) — `ez2dj1stse`·`ez2dj1st` 효과음 무한 반복. `STATIC` 효과음을 스트리밍에서 제외하고 스트리밍 경로가 `DSBPLAY_LOOPING`을 따르게 함. 사용자 청취 확인
-- [ ] OSD 입력 공급의 Linux·Web 경로
+- [ ] OSD 입력 공급의 Linux 경로
 - [ ] `re2dj_windows_vfs_runtime_probe` hang 원인
 - [ ] 작업 119 — Windows x86 4th dynamic <code>GetProcAddress</code> VFS HLE
 - [ ] Windows x86 INI API HLE (`GetPrivateProfile*`, `WritePrivateProfileStringA`)
 - [ ] Windows x86 directory enumeration (`FindFirstFileA`, `FindNextFileA`, `FindClose`)
-- [ ] Web(Emscripten) build verification
 - [ ] GitHub Actions first workflow verification
 
 ## 분석 미완료 / Analysis remaining
@@ -217,7 +227,7 @@
 ## 보류 / Deferred
 
 - [ ] Windows x64 host expansion
-- [ ] Custom x86-32 interpreter, only if no permitted Web execution engine is suitable
+- [ ] Native 32-bit Linux kernel에서의 실행 검증
 
 - [ ] Task 096 visual revalidation: confirm scene-transition flicker/fade-out and z-order behavior with the user's current display setup
 - [ ] 작업 097 Music Select 좌표·창 pixel viewport 재검증 (창 크기/DPI 변경 포함)

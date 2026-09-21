@@ -12,6 +12,8 @@ int main()
     RunPortHelperScanTests(context);
     RunImmediateScanTests(context);
     RunExecutionBackendTests(context);
+    RunImportDispatcherTests(context);
+    RunImportEventLoopTests(context);
     RunGuestPathTests(context);
     RunPeImageTests(context);
     RunPeLoaderTests(context);

@@ -58,7 +58,7 @@
 
 ## 이식성 규칙
 
-* 공용 코어(`src/` 중 `src/platform/` 이외)는 호스트 OS 헤더를 직접 포함하지 않는다. `<windows.h>`, `<unistd.h>`, `<emscripten.h>`는 플랫폼 계층 전용이다.
+* 공용 코어(`src/` 중 `src/platform/` 이외)는 호스트 OS 헤더를 직접 포함하지 않는다. `<windows.h>`와 `<unistd.h>`는 플랫폼 계층 전용이다.
 * 파일 시스템 접근은 `std::filesystem`을 사용한다.
 * 정수 폭에 의존하는 게스트 구조체는 `std::uint32_t` 같은 고정 폭 타입만 사용한다.
 * 게스트 주소는 호스트 포인터와 혼동되지 않도록 `re2dj::runtime::GuestAddress`(32비트 값 타입)로 표현한다. 호스트 포인터로 캐스팅하지 않는다.
@@ -67,7 +67,7 @@
 
 ## Portability Rules
 
-* The shared core — everything under `src/` except `src/platform/` — must not include host OS headers directly. `<windows.h>`, `<unistd.h>`, and `<emscripten.h>` belong to the platform layer only.
+* The shared core — everything under `src/` except `src/platform/` — must not include host OS headers directly. `<windows.h>` and `<unistd.h>` belong to the platform layer only.
 * Use `std::filesystem` for file-system access.
 * Use fixed-width types such as `std::uint32_t` for any guest structure whose width matters.
 * Represent guest addresses as `re2dj::runtime::GuestAddress`, a 32-bit value type, so they are never confused with host pointers. Do not cast them to host pointers.
@@ -169,7 +169,6 @@ int main()
 * 플랫폼 공용 로더와 런타임 코어는 `src/` 아래의 공용 영역에 둔다.
 * 64비트 Windows 전용 코드는 `src/platform/windows/` 아래에 둔다.
 * Linux 전용 코드는 `src/platform/linux/` 아래에 둔다.
-* Web 전용 코드는 `src/platform/web/` 아래에 둔다.
 * 실행 진입점은 `src/host/` 아래에 둔다.
 * 비실행 분석 도구는 `src/tools/<도구 이름>/` 아래에 둔다.
 * 공개 헤더는 `include/re2dj/<subsystem>/`에 두고, 한 하위 시스템 안에서만 쓰는 헤더는 해당 `src/` 디렉터리에 둔다.
@@ -181,7 +180,6 @@ int main()
 * Put platform-neutral loader and runtime core code in shared areas under `src/`.
 * Put 64-bit Windows-specific code under `src/platform/windows/`.
 * Put Linux-specific code under `src/platform/linux/`.
-* Put Web-specific code under `src/platform/web/`.
 * Put execution entry points under `src/host/`.
 * Put non-executing analysis tools under `src/tools/<tool-name>/`.
 * Put public headers in `include/re2dj/<subsystem>/`, and keep headers used only inside one subsystem next to its sources under `src/`.

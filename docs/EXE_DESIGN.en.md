@@ -192,3 +192,11 @@ Analysis: [EZ2Dancer 2nd MOVE demo and the autoplay flag](analysis/ez2d2m-demo-p
 **Confirmed — `ez2d2m` is built from paired classes.** The TimeDateStamp `0x3a5f074c` build has no scene registration function; each class such as `NormalGame` and `DemoGame` carries its own `OnCreateGame`, `OnDestroyGame` and Director, and each function passes its own name string to the logging function.
 
 **Confirmed — the autoplay flag is `[0x007fa424]`.** `NormalGame::OnCreateGame` puts channels 3-`0x12` in automatic mode only when it is 1, where the demo writes the same values as constants, and a toggle built into the game flips it from input slot `0xc`. Because the demo does not use the flag, attract polling cannot confirm it; the OSD toggle did.
+
+### 2.5 Linux resolver-continuation trace — confirmed
+
+The Linux i386 minimum diagnostic traced 37 frames after return 0x00af0b99 from GetProcAddress(kernel32, GetVersion). The intermediate second GetProcAddress request is for CreateFileA, and it returned EAX=0 at 0x00af09f6. That value remained zero through MOV CL, byte ptr [EAX] at 0x00af0c22, producing the null read. This confirms that the dynamic CreateFileA resolver is the next implementation and verification boundary for the current minimum diagnostic; it does not establish that CreateFileA alone completes all protection initialization.
+
+### 2.6 Linux first dynamic CreateFileA call — confirmed
+
+When GetProcAddress(kernel32, CreateFileA) returns an executable thunk in the Linux i386 diagnostic, the original code actually calls it. The first path is `\\.\NTICE`, with desired access `0xc0000000`, share mode 3, creation disposition 3, flags/attributes zero, and null security attributes and template handle. The caller return is `0x00aeffbc`, and stdcall cleanup is 28 bytes. The device contract after a failure handle remains unresolved.

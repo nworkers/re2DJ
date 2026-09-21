@@ -1,5 +1,9 @@
 # Web x86 실행 엔진 후보
 
+> **역사적 기록 / Historical record:** WebAssembly는 2026-09-18 작업 310에서 re2DJ의 활성 지원 범위에서 제거되었습니다. 아래 조사는 당시의 범위 결정 근거로만 보존하며, 현재 제품 의존성이나 구현 계획을 제안하지 않습니다.
+>
+> **Historical record:** WebAssembly was removed from re2DJ's active support scope by Task 310 on 2026-09-18. The survey below is retained only as evidence for that decision and is not a current product dependency or implementation plan.
+
 ## 조사 범위
 
 2026년 8월 22일 기준으로, 브라우저에서 IA-32 코드를 실행할 수 있거나 CPU 코어로 재사용할 가능성이 있는 프로젝트를 공식 저장소·공식 문서·라이선스 원문으로 비교했다. 이 문서는 기술 후보 조사이며 어떤 프로젝트도 re2DJ 의존성으로 도입하지 않는다.

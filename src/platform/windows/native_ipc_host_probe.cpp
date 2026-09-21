@@ -4,13 +4,18 @@
 #include <cstdio>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "re2dj/exe/pe_image.h"
+#include "re2dj/hle/import_dispatcher.h"
 #include "re2dj/platform/windows/native_helper_backend.h"
+#include "../native_helper_protocol.h"
 
 namespace
 {
+
+namespace protocol = re2dj::platform::native_protocol;
 
 constexpr std::uint32_t kImageBase = 0x10000000;
 constexpr std::uint32_t kRequestedBase = 0x11000000;
@@ -56,6 +61,36 @@ void PutSectionName(std::vector<std::uint8_t>* bytes,
     }
 }
 
+bool ProbeImportHandler(const re2dj::hle::ImportCall& call,
+                        re2dj::hle::ImportReturn* result,
+                        std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 1)
+    {
+        if (error != nullptr)
+        {
+            *error = "synthetic import needs exactly one argument";
+        }
+        return false;
+    }
+    if (!call.gate.by_ordinal && call.arguments[0] == 41)
+    {
+        result->eax = 42;
+        return true;
+    }
+    if (call.gate.by_ordinal && call.gate.ordinal == 7 && call.arguments[0] == 42)
+    {
+        result->eax = 43;
+        result->edx = 1;
+        return true;
+    }
+    if (error != nullptr)
+    {
+        *error = "unexpected synthetic import argument";
+    }
+    return false;
+}
+
 std::vector<std::uint8_t> MakeSyntheticPe32()
 {
     constexpr std::size_t kPeOffset = 0x80;
@@ -79,7 +114,7 @@ std::vector<std::uint8_t> MakeSyntheticPe32()
     PutU32(&bytes, kOptionalHeader + 28, kImageBase);
     PutU32(&bytes, kOptionalHeader + 32, 0x1000);
     PutU32(&bytes, kOptionalHeader + 36, 0x200);
-    PutU32(&bytes, kOptionalHeader + 56, 0x5000);
+    PutU32(&bytes, kOptionalHeader + 56, 0x11000);
     PutU32(&bytes, kOptionalHeader + 60, 0x400);
     PutU16(&bytes, kOptionalHeader + 68, 3);
     PutU32(&bytes, kOptionalHeader + 92, 16);
@@ -209,8 +244,22 @@ int wmain(int argc, wchar_t** argv)
 
     re2dj::platform::windows::NativeHelperBackend backend{
         std::filesystem::path(argv[1])};
+    re2dj::hle::ImportDispatcher dispatcher;
+    re2dj::hle::ImportBinding named_binding;
+    named_binding.module = "probe.dll";
+    named_binding.name = "ProbeGate";
+    named_binding.argument_count = 1;
+    named_binding.handler = ProbeImportHandler;
+    re2dj::hle::ImportBinding ordinal_binding;
+    ordinal_binding.module = "probe.dll";
+    ordinal_binding.ordinal = 7;
+    ordinal_binding.by_ordinal = true;
+    ordinal_binding.argument_count = 1;
+    ordinal_binding.handler = ProbeImportHandler;
     re2dj::runtime::LoadedPeImage loaded;
-    bool success = backend.PrepareImage(image,
+    bool success = dispatcher.Register(std::move(named_binding), &error) &&
+                   dispatcher.Register(std::move(ordinal_binding), &error) &&
+                   backend.PrepareImage(image,
                                         info,
                                         re2dj::runtime::GuestAddress(kRequestedBase),
                                         &loaded,
@@ -231,12 +280,18 @@ int wmain(int argc, wchar_t** argv)
                            re2dj::runtime::kDefaultImportGateStride &&
                    backend.Start(&error);
 
+#if defined(RE2DJ_LINUX_NATIVE_IPC_HOST_PROBE)
+    re2dj::runtime::GuestAddress persistent_allocation;
+    std::uint32_t persistent_allocation_size = 0;
+    const auto persistent_read_write = re2dj::runtime::GuestMemoryAccess::kRead |
+                                       re2dj::runtime::GuestMemoryAccess::kWrite;
+    const std::array<std::uint8_t, 4> persistent_initial_bytes = {9, 8, 7, 6};
+    const std::array<std::uint8_t, 4> persistent_after_first_page_write = {5, 8, 7, 6};
+#endif
+
     auto complete_gate = [&](std::size_t import_index,
                              std::uint64_t expected_event_id,
-                             std::uint32_t expected_instruction_pointer,
-                             std::uint32_t expected_argument,
-                             std::uint32_t eax,
-                             std::uint32_t edx) -> bool
+                             std::uint32_t expected_instruction_pointer) -> bool
     {
         re2dj::runtime::ExecutionEvent event;
         if (!backend.WaitForEvent(&event, &error) ||
@@ -249,32 +304,111 @@ int wmain(int argc, wchar_t** argv)
             return false;
         }
 
-        std::array<std::uint8_t, 4> argument_bytes = {};
-        if (!backend.ReadMemory(event.stack_pointer + 4, argument_bytes, &error))
+        if (import_index == 0)
         {
-            return false;
-        }
-        const std::uint32_t argument =
-            static_cast<std::uint32_t>(argument_bytes[0]) |
-            (static_cast<std::uint32_t>(argument_bytes[1]) << 8) |
-            (static_cast<std::uint32_t>(argument_bytes[2]) << 16) |
-            (static_cast<std::uint32_t>(argument_bytes[3]) << 24);
-        if (argument != expected_argument ||
-            !backend.WriteMemory(event.stack_pointer + 4, argument_bytes, &error))
-        {
-            return false;
-        }
+            std::array<std::uint8_t, protocol::kMaximumMemoryTransferSize> image_bytes = {};
+            if (!backend.ReadMemory(loaded.load_base + 0x1000, image_bytes, &error) ||
+                !backend.WriteMemory(loaded.load_base + 0x1000, image_bytes, &error))
+            {
+                return false;
+            }
+            std::vector<std::uint8_t> oversized(protocol::kMaximumMemoryTransferSize + 1);
+            if (backend.ReadMemory(loaded.load_base, oversized, &error))
+            {
+                return false;
+            }
+            error.clear();
+            std::array<std::uint8_t, 1> outside = {};
+            if (backend.ReadMemory(loaded.load_base + 0x11000, outside, &error))
+            {
+                return false;
+            }
+            error.clear();
 
-        re2dj::runtime::ImportCompletion completion;
-        completion.event_id = event.event_id;
-        completion.eax = eax;
-        completion.edx = edx;
-        completion.stack_bytes_to_pop = 4;
-        return backend.CompleteImport(completion, &error);
+#if defined(RE2DJ_LINUX_NATIVE_IPC_HOST_PROBE)
+            if (!backend.AllocateGuestMemory(5000,
+                                             persistent_read_write,
+                                             &persistent_allocation,
+                                             &persistent_allocation_size,
+                                             &error) ||
+                persistent_allocation.value() == 0 || persistent_allocation_size != 8192)
+            {
+                return false;
+            }
+            std::array<std::uint8_t, 4> dynamic_read = {};
+            if (!backend.WriteMemory(persistent_allocation, persistent_initial_bytes, &error) ||
+                !backend.ReadMemory(persistent_allocation, dynamic_read, &error) ||
+                dynamic_read != persistent_initial_bytes)
+            {
+                return false;
+            }
+            re2dj::runtime::GuestMemoryAccess previous_access;
+            const re2dj::runtime::GuestAddress second_page = persistent_allocation + 4096;
+            const std::array<std::uint8_t, 1> page_byte = {persistent_after_first_page_write[0]};
+            if (!backend.ProtectGuestMemory(second_page,
+                                            4096,
+                                            re2dj::runtime::GuestMemoryAccess::kRead,
+                                            &previous_access,
+                                            &error) ||
+                previous_access != persistent_read_write ||
+                !backend.WriteMemory(persistent_allocation, page_byte, &error) ||
+                backend.WriteMemory(second_page, page_byte, &error))
+            {
+                return false;
+            }
+            error.clear();
+            if (!backend.ProtectGuestMemory(second_page,
+                                            4096,
+                                            persistent_read_write,
+                                            &previous_access,
+                                            &error) ||
+                previous_access != re2dj::runtime::GuestMemoryAccess::kRead)
+            {
+                return false;
+            }
+            error.clear();
+            if (!backend.ProtectGuestMemory(persistent_allocation,
+                                            persistent_allocation_size,
+                                            re2dj::runtime::GuestMemoryAccess::kRead,
+                                            &previous_access,
+                                            &error) ||
+                previous_access != persistent_read_write ||
+                backend.WriteMemory(persistent_allocation, persistent_initial_bytes, &error))
+            {
+                return false;
+            }
+            error.clear();
+            if (!backend.ProtectGuestMemory(persistent_allocation,
+                                            persistent_allocation_size,
+                                            persistent_read_write,
+                                            &previous_access,
+                                            &error) ||
+                previous_access != re2dj::runtime::GuestMemoryAccess::kRead)
+            {
+                return false;
+            }
+            error.clear();
+#endif
+        }
+#if defined(RE2DJ_LINUX_NATIVE_IPC_HOST_PROBE)
+        if (import_index == 1)
+        {
+            std::array<std::uint8_t, 4> persistent_read = {};
+            if (!backend.ReadMemory(persistent_allocation, persistent_read, &error) ||
+                persistent_read != persistent_after_first_page_write ||
+                !backend.FreeGuestMemory(persistent_allocation, &error) ||
+                backend.ReadMemory(persistent_allocation, persistent_read, &error))
+            {
+                return false;
+            }
+            error.clear();
+        }
+#endif
+        return dispatcher.Dispatch(loaded.imports[import_index], event, &backend, &error);
     };
 
-    success = success && complete_gate(0, 1, kRequestedBase + kEntryRva + 8, 41, 42, 0);
-    success = success && complete_gate(1, 2, kRequestedBase + kEntryRva + 15, 42, 43, 1);
+    success = success && complete_gate(0, 1, kRequestedBase + kEntryRva + 8);
+    success = success && complete_gate(1, 2, kRequestedBase + kEntryRva + 15);
 
     re2dj::runtime::ExecutionEvent exit_event;
     success = success && backend.WaitForEvent(&exit_event, &error) &&

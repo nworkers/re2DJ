@@ -38,12 +38,8 @@ constexpr float kLogicalHeight = 480.0f;
 constexpr float kFontScaleFactor = 0.75f;
 constexpr float kMinimumFontScale = 0.75f;
 
-#if defined(__EMSCRIPTEN__)
-constexpr char kGlslVersion[] = "#version 100";
-#else
 // The backend creates an OpenGL 2.1 compatibility context, whose GLSL is 1.20.
 constexpr char kGlslVersion[] = "#version 120";
-#endif
 
 }  // namespace
 

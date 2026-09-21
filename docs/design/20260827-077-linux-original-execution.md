@@ -1,5 +1,11 @@
 # Linux 원본 실행 경로 설계
 
+## 2026-09-18 후속 설계 / Updated plan
+
+아래 내용은 당시의 x64 중심 설계다. 현재 x86·x64 호스트 정책, 공식 target 기준과 작업 순서는 후속 설계에 따른다. 최소 process bootstrap은 작업 078에서 구현되었으며 전체 Win32 환경은 후속 작업이다. [설계 / Design](20260918-307-linux-x86-x64-wsl.md).
+
+*The text below records the earlier x64-focused design. The follow-up design governs current x86/x64 host policy, official-target acceptance, and implementation order. Minimal process bootstrap was implemented in task 078; the full Win32 environment remains future work.*
+
 ## 상태
 
 **구현 진행 중.** Linux x86-64 host와 production i386 helper의 합성 PE32 실행, import gate IPC와 CLI 제품 진입점이 검증됐다. 다음 단계는 Win32 process bootstrap과 공용 Win32 HLE를 추가해 원본 `ez2dj1.exe`와 최종적으로 보호된 `ez2dj.exe`를 실행하는 것이다.
@@ -26,7 +32,7 @@ flowchart LR
 - x86-64 host는 guest address를 host pointer로 해석하지 않는다. 모든 문자열·구조체·buffer 접근은 `ExecutionBackend` memory API를 사용한다.
 - 공용 HLE dispatcher는 `{module, name/ordinal, calling convention, ABI signature, handler}` table과 guest handle/object registry를 소유한다.
 - USER32 handle과 DirectX COM object는 guest-visible 32비트 token과 vtable로 표현하고 host-side object state에 연결한다.
-- SDL3/OpenGL과 audio device는 x86-64 host에 유지한다. i386 SDL package 의존성을 추가하지 않으며 같은 service 경계를 향후 Web backend에서도 재사용한다.
+- SDL3/OpenGL과 audio device는 x86-64 host에 유지한다. i386 SDL package 의존성을 추가하지 않는다.
 - Windows 전용 facade는 확인된 의미와 회귀 기준으로 사용하되 Windows type과 host pointer를 공용 HLE에 복사하지 않는다.
 
 ## 단계
@@ -42,7 +48,7 @@ flowchart LR
 
 ## protocol과 backend 확장 원칙
 
-현재 protocol v3의 단일 pending event와 4 KiB stack window는 bootstrap probe에는 충분하지만 원본 실행에는 부족하다. 확장은 capability handshake 뒤에 version을 올리고 다음 계약을 독립적으로 추가한다.
+현재 protocol v3의 단일 pending event와 작업 311의 64KiB image/stack memory transport는 bootstrap 및 초기 ABI probe에는 충분하지만 원본 실행 전체에는 부족하다. 확장은 capability handshake 뒤에 version을 올리고 다음 계약을 독립적으로 추가한다.
 
 - 검증된 mapped range의 chunked read/write
 - reserve/commit/protect/free guest memory
@@ -76,7 +82,7 @@ The unprotected `ez2dj1.exe` is the bring-up target. Fixed-base mapping, Win32 A
 
 ## Selected Structure
 
-The i386 helper owns requested-base mapping, section protections, guest stack/TEB/PEB and FS state, guest threads, and fault contexts. The x86-64 host never treats guest addresses as host pointers; all marshalling goes through `ExecutionBackend`. A shared HLE dispatcher owns module/function ABI tables and guest handle/object registries. Guest-visible USER32 and DirectX objects use 32-bit tokens and vtables backed by host-side state. SDL graphics, audio, and input stay in the x86-64 host so no i386 SDL dependency is introduced and the service boundary can later be reused by Web.
+The i386 helper owns requested-base mapping, section protections, guest stack/TEB/PEB and FS state, guest threads, and fault contexts. The x86-64 host never treats guest addresses as host pointers; all marshalling goes through `ExecutionBackend`. A shared HLE dispatcher owns module/function ABI tables and guest handle/object registries. Guest-visible USER32 and DirectX objects use 32-bit tokens and vtables backed by host-side state. SDL graphics, audio, and input stay in the x86-64 host so no i386 SDL dependency is introduced.
 
 ## Phases
 
@@ -91,7 +97,7 @@ The i386 helper owns requested-base mapping, section protections, guest stack/TE
 
 ## Backend Evolution
 
-Protocol v3's single pending event and 4 KiB stack window are insufficient for the original. A capability-negotiated version adds validated chunked memory access, guest allocation/protection, callback invocation with nested imports, multi-thread completion routing, and fault/privileged-instruction events. Shared HLE remains independent of transport and POSIX handles. Pipes and bounded copies come first; shared-memory transport is considered only after a measured rendering or texture bottleneck.
+Protocol v3's single pending event and Task 311's 64 KiB image/stack memory transport are sufficient for bootstrap and initial ABI probes but insufficient for the complete original execution path. A capability-negotiated version adds validated chunked memory access, guest allocation/protection, callback invocation with nested imports, multi-thread completion routing, and fault/privileged-instruction events. Shared HLE remains independent of transport and POSIX handles. Pipes and bounded copies come first; shared-memory transport is considered only after a measured rendering or texture bottleneck.
 
 ## Completion Criteria
 

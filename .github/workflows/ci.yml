@@ -46,17 +46,3 @@ jobs:
         run: cmake --build --preset linux-x64-debug
       - name: Test
         run: ctest --preset linux-x64-debug
-
-  web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Ninja
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - uses: mymindstorm/setup-emsdk@v14
-      # The Web host cannot run CTest, so this job proves the shared core and
-      # SDL3/OpenGL backend still compile for WebAssembly.
-      - name: Configure
-        run: cmake --preset web
-      - name: Build
-        run: cmake --build --preset web

@@ -70,10 +70,11 @@ if(NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     FetchContent_MakeAvailable(imgui)
 endif()
 
-# Win32 x86 is the primary Windows-native host during the current bring-up.
-# A non-Windows 32-bit build remains reserved for explicit helper probes.
-if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT WIN32 AND NOT RE2DJ_BUILD_NATIVE_HELPER_PROBE AND
-   NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
+# Win32 x86 and Linux x86 are supported product-host configurations. Other
+# non-Windows 32-bit configurations remain reserved for explicit probes.
+if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT WIN32 AND
+   NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   NOT RE2DJ_BUILD_NATIVE_HELPER_PROBE AND NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     message(WARNING
         "Configuring an unsupported 32-bit non-Windows host build.")
 endif()
@@ -84,8 +85,12 @@ if(RE2DJ_BUILD_LINUX_NATIVE_HELPER)
             "RE2DJ_BUILD_LINUX_NATIVE_HELPER requires a Linux i386 build")
     endif()
     add_executable(re2dj_linux_native_ipc_helper
+        src/platform/linux/native_import_bridge.cpp
         src/platform/linux/native_import_thunks.cpp
         src/platform/linux/native_ipc_helper.cpp
+        src/platform/linux/native_ipc_helper_main.cpp
+        src/platform/linux/native_pe_image.cpp
+        src/platform/linux/native_pe_session.cpp
         src/platform/linux/native_process_bootstrap.cpp
     )
     target_compile_options(re2dj_linux_native_ipc_helper
@@ -94,11 +99,31 @@ if(RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     target_link_libraries(re2dj_linux_native_ipc_helper PRIVATE re2dj_core re2dj_warnings)
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     add_library(re2dj_linux_native_backend STATIC
+        src/platform/linux/native_create_file_observation.cpp
         src/platform/linux/native_helper_backend.cpp
         src/platform/linux/original_runner.cpp
     )
+    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        target_sources(re2dj_linux_native_backend PRIVATE
+            src/platform/linux/native_dynamic_thunk.cpp
+            src/platform/linux/native_fault_observation.cpp
+            src/platform/linux/native_import_bridge.cpp
+            src/platform/linux/native_import_thunks.cpp
+            src/platform/linux/native_in_process_runner.cpp
+            src/platform/linux/native_pe_image.cpp
+            src/platform/linux/native_pe_session.cpp
+            src/platform/linux/native_process_bootstrap.cpp
+        )
+        target_compile_options(re2dj_linux_native_backend PRIVATE -fno-omit-frame-pointer)
+        add_executable(re2dj_linux_native_in_process_probe
+            src/platform/linux/native_in_process_probe.cpp
+        )
+        target_link_libraries(re2dj_linux_native_in_process_probe
+            PRIVATE re2dj_linux_native_backend re2dj_warnings
+        )
+    endif()
     target_link_libraries(re2dj_linux_native_backend
         PUBLIC re2dj_core
         PRIVATE re2dj_warnings
@@ -108,6 +133,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     )
     target_link_libraries(re2dj_linux_native_ipc_host_probe
         PRIVATE re2dj_linux_native_backend re2dj_warnings
+    )
+    add_executable(re2dj_linux_capability_rejection_helper
+        src/platform/linux/native_ipc_capability_rejection_helper.cpp
+    )
+    target_link_libraries(re2dj_linux_capability_rejection_helper
+        PRIVATE re2dj_warnings
     )
 endif()
 
@@ -240,10 +271,6 @@ if(NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
     )
-    if(EMSCRIPTEN)
-        target_compile_definitions(re2dj_imgui PUBLIC IMGUI_IMPL_OPENGL_ES2)
-    endif()
-
     # The on-screen display. Platform-neutral: it takes input through its own
     # queue and draws through the backend's present overlay point.
     add_library(re2dj_osd STATIC
@@ -271,6 +298,8 @@ add_library(re2dj_core STATIC
     src/hle/hardlock/payload_responses.cpp
     src/hle/hardlock/seed_config.cpp
     src/hle/hardlock/transform_responses.cpp
+    src/hle/import_dispatcher.cpp
+    src/hle/import_event_loop.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/ez2dj_io_board.cpp
@@ -504,7 +533,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
 endif()
 
 # std::filesystem needs no separate link library on GCC 9+, Clang with
-# libstdc++ 9+, MSVC, or Emscripten, which covers every supported host.
+# libstdc++ 9+ or MSVC, which covers every supported host.
 
 # Command-line host.
 add_executable(re2dj
@@ -514,7 +543,7 @@ target_link_libraries(re2dj PRIVATE re2dj_core re2dj_warnings)
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     target_link_libraries(re2dj PRIVATE re2dj_windows_original_process_backend)
 endif()
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     target_link_libraries(re2dj PRIVATE re2dj_linux_native_backend)
 endif()
 
@@ -556,6 +585,8 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/address_space_test.cpp
         tests/unit/code_region_score_test.cpp
         tests/unit/execution_backend_test.cpp
+        tests/unit/import_dispatcher_test.cpp
+        tests/unit/import_event_loop_test.cpp
         tests/unit/ez2dj_io_board_test.cpp
         tests/unit/ez2dancer_io_board_test.cpp
         tests/unit/guest_path_test.cpp
@@ -602,7 +633,7 @@ if(RE2DJ_BUILD_TESTS)
     add_test(NAME re2dj_unit_tests COMMAND re2dj_unit_tests)
 
     # Run explicitly on a desktop with an OpenGL driver, not in headless CTest.
-    if(TARGET re2dj_sdl3_opengl_backend AND NOT EMSCRIPTEN)
+    if(TARGET re2dj_sdl3_opengl_backend)
         add_executable(re2dj_opengl_blend_probe tests/graphics/opengl_blend_probe.cpp)
         target_link_libraries(re2dj_opengl_blend_probe
             PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_warnings

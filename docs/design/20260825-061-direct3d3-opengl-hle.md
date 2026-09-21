@@ -15,7 +15,7 @@
 1. `DirectDrawCreate` import에서 시작하는 guest 소유 COM 객체 그래프를 제공한다.
 2. 원본의 `IDirectDraw`, `IDirectDraw4`, `IDirect3D3`, `IDirect3DDevice3` ABI와 수명 계약을 보존한다.
 3. EZ2DJ가 실제 사용하는 DirectDraw surface와 Direct3D 3 fixed-function 명령만 플랫폼 중립 표현으로 변환한다.
-4. Windows와 Linux는 OpenGL backend, Web은 같은 계약을 구현하는 WebGL 2 backend를 사용할 수 있게 한다.
+4. Windows와 Linux의 desktop OpenGL backend가 같은 계약을 구현하도록 한다.
 5. 640×480×16 guest framebuffer를 host desktop mode 변경 없이 표시한다.
 
 Direct3D 3 전체 구현, 임의의 구형 게임 지원, 원본 gameplay 재구현, host Direct3D 객체의 vtable 수정은 범위에 포함하지 않는다. OpenGL은 첫 backend일 뿐 공용 HLE의 ABI가 아니다.
@@ -29,7 +29,6 @@ flowchart LR
     C --> L["Legacy graphics core<br/>surface, state, draw contract"]
     L --> R["RenderBackend interface"]
     R --> GL["Desktop OpenGL backend"]
-    R --> WG["WebGL 2 backend"]
     R -.-> T["향후 대체 backend"]
 ```
 
@@ -62,7 +61,7 @@ DirectDraw surface는 guest가 기대하는 pitch와 16비트 메모리 표현�
 
 ### RenderBackend와 OpenGL
 
-`RenderBackend`는 resource 생성·갱신, render target/depth target 선택, 정규화된 pipeline state 적용, draw, present만 받는다. OpenGL context 생성과 swap은 platform 계층에 둔다. 공용 코어에서는 WGL, GLX, EGL 또는 Web API를 직접 호출하지 않는다.
+`RenderBackend`는 resource 생성·갱신, render target/depth target 선택, 정규화된 pipeline state 적용, draw, present만 받는다. OpenGL context 생성과 swap은 platform 계층에 둔다. 공용 코어에서는 WGL 또는 GLX를 직접 호출하지 않는다.
 
 첫 OpenGL backend는 legacy fixed-function API에 의존하지 않고 소수의 내부 shader 조합으로 Direct3D 3 상태를 재현한다. 좌표계, half-pixel, depth range, winding, alpha test와 texture combine 차이는 명시적 변환 정책으로 관리한다. RGB565, ARGB1555 등 guest 16비트 형식은 host가 직접 지원하면 대응 texture format을 사용하고, 그렇지 않으면 lossless CPU 변환 또는 shader unpack 경로를 사용한다.
 
@@ -71,11 +70,10 @@ DirectDraw surface는 guest가 기대하는 pitch와 16비트 메모리 표현�
 | 경로 | 책임 |
 | --- | --- |
 | `src/platform/windows/direct3d3_com_facade.*` | 현재 Windows x86 native guest ABI, COM facade와 method dispatch |
-| `include/re2dj/hle/directx/`, `src/hle/directx/` | 향후 native helper/Web 공용 guest ABI와 dispatch 계약 |
+| `include/re2dj/hle/directx/`, `src/hle/directx/` | 향후 native helper 공용 guest ABI와 dispatch 계약 |
 | `include/re2dj/graphics/`, `src/graphics/` | legacy surface/state model과 `RenderBackend` interface |
 | `src/graphics/opengl/` | platform window API를 포함하지 않는 공용 OpenGL resource·draw 변환 |
 | `src/platform/windows/`, `src/platform/linux/` | native OpenGL context, window와 swap/present adapter |
-| `src/platform/web/` | WebGL 2 context와 browser present adapter |
 
 기존 `src/platform/windows/injected_runtime.cpp`에는 정책 wiring과 import 교체만 남기며 COM 객체와 renderer 구현을 누적하지 않는다.
 
@@ -151,11 +149,11 @@ The HLE will therefore preserve the original DirectDraw/Direct3D 3 COM contract 
 
 ## Boundaries
 
-The design has four replaceable layers: a `DirectDrawCreate` import gate, guest-owned 32-bit COM facades, a platform-neutral legacy graphics core, and a `RenderBackend`. Desktop OpenGL is the first backend and WebGL 2 implements the same backend contract for Web. OpenGL types and platform context APIs do not enter the common COM or graphics core.
+The design has four replaceable layers: a `DirectDrawCreate` import gate, guest-owned 32-bit COM facades, a platform-neutral legacy graphics core, and a `RenderBackend`. Desktop OpenGL is the backend for the supported Windows/Linux hosts. OpenGL types and platform context APIs do not enter the common COM or graphics core.
 
 The COM facade owns guest vtables, identity, `QueryInterface`, and shared reference counts without exposing host pointers. The legacy core owns guest surface layouts, CPU locks, normalized fixed-function state, resource relationships, drawing, and present state. Unsupported methods return deterministic failures and emit diagnostics rather than pretending success.
 
-The first native ABI adapter lives in `src/platform/windows/direct3d3_com_facade.*`. Shared helper/Web ABI contracts will later live under `hle/directx`; the neutral surface/state model and backend contract under `graphics`; reusable OpenGL translation under `graphics/opengl`; and native context and present adapters under platform directories. The injected Windows runtime retains only policy wiring and import replacement.
+The first native ABI adapter lives in `src/platform/windows/direct3d3_com_facade.*`. Shared helper ABI contracts will later live under `hle/directx`; the neutral surface/state model and backend contract under `graphics`; reusable OpenGL translation under `graphics/opengl`; and native context and present adapters under platform directories. The injected Windows runtime retains only policy wiring and import replacement.
 
 The first Task 61 increment replaces the `DirectDrawCreate` IAT through `--hle-d3d3`. Task 66 extends the surface contract with RGB565 texture surfaces, GDI bitmap upload, `IDirect3DTexture2`, color key, and color-fill Blt. Task 67 translates the observed FVF 0x1c4 triangle strip into a neutral draw command and connects a Windows WGL/GLSL backend, Flip presentation, and texture-stage-state retention. The former DrawPrimitive and state null slots are removed, and two runs reach the later controlled KSND `title.wav` load exit. Visual output accuracy remains unverified.
 

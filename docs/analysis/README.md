@@ -12,6 +12,8 @@
 
 ## 문서 / Documents
 
+- [Linux 실행 기준선 / Linux runtime baseline](linux-runtime-baseline.md): WSL x86·x64 합성 실행·빌드 확인과 원본 실행 미확정 범위 / Verified WSL x86/x64 synthetic execution/builds and unresolved original execution.
+
 | 문서 | 내용 | 현재 상태 |
 | --- | --- | --- |
 | [ez2dj-hdd-layout.md](ez2dj-hdd-layout.md) | HDD 덤프의 디렉터리 구조와 실행 파일 식별 | 1st Tracks·1st SE·2nd·3rd·5th·6th 덤프와 보조 도구로 확인됨 |
@@ -50,3 +52,5 @@
 | [ez2d2m-jam-audio-runtime.md](ez2d2m-jam-audio-runtime.md) | EZ2Dancer JAM VFS/DirectSound/SDL runtime audio evidence and streaming Play semantics | 2026-09-14 VFS, PCM delivery, and repeated-Play HLE divergence confirmed |
 
 *Update this table in the same task whenever an analysis document is added or renamed.*
+
+- [EZ2DJ 4th Linux in-process first import](ez2dj4th-linux-inprocess-first-import.md): Confirmed first `GetModuleHandleA("kernel32")` caller return under Linux x86 in-process runner.

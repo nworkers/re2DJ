@@ -86,6 +86,51 @@ public:
         return true;
     }
 
+    bool AllocateGuestMemory(std::uint32_t size,
+                             re2dj::runtime::GuestMemoryAccess access,
+                             re2dj::runtime::GuestAddress* address,
+                             std::uint32_t* allocated_size,
+                             std::string*) override
+    {
+        if (size != 4096 || access != (re2dj::runtime::GuestMemoryAccess::kRead |
+                                       re2dj::runtime::GuestMemoryAccess::kWrite) ||
+            address == nullptr || allocated_size == nullptr)
+        {
+            return false;
+        }
+        *address = re2dj::runtime::GuestAddress(0x2000);
+        *allocated_size = 4096;
+        allocated_ = true;
+        return true;
+    }
+
+    bool ProtectGuestMemory(re2dj::runtime::GuestAddress address,
+                            std::uint32_t size,
+                            re2dj::runtime::GuestMemoryAccess access,
+                            re2dj::runtime::GuestMemoryAccess* previous_access,
+                            std::string*) override
+    {
+        if (!allocated_ || address.value() != 0x2000 || size != 4096 ||
+            access != re2dj::runtime::GuestMemoryAccess::kRead ||
+            previous_access == nullptr)
+        {
+            return false;
+        }
+        *previous_access = re2dj::runtime::GuestMemoryAccess::kRead |
+                           re2dj::runtime::GuestMemoryAccess::kWrite;
+        return true;
+    }
+
+    bool FreeGuestMemory(re2dj::runtime::GuestAddress address, std::string*) override
+    {
+        if (!allocated_ || address.value() != 0x2000)
+        {
+            return false;
+        }
+        allocated_ = false;
+        return true;
+    }
+
     bool CompleteImport(const re2dj::runtime::ImportCompletion& completion,
                         std::string*) override
     {
@@ -116,6 +161,7 @@ private:
     bool started_ = false;
     bool completed_ = false;
     bool stopped_ = false;
+    bool allocated_ = false;
     std::array<std::uint8_t, 4> memory_ = {};
 };
 
@@ -156,6 +202,30 @@ void RunExecutionBackendTests(re2dj::test::Context& context)
                                    read,
                                    &error));
     RE2DJ_CHECK_EQ(context, read, written);
+
+    re2dj::runtime::GuestAddress allocation;
+    std::uint32_t allocation_size = 0;
+    RE2DJ_CHECK(context,
+                backend.AllocateGuestMemory(
+                    4096,
+                    re2dj::runtime::GuestMemoryAccess::kRead |
+                        re2dj::runtime::GuestMemoryAccess::kWrite,
+                    &allocation,
+                    &allocation_size,
+                    &error));
+    RE2DJ_CHECK_EQ(context, allocation.value(), std::uint32_t{0x2000});
+    RE2DJ_CHECK_EQ(context, allocation_size, std::uint32_t{4096});
+    re2dj::runtime::GuestMemoryAccess previous_access;
+    RE2DJ_CHECK(context,
+                backend.ProtectGuestMemory(allocation,
+                                           allocation_size,
+                                           re2dj::runtime::GuestMemoryAccess::kRead,
+                                           &previous_access,
+                                           &error));
+    RE2DJ_CHECK(context,
+                previous_access == (re2dj::runtime::GuestMemoryAccess::kRead |
+                                    re2dj::runtime::GuestMemoryAccess::kWrite));
+    RE2DJ_CHECK(context, backend.FreeGuestMemory(allocation, &error));
 
     re2dj::runtime::ImportCompletion completion;
     completion.event_id = event.event_id;

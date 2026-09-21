@@ -1,10 +1,6 @@
 #include <SDL3/SDL.h>
 
-#if defined(SDL_PLATFORM_EMSCRIPTEN)
-#include <SDL3/SDL_opengles2.h>
-#else
 #include <SDL3/SDL_opengl.h>
-#endif
 
 #include <array>
 #include <cstddef>
@@ -379,13 +375,8 @@ struct Sdl3OpenGlBackend::Impl
 
     bool CreateProgram(std::string* error)
     {
-#if defined(SDL_PLATFORM_EMSCRIPTEN)
-        constexpr char shader_version[] = "#version 100\n";
-        constexpr char fragment_precision[] = "precision mediump float;\n";
-#else
         constexpr char shader_version[] = "#version 120\n";
         constexpr char fragment_precision[] = "";
-#endif
         constexpr char vertex_source[] =
             "attribute vec4 a_position;\n"
             "attribute vec4 a_color;\n"
@@ -579,21 +570,12 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
     }
 
     SDL_GL_ResetAttributes();
-#if defined(SDL_PLATFORM_EMSCRIPTEN)
-    const bool attributes_set =
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES) &&
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2) &&
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0) &&
-        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16) &&
-        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-#else
     const bool attributes_set =
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY) &&
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2) &&
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1) &&
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16) &&
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-#endif
     if (!attributes_set)
     {
         *error = std::string("cannot configure the SDL3 OpenGL context: ") + SDL_GetError();

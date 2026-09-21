@@ -62,6 +62,35 @@
       }
     },
     {
+      "name": "linux-x86-debug",
+      "displayName": "Linux x86 (i386) Debug Product Host",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x86-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-m32",
+        "CMAKE_CXX_FLAGS": "-m32",
+        "CMAKE_EXE_LINKER_FLAGS": "-m32",
+        "SDL_X11_XSCRNSAVER": "OFF",
+        "SDL_X11_XTEST": "OFF",
+        "RE2DJ_BUILD_TESTS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-x86-release",
+      "displayName": "Linux x86 (i386) Release Product Host",
+      "inherits": "linux-x86-debug",
+      "binaryDir": "${sourceDir}/build/linux-x86-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "linux-x86-helper",
       "displayName": "Linux i386 Native Helper",
       "generator": "Ninja",
@@ -78,17 +107,6 @@
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Linux"
-      }
-    },
-    {
-      "name": "web",
-      "displayName": "Web (Emscripten)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/web",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
-        "RE2DJ_BUILD_TESTS": "OFF"
       }
     }
   ],
@@ -113,13 +131,17 @@
       "configurePreset": "linux-x64-release"
     },
     {
+      "name": "linux-x86-debug",
+      "configurePreset": "linux-x86-debug"
+    },
+    {
+      "name": "linux-x86-release",
+      "configurePreset": "linux-x86-release"
+    },
+    {
       "name": "linux-x86-helper",
       "configurePreset": "linux-x86-helper",
       "targets": ["re2dj_linux_native_ipc_helper"]
-    },
-    {
-      "name": "web",
-      "configurePreset": "web"
     }
   ],
   "testPresets": [
@@ -142,6 +164,13 @@
     {
       "name": "linux-x64-debug",
       "configurePreset": "linux-x64-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-x86-debug",
+      "configurePreset": "linux-x86-debug",
       "output": {
         "outputOnFailure": true
       }

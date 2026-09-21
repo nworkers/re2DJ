@@ -6,10 +6,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <new>
+#include <utility>
 #include <vector>
 
 #include "../native_helper_protocol.h"
+#include "native_import_bridge.h"
 #include "native_import_thunks.h"
+#include "native_ipc_helper_main.h"
+#include "native_pe_image.h"
+#include "native_pe_session.h"
 #include "native_process_bootstrap.h"
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/runtime/pe_loader.h"
@@ -21,15 +28,113 @@ namespace protocol = re2dj::platform::native_protocol;
 
 std::uint32_t pending_stack_start = 0;
 std::uint32_t pending_stack_size = 0;
-std::uint32_t completion_stack_bytes = 0;
+std::uint32_t active_image_start = 0;
+std::uint32_t active_image_size = 0;
 std::uint64_t next_event_id = 1;
 bool gate_failed = false;
 
-struct MappedImage
+struct DynamicGuestMapping
 {
     void* memory = nullptr;
+    std::uint32_t address = 0;
     std::uint32_t size = 0;
-    std::uint32_t entry_point = 0;
+    std::vector<std::uint32_t> page_access;
+};
+
+std::vector<DynamicGuestMapping> dynamic_mappings;
+
+constexpr std::uint32_t kGuestPageSize = 4096;
+
+bool HasMemoryAccess(std::uint32_t available, std::uint32_t required)
+{
+    return (available & required) == required;
+}
+
+bool IsValidMemoryAccess(std::uint32_t access)
+{
+    return (access & ~protocol::kGuestMemoryAccessMask) == 0;
+}
+
+int NativeProtection(std::uint32_t access)
+{
+    int protection = PROT_NONE;
+    if ((access & protocol::kGuestMemoryAccessRead) != 0)
+    {
+        protection |= PROT_READ;
+    }
+    if ((access & protocol::kGuestMemoryAccessWrite) != 0)
+    {
+        protection |= PROT_WRITE;
+    }
+    if ((access & protocol::kGuestMemoryAccessExecute) != 0)
+    {
+        protection |= PROT_EXEC;
+    }
+    return protection;
+}
+
+bool RangeWithin(std::uint32_t address,
+                 std::uint32_t size,
+                 std::uint32_t range_start,
+                 std::uint32_t range_size)
+{
+    const std::uint64_t request_start = address;
+    const std::uint64_t request_end = request_start + size;
+    const std::uint64_t range_end = static_cast<std::uint64_t>(range_start) + range_size;
+    return size != 0 && request_end >= request_start && request_start >= range_start &&
+           request_end <= range_end;
+}
+
+DynamicGuestMapping* FindDynamicMapping(std::uint32_t address, std::uint32_t size)
+{
+    for (DynamicGuestMapping& mapping : dynamic_mappings)
+    {
+        if (RangeWithin(address, size, mapping.address, mapping.size))
+        {
+            return &mapping;
+        }
+    }
+    return nullptr;
+}
+
+bool MappingRangeHasAccess(const DynamicGuestMapping& mapping,
+                           std::uint32_t address,
+                           std::uint32_t size,
+                           std::uint32_t required_access)
+{
+    if (!RangeWithin(address, size, mapping.address, mapping.size))
+    {
+        return false;
+    }
+    const std::uint32_t offset = address - mapping.address;
+    const std::uint32_t first_page = offset / kGuestPageSize;
+    const std::uint32_t last_page = (offset + size - 1) / kGuestPageSize;
+    for (std::uint32_t page = first_page; page <= last_page; ++page)
+    {
+        if (!HasMemoryAccess(mapping.page_access[page], required_access))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+void ReleaseDynamicMappings()
+{
+    for (DynamicGuestMapping& mapping : dynamic_mappings)
+    {
+        munmap(mapping.memory, mapping.size);
+    }
+    dynamic_mappings.clear();
+}
+
+class DynamicMappingCleanup
+{
+public:
+    ~DynamicMappingCleanup()
+    {
+        ReleaseDynamicMappings();
+    }
 };
 
 std::uint32_t ReadU32(const std::uint8_t* bytes)
@@ -40,68 +145,7 @@ std::uint32_t ReadU32(const std::uint8_t* bytes)
            (static_cast<std::uint32_t>(bytes[3]) << 24);
 }
 
-void WriteU32(std::uint8_t* bytes, std::uint32_t value)
-{
-    for (std::size_t index = 0; index < 4; ++index)
-    {
-        bytes[index] = static_cast<std::uint8_t>(value >> (index * 8));
-    }
-}
-
-bool ApplyHighLowRelocations(const re2dj::exe::PeImageInfo& info,
-                             MappedImage* image)
-{
-    const std::int64_t delta = static_cast<std::int64_t>(image->entry_point - info.entry_point_rva) -
-                               static_cast<std::int64_t>(info.image_base);
-    if (delta == 0)
-    {
-        return true;
-    }
-    const auto* directory = info.Directory(re2dj::exe::PeDirectoryIndex::kBaseRelocation);
-    if (directory == nullptr || directory->virtual_address == 0 || directory->size < 8 ||
-        directory->virtual_address > image->size ||
-        directory->size > image->size - directory->virtual_address)
-    {
-        return false;
-    }
-    auto* bytes = static_cast<std::uint8_t*>(image->memory);
-    std::uint32_t offset = 0;
-    while (offset < directory->size)
-    {
-        if (directory->size - offset < 8)
-        {
-            return false;
-        }
-        const std::uint32_t page_rva = ReadU32(bytes + directory->virtual_address + offset);
-        const std::uint32_t block_size = ReadU32(bytes + directory->virtual_address + offset + 4);
-        if (block_size < 8 || block_size > directory->size - offset || (block_size & 1U) != 0)
-        {
-            return false;
-        }
-        for (std::uint32_t entry_offset = 8; entry_offset < block_size; entry_offset += 2)
-        {
-            const auto entry = static_cast<std::uint16_t>(
-                bytes[directory->virtual_address + offset + entry_offset] |
-                (static_cast<std::uint16_t>(bytes[directory->virtual_address + offset + entry_offset + 1]) << 8));
-            const std::uint16_t type = entry >> 12;
-            if (type == 0)
-            {
-                continue;
-            }
-            const std::uint32_t target_rva = page_rva + (entry & 0x0FFFU);
-            if (type != 3 || target_rva > image->size || 4 > image->size - target_rva)
-            {
-                return false;
-            }
-            WriteU32(bytes + target_rva,
-                     static_cast<std::uint32_t>(static_cast<std::int64_t>(ReadU32(bytes + target_rva)) + delta));
-        }
-        offset += block_size;
-    }
-    return offset == directory->size;
-}
-
-bool ReadImageString(const MappedImage& image, std::uint32_t rva, std::string* value)
+bool ReadImageString(const re2dj::platform::linux::NativePeImage& image, std::uint32_t rva, std::string* value)
 {
     value->clear();
     if (rva >= image.size)
@@ -120,7 +164,7 @@ bool ReadImageString(const MappedImage& image, std::uint32_t rva, std::string* v
     return false;
 }
 
-[[maybe_unused]] bool CollectImports(const re2dj::exe::PeImageInfo& info, const MappedImage& image,
+[[maybe_unused]] bool CollectImports(const re2dj::exe::PeImageInfo& info, const re2dj::platform::linux::NativePeImage& image,
                     re2dj::runtime::ImportGateTable* gates, std::string* error)
 {
     const auto* directory = info.Directory(re2dj::exe::PeDirectoryIndex::kImport);
@@ -175,74 +219,8 @@ bool ReadImageString(const MappedImage& image, std::uint32_t rva, std::string* v
     return false;
 }
 
-void ReleaseMappedImage(MappedImage* image)
-{
-    if (image->memory != nullptr)
-    {
-        munmap(image->memory, image->size);
-    }
-    *image = {};
-}
-
-bool MapPe32Image(const std::vector<std::uint8_t>& file,
-                  const re2dj::exe::PeImageInfo& info,
-                  std::uint32_t requested_base,
-                  MappedImage* image)
-{
-    if (!re2dj::exe::IsGuestExecutable(info) || requested_base == 0 ||
-        info.size_of_image == 0 || info.size_of_headers > file.size() ||
-        info.size_of_headers > info.size_of_image ||
-        requested_base > UINT32_MAX - info.entry_point_rva)
-    {
-        return false;
-    }
-    void* memory = mmap(reinterpret_cast<void*>(static_cast<std::uintptr_t>(requested_base)),
-                        info.size_of_image,
-                        PROT_READ | PROT_WRITE | PROT_EXEC,
-                        MAP_PRIVATE | MAP_ANONYMOUS,
-                        -1,
-                        0);
-    if (memory == MAP_FAILED ||
-        reinterpret_cast<std::uintptr_t>(memory) != requested_base)
-    {
-        if (memory != MAP_FAILED)
-        {
-            munmap(memory, info.size_of_image);
-        }
-        return false;
-    }
-    std::memcpy(memory, file.data(), info.size_of_headers);
-    for (const re2dj::exe::PeSection& section : info.sections)
-    {
-        const std::uint32_t size = section.virtual_size != 0 ?
-            section.virtual_size : section.raw_size;
-        if (size > info.size_of_image - section.virtual_address ||
-            section.raw_offset > file.size() || section.raw_size > file.size() - section.raw_offset)
-        {
-            munmap(memory, info.size_of_image);
-            return false;
-        }
-        const std::uint32_t copy_size = std::min(size, section.raw_size);
-        if (copy_size != 0)
-        {
-            std::memcpy(static_cast<std::uint8_t*>(memory) + section.virtual_address,
-                        file.data() + section.raw_offset,
-                        copy_size);
-        }
-    }
-    image->memory = memory;
-    image->size = info.size_of_image;
-    image->entry_point = requested_base + info.entry_point_rva;
-    if (!ApplyHighLowRelocations(info, image))
-    {
-        ReleaseMappedImage(image);
-        return false;
-    }
-    return true;
-}
-
-bool RunTlsCallbacks(const re2dj::exe::PeImageInfo& info,
-                     const MappedImage& image,
+[[maybe_unused]] bool RunTlsCallbacks(const re2dj::exe::PeImageInfo& info,
+                     const re2dj::platform::linux::NativePeImage& image,
                      re2dj::platform::linux::NativeProcessBootstrap* bootstrap,
                      re2dj::platform::linux::NativeGuestFault* fault,
                      std::string* error)
@@ -390,20 +368,26 @@ bool SendFaultEvent(const re2dj::platform::linux::NativeGuestFault& fault)
     return SendPacket(protocol::MessageType::kExecutionEvent, &event, sizeof(event));
 }
 
-bool MemoryRangeAllowed(std::uint32_t address, std::uint32_t size)
+bool MemoryRangeAllowed(std::uint32_t address, std::uint32_t size, std::uint32_t access)
 {
-    const std::uint64_t start = pending_stack_start;
-    const std::uint64_t end = start + pending_stack_size;
-    const std::uint64_t request_start = address;
-    const std::uint64_t request_end = request_start + size;
-    return request_start >= start && request_end >= request_start && request_end <= end;
+    if (size > protocol::kMaximumMemoryTransferSize)
+    {
+        return false;
+    }
+    if (RangeWithin(address, size, active_image_start, active_image_size) ||
+        RangeWithin(address, size, pending_stack_start, pending_stack_size))
+    {
+        return true;
+    }
+    const DynamicGuestMapping* mapping = FindDynamicMapping(address, size);
+    return mapping != nullptr && MappingRangeHasAccess(*mapping, address, size, access);
 }
 
 bool SendMemory(const protocol::ReadMemoryRequest& request)
 {
-    if (!MemoryRangeAllowed(request.address, request.size))
+    if (!MemoryRangeAllowed(request.address, request.size, protocol::kGuestMemoryAccessRead))
     {
-        return false;
+        return SendError("guest memory request is outside the allowed regions");
     }
     std::vector<std::uint8_t> bytes(request.size);
     if (request.size != 0)
@@ -422,17 +406,33 @@ bool ReceiveAndWriteMemory(std::uint32_t payload_size)
 {
     protocol::ReadMemoryRequest request;
     if (payload_size < sizeof(request) ||
-        !ReadExact(STDIN_FILENO, &request, sizeof(request)) ||
-        payload_size != sizeof(request) + request.size ||
-        !MemoryRangeAllowed(request.address, request.size))
+        !ReadExact(STDIN_FILENO, &request, sizeof(request)))
     {
         return false;
+    }
+    const std::uint64_t expected_payload = sizeof(request) +
+                                            static_cast<std::uint64_t>(request.size);
+    if (expected_payload != payload_size ||
+        request.size > protocol::kMaximumMemoryTransferSize)
+    {
+        std::vector<std::uint8_t> discarded(payload_size - sizeof(request));
+        if (!discarded.empty() &&
+            !ReadExact(STDIN_FILENO, discarded.data(),
+                       static_cast<std::uint32_t>(discarded.size())))
+        {
+            return false;
+        }
+        return SendError("write memory packet has an invalid size");
     }
     std::vector<std::uint8_t> bytes(request.size);
     if (request.size != 0 &&
         !ReadExact(STDIN_FILENO, bytes.data(), request.size))
     {
         return false;
+    }
+    if (!MemoryRangeAllowed(request.address, request.size, protocol::kGuestMemoryAccessWrite))
+    {
+        return SendError("guest memory request is outside the allowed regions");
     }
     if (request.size != 0)
     {
@@ -447,16 +447,132 @@ bool ReceiveAndWriteMemory(std::uint32_t payload_size)
     return SendPacket(protocol::MessageType::kWriteResult, &result, sizeof(result));
 }
 
-extern "C" __attribute__((noinline, stdcall)) std::uint64_t NativeImportGate(
-    std::uint32_t gate_address)
+bool ReceiveAndAllocateMemory(std::uint32_t payload_size)
 {
-    auto* frame = static_cast<std::uint8_t*>(__builtin_frame_address(0));
-    std::uint8_t* bridge_return_slot = frame + sizeof(void*);
-    std::uint8_t* return_slot = bridge_return_slot + 2 * sizeof(void*);
-    std::uint32_t return_address = 0;
-    std::memcpy(&return_address, return_slot, sizeof(return_address));
-    pending_stack_start = static_cast<std::uint32_t>(
-        reinterpret_cast<std::uintptr_t>(return_slot));
+    protocol::AllocateMemoryRequest request;
+    if (payload_size != sizeof(request) || !ReadExact(STDIN_FILENO, &request, sizeof(request)) ||
+        request.size == 0 || !IsValidMemoryAccess(request.access))
+    {
+        return SendError("invalid guest memory allocation request");
+    }
+    const std::uint64_t rounded_size =
+        (static_cast<std::uint64_t>(request.size) + kGuestPageSize - 1) &
+        ~static_cast<std::uint64_t>(kGuestPageSize - 1);
+    if (rounded_size == 0 || rounded_size > std::numeric_limits<std::uint32_t>::max())
+    {
+        return SendError("guest memory allocation is too large");
+    }
+    const std::uint32_t size = static_cast<std::uint32_t>(rounded_size);
+    void* memory = mmap(nullptr,
+                        size,
+                        NativeProtection(request.access),
+                        MAP_PRIVATE | MAP_ANONYMOUS,
+                        -1,
+                        0);
+    const std::uintptr_t raw_address = reinterpret_cast<std::uintptr_t>(memory);
+    if (memory == MAP_FAILED || raw_address == 0 ||
+        raw_address > std::numeric_limits<std::uint32_t>::max() ||
+        size > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(raw_address) + 1)
+    {
+        if (memory != MAP_FAILED)
+        {
+            munmap(memory, size);
+        }
+        return SendError("cannot map guest memory below 4 GiB");
+    }
+    try
+    {
+        DynamicGuestMapping mapping;
+        mapping.memory = memory;
+        mapping.address = static_cast<std::uint32_t>(raw_address);
+        mapping.size = size;
+        mapping.page_access.assign(size / kGuestPageSize, request.access);
+        dynamic_mappings.push_back(std::move(mapping));
+    }
+    catch (const std::bad_alloc&)
+    {
+        munmap(memory, size);
+        return SendError("cannot record guest memory allocation");
+    }
+    protocol::AllocateMemoryResult result;
+    result.address = static_cast<std::uint32_t>(raw_address);
+    result.size = size;
+    return SendPacket(protocol::MessageType::kAllocateMemoryResult, &result, sizeof(result));
+}
+
+bool ReceiveAndProtectMemory(std::uint32_t payload_size)
+{
+    protocol::ProtectMemoryRequest request;
+    if (payload_size != sizeof(request) || !ReadExact(STDIN_FILENO, &request, sizeof(request)) ||
+        request.size == 0 || !IsValidMemoryAccess(request.access))
+    {
+        return SendError("invalid guest memory protection request");
+    }
+    DynamicGuestMapping* mapping = FindDynamicMapping(request.address, request.size);
+    if (mapping == nullptr || request.address % kGuestPageSize != 0 ||
+        request.size % kGuestPageSize != 0)
+    {
+        return SendError("cannot change guest memory protection");
+    }
+    const std::uint32_t offset = request.address - mapping->address;
+    const std::uint32_t first_page = offset / kGuestPageSize;
+    const std::uint32_t page_count = request.size / kGuestPageSize;
+    const std::uint32_t previous_access = mapping->page_access[first_page];
+    for (std::uint32_t page = first_page; page < first_page + page_count; ++page)
+    {
+        if (mapping->page_access[page] != previous_access)
+        {
+            return SendError("guest memory protection range has mixed prior access");
+        }
+    }
+    auto* protection_start = static_cast<std::uint8_t*>(mapping->memory) + offset;
+    if (mprotect(protection_start, request.size, NativeProtection(request.access)) != 0)
+    {
+        return SendError("cannot change guest memory protection");
+    }
+    protocol::ProtectMemoryResult result;
+    result.previous_access = previous_access;
+    for (std::uint32_t page = first_page; page < first_page + page_count; ++page)
+    {
+        mapping->page_access[page] = request.access;
+    }
+    return SendPacket(protocol::MessageType::kProtectMemoryResult, &result, sizeof(result));
+}
+
+bool ReceiveAndFreeMemory(std::uint32_t payload_size)
+{
+    protocol::FreeMemoryRequest request;
+    if (payload_size != sizeof(request) || !ReadExact(STDIN_FILENO, &request, sizeof(request)))
+    {
+        return SendError("invalid guest memory free request");
+    }
+    for (auto iterator = dynamic_mappings.begin(); iterator != dynamic_mappings.end(); ++iterator)
+    {
+        if (iterator->address == request.address)
+        {
+            if (munmap(iterator->memory, iterator->size) != 0)
+            {
+                return SendError("cannot free guest memory");
+            }
+            protocol::FreeMemoryResult result;
+            result.released_size = iterator->size;
+            dynamic_mappings.erase(iterator);
+            return SendPacket(protocol::MessageType::kFreeMemoryResult, &result, sizeof(result));
+        }
+    }
+    return SendError("guest memory allocation was not found");
+}
+
+bool HandleIpcImportGate(const re2dj::platform::linux::NativeImportGateEvent& gate_event,
+                         re2dj::platform::linux::NativeImportGateResult* result,
+                         void*)
+{
+    if (result == nullptr)
+    {
+        gate_failed = true;
+        return false;
+    }
+    pending_stack_start = gate_event.stack_pointer;
     pending_stack_size = 4096;
 
     const std::uint64_t event_id = next_event_id++;
@@ -466,13 +582,13 @@ extern "C" __attribute__((noinline, stdcall)) std::uint64_t NativeImportGate(
     event.event_id_low = static_cast<std::uint32_t>(event_id);
     event.event_id_high = static_cast<std::uint32_t>(event_id >> 32);
     event.thread_id = static_cast<std::uint32_t>(syscall(SYS_gettid));
-    event.instruction_pointer = return_address;
+    event.instruction_pointer = gate_event.instruction_pointer;
     event.stack_pointer = pending_stack_start;
-    event.gate_address = gate_address;
+    event.gate_address = gate_event.gate_address;
     if (!SendPacket(protocol::MessageType::kExecutionEvent, &event, sizeof(event)))
     {
         gate_failed = true;
-        return 0;
+        return false;
     }
 
     for (;;)
@@ -480,7 +596,8 @@ extern "C" __attribute__((noinline, stdcall)) std::uint64_t NativeImportGate(
         protocol::MessageHeader header;
         if (!ReceiveHeader(&header))
         {
-            return 0;
+            gate_failed = true;
+            return false;
         }
         const auto type = static_cast<protocol::MessageType>(header.type);
         if (type == protocol::MessageType::kReadMemory &&
@@ -491,7 +608,7 @@ extern "C" __attribute__((noinline, stdcall)) std::uint64_t NativeImportGate(
                 !SendMemory(request))
             {
                 gate_failed = true;
-                return 0;
+                return false;
             }
             continue;
         }
@@ -500,7 +617,34 @@ extern "C" __attribute__((noinline, stdcall)) std::uint64_t NativeImportGate(
             if (!ReceiveAndWriteMemory(header.payload_size))
             {
                 gate_failed = true;
-                return 0;
+                return false;
+            }
+            continue;
+        }
+        if (type == protocol::MessageType::kAllocateMemory)
+        {
+            if (!ReceiveAndAllocateMemory(header.payload_size))
+            {
+                gate_failed = true;
+                return false;
+            }
+            continue;
+        }
+        if (type == protocol::MessageType::kProtectMemory)
+        {
+            if (!ReceiveAndProtectMemory(header.payload_size))
+            {
+                gate_failed = true;
+                return false;
+            }
+            continue;
+        }
+        if (type == protocol::MessageType::kFreeMemory)
+        {
+            if (!ReceiveAndFreeMemory(header.payload_size))
+            {
+                gate_failed = true;
+                return false;
             }
             continue;
         }
@@ -514,31 +658,64 @@ extern "C" __attribute__((noinline, stdcall)) std::uint64_t NativeImportGate(
                 completion.action != 0)
             {
                 gate_failed = true;
-                return 0;
+                return false;
             }
             pending_stack_start = 0;
             pending_stack_size = 0;
-            completion_stack_bytes = completion.stack_bytes_to_pop;
-            return (static_cast<std::uint64_t>(completion.edx) << 32) | completion.eax;
+            result->eax = completion.eax;
+            result->edx = completion.edx;
+            result->stack_bytes_to_pop = completion.stack_bytes_to_pop;
+            return true;
         }
         gate_failed = true;
-        return 0;
+        return false;
     }
 }
 
-}  // namespace
-
-int main()
+class ImportGateHandlerCleanup
 {
-    static_assert(sizeof(void*) == 4, "Linux native helper must be i386");
+public:
+    ~ImportGateHandlerCleanup()
+    {
+        re2dj::platform::linux::ClearNativeImportGateHandler();
+    }
+};
+
+int RunNativeIpcHelperImpl()
+{
     protocol::MessageHeader request;
     if (!ReceiveHeader(&request))
     {
         return 1;
     }
 
+    if (static_cast<protocol::MessageType>(request.type) != protocol::MessageType::kHello ||
+        request.payload_size != sizeof(protocol::HelloRequest))
+    {
+        SendError("expected protocol hello request");
+        return 1;
+    }
+    protocol::HelloRequest hello;
+    if (!ReadExact(STDIN_FILENO, &hello, sizeof(hello)))
+    {
+        return 1;
+    }
+    if ((hello.required_features & ~protocol::kSupportedFeatures) != 0)
+    {
+        SendError("helper does not support required protocol features");
+        return 1;
+    }
+    protocol::HelloResult hello_result;
+    hello_result.supported_features = protocol::kSupportedFeatures;
+    if (!SendPacket(protocol::MessageType::kHelloResult, &hello_result, sizeof(hello_result)) ||
+        !ReceiveHeader(&request))
+    {
+        return 1;
+    }
+
     if (static_cast<protocol::MessageType>(request.type) == protocol::MessageType::kLoadImage)
     {
+        DynamicMappingCleanup dynamic_mapping_cleanup;
         protocol::LoadImageRequest load;
         if (request.payload_size < sizeof(load) || !ReadExact(STDIN_FILENO, &load, sizeof(load)) ||
             load.file_size == 0 || request.payload_size != sizeof(load) + load.file_size)
@@ -552,43 +729,43 @@ int main()
         }
         re2dj::exe::PeImageInfo info;
         std::string error;
-        MappedImage image;
-        re2dj::runtime::ImportGateTable gates;
-        re2dj::platform::linux::NativeImportThunkRegion thunks;
-        re2dj::platform::linux::NativeProcessBootstrap bootstrap;
+        re2dj::platform::linux::NativePeSession session;
+        if (!re2dj::platform::linux::ConfigureNativeImportGateHandler(&HandleIpcImportGate,
+                                                                       nullptr))
+        {
+            SendError("cannot configure native import gate handler");
+            return 4;
+        }
+        ImportGateHandlerCleanup import_gate_handler_cleanup;
         if (!re2dj::exe::ReadPeImageInfo(file.data(), file.size(), &info, &error) ||
-            !MapPe32Image(file, info, load.requested_base, &image) ||
-            !re2dj::platform::linux::BindNativeImportThunks(
-                info,
-                image.memory,
-                image.size,
-                reinterpret_cast<std::uintptr_t>(&NativeImportGate),
-                reinterpret_cast<std::uintptr_t>(&completion_stack_bytes),
-                &gates,
-                &thunks,
-                &error) ||
-            !bootstrap.Initialize(load.requested_base, &error))
+            !session.Prepare(file, info, load.requested_base,
+                             re2dj::platform::linux::NativeImportGateBridgeAddress(),
+                             re2dj::platform::linux::NativeImportGateCleanupAddress(), &error))
         {
             SendError(error.empty() ? "cannot map native PE image" : error);
             return 4;
         }
+        active_image_start = load.requested_base;
+        active_image_size = session.image().size;
         protocol::LoadResult result;
         result.success = 1;
         result.load_base = load.requested_base;
-        result.entry_point = image.entry_point;
-        result.import_count = static_cast<std::uint32_t>(gates.gates().size());
+        result.entry_point = session.image().entry_point;
+        result.import_count = static_cast<std::uint32_t>(session.gates().gates().size());
         if (!SendPacket(protocol::MessageType::kLoadResult, &result, sizeof(result)))
         {
-            ReleaseMappedImage(&image);
-            re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
+            session.Release();
+            active_image_start = 0;
+            active_image_size = 0;
             return 5;
         }
-        for (const re2dj::runtime::ImportGate& gate : gates.gates())
+        for (const re2dj::runtime::ImportGate& gate : session.gates().gates())
         {
             if (!SendImportMetadata(gate))
             {
-                ReleaseMappedImage(&image);
-                re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
+                session.Release();
+                active_image_start = 0;
+                active_image_size = 0;
                 return 5;
             }
         }
@@ -596,24 +773,27 @@ int main()
             static_cast<protocol::MessageType>(request.type) != protocol::MessageType::kStart ||
             request.payload_size != 0)
         {
-            ReleaseMappedImage(&image);
-            re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
+            session.Release();
+            active_image_start = 0;
+            active_image_size = 0;
             return 6;
         }
         re2dj::platform::linux::NativeGuestFault fault;
-        if (!RunTlsCallbacks(info, image, &bootstrap, &fault, &error))
+        if (!session.RunTlsCallbacks(&fault, &error))
         {
             const bool sent = fault.status_code != 0 ? SendFaultEvent(fault) : SendError(error);
-            ReleaseMappedImage(&image);
-            re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
+            session.Release();
+            active_image_start = 0;
+            active_image_size = 0;
             return sent ? 0 : 6;
         }
         std::uint32_t result_code = 0;
-        if (!bootstrap.RunEntry(image.entry_point, &result_code, &fault, &error))
+        if (!session.RunEntry(&result_code, &fault, &error))
         {
             const bool sent = fault.status_code != 0 ? SendFaultEvent(fault) : SendError(error);
-            ReleaseMappedImage(&image);
-            re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
+            session.Release();
+            active_image_start = 0;
+            active_image_size = 0;
             return sent ? 0 : 7;
         }
         protocol::ExecutionEvent event;
@@ -622,14 +802,22 @@ int main()
         event.event_id_low = static_cast<std::uint32_t>(exit_event_id);
         event.event_id_high = static_cast<std::uint32_t>(exit_event_id >> 32);
         event.thread_id = static_cast<std::uint32_t>(syscall(SYS_gettid));
-        event.instruction_pointer = image.entry_point;
+        event.instruction_pointer = session.image().entry_point;
         event.status_code = result_code;
         const bool sent = SendPacket(protocol::MessageType::kExecutionEvent, &event, sizeof(event));
-        ReleaseMappedImage(&image);
-        re2dj::platform::linux::ReleaseNativeImportThunks(&thunks);
+        session.Release();
+        active_image_start = 0;
+        active_image_size = 0;
         return sent && !gate_failed ? 0 : 7;
     }
 
     SendError("expected LoadImage request");
     return 1;
+}
+
+}  // namespace
+
+int re2dj::platform::linux::RunNativeIpcHelper()
+{
+    return RunNativeIpcHelperImpl();
 }

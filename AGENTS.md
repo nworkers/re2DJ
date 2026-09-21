@@ -8,7 +8,7 @@
 
 목표는 원본 32비트 x86 Win32 코드를 실행 주체로 유지하면서, 그 주변의 운영체제·그래픽·사운드·입력 경계만 High Level Emulation(HLE) 계층으로 대체하는 것이다.
 
-지원 호스트는 **Linux(x86-64)**, **64비트 Windows**, **Web(WebAssembly)** 세 가지다.
+지원 호스트는 **Linux(x86 및 x86-64)**와 **64비트 Windows**다. Linux 개발·검증 환경은 WSL을 사용한다.
 
 모든 구현 결정은 이 원칙을 따른다.
 
@@ -20,7 +20,7 @@ The goal is not to reimplement the game logic.
 
 The goal is to keep the original 32-bit x86 Win32 code as the executing subject while replacing only the surrounding operating-system, graphics, sound, and input boundaries with a High Level Emulation (HLE) layer.
 
-The supported hosts are **Linux (x86-64)**, **64-bit Windows**, and **Web (WebAssembly)**.
+The supported hosts are **Linux (x86 and x86-64)** and **64-bit Windows**. Linux development and validation use WSL.
 
 All implementation decisions must follow this principle.
 
@@ -33,7 +33,7 @@ All implementation decisions must follow this principle.
 1. 원본 게임 로직을 보존한다.
 2. 가능하면 원본 실행 파일 코드를 수정하지 않는다.
 3. Win32 API와 DirectX 계열 서비스를 HLE 구현으로 대체한다.
-4. 플랫폼 공용 코어를 먼저 만들고 Linux / 64-bit Windows / Web 호스트를 모두 지원한다.
+4. 플랫폼 공용 코어를 먼저 만들고 Linux / 64-bit Windows 호스트를 모두 지원한다.
 5. Wine, QEMU, VirtualBox 같은 외부 실행 환경의 소스를 통합하지 않는다.
 6. 여러 게임 버전과 런타임 경로를 지원할 수 있는 공용 구조를 우선 설계한다.
 7. 원본 자산은 저장소에 포함하지 않고, 사용자가 제공한 HDD 디렉터리 경로에서만 읽는다.
@@ -45,7 +45,7 @@ Priority order:
 1. Preserve original game logic.
 2. Avoid modifying original executable code whenever possible.
 3. Replace Win32 API and DirectX-family services with HLE implementations.
-4. Build the platform-neutral core first and support Linux, 64-bit Windows, and Web hosts.
+4. Build the platform-neutral core first and support Linux and 64-bit Windows hosts.
 5. Do not integrate source from external execution environments such as Wine, QEMU, or VirtualBox.
 6. Design shared structures first so multiple game versions and runtime paths can be supported.
 7. Never store original assets in the repository; read them only from the user-supplied HDD directory path.
@@ -143,6 +143,8 @@ Repeated investigation and work procedures live as skills in `.agents/skills/<na
 7. 빌드 또는 범위에 맞는 검증
 8. 작업 로그 작성
 
+구현을 시작한 작업은 설계·코드·검증·작업 로그를 같은 작업 단위에서 완료한다. 검증이 남아 있으면 구현 작업을 완료로 보고하거나 다음 작업으로 넘기지 않는다.
+
 단, 요구사항이 단순 질문이거나 확인 요청이라면 해당 내용에 바로 응답하고 문서화 및 코드 구현은 하지 않는다.
 
 ## Requirement Handling Procedure
@@ -155,6 +157,8 @@ Repeated investigation and work procedures live as skills in `.agents/skills/<na
 6. Implement.
 7. Run a build or verification appropriate to the scope.
 8. Write the work log.
+
+For a task that starts implementation, complete design, code, verification, and the work log in the same task unit. Do not report implementation complete or defer it to another task while its verification remains outstanding.
 
 If the requirement is a simple question or confirmation request, answer it directly without documentation or code implementation.
 
@@ -240,9 +244,10 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 ## 구현 규칙
 
-* 플랫폼 종속 코드는 `src/platform/windows/`, `src/platform/linux/`, `src/platform/web/` 아래에 둔다.
+* 플랫폼 종속 코드는 `src/platform/windows/`, `src/platform/linux/` 아래에 둔다.
 * 새 기능을 추가할 때는 테스트 전략 또는 최소 검증 절차를 문서에 함께 남긴다.
 * 코드 수정이 있는 작업은 영향 범위에 맞는 빌드 검증을 수행하고, 불가능하면 이유를 작업 로그에 남긴다.
+* 구현과 검증은 같은 작업 단위에서 끝낸다. 후속 작업으로 검증만 넘기는 것은 허용하지 않는다.
 * 자산, 런타임 경로, 플랫폼 분기 정책은 코드와 문서에서 함께 관리한다.
 * 코딩 스타일 세부 규칙은 `docs/CODING_STYLE.md`에서 관리한다.
 * 소스 코드 주석은 영어로만 작성한다. 한국어 주석과 한국어·영어 이중 언어 주석을 남기지 않으며, 기존 파일을 수정하다 발견하면 같은 작업에서 영어로 정리한다. 세부 규칙은 `docs/CODING_STYLE.md`의 주석 언어 항목을 따른다.
@@ -255,9 +260,10 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 ## Implementation Rules
 
-* Put platform-specific code under `src/platform/windows/`, `src/platform/linux/`, or `src/platform/web/`.
+* Put platform-specific code under `src/platform/windows/` or `src/platform/linux/`.
 * When adding a feature, document the test strategy or minimum verification procedure.
 * For tasks that modify code, run build verification appropriate to the impact. If verification is impossible, record the reason in the work log.
+* Finish implementation and verification in the same task unit. Do not defer verification alone to a later task.
 * Manage assets, runtime paths, and platform branching policy in both code and documentation.
 * Maintain detailed coding style rules in `docs/CODING_STYLE.md`.
 * Write source-code comments in English only. Leave no Korean or bilingual comments, and convert any found while editing an existing file in the same task. The detailed rule is the comment-language section of `docs/CODING_STYLE.md`.
@@ -276,6 +282,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * 작업이 끝나면 대응되는 작업 로그를 남긴다.
 * 설계 없이 바로 코드만 추가하지 않는다.
 * 초기 구조 작업이라도 디렉터리 목적과 향후 확장 방향을 문서로 남긴다.
+* 구현을 포함한 작업은 검증이 통과하거나 불가능한 이유가 작업 로그에 기록되기 전에는 끝나지 않는다.
 
 ## Task Unit Rules
 
@@ -283,6 +290,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * When the task is complete, leave the corresponding work log.
 * Do not add code directly without a design.
 * Even for initial structure work, document the directory purpose and future extension direction.
+* A task that includes implementation is not complete until verification passes or its impossibility is recorded in the work log.
 
 ---
 
@@ -329,8 +337,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 * 절대적으로 필요하지 않으면 게임플레이 로직을 C++로 다시 작성하지 않는다.
 * 모든 하위 시스템은 독립적으로 교체 가능해야 한다.
 * HLE 경계는 **Win32 import thunk 단위**를 기본으로 삼는다. 명령어 단위 트랩은 대체 수단이 없을 때만 사용한다.
-* 실행 경로는 교체 가능한 `ExecutionBackend` 경계 뒤에 둔다. Windows/Linux 데스크톱은 별도 32비트 네이티브 helper를 먼저 검증하고, Web은 허용 라이선스의 재사용 실행 엔진을 우선 조사한다. 직접 x86 인터프리터는 적합한 엔진이 없을 때 구현하는 후순위 fallback이다.
-* 공용 코어는 Linux, 64-bit Windows, Web에서 모두 빌드되어야 한다. 플랫폼 하나에서만 성립하는 가정을 공용 코어에 넣지 않는다.
+* 실행 경로는 교체 가능한 `ExecutionBackend` 경계 뒤에 둔다. Windows/Linux 데스크톱은 별도 32비트 네이티브 helper를 먼저 검증한다. 브라우저용 x86 실행 엔진과 직접 인터프리터는 현재 지원 범위에 포함하지 않는다.
+* 공용 코어는 Linux와 64-bit Windows에서 모두 빌드되어야 한다. 플랫폼 하나에서만 성립하는 가정을 공용 코어에 넣지 않는다.
 
 ## Architecture Rules
 
@@ -339,8 +347,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 * Do not rewrite gameplay logic into C++ unless absolutely unavoidable.
 * Every subsystem should be replaceable independently.
 * The default HLE boundary is the **Win32 import thunk**. Use instruction-level traps only when no alternative exists.
-* Put execution paths behind a replaceable `ExecutionBackend` boundary. Validate a separate native 32-bit helper first for Windows/Linux desktops, and evaluate reusable Web execution engines with permitted licenses before writing a custom x86 interpreter. A custom interpreter is a deferred fallback when no suitable engine exists.
-* The shared core must build on Linux, 64-bit Windows, and Web. Do not place single-platform assumptions in the shared core.
+* Put execution paths behind a replaceable `ExecutionBackend` boundary and validate a separate native 32-bit helper first for Windows/Linux desktops. Browser x86 execution engines and a custom interpreter are outside the current support scope.
+* The shared core must build on Linux and 64-bit Windows. Do not place single-platform assumptions in the shared core.
 
 ---
 

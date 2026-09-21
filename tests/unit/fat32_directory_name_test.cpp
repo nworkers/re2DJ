@@ -45,7 +45,7 @@ Entry MakeLongNameSlot(std::uint8_t sequence,
     constexpr std::array<std::pair<std::size_t, std::size_t>, 3> ranges = {
         {{1, 5}, {14, 6}, {28, 2}}};
     std::size_t index = 0;
-    for (const auto [offset, count] : ranges)
+    for (const auto& [offset, count] : ranges)
     {
         for (std::size_t step = 0; step < count; ++step)
         {

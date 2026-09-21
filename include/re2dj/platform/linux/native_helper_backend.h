@@ -33,6 +33,17 @@ public:
     bool WriteMemory(runtime::GuestAddress address,
                      std::span<const std::uint8_t> bytes,
                      std::string* error) override;
+    bool AllocateGuestMemory(std::uint32_t size,
+                             runtime::GuestMemoryAccess access,
+                             runtime::GuestAddress* address,
+                             std::uint32_t* allocated_size,
+                             std::string* error) override;
+    bool ProtectGuestMemory(runtime::GuestAddress address,
+                            std::uint32_t size,
+                            runtime::GuestMemoryAccess access,
+                            runtime::GuestMemoryAccess* previous_access,
+                            std::string* error) override;
+    bool FreeGuestMemory(runtime::GuestAddress address, std::string* error) override;
     bool CompleteImport(const runtime::ImportCompletion& completion,
                         std::string* error) override;
     void RequestStop() override;

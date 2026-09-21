@@ -47,6 +47,20 @@ struct ImportCompletion
     ImportCompletionAction action = ImportCompletionAction::kContinue;
 };
 
+enum class GuestMemoryAccess : std::uint8_t
+{
+    kNone = 0,
+    kRead = 1,
+    kWrite = 2,
+    kExecute = 4,
+};
+
+constexpr GuestMemoryAccess operator|(GuestMemoryAccess left, GuestMemoryAccess right)
+{
+    return static_cast<GuestMemoryAccess>(static_cast<std::uint8_t>(left) |
+                                          static_cast<std::uint8_t>(right));
+}
+
 // Execution backends may run in-process or behind a helper process. This
 // event/reply boundary therefore carries guest values only and never exposes
 // host pointers or backend-specific handles.
@@ -68,6 +82,17 @@ public:
     virtual bool WriteMemory(GuestAddress address,
                              std::span<const std::uint8_t> bytes,
                              std::string* error) = 0;
+    virtual bool AllocateGuestMemory(std::uint32_t size,
+                                     GuestMemoryAccess access,
+                                     GuestAddress* address,
+                                     std::uint32_t* allocated_size,
+                                     std::string* error) = 0;
+    virtual bool ProtectGuestMemory(GuestAddress address,
+                                    std::uint32_t size,
+                                    GuestMemoryAccess access,
+                                    GuestMemoryAccess* previous_access,
+                                    std::string* error) = 0;
+    virtual bool FreeGuestMemory(GuestAddress address, std::string* error) = 0;
     virtual bool CompleteImport(const ImportCompletion& completion,
                                 std::string* error) = 0;
     virtual void RequestStop() = 0;

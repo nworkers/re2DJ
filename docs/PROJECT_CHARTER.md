@@ -20,10 +20,9 @@ Game logic must remain in the original 32-bit x86 code. C++ code should focus on
 | --- | --- | --- |
 | Windows x86 | MSVC 또는 clang-cl | 1차 개발·실행 host |
 | 64-bit Windows | MSVC 또는 clang-cl | 보류된 확장 host |
-| Linux x86-64 | GCC 또는 Clang | Windows 단계 완료 후 이식 목표 |
-| Web (WebAssembly) | Emscripten | 2차 이식 목표 |
+| Linux x86 / x86-64 | GCC 또는 Clang | WSL에서 두 아키텍처를 함께 개발·검증하는 다음 이식 목표 |
 
-Windows의 현재 1차 경로는 x86 host process에서 원본 x86 EXE와 runtime을 함께 실행하는 것이다. x64 Windows helper 경로는 보류하며, WebAssembly는 명령어 집합 자체가 달라 별도 x86 실행 계층이 반드시 필요하다.
+Windows의 현재 경로는 64비트 Windows에서 Win32 x86 제품 경로를 실행하는 것이다. Linux는 x86-64 제품 host와 i386 제품/helper 경로를 함께 검증한다. 브라우저 실행 경로는 성능과 검증 범위 문제로 현재 지원 목표에서 제거했다.
 
 ## Target Host Platforms
 
@@ -31,10 +30,9 @@ Windows의 현재 1차 경로는 x86 host process에서 원본 x86 EXE와 runtim
 | --- | --- | --- |
 | Windows x86 | MSVC or clang-cl | Primary development and execution host |
 | 64-bit Windows | MSVC or clang-cl | Deferred expansion host |
-| Linux x86-64 | GCC or Clang | Porting target after Windows stages |
-| Web (WebAssembly) | Emscripten | Second porting target |
+| Linux x86 / x86-64 | GCC or Clang | Next porting target, developed and validated together under WSL |
 
-The current Windows-first path runs the original x86 EXE and runtime together in an x86 host process. The x64 Windows helper path is deferred, while WebAssembly has a different instruction set and therefore always needs a separate x86 execution layer.
+The current path runs the original x86 EXE through the Win32 product route on 64-bit Windows. Linux validates x86-64 product and i386 product/helper paths together. The browser execution path was removed from the active target because its performance and verification scope do not fit the project target.
 
 ---
 
@@ -62,7 +60,7 @@ Because multiple versions must be supported later, executable paths, working dir
 * HLE profile은 실제 게임 로직을 대체하지 않고, 원본 코드 주변 환경 서비스의 범위를 선언한다.
 * 원본 HDD 내용은 사용자가 지정한 디렉터리 경로로 입력받고, 저장소는 그 내용을 절대 포함하지 않는다.
 * 게스트의 파일 쓰기는 원본 디렉터리를 건드리지 않고 overlay 경로로 보낸다.
-* 플랫폼 공용 코어를 먼저 설계하고 Windows/Linux/Web 세부 구현은 플랫폼 계층에 둔다.
+* 플랫폼 공용 코어를 먼저 설계하고 Windows/Linux 세부 구현은 플랫폼 계층에 둔다.
 * 코드 변경 전에는 설계와 작업 계획을 문서화한다.
 * 프로젝트 버전은 `VERSION` 파일의 `major.minor.patch` 형식으로 관리한다.
 
@@ -76,7 +74,7 @@ Because multiple versions must be supported later, executable paths, working dir
 * HLE profiles declare the scope of surrounding environment services and do not replace original game logic.
 * Take the original HDD contents as a user-supplied directory path, and never include those contents in the repository.
 * Route guest file writes to an overlay path so the original directory is never modified.
-* Design the shared platform-neutral core first and keep Windows/Linux/Web specifics in platform layers.
+* Design the shared platform-neutral core first and keep Windows/Linux specifics in platform layers.
 * Document design and work plans before changing code.
 * Manage the project version in the `VERSION` file using `major.minor.patch`.
 
@@ -95,3 +93,7 @@ Because multiple versions must be supported later, executable paths, working dir
 * Do not provide a redistribution path for original assets.
 * Do not treat copy-protection circumvention as a goal in itself; implement only the environment services execution requires.
 * Do not treat a finished game launcher as a short-term goal. This is research-stage work.
+
+Linux x86·x64는 각각 제품 호스트를 제공하고 공통 i386 helper로 원본 PE32를 실행하는 지원 목표다. WSL은 개발 환경이며 지원 완료를 뜻하지 않는다. [세부 설계](design/20260918-307-linux-x86-x64-wsl.md).
+
+*Linux x86 and x64 target separate product hosts using a common i386 helper to execute original PE32 code. WSL is the development environment, not evidence of completed support. [Detailed design](design/20260918-307-linux-x86-x64-wsl.md).*

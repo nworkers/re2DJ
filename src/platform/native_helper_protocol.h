@@ -7,8 +7,9 @@ namespace re2dj::platform::native_protocol
 {
 
 inline constexpr std::uint32_t kMagic = 0x504A4432;
-inline constexpr std::uint32_t kVersion = 3;
+inline constexpr std::uint32_t kVersion = 5;
 inline constexpr std::uint32_t kMaximumPayloadSize = 16 * 1024 * 1024;
+inline constexpr std::uint32_t kMaximumMemoryTransferSize = 64 * 1024;
 inline constexpr std::uint32_t kMaximumImportStringSize = 4096;
 inline constexpr std::uint32_t kMaximumImportCount = 65536;
 
@@ -25,7 +26,27 @@ enum class MessageType : std::uint32_t
     kWriteResult = 9,
     kError = 10,
     kImportMetadata = 11,
+    kAllocateMemory = 12,
+    kAllocateMemoryResult = 13,
+    kProtectMemory = 14,
+    kProtectMemoryResult = 15,
+    kFreeMemory = 16,
+    kFreeMemoryResult = 17,
+    kHello = 18,
+    kHelloResult = 19,
 };
+
+inline constexpr std::uint32_t kGuestMemoryAccessRead = 1;
+inline constexpr std::uint32_t kGuestMemoryAccessWrite = 2;
+inline constexpr std::uint32_t kGuestMemoryAccessExecute = 4;
+inline constexpr std::uint32_t kGuestMemoryAccessMask =
+    kGuestMemoryAccessRead | kGuestMemoryAccessWrite | kGuestMemoryAccessExecute;
+
+inline constexpr std::uint32_t kFeatureImportMetadata = 1;
+inline constexpr std::uint32_t kFeatureMemoryTransfer = 2;
+inline constexpr std::uint32_t kFeatureMemoryLifecycle = 4;
+inline constexpr std::uint32_t kSupportedFeatures =
+    kFeatureImportMetadata | kFeatureMemoryTransfer | kFeatureMemoryLifecycle;
 
 enum class EventKind : std::uint32_t
 {
@@ -99,6 +120,51 @@ struct WriteMemoryResult
     std::uint32_t size = 0;
 };
 
+struct AllocateMemoryRequest
+{
+    std::uint32_t size = 0;
+    std::uint32_t access = 0;
+};
+
+struct AllocateMemoryResult
+{
+    std::uint32_t address = 0;
+    std::uint32_t size = 0;
+};
+
+struct ProtectMemoryRequest
+{
+    std::uint32_t address = 0;
+    std::uint32_t size = 0;
+    std::uint32_t access = 0;
+};
+
+struct ProtectMemoryResult
+{
+    std::uint32_t previous_access = 0;
+};
+
+struct FreeMemoryRequest
+{
+    std::uint32_t address = 0;
+};
+
+struct FreeMemoryResult
+{
+    std::uint32_t released_size = 0;
+};
+
+struct HelloRequest
+{
+    std::uint32_t required_features = 0;
+    std::uint32_t optional_features = 0;
+};
+
+struct HelloResult
+{
+    std::uint32_t supported_features = 0;
+};
+
 static_assert(sizeof(MessageHeader) == 16);
 static_assert(sizeof(LoadImageRequest) == 8);
 static_assert(sizeof(LoadResult) == 16);
@@ -107,6 +173,14 @@ static_assert(sizeof(ExecutionEvent) == 32);
 static_assert(sizeof(ReadMemoryRequest) == 8);
 static_assert(sizeof(CompleteImport) == 24);
 static_assert(sizeof(WriteMemoryResult) == 8);
+static_assert(sizeof(AllocateMemoryRequest) == 8);
+static_assert(sizeof(AllocateMemoryResult) == 8);
+static_assert(sizeof(ProtectMemoryRequest) == 12);
+static_assert(sizeof(ProtectMemoryResult) == 4);
+static_assert(sizeof(FreeMemoryRequest) == 4);
+static_assert(sizeof(FreeMemoryResult) == 4);
+static_assert(sizeof(HelloRequest) == 8);
+static_assert(sizeof(HelloResult) == 4);
 
 }  // namespace re2dj::platform::native_protocol
 

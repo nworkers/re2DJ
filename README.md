@@ -1,15 +1,15 @@
 # re2DJ
 
 ![Language](https://img.shields.io/badge/C%2B%2B-20-00599C)
-![Hosts](https://img.shields.io/badge/hosts-Linux%20%7C%20Windows%20x64%20%7C%20Web-0078D4)
+![Hosts](https://img.shields.io/badge/hosts-Linux%20%7C%20Windows%20x64-0078D4)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)
 
-re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, EZ2DJ의 원본 32비트 x86 실행 파일을 Linux, 64비트 Windows, Web에서 실행하기 위한 실험적 런타임입니다. 게임 로직은 원본 코드에 그대로 남겨 두고, 그 주변의 Win32 API·DirectX·하드웨어 경계만 High Level Emulation(HLE)으로 제공합니다.
+re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, EZ2DJ의 원본 32비트 x86 실행 파일을 Linux와 64비트 Windows에서 실행하기 위한 실험적 런타임입니다. 게임 로직은 원본 코드에 그대로 남겨 두고, 그 주변의 Win32 API·DirectX·하드웨어 경계만 High Level Emulation(HLE)으로 제공합니다.
 
 현재 버전은 [VERSION](VERSION)에서 확인할 수 있습니다.
 
-*re2DJ is an experimental runtime for executing the original 32-bit x86 EZ2DJ executable on Linux, 64-bit Windows, and the Web without an emulator or a virtual machine. Original game logic stays authoritative; only the surrounding Win32 API, DirectX, and hardware boundaries are replaced with High Level Emulation (HLE). See [VERSION](VERSION) for the current version.*
+*re2DJ is an experimental runtime for executing the original 32-bit x86 EZ2DJ executable on Linux and 64-bit Windows without an emulator or a virtual machine. Original game logic stays authoritative; only the surrounding Win32 API, DirectX, and hardware boundaries are replaced with High Level Emulation (HLE). See [VERSION](VERSION) for the current version.*
 
 > [!WARNING]
 > 현재는 초기 연구·개발 단계입니다. 지금 저장소가 하는 일은 **원본 HDD 디렉터리를 읽어 실행 대상 바이너리를 식별하고 PE 헤더를 분석하는 것까지**이며, 로더·실행 backend·HLE 계층은 아직 설계 단계입니다. 게임은 실행되지 않습니다.
@@ -27,7 +27,7 @@ re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, EZ2DJ의 원�
 
 * **원본 로직 보존:** 게임플레이를 C++로 재작성하지 않고 원본 x86 코드를 주 실행 경로로 유지합니다.
 * **선별적 HLE:** 경계는 Win32 import thunk입니다. 게임이 실제로 호출하는 API만 좁은 범위로 구현합니다.
-* **처음부터 멀티플랫폼:** 공용 코어는 호스트 OS 헤더를 포함하지 않으며, Windows/Linux/Web 세부 구현은 플랫폼 계층에 분리합니다.
+* **처음부터 멀티플랫폼:** 공용 코어는 호스트 OS 헤더를 포함하지 않으며, Windows/Linux 세부 구현은 플랫폼 계층에 분리합니다.
 * **HDD·CHD 입력 경계:** 추출 HDD는 사용자가 지정한 디렉터리로 받고, MAME CHD는 `libchdr` 기반 FAT32 read-only 계층으로 읽습니다. 원본 자산은 저장소에 포함하지 않습니다.
 * **원본 무변경 보장:** 게스트의 파일 쓰기는 overlay 디렉터리로 향하므로 원본 덤프는 그대로 유지됩니다.
 * **재현 가능한 진척 기록:** 설계, 작업 지시, 분석과 기술 지식을 저장소 문서로 누적합니다.
@@ -45,12 +45,12 @@ flowchart LR
     PE --> LOAD["PE32 loader<br/>(implemented)"]
     LOAD --> EXEC["replaceable execution backend<br/>(planned)"]
     EXEC -->|import gate| HLE["Win32 / DirectX HLE<br/>(planned)"]
-    HLE --> PLAT["Platform backend<br/>windows / linux / web"]
+    HLE --> PLAT["Platform backend<br/>windows / linux"]
 ```
 
-x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86-64 제품 CLI가 별도 i386 helper를 통해 원본 PE32 entry의 첫 import·exit·fault 경계까지 실행합니다. Linux는 아직 Win32 import를 처리하지 않으므로 게임 창까지 진행되지는 않습니다. WebAssembly에는 별도 x86 실행 엔진이 필요합니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86-64 제품 CLI가 별도 i386 helper를 통해 원본 PE32 entry의 첫 import·exit·fault 경계까지 실행합니다. Linux는 아직 Win32 import를 처리하지 않으므로 게임 창까지 진행되지는 않습니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, the x86-64 product CLI uses a separate i386 helper to execute the original PE32 entry up to its first import, exit, or fault boundary; it does not reach a game window yet because Win32 imports are not handled. WebAssembly needs a separate x86 execution engine. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, the x86-64 product CLI uses a separate i386 helper to execute the original PE32 entry up to its first import, exit, or fault boundary; it does not reach a game window yet because Win32 imports are not handled. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -59,8 +59,7 @@ x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 
 | 호스트 | 필요한 것 |
 | --- | --- |
 | 64-bit Windows | Visual Studio 2019 이상 또는 Build Tools의 **Desktop development with C++**, CMake 3.20 이상 |
-| Linux x86-64 | GCC 11 이상 또는 Clang 14 이상, CMake 3.20 이상, Ninja, SDL3용 X11/Wayland/OpenGL 개발 패키지 |
-| Web | Emscripten SDK (`EMSDK` 환경 변수 설정), CMake 3.20 이상, Ninja |
+| Linux x86 / x86-64 | GCC 11 이상 또는 Clang 14 이상, CMake 3.20 이상, Ninja, 해당 폭의 SDL3용 X11/Wayland/OpenGL 개발 패키지. x86은 `g++-multilib libc6-dev-i386` 추가 |
 
 SDL3와 SDL_mixer는 CMake가 고정된 zlib 라이선스 버전에서 가져옵니다. 원본 자산 없이도 빌드되고 단위 테스트가 통과합니다.
 Ubuntu/WSL의 정확한 패키지 설치 명령은 [Linux SDL3/OpenGL 빌드 가이드](docs/guides/linux-sdl3-build.md)를 참고하세요.
@@ -90,6 +89,13 @@ ctest --preset windows-x86-debug
 cmake --preset linux-x64-debug
 cmake --build --preset linux-x64-debug
 ctest --preset linux-x64-debug
+
+# Linux x86 product host and separate i386 guest helper
+cmake --preset linux-x86-debug
+cmake --build --preset linux-x86-debug
+ctest --preset linux-x86-debug
+cmake --preset linux-x86-helper
+cmake --build --preset linux-x86-helper
 
 # Windows x86 native-helper feasibility probe under WOW64
 cmake --preset windows-x86-native-probe -DRE2DJ_WARNINGS_AS_ERRORS=ON
@@ -324,7 +330,7 @@ HLE/Hardlock boundary remains a runtime observation item.
 | 경로 | 내용 |
 | --- | --- |
 | `include/re2dj/`, `src/` | C++20 공용 코어: HDD·CHD 입력, 게스트 경로, PE 판독, 타깃 프로파일 |
-| `src/platform/{windows,linux,web}/` | 플랫폼별 backend (예정) |
+| `src/platform/{windows,linux}/` | 플랫폼별 backend (예정) |
 | `src/host/cli/` | 명령행 진입점 |
 | `src/tools/` | 비실행 분석 도구 |
 | `tests/unit/` | 단위 테스트 |
