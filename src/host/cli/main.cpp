@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -18,12 +19,15 @@
 #include <utility>
 #include <vector>
 
+#include <spdlog/logger.h>
+
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
 #include "re2dj/storage/guest_path.h"
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/graphics/present_sync.h"
+#include "re2dj/logging/logging.h"
 #include "re2dj/target/target_profile.h"
 #include "re2dj/version.h"
 
@@ -42,6 +46,53 @@ constexpr int kExitOk = 0;
 constexpr int kExitUsage = 1;
 constexpr int kExitHddError = 2;
 constexpr int kExitNotImplemented = 3;
+constexpr int kExitLoggingError = 4;
+
+struct LoggingLifetime
+{
+    ~LoggingLifetime()
+    {
+        re2dj::logging::Shutdown();
+    }
+};
+
+std::string FormatLogMessage(const char* format, va_list arguments)
+{
+    va_list sizing_arguments;
+    va_copy(sizing_arguments, arguments);
+    const int length = std::vsnprintf(nullptr, 0, format, sizing_arguments);
+    va_end(sizing_arguments);
+    if (length <= 0)
+    {
+        return {};
+    }
+    std::string message(static_cast<std::size_t>(length) + 1, '\0');
+    std::vsnprintf(message.data(), message.size(), format, arguments);
+    message.resize(static_cast<std::size_t>(length));
+    while (!message.empty() && (message.back() == '\n' || message.back() == '\r'))
+    {
+        message.pop_back();
+    }
+    return message;
+}
+
+void LogError(const char* format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    const std::string message = FormatLogMessage(format, arguments);
+    va_end(arguments);
+    re2dj::logging::GetLogger()->error("{}", message);
+}
+
+void LogFatal(const char* classification, const char* format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    const std::string message = FormatLogMessage(format, arguments);
+    va_end(arguments);
+    re2dj::logging::Fatal(classification, message);
+}
 
 struct Options
 {
@@ -51,6 +102,7 @@ struct Options
     bool linux_in_process_first_resolver = false;
     bool linux_in_process_getversion_call = false;
     bool linux_in_process_createfile_call = false;
+    bool linux_in_process_continue = false;
     std::filesystem::path io_config;
     std::string target_id;
     std::string resolve_path;
@@ -203,13 +255,13 @@ int ResolveOneChdPath(const re2dj::storage::Fat32Volume& volume,
     if (!re2dj::storage::ParseGuestPath(text, &parsed) ||
         !re2dj::storage::NormalizeGuestPath(&parsed))
     {
-        std::fprintf(stderr, "error: cannot parse guest path '%s'\n", text.c_str());
+        LogError("cannot parse guest path '%s'", text.c_str());
         return kExitUsage;
     }
     if (parsed.drive_letter != 'D' || parsed.components.empty() ||
         !re2dj::storage::EqualsIgnoreAsciiCase(parsed.components.front(), "ez2dj"))
     {
-        std::fprintf(stderr, "error: CHD guest path must be under D:\\ez2dj\n");
+        LogError("CHD guest path must be under D:\\ez2dj");
         return kExitUsage;
     }
     const std::string guest_path = re2dj::storage::GuestPathToString(parsed);
@@ -244,15 +296,19 @@ void PrintUsage()
         "                      \"C:\\\\EZ2DJ\\\\DATA\\\\SONG.EZ\") and exit.\n"
         "  --run               Start the selected guest executable.\n"
         "  --linux-helper <path>\n"
-        "                      32-bit native helper used by --run on Linux.\n"
+        "                      Linux diagnostic fallback: run through this separate i386\n"
+        "                      helper instead of in-process, which --run does by default.\n"
         "  --linux-in-process-first-import\n"
-        "                      Linux x86 diagnostic: complete only the first import in-process.\n"
+        "                      Linux diagnostic: complete only the first import in-process.\n"
         "  --linux-in-process-first-resolver\n"
-        "                      Linux x86 diagnostic: observe first dynamic GetProcAddress request.\n"
+        "                      Linux diagnostic: observe first dynamic GetProcAddress request.\n"
         "  --linux-in-process-getversion-call\n"
-        "                      Linux x86 diagnostic: observe the resolved GetVersion thunk call.\n"
+        "                      Linux diagnostic: observe the resolved GetVersion thunk call.\n"
         "  --linux-in-process-createfile-call\n"
-        "                      Linux x86 diagnostic: observe the resolved CreateFileA thunk call.\n"
+        "                      Linux diagnostic: observe the resolved CreateFileA thunk call.\n"
+        "  --linux-in-process-continue\n"
+        "                      Linux diagnostic: run on the kernel32 facade until the\n"
+        "                      first unhandled import, unresolved lookup, or fault.\n"
         "  --audio-gain-db <dB>\n"
         "                      Windows output gain (-24..+18, default 0).\n"
         "  --demo-volume <0..3>\n"
@@ -325,6 +381,38 @@ void PrintFaultObservation(const re2dj::platform::linux::OriginalRunResult& resu
         }
         std::printf("\n");
     }
+    if (fault.fs_base.value() != 0)
+    {
+        if (fault.seh_frame_observed)
+        {
+            std::printf("fault seh       : teb=0x%08x frame=0x%08x handler=0x%08x next=0x%08x\n",
+                        fault.fs_base.value(),
+                        fault.seh_frame_address.value(),
+                        fault.seh_handler.value(),
+                        fault.seh_next);
+            if (fault.seh_handler_window_observed)
+            {
+                std::printf("seh handler code: 0x%08x\n", fault.seh_handler.value());
+                for (std::size_t index = 0; index < fault.seh_handler_window.size(); index += 16)
+                {
+                    std::printf("                  ");
+                    for (std::size_t byte_index = index;
+                         byte_index < index + 16 && byte_index < fault.seh_handler_window.size();
+                         ++byte_index)
+                    {
+                        std::printf("%02x", static_cast<unsigned>(fault.seh_handler_window[byte_index]));
+                    }
+                    std::printf("\n");
+                }
+            }
+        }
+        else
+        {
+            std::printf("fault seh       : teb=0x%08x frame=0x%08x (no frame registered)\n",
+                        fault.fs_base.value(),
+                        fault.seh_frame_address.value());
+        }
+    }
 }
 
 void PrintInstructionTrace(const re2dj::platform::linux::OriginalRunResult& result)
@@ -378,13 +466,199 @@ void PrintCreateFileObservation(const re2dj::platform::linux::OriginalRunResult&
                 observation.flags_and_attributes,
                 observation.template_file.value());
 }
+
+const char* DescribeIdentity(re2dj::runtime::GuestAddress registry,
+                             re2dj::runtime::GuestAddress guest)
+{
+    return guest.value() == 0 ? " (never requested)"
+           : guest == registry ? " (match)"
+                               : " (MISMATCH)";
+}
+
+void PrintResolverIdentity(const re2dj::platform::linux::OriginalRunResult& result)
+{
+    const auto& identity = result.resolver_identity;
+    if (identity.prepared)
+    {
+        std::printf("kernel32 facade  : registry 0x%08x, guest saw 0x%08x%s\n",
+                    identity.registry_kernel32_base.value(),
+                    identity.kernel32_base.value(),
+                    DescribeIdentity(identity.registry_kernel32_base, identity.kernel32_base));
+        std::printf("CreateFileA addr : registry 0x%08x, static IAT 0x%08x, guest saw 0x%08x%s%s\n",
+                    identity.registry_create_file.value(),
+                    identity.static_create_file_slot.value(),
+                    identity.create_file_address.value(),
+                    DescribeIdentity(identity.registry_create_file, identity.create_file_address),
+                    identity.static_imports_rebound ? "" : " (no static rebind)");
+        std::printf("GetVersion addr  : registry 0x%08x, guest saw 0x%08x%s\n",
+                    identity.registry_get_version.value(),
+                    identity.get_version_address.value(),
+                    DescribeIdentity(identity.registry_get_version, identity.get_version_address));
+    }
+    if (result.unhandled_import_observed)
+    {
+        std::printf("unhandled import : %s\n", result.unhandled_import.c_str());
+    }
+    if (result.unhandled_dynamic_request_observed)
+    {
+        std::printf("unresolved lookup: %s\n",
+                    result.unhandled_dynamic_request.c_str());
+    }
+}
+
+// Prints a guest ANSI string in quotes. Guest text may be CP949 rather than
+// UTF-8, so bytes outside printable ASCII appear as \xNN, keeping the
+// original bytes recoverable instead of guessing an encoding.
+void PrintGuestText(const std::string& text)
+{
+    std::printf(" \"");
+    for (const char character : text)
+    {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte < 0x20 || byte > 0x7E)
+        {
+            std::printf("\\x%02x", byte);
+        }
+        else
+        {
+            std::putchar(character);
+        }
+    }
+    std::printf("\"");
+}
+
+void PrintApiCalls(const re2dj::platform::linux::OriginalRunResult& result)
+{
+    std::printf("api calls       : %u", result.api_call_count);
+    if (result.api_call_count > result.api_calls.size())
+    {
+        std::printf(" (first %zu logged)", result.api_calls.size());
+    }
+    std::printf("\n");
+    for (const auto& call : result.api_calls)
+    {
+        std::printf("  #%04u %-32s ret=%08x", call.sequence, call.name.c_str(), call.return_address);
+        if (call.argument_count != 0)
+        {
+            std::printf(" args=");
+            for (std::uint32_t index = 0; index < call.argument_count; ++index)
+            {
+                std::printf(index == 0 ? "%08x" : ",%08x", call.arguments[index]);
+            }
+        }
+        if (call.text_observed)
+        {
+            PrintGuestText(call.text);
+        }
+        if (call.second_text_observed)
+        {
+            PrintGuestText(call.second_text);
+        }
+        if (call.handled)
+        {
+            std::printf(" -> eax=%08x\n", call.eax);
+        }
+        else
+        {
+            std::printf(" -> UNHANDLED\n");
+        }
+    }
+}
+
+bool PrintContinuationBoundary(const re2dj::platform::linux::OriginalRunResult& result)
+{
+    using re2dj::platform::linux::OriginalRunBoundary;
+    switch (result.boundary)
+    {
+    case OriginalRunBoundary::kContinuationUnhandledImport:
+        std::printf("continuation    : stopped at unhandled import %s, return 0x%08x\n",
+                    result.continuation_stop_detail.c_str(),
+                    result.import_return_address);
+        break;
+    case OriginalRunBoundary::kContinuationUnresolvedLookup:
+        std::printf("continuation    : stopped at unresolved lookup %s, return 0x%08x\n",
+                    result.continuation_stop_detail.c_str(),
+                    result.import_return_address);
+        break;
+    case OriginalRunBoundary::kContinuationCallLimit:
+        std::printf("continuation    : stopped at the call limit after %s, return 0x%08x\n",
+                    result.continuation_stop_detail.c_str(),
+                    result.import_return_address);
+        break;
+    case OriginalRunBoundary::kContinuationFault:
+        std::printf("continuation    : guest fault signal %u, EIP 0x%08x\n",
+                    result.status_code,
+                    result.instruction_pointer.value());
+        PrintFaultObservation(result);
+        break;
+    case OriginalRunBoundary::kProcessExit:
+        std::printf("continuation    : process exit, %s\n",
+                    result.continuation_stop_detail.c_str());
+        break;
+    default:
+        return false;
+    }
+    PrintResolverIdentity(result);
+    return true;
+}
+
+// Whether a Linux --run takes the in-process continuation: named explicitly,
+// or by default when neither another in-process diagnostic nor the helper
+// fallback was requested.
+bool IsLinuxContinuationRun(const Options& options)
+{
+    return options.linux_in_process_continue ||
+           (options.linux_helper.empty() && !options.linux_in_process_first_import &&
+            !options.linux_in_process_first_resolver &&
+            !options.linux_in_process_getversion_call &&
+            !options.linux_in_process_createfile_call);
+}
+
+// Runs the guest on Linux. Both host widths execute it in this process on the
+// guest facades; the i386 helper runs only when --linux-helper names it, as a
+// diagnostic fallback.
+bool RunLinuxOriginal(const Options& options,
+                      const std::filesystem::path& executable_path,
+                      const re2dj::exe::PeImageInfo& image_info,
+                      re2dj::platform::linux::OriginalRunResult* result,
+                      std::string* error)
+{
+    namespace linux_platform = re2dj::platform::linux;
+    if (IsLinuxContinuationRun(options))
+    {
+        return linux_platform::RunOriginalInProcessContinuation(
+            executable_path, image_info, result, error);
+    }
+    if (options.linux_in_process_createfile_call)
+    {
+        return linux_platform::RunOriginalInProcessCreateFileCall(
+            executable_path, image_info, result, error);
+    }
+    if (options.linux_in_process_getversion_call)
+    {
+        return linux_platform::RunOriginalInProcessGetVersionCall(
+            executable_path, image_info, result, error);
+    }
+    if (options.linux_in_process_first_resolver)
+    {
+        return linux_platform::RunOriginalInProcessFirstResolver(
+            executable_path, image_info, result, error);
+    }
+    if (options.linux_in_process_first_import)
+    {
+        return linux_platform::RunOriginalInProcessFirstImport(
+            executable_path, image_info, result, error);
+    }
+    return linux_platform::RunOriginalUntilBoundary(
+        executable_path, image_info, options.linux_helper, result, error);
+}
 #endif
 
 bool TakeValue(int argc, char** argv, int* index, std::string_view name, std::string* out)
 {
     if (*index + 1 >= argc)
     {
-        std::fprintf(stderr, "error: %s requires a value\n", std::string(name).c_str());
+        LogError("%s requires a value", std::string(name).c_str());
         return false;
     }
     ++(*index);
@@ -429,6 +703,10 @@ bool ParseOptions(int argc, char** argv, Options* options)
         {
             options->linux_in_process_createfile_call = true;
         }
+        else if (argument == "--linux-in-process-continue")
+        {
+            options->linux_in_process_continue = true;
+        }
         else if (argument == "--hdd")
         {
             std::string value;
@@ -466,8 +744,7 @@ bool ParseOptions(int argc, char** argv, Options* options)
             }
             catch (const std::exception&)
             {
-                std::fprintf(stderr,
-                             "error: --audio-gain-db must be between -24 and +18 dB\n");
+                LogError("--audio-gain-db must be between -24 and +18 dB");
                 return false;
             }
             options->audio_gain_explicit = true;
@@ -495,7 +772,7 @@ bool ParseOptions(int argc, char** argv, Options* options)
             }
             catch (const std::exception&)
             {
-                std::fprintf(stderr, "error: --demo-volume must be between 0 and 3\n");
+                LogError("--demo-volume must be between 0 and 3");
                 return false;
             }
             options->demo_volume_explicit = true;
@@ -545,7 +822,7 @@ bool ParseOptions(int argc, char** argv, Options* options)
             }
             else
             {
-                std::fprintf(stderr, "error: --vsync must be on, off or adaptive\n");
+                LogError("--vsync must be on, off or adaptive");
                 return false;
             }
             options->present_sync_explicit = true;
@@ -580,7 +857,7 @@ bool ParseOptions(int argc, char** argv, Options* options)
         {
             if (options->positional_target)
             {
-                std::fprintf(stderr, "error: only one profile id may be specified\n");
+                LogError("only one profile id may be specified");
                 return false;
             }
             options->positional_target = true;
@@ -592,7 +869,7 @@ bool ParseOptions(int argc, char** argv, Options* options)
         }
         else
         {
-            std::fprintf(stderr, "error: unknown argument '%s'\n", argv[index]);
+            LogError("unknown argument '%s'", argv[index]);
             return false;
         }
     }
@@ -617,10 +894,9 @@ std::filesystem::path NormalizeIoConfigForProfile(
 {
     if (!io_config.empty() && !defaults.lptdi.legacy_io_ports)
     {
-        std::fprintf(stderr,
-                     "\nnote: --io-config is ignored for profile '%.*s' because legacy I/O is disabled.\n",
-                     static_cast<int>(profile_id.size()),
-                     profile_id.data());
+        re2dj::logging::GetLogger()->warn(
+            "--io-config is ignored for profile '{}' because legacy I/O is disabled",
+            profile_id);
         return {};
     }
     return io_config;
@@ -633,14 +909,12 @@ int ResolveOnePath(const re2dj::hdd::HddRoot& root, const std::string& text)
     re2dj::storage::GuestPath parsed;
     if (!re2dj::storage::ParseGuestPath(text, &parsed))
     {
-        std::fprintf(stderr, "error: cannot parse guest path '%s'\n", text.c_str());
+        LogError("cannot parse guest path '%s'", text.c_str());
         return kExitUsage;
     }
     if (!re2dj::storage::NormalizeGuestPath(&parsed))
     {
-        std::fprintf(stderr,
-                     "error: guest path '%s' escapes the HDD directory\n",
-                     text.c_str());
+        LogError("guest path '%s' escapes the HDD directory", text.c_str());
         return kExitUsage;
     }
 
@@ -668,31 +942,31 @@ int RunChdTarget(const Options& options,
     std::string error;
     if (!re2dj::storage::Fat32Volume::Open(chd_path, &volume, &error))
     {
-        std::fprintf(stderr, "error: %s\n", error.c_str());
+        LogError("%s", error.c_str());
         return kExitHddError;
     }
     const std::string_view executable_path = built_in.profile.executable_relative_path;
     if (executable_path.empty())
     {
-        std::fprintf(stderr, "error: CHD profile has no executable path\n");
+        LogError("CHD profile has no executable path");
         return kExitHddError;
     }
     re2dj::storage::Fat32Entry executable_entry;
     if (!volume->Find(executable_path, &executable_entry, &error) || executable_entry.directory)
     {
-        std::fprintf(stderr, "error: CHD does not contain %.*s: %s\n",
-                     static_cast<int>(executable_path.size()),
-                     executable_path.data(),
-                     error.c_str());
+        LogError("CHD does not contain %.*s: %s",
+                 static_cast<int>(executable_path.size()),
+                 executable_path.data(),
+                 error.c_str());
         return kExitHddError;
     }
     std::vector<std::uint8_t> executable_bytes;
     if (!volume->ReadFile(executable_path, &executable_bytes, &error))
     {
-        std::fprintf(stderr, "error: cannot read %.*s from CHD: %s\n",
-                     static_cast<int>(executable_path.size()),
-                     executable_path.data(),
-                     error.c_str());
+        LogError("cannot read %.*s from CHD: %s",
+                 static_cast<int>(executable_path.size()),
+                 executable_path.data(),
+                 error.c_str());
         return kExitHddError;
     }
     re2dj::exe::PeImageInfo executable_info;
@@ -702,8 +976,8 @@ int RunChdTarget(const Options& options,
                                      &error) ||
         !re2dj::exe::IsGuestExecutable(executable_info))
     {
-        std::fprintf(stderr, "error: CHD executable is not a PE32 guest image: %s\n",
-                     error.empty() ? "unexpected executable format" : error.c_str());
+        LogError("CHD executable is not a PE32 guest image: %s",
+                 error.empty() ? "unexpected executable format" : error.c_str());
         return kExitHddError;
     }
 
@@ -769,7 +1043,7 @@ int RunChdTarget(const Options& options,
     if (!PrepareChdStaging(
             *volume, profile.id, profile.executable_relative_path, &staging_root, &error))
     {
-        std::fprintf(stderr, "error: cannot stage CHD executable: %s\n", error.c_str());
+        LogError("cannot stage CHD executable: %s", error.c_str());
         return kExitHddError;
     }
     re2dj::platform::windows::OriginalProcessOptions run_options;
@@ -810,52 +1084,42 @@ int RunChdTarget(const Options& options,
     const int result = re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (result < 0)
     {
-        std::fprintf(stderr, "error: Windows execution failed: %s\n", error.c_str());
+        LogFatal("EXECUTION_FAILED", "Windows execution failed: %s", error.c_str());
         return kExitNotImplemented;
     }
     return result;
 #else
 #if defined(__linux__)
-    if (options.linux_helper.empty() && !options.linux_in_process_first_import &&
-        !options.linux_in_process_first_resolver && !options.linux_in_process_getversion_call &&
-        !options.linux_in_process_createfile_call)
-    {
-        std::fprintf(stderr,
-                     "error: --linux-helper <path> is required with --run on Linux.\n");
-        return kExitUsage;
-    }
     std::filesystem::path staging_root;
     if (!PrepareChdStaging(
             *volume, profile.id, profile.executable_relative_path, &staging_root, &error))
     {
-        std::fprintf(stderr, "error: cannot stage CHD executable: %s\n", error.c_str());
+        LogError("cannot stage CHD executable: %s", error.c_str());
         return kExitHddError;
     }
     const std::filesystem::path staged_executable_path =
         staging_root / profile.executable_relative_path;
     re2dj::platform::linux::OriginalRunResult run_result;
-    const bool executed = options.linux_in_process_createfile_call
-                              ? re2dj::platform::linux::RunOriginalInProcessCreateFileCall(
-                                    staged_executable_path, executable_info, &run_result, &error)
-                              : options.linux_in_process_getversion_call
-                              ? re2dj::platform::linux::RunOriginalInProcessGetVersionCall(
-                                    staged_executable_path, executable_info, &run_result, &error)
-                              : options.linux_in_process_first_resolver
-                              ? re2dj::platform::linux::RunOriginalInProcessFirstResolver(
-                                    staged_executable_path, executable_info, &run_result, &error)
-                              : options.linux_in_process_first_import
-                              ? re2dj::platform::linux::RunOriginalInProcessFirstImport(
-                                    staged_executable_path, executable_info, &run_result, &error)
-                              : re2dj::platform::linux::RunOriginalUntilBoundary(
-                                    staged_executable_path, executable_info, options.linux_helper,
-                                    &run_result, &error);
+    const bool executed = RunLinuxOriginal(
+        options, staged_executable_path, executable_info, &run_result, &error);
     if (!executed)
     {
-        std::fprintf(stderr, "error: Linux execution failed: %s\n", error.c_str());
+        LogFatal("EXECUTION_FAILED", "Linux execution failed: %s", error.c_str());
         return kExitNotImplemented;
     }
     std::printf("\nload base       : 0x%08x\n", run_result.load_base.value());
     std::printf("entry point     : 0x%08x\n", run_result.entry_point.value());
+    if (IsLinuxContinuationRun(options))
+    {
+        if (run_result.seh_dispatch_count > 0)
+        {
+            std::printf("seh dispatched  : count=%u last_handler=0x%08x resumed_eip=0x%08x\n",
+                        run_result.seh_dispatch_count,
+                        run_result.last_seh_handler.value(),
+                        run_result.last_seh_resumed_eip.value());
+        }
+        PrintApiCalls(run_result);
+    }
     if (run_result.boundary == re2dj::platform::linux::OriginalRunBoundary::kImportGate)
     {
         if (run_result.by_ordinal)
@@ -895,6 +1159,7 @@ int RunChdTarget(const Options& options,
                     run_result.import_first_argument_text.c_str(),
                     run_result.import_return_address,
                     run_result.instruction_pointer.value());
+        PrintResolverIdentity(run_result);
     }
     else if (run_result.boundary ==
              re2dj::platform::linux::OriginalRunBoundary::kGetVersionCalled)
@@ -902,6 +1167,8 @@ int RunChdTarget(const Options& options,
         std::printf("GetVersion call completion: return 0x%08x, SIGTRAP EIP 0x%08x\n",
                     run_result.import_return_address,
                     run_result.instruction_pointer.value());
+        PrintResolverIdentity(run_result);
+        PrintInstructionTrace(run_result);
     }
     else if (run_result.boundary ==
              re2dj::platform::linux::OriginalRunBoundary::kGetVersionCallNotReached)
@@ -911,10 +1178,12 @@ int RunChdTarget(const Options& options,
                     run_result.instruction_pointer.value());
         PrintFaultObservation(run_result);
         PrintInstructionTrace(run_result);
+        PrintResolverIdentity(run_result);
         if (run_result.unhandled_dynamic_request_observed)
         {
-            std::printf("unhandled dynamic request: %s\n",
-                        run_result.unhandled_dynamic_request.c_str());
+            LogFatal("HLE_UNIMPLEMENTED",
+                     "dynamic request=%s",
+                     run_result.unhandled_dynamic_request.c_str());
         }
     }
     else if (run_result.boundary ==
@@ -924,6 +1193,7 @@ int RunChdTarget(const Options& options,
                     run_result.import_return_address,
                     run_result.instruction_pointer.value());
         PrintCreateFileObservation(run_result);
+        PrintResolverIdentity(run_result);
     }
     else if (run_result.boundary ==
              re2dj::platform::linux::OriginalRunBoundary::kCreateFileCallNotReached)
@@ -933,14 +1203,14 @@ int RunChdTarget(const Options& options,
                     run_result.instruction_pointer.value());
         PrintFaultObservation(run_result);
     }
-    else
+    else if (!PrintContinuationBoundary(run_result))
     {
         std::printf("first boundary  : terminal status=%u\n", run_result.status_code);
     }
     return kExitOk;
 #else
-    std::fprintf(stderr,
-                 "error: CHD-backed original-process execution is currently connected only to the Windows x86 launcher\n");
+    LogFatal("EXECUTION_UNSUPPORTED",
+             "CHD-backed original-process execution is currently connected only to the Windows x86 launcher");
     return kExitNotImplemented;
 #endif
 #endif
@@ -950,6 +1220,18 @@ int RunChdTarget(const Options& options,
 
 int main(int argc, char** argv)
 {
+    LoggingLifetime logging_lifetime;
+    re2dj::logging::LoggerOptions logger_options;
+    std::filesystem::path log_file;
+    std::string logging_error;
+    if (!re2dj::logging::Initialize(logger_options, &log_file, &logging_error))
+    {
+        std::fprintf(stderr, "fatal: cannot initialize logging: %s\n", logging_error.c_str());
+        return kExitLoggingError;
+    }
+    re2dj::logging::GetLogger()->info("re2DJ {} starting", re2dj::VersionString());
+    re2dj::logging::GetLogger()->info("Log file: {}", log_file.string());
+
     Options options;
     if (!ParseOptions(argc, argv, &options))
     {
@@ -972,7 +1254,8 @@ int main(int argc, char** argv)
         options.present_sync_explicit ||
         !options.io_config.empty())
     {
-        std::fprintf(stderr, "error: selected execution options are currently supported only on Windows\n");
+        LogFatal("EXECUTION_UNSUPPORTED",
+                 "selected execution options are currently supported only on Windows");
         return kExitNotImplemented;
     }
 #endif
@@ -993,7 +1276,7 @@ int main(int argc, char** argv)
         std::string chd_error;
         if (!FindChdImage(input, &chd_path, &chd_error))
         {
-            std::fprintf(stderr, "error: %s\n", chd_error.c_str());
+            LogError("%s", chd_error.c_str());
             return kExitHddError;
         }
         return RunChdTarget(options, chd_path, *shortcut);
@@ -1005,9 +1288,8 @@ int main(int argc, char** argv)
         if (directory_shortcut == nullptr ||
             directory_shortcut->profile.run_defaults.default_hdd_directory_relative_path.empty())
         {
-            std::fprintf(stderr,
-                         "error: profile '%s' has no default HDD directory; pass --hdd <directory>\n",
-                         options.target_id.c_str());
+            LogError("profile '%s' has no default HDD directory; pass --hdd <directory>",
+                     options.target_id.c_str());
             return kExitUsage;
         }
         options.hdd_directory = std::filesystem::current_path() /
@@ -1016,7 +1298,7 @@ int main(int argc, char** argv)
     }
     if (options.hdd_directory.empty())
     {
-        std::fprintf(stderr, "error: --hdd <directory> is required\n");
+        LogError("--hdd <directory> is required");
         return kExitUsage;
     }
 
@@ -1024,7 +1306,7 @@ int main(int argc, char** argv)
     std::string error;
     if (!re2dj::hdd::HddRoot::Open(options.hdd_directory, &root, &error))
     {
-        std::fprintf(stderr, "error: %s\n", error.c_str());
+        LogError("%s", error.c_str());
         return kExitHddError;
     }
 
@@ -1046,9 +1328,8 @@ int main(int argc, char** argv)
 
     if (profiles.empty())
     {
-        std::fprintf(stderr,
-                     "error: no 32-bit x86 PE32 executable found under %s\n",
-                     scan.root.string().c_str());
+        LogError("no 32-bit x86 PE32 executable found under %s",
+                 scan.root.string().c_str());
         return kExitHddError;
     }
 
@@ -1062,9 +1343,7 @@ int main(int argc, char** argv)
         selected = re2dj::target::FindTargetProfileById(profiles, options.target_id);
         if (selected == nullptr)
         {
-            std::fprintf(stderr,
-                         "error: no target profile with id '%s'\n",
-                         options.target_id.c_str());
+            LogError("no target profile with id '%s'", options.target_id.c_str());
             options.list_targets = true;
         }
     }
@@ -1145,54 +1424,45 @@ int main(int argc, char** argv)
     }
 
 #if defined(__linux__)
-    if (options.linux_helper.empty() && !options.linux_in_process_first_import &&
-        !options.linux_in_process_first_resolver && !options.linux_in_process_getversion_call &&
-        !options.linux_in_process_createfile_call)
-    {
-        std::fprintf(stderr,
-                     "\nerror: --linux-helper <path> is required with --run on Linux.\n");
-        return kExitUsage;
-    }
     if (selected_entry == nullptr)
     {
-        std::fprintf(stderr, "\nerror: selected executable metadata is unavailable.\n");
+        LogError("selected executable metadata is unavailable");
         return kExitHddError;
     }
 
     std::filesystem::path executable_path;
     if (!root.ResolveFile(selected->executable_relative_path, &executable_path))
     {
-        std::fprintf(stderr, "\nerror: selected executable is no longer available.\n");
+        LogError("selected executable is no longer available");
         return kExitHddError;
     }
 
     re2dj::platform::linux::OriginalRunResult run_result;
-    const bool executed = options.linux_in_process_createfile_call
-                              ? re2dj::platform::linux::RunOriginalInProcessCreateFileCall(
-                                    executable_path, selected_entry->pe_info, &run_result, &error)
-                              : options.linux_in_process_getversion_call
-                              ? re2dj::platform::linux::RunOriginalInProcessGetVersionCall(
-                                    executable_path, selected_entry->pe_info, &run_result, &error)
-                              : options.linux_in_process_first_resolver
-                              ? re2dj::platform::linux::RunOriginalInProcessFirstResolver(
-                                    executable_path, selected_entry->pe_info, &run_result, &error)
-                              : options.linux_in_process_first_import
-                              ? re2dj::platform::linux::RunOriginalInProcessFirstImport(
-                                    executable_path, selected_entry->pe_info, &run_result, &error)
-                              : re2dj::platform::linux::RunOriginalUntilBoundary(
-                                    executable_path, selected_entry->pe_info, options.linux_helper,
-                                    &run_result, &error);
+    const bool executed = RunLinuxOriginal(
+        options, executable_path, selected_entry->pe_info, &run_result, &error);
     if (!executed)
     {
-        std::fprintf(stderr, "\nerror: Linux execution failed: %s\n", error.c_str());
+        LogFatal("EXECUTION_FAILED", "Linux execution failed: %s", error.c_str());
         return kExitNotImplemented;
     }
 
     std::printf("\nload base       : 0x%08x\n", run_result.load_base.value());
     std::printf("entry point     : 0x%08x\n", run_result.entry_point.value());
+    if (IsLinuxContinuationRun(options))
+    {
+        if (run_result.seh_dispatch_count > 0)
+        {
+            std::printf("seh dispatched  : count=%u last_handler=0x%08x resumed_eip=0x%08x\n",
+                        run_result.seh_dispatch_count,
+                        run_result.last_seh_handler.value(),
+                        run_result.last_seh_resumed_eip.value());
+        }
+        PrintApiCalls(run_result);
+    }
     switch (run_result.boundary)
     {
     case re2dj::platform::linux::OriginalRunBoundary::kImportGate:
+    {
         if (run_result.by_ordinal)
         {
             std::printf("first boundary  : import %s!#%u\n",
@@ -1219,21 +1489,32 @@ int main(int argc, char** argv)
         {
             std::printf("arg0 text       : %s\n", run_result.import_first_argument_text.c_str());
         }
-        std::fprintf(stderr,
-                     "execution stopped cleanly at the first unimplemented Win32 import.\n");
+        const std::string export_name = run_result.by_ordinal
+            ? "#" + std::to_string(run_result.ordinal)
+            : run_result.name;
+        LogFatal("HLE_UNIMPLEMENTED",
+                 "execution stopped at import %s!%s",
+                 run_result.module.c_str(),
+                 export_name.c_str());
         return kExitNotImplemented;
+    }
     case re2dj::platform::linux::OriginalRunBoundary::kProcessExit:
+        if (IsLinuxContinuationRun(options))
+        {
+            PrintContinuationBoundary(run_result);
+            return kExitOk;
+        }
         std::printf("first boundary  : process exit (guest status 0x%08x)\n",
                     run_result.status_code);
         return kExitOk;
     case re2dj::platform::linux::OriginalRunBoundary::kFault:
-        std::fprintf(stderr,
-                     "first boundary  : guest fault (host signal/status %u, eip 0x%08x)\n",
-                     run_result.status_code,
-                     run_result.instruction_pointer.value());
+        LogFatal("GUEST_FAULT",
+                 "host signal/status %u, eip 0x%08x",
+                 run_result.status_code,
+                 run_result.instruction_pointer.value());
         return kExitNotImplemented;
     case re2dj::platform::linux::OriginalRunBoundary::kStopped:
-        std::fprintf(stderr, "first boundary  : guest stopped\n");
+        LogFatal("EXECUTION_STOPPED", "guest stopped before a supported terminal boundary");
         return kExitNotImplemented;
     case re2dj::platform::linux::OriginalRunBoundary::kFirstImportCompleted:
         std::printf("first import completion: return 0x%08x, SIGTRAP EIP 0x%08x\n",
@@ -1243,20 +1524,25 @@ int main(int argc, char** argv)
         std::printf("first resolver completion: %s, return 0x%08x, SIGTRAP EIP 0x%08x\n",
                     run_result.import_first_argument_text.c_str(),
                     run_result.import_return_address, run_result.instruction_pointer.value());
+        PrintResolverIdentity(run_result);
         return kExitOk;
     case re2dj::platform::linux::OriginalRunBoundary::kGetVersionCalled:
         std::printf("GetVersion call completion: return 0x%08x, SIGTRAP EIP 0x%08x\n",
                     run_result.import_return_address, run_result.instruction_pointer.value());
+        PrintResolverIdentity(run_result);
+        PrintInstructionTrace(run_result);
         return kExitOk;
     case re2dj::platform::linux::OriginalRunBoundary::kGetVersionCallNotReached:
         std::printf("GetVersion thunk not reached: signal %u, EIP 0x%08x\n",
                     run_result.status_code, run_result.instruction_pointer.value());
         PrintFaultObservation(run_result);
         PrintInstructionTrace(run_result);
+        PrintResolverIdentity(run_result);
         if (run_result.unhandled_dynamic_request_observed)
         {
-            std::printf("unhandled dynamic request: %s\n",
-                        run_result.unhandled_dynamic_request.c_str());
+            LogFatal("HLE_UNIMPLEMENTED",
+                     "dynamic request=%s",
+                     run_result.unhandled_dynamic_request.c_str());
         }
         return kExitOk;
     case re2dj::platform::linux::OriginalRunBoundary::kCreateFileCalled:
@@ -1264,6 +1550,7 @@ int main(int argc, char** argv)
                     run_result.import_return_address,
                     run_result.instruction_pointer.value());
         PrintCreateFileObservation(run_result);
+        PrintResolverIdentity(run_result);
         return kExitOk;
     case re2dj::platform::linux::OriginalRunBoundary::kCreateFileCallNotReached:
         std::printf("CreateFileA thunk not reached: signal %u, EIP 0x%08x\n",
@@ -1271,28 +1558,34 @@ int main(int argc, char** argv)
                     run_result.instruction_pointer.value());
         PrintFaultObservation(run_result);
         return kExitOk;
+    case re2dj::platform::linux::OriginalRunBoundary::kContinuationUnhandledImport:
+    case re2dj::platform::linux::OriginalRunBoundary::kContinuationUnresolvedLookup:
+    case re2dj::platform::linux::OriginalRunBoundary::kContinuationFault:
+    case re2dj::platform::linux::OriginalRunBoundary::kContinuationCallLimit:
+        PrintContinuationBoundary(run_result);
+        return kExitOk;
     }
 #elif defined(_WIN32)
     if (options.fullscreen && !selected->run_defaults.hle_d3d3)
     {
-        std::fprintf(stderr,
-                     "\nerror: --fullscreen is not supported by profile '%s'.\n",
-                     selected->id.c_str());
+        LogFatal("EXECUTION_UNSUPPORTED",
+                 "--fullscreen is not supported by profile '%s'",
+                 selected->id.c_str());
         return kExitNotImplemented;
     }
     if ((options.audio_gain_explicit || options.audio_volume_trace) &&
         !selected->run_defaults.hle_directsound)
     {
-        std::fprintf(stderr,
-                     "\nerror: audio options are not supported by profile '%s'.\n",
-                     selected->id.c_str());
+        LogFatal("EXECUTION_UNSUPPORTED",
+                 "audio options are not supported by profile '%s'",
+                 selected->id.c_str());
         return kExitNotImplemented;
     }
     if (options.demo_volume_explicit && !selected->run_defaults.demo_volume.has_value())
     {
-        std::fprintf(stderr,
-                     "\nerror: --demo-volume is not supported by profile '%s'.\n",
-                     selected->id.c_str());
+        LogFatal("EXECUTION_UNSUPPORTED",
+                 "--demo-volume is not supported by profile '%s'",
+                 selected->id.c_str());
         return kExitNotImplemented;
     }
     re2dj::platform::windows::OriginalProcessOptions run_options;
@@ -1332,13 +1625,13 @@ int main(int argc, char** argv)
         re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (run_result < 0)
     {
-        std::fprintf(stderr, "\nerror: Windows execution failed: %s\n", error.c_str());
+        LogFatal("EXECUTION_FAILED", "Windows execution failed: %s", error.c_str());
         return kExitNotImplemented;
     }
     return run_result;
 #else
-    std::fprintf(stderr,
-                 "\nerror: --run is not connected to an execution backend on this host.\n");
+    LogFatal("EXECUTION_UNSUPPORTED",
+             "--run is not connected to an execution backend on this host");
     return kExitNotImplemented;
 #endif
 }

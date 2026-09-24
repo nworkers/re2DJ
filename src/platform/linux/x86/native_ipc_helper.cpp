@@ -11,13 +11,13 @@
 #include <utility>
 #include <vector>
 
-#include "../native_helper_protocol.h"
-#include "native_import_bridge.h"
-#include "native_import_thunks.h"
+#include "../../native_helper_protocol.h"
+#include "../native_import_bridge.h"
+#include "../native_import_thunks.h"
 #include "native_ipc_helper_main.h"
-#include "native_pe_image.h"
-#include "native_pe_session.h"
-#include "native_process_bootstrap.h"
+#include "../native_pe_image.h"
+#include "../native_pe_session.h"
+#include "../native_process_bootstrap.h"
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/runtime/pe_loader.h"
 

@@ -1,6 +1,7 @@
-#include "native_import_bridge.h"
+#include "../native_import_bridge.h"
+#include "../native_instruction_trace.h"
 
-#include "native_process_bootstrap.h"
+#include "../native_process_bootstrap.h"
 
 #include <cstddef>
 #include <cstring>
@@ -37,6 +38,10 @@ extern "C" __attribute__((noinline, stdcall)) std::uint64_t NativeImportGateBrid
         import_gate_cleanup_bytes = 0;
         re2dj::platform::linux::ResumeNativeInstructionTrace(return_address);
         return 0;
+    }
+    if (result.exit_process)
+    {
+        re2dj::platform::linux::ExitNativeGuestProcess(result.exit_code);
     }
     import_gate_cleanup_bytes = result.stack_bytes_to_pop;
     re2dj::platform::linux::ResumeNativeInstructionTrace(return_address);

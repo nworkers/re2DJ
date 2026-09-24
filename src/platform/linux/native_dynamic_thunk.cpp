@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "native_import_bridge.h"
+#include "native_low_memory.h"
 
 namespace re2dj::platform::linux
 {
@@ -44,17 +45,14 @@ bool CreateNativeDynamicThunk(std::uint32_t gate_address,
         return false;
     }
 
-    void* memory = mmap(nullptr,
-                        kThunkBytes,
-                        PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS,
-                        -1,
-                        0);
-    if (memory == MAP_FAILED)
+    // The guest calls the thunk, so it must be guest-addressable.
+    NativeLowMemory mapping;
+    if (!MapNativeLowMemory(kThunkBytes, PROT_READ | PROT_WRITE, &mapping, error))
     {
-        *error = "cannot allocate native dynamic thunk";
+        *error = "cannot allocate native dynamic thunk: " + *error;
         return false;
     }
+    void* memory = mapping.memory;
 
     const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(memory);
     const std::uintptr_t bridge = NativeImportGateBridgeAddress();

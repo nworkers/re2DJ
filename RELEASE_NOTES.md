@@ -1,5 +1,59 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.52 (2026-09-24)
+
+### 한국어
+
+Linux에서 원본 PE32를 별도 helper 없이 같은 프로세스 안에서 실행합니다. x86·x86-64 두 host 모두 실제 4th CHD의 보호 stub을 Hardlock 오류 대화상자와 `ExitProcess(9)`까지 원본 코드로 진행합니다.
+
+#### 1. 게스트 PE 호환 모듈 (작업 340~344, 348)
+- **module registry와 PE32 facade**: `kernel32`, `user32` 같은 Win32 DLL을 DLL별 export 명세에서 만든 실제 PE32 facade image로 게스트에 보여 줍니다. 정적 IAT와 동적 `GetModuleHandleA`/`GetProcAddress`가 같은 export thunk 주소로 모입니다. 이전의 pseudo handle(`0x7F000001`)은 제거했습니다.
+- **facade export**: `kernel32`의 `GetModuleHandleA`, `GetProcAddress`, `GetVersion`, `CreateFileA`, `ExitProcess`와 `user32`의 `GetActiveWindow`, `MessageBoxA`를 제공합니다.
+- **종료 계약**: HLE 반환 구조 `ImportReturn`에 "게스트로 돌아가지 않고 프로세스가 끝난다"는 `exit_process`/`exit_code`를 추가했습니다. `ExitProcess`가 이를 쓰며, Linux in-process 실행은 이를 정상 종료로 보고합니다.
+
+#### 2. Linux in-process 실행 (작업 345·349~352, 2026-09-22~23)
+- **연속 실행과 게스트 SEH**: facade 위에서 원본을 계속 실행합니다. 첫 미처리 import, 미해석 lookup, fault, 종료에서 멈추고, 그때까지의 API 호출 기록을 출력합니다. 게스트 자신의 `INT3`는 게스트가 등록한 SEH handler로 전달하고, handler가 고친 CONTEXT로 재개합니다.
+- **플랫폼 트리 비트 폭 분리**: `src/platform/linux/`를 두 폭 공용 루트와 `x86/`·`x64/` 구현으로 나눴습니다.
+
+#### 3. Linux x86-64 compatibility-mode 실행 (작업 353~357)
+- **같은 프로세스 실행**: x86-64 host가 CPU compatibility mode(CS `0x23`)로 32비트 게스트 코드를 직접 실행합니다. 게스트 FS(TEB)와 glibc TLS가 충돌하지 않도록, host로 돌아오는 모든 경로에서 host FS base를 복원합니다(`wrfsbase` 또는 `arch_prctl`).
+- **x86과 같은 코드 경로**: PE session, import thunk, runner, facade, kernel32 진단, 게스트 SEH, instruction trace를 두 폭이 공유합니다. 실제 4th CHD의 진단 다섯 개가 x86과 같은 결과를 냅니다.
+- **기본 실행 전환**: Linux의 `re2dj --run`은 이제 두 폭 모두 in-process로 실행합니다. 별도 i386 helper는 `--linux-helper <path>`로 고르는 진단 fallback입니다.
+
+#### 4. 기타
+- **로깅 표준화**: 런타임 로그를 spdlog 기반으로 통일했습니다(작업 345, 2026-09-21).
+- **저장소 정책**: 런타임 산출물 ignore 정책(작업 346)과 플랫폼 비트 폭 디렉터리 규칙(작업 347)을 정했습니다.
+- **수정**: x86 bootstrap이 게스트 FS용 TLS GDT 슬롯을 반환하지 않던 누수를 고쳤습니다. 한 프로세스에서 세 번째 실행부터 실패하던 문제입니다.
+- **알려진 문제**: Windows `re2dj_windows_vfs_runtime_probe`는 이 릴리즈 이전부터 실패합니다(TODO의 기존 항목).
+
+---
+
+### English
+
+Linux now runs the original PE32 in the same process without a separate helper. On both x86 and x86-64 hosts, the real 4th CHD's protection stub runs on original code through to its Hardlock error dialog and `ExitProcess(9)`.
+
+#### 1. Guest PE compatibility modules (tasks 340–344, 348)
+- **Module registry and PE32 facades**: Win32 DLLs such as `kernel32` and `user32` appear to the guest as real PE32 facade images built from per-DLL export declarations. Static IAT slots and dynamic `GetModuleHandleA`/`GetProcAddress` converge on the same export-thunk addresses; the former pseudo handle (`0x7F000001`) is gone.
+- **Facade exports**: `kernel32` provides `GetModuleHandleA`, `GetProcAddress`, `GetVersion`, `CreateFileA`, and `ExitProcess`; `user32` provides `GetActiveWindow` and `MessageBoxA`.
+- **Exit contract**: The HLE return structure `ImportReturn` gains `exit_process`/`exit_code`, meaning the call does not return because the process ends. `ExitProcess` uses it, and Linux in-process runs report it as a normal exit.
+
+#### 2. Linux in-process execution (tasks 345 and 349–352, 2026-09-22–23)
+- **Continuation and guest SEH**: The original keeps running on the facades until the first unhandled import, unresolved lookup, fault, or exit, printing the API call record up to that point. The guest's own `INT3` is delivered to its registered SEH handler and resumed with the CONTEXT the handler edited.
+- **Platform tree split by host width**: `src/platform/linux/` is divided into a root shared by both widths and `x86/`/`x64/` implementations.
+
+#### 3. Linux x86-64 compatibility-mode execution (tasks 353–357)
+- **Same-process execution**: The x86-64 host runs 32-bit guest code directly in CPU compatibility mode (CS `0x23`). To keep the guest FS (TEB) from colliding with glibc TLS, every path back to the host restores the host FS base (`wrfsbase` or `arch_prctl`).
+- **One code path with x86**: Both widths share the PE session, import thunks, runner, facades, kernel32 diagnostic, guest SEH, and instruction trace; all five real-4th-CHD diagnostics match x86.
+- **Default run switched**: Linux `re2dj --run` now runs in-process on both widths; the separate i386 helper is a diagnostic fallback selected with `--linux-helper <path>`.
+
+#### 4. Other
+- **Logging**: Standardized runtime logging on spdlog (task 345, 2026-09-21).
+- **Repository policy**: Defined the runtime-artifact ignore policy (task 346) and the platform bit-width directory rules (task 347).
+- **Fix**: Fixed an x86 bootstrap leak that never returned the guest-FS TLS GDT slot, which made a third run in one process fail.
+- **Known issue**: The Windows `re2dj_windows_vfs_runtime_probe` fails independently of this release (an existing TODO item).
+
+---
+
 ## v0.0.48 (2026-09-18)
 
 ### 한국어

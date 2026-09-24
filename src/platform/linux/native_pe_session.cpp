@@ -95,6 +95,11 @@ bool NativePeSession::RunTlsCallbacks(NativeGuestFault* fault, std::string* erro
             if (error->empty()) *error = "invalid native PE TLS callback";
             return false;
         }
+        if (bootstrap_.GuestProcessExited())
+        {
+            // The callback ended the process; later callbacks never run.
+            return true;
+        }
     }
     *error = "unterminated native PE TLS callback table";
     return false;
@@ -122,5 +127,7 @@ void NativePeSession::Release()
 const NativePeImage& NativePeSession::image() const { return image_; }
 const NativeProcessBootstrap& NativePeSession::bootstrap() const { return bootstrap_; }
 const runtime::ImportGateTable& NativePeSession::gates() const { return gates_; }
+runtime::ImportGateTable* NativePeSession::mutable_gates() { return &gates_; }
+NativeImportThunkRegion* NativePeSession::mutable_import_thunks() { return &thunks_; }
 
 }  // namespace re2dj::platform::linux

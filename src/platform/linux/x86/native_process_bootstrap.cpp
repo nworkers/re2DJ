@@ -1,4 +1,6 @@
-#include "native_process_bootstrap.h"
+#include "../native_process_bootstrap.h"
+#include "../native_guest_seh.h"
+#include "../native_instruction_trace.h"
 
 #include <asm/ldt.h>
 #include <setjmp.h>
@@ -10,6 +12,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 
 namespace re2dj::platform::linux
@@ -17,27 +20,19 @@ namespace re2dj::platform::linux
 namespace
 {
 
+NativeProcessBootstrap::Impl* g_current_bootstrap = nullptr;
+
+bool TryDispatchGuestSeh(NativeTrapRegisters* registers);
+
 constexpr std::uint32_t kGuestStackSize = 1024 * 1024;
 constexpr std::uint32_t kSignalStackSize = 64 * 1024;
 constexpr std::array<int, 5> kGuestSignals = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
-constexpr sig_atomic_t kTrapFlag = 0x100;
-
-struct RawInstructionTraceFrame
-{
-    volatile sig_atomic_t instruction_pointer = 0;
-    volatile sig_atomic_t stack_pointer = 0;
-    volatile sig_atomic_t eax = 0;
-    volatile sig_atomic_t ebx = 0;
-    volatile sig_atomic_t ecx = 0;
-    volatile sig_atomic_t edx = 0;
-    volatile sig_atomic_t esi = 0;
-    volatile sig_atomic_t edi = 0;
-    volatile sig_atomic_t ebp = 0;
-    volatile sig_atomic_t eflags = 0;
-};
 
 sigjmp_buf g_guest_jump;
 volatile sig_atomic_t g_guest_active = 0;
+// Set by ExitNativeGuestProcess just before it jumps back to Execute.
+volatile sig_atomic_t g_exit_requested = 0;
+volatile std::uint32_t g_exit_code = 0;
 volatile sig_atomic_t g_fault_signal = 0;
 volatile sig_atomic_t g_fault_eip = 0;
 volatile sig_atomic_t g_fault_esp = 0;
@@ -52,49 +47,54 @@ volatile sig_atomic_t g_fault_esi = 0;
 volatile sig_atomic_t g_fault_edi = 0;
 volatile sig_atomic_t g_fault_ebp = 0;
 volatile sig_atomic_t g_fault_eflags = 0;
-volatile sig_atomic_t g_trace_armed = 0;
-volatile sig_atomic_t g_trace_started = 0;
-volatile sig_atomic_t g_trace_paused = 0;
-volatile sig_atomic_t g_trace_breakpoint_pending = 0;
-volatile sig_atomic_t g_trace_limit_reached = 0;
-volatile sig_atomic_t g_trace_breakpoint = 0;
-volatile sig_atomic_t g_trace_original_byte = 0;
-volatile sig_atomic_t g_trace_image_base = 0;
-volatile sig_atomic_t g_trace_image_size = 0;
-volatile sig_atomic_t g_trace_frame_count = 0;
-std::array<RawInstructionTraceFrame, kNativeInstructionTraceMaximumFrames> g_trace_frames = {};
 
 void WriteU32(std::uint8_t* bytes, std::size_t offset, std::uint32_t value)
 {
     std::memcpy(bytes + offset, &value, sizeof(value));
 }
 
-void CaptureInstructionTraceFrame(const ucontext_t* context)
+using Win32ExceptionHandlerFunction = std::uint32_t(__attribute__((cdecl)) *)(
+    const Win32ExceptionRecord32* record,
+    const Win32ExceptionRegistrationRecord32* frame,
+    Win32Context32* context,
+    void* dispatcher_context);
+
+NativeTrapRegisters ReadTrapRegisters(const ucontext_t* context)
 {
-    const sig_atomic_t frame_index = g_trace_frame_count;
-    if (frame_index < 0 || static_cast<std::size_t>(frame_index) >= g_trace_frames.size())
-    {
-        return;
-    }
-    RawInstructionTraceFrame& frame = g_trace_frames[static_cast<std::size_t>(frame_index)];
-    frame.instruction_pointer = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EIP]);
-    frame.stack_pointer = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_ESP]);
-    frame.eax = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EAX]);
-    frame.ebx = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EBX]);
-    frame.ecx = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_ECX]);
-    frame.edx = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EDX]);
-    frame.esi = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_ESI]);
-    frame.edi = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EDI]);
-    frame.ebp = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EBP]);
-    frame.eflags = static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EFL]);
-    g_trace_frame_count = frame_index + 1;
+    const greg_t* registers = context->uc_mcontext.gregs;
+    NativeTrapRegisters trap;
+    trap.eip = static_cast<std::uint32_t>(registers[REG_EIP]);
+    trap.esp = static_cast<std::uint32_t>(registers[REG_ESP]);
+    trap.eax = static_cast<std::uint32_t>(registers[REG_EAX]);
+    trap.ebx = static_cast<std::uint32_t>(registers[REG_EBX]);
+    trap.ecx = static_cast<std::uint32_t>(registers[REG_ECX]);
+    trap.edx = static_cast<std::uint32_t>(registers[REG_EDX]);
+    trap.esi = static_cast<std::uint32_t>(registers[REG_ESI]);
+    trap.edi = static_cast<std::uint32_t>(registers[REG_EDI]);
+    trap.ebp = static_cast<std::uint32_t>(registers[REG_EBP]);
+    trap.eflags = static_cast<std::uint32_t>(registers[REG_EFL]);
+    trap.cs = static_cast<std::uint32_t>(registers[REG_CS]);
+    trap.ss = static_cast<std::uint32_t>(registers[REG_SS]);
+    trap.ds = static_cast<std::uint32_t>(registers[REG_DS]);
+    trap.es = static_cast<std::uint32_t>(registers[REG_ES]);
+    trap.fs = static_cast<std::uint32_t>(registers[REG_FS]);
+    trap.gs = static_cast<std::uint32_t>(registers[REG_GS]);
+    return trap;
 }
 
-bool IsTraceGuestInstructionAddress(sig_atomic_t address)
+void WriteTrapRegisters(const NativeTrapRegisters& trap, ucontext_t* context)
 {
-    return address >= g_trace_image_base &&
-           static_cast<std::uint32_t>(address - g_trace_image_base) <
-               static_cast<std::uint32_t>(g_trace_image_size);
+    greg_t* registers = context->uc_mcontext.gregs;
+    registers[REG_EIP] = static_cast<greg_t>(trap.eip);
+    registers[REG_ESP] = static_cast<greg_t>(trap.esp);
+    registers[REG_EAX] = static_cast<greg_t>(trap.eax);
+    registers[REG_EBX] = static_cast<greg_t>(trap.ebx);
+    registers[REG_ECX] = static_cast<greg_t>(trap.ecx);
+    registers[REG_EDX] = static_cast<greg_t>(trap.edx);
+    registers[REG_ESI] = static_cast<greg_t>(trap.esi);
+    registers[REG_EDI] = static_cast<greg_t>(trap.edi);
+    registers[REG_EBP] = static_cast<greg_t>(trap.ebp);
+    registers[REG_EFL] = static_cast<greg_t>(trap.eflags);
 }
 
 void GuestSignalHandler(int signal_number, siginfo_t* signal_info, void* context_pointer)
@@ -104,39 +104,12 @@ void GuestSignalHandler(int signal_number, siginfo_t* signal_info, void* context
         _exit(128 + signal_number);
     }
     auto* context = static_cast<ucontext_t*>(context_pointer);
-    if (signal_number == SIGTRAP && g_trace_armed != 0)
+    if (signal_number == SIGTRAP)
     {
-        const sig_atomic_t instruction_pointer =
-            static_cast<sig_atomic_t>(context->uc_mcontext.gregs[REG_EIP]);
-        if (g_trace_breakpoint_pending != 0 &&
-            instruction_pointer == g_trace_breakpoint + 1)
+        NativeTrapRegisters trap = ReadTrapRegisters(context);
+        if (HandleNativeInstructionTraceTrap(&trap) || TryDispatchGuestSeh(&trap))
         {
-            auto* breakpoint = reinterpret_cast<std::uint8_t*>(
-                static_cast<std::uintptr_t>(g_trace_breakpoint));
-            *breakpoint = static_cast<std::uint8_t>(g_trace_original_byte);
-            g_trace_started = 1;
-            g_trace_paused = 0;
-            g_trace_breakpoint_pending = 0;
-            context->uc_mcontext.gregs[REG_EIP] = g_trace_breakpoint;
-            context->uc_mcontext.gregs[REG_EFL] |= kTrapFlag;
-            CaptureInstructionTraceFrame(context);
-            return;
-        }
-        if (g_trace_started != 0 && g_trace_paused == 0)
-        {
-            CaptureInstructionTraceFrame(context);
-            if (!IsTraceGuestInstructionAddress(instruction_pointer))
-            {
-                g_trace_paused = 1;
-                context->uc_mcontext.gregs[REG_EFL] &= ~kTrapFlag;
-                return;
-            }
-            if (static_cast<std::size_t>(g_trace_frame_count) >= g_trace_frames.size())
-            {
-                g_trace_limit_reached = 1;
-                g_trace_armed = 0;
-                context->uc_mcontext.gregs[REG_EFL] &= ~kTrapFlag;
-            }
+            WriteTrapRegisters(trap, context);
             return;
         }
     }
@@ -209,6 +182,17 @@ struct NativeProcessBootstrap::Impl
     std::uint16_t fs_selector = 0;
     std::uint16_t previous_fs = 0;
     bool initialized = false;
+    std::uint32_t image_base = 0;
+    std::uint32_t seh_dispatch_count = 0;
+    std::uint32_t last_seh_handler = 0;
+    std::uint32_t last_seh_resumed_eip = 0;
+    bool process_exited = false;
+    std::uint32_t exit_code = 0;
+
+    bool IsGuestStackRange(std::uint32_t address, std::uint32_t size) const
+    {
+        return address >= stack_limit && address <= stack_base && size <= stack_base - address;
+    }
 
     ~Impl()
     {
@@ -236,8 +220,13 @@ struct NativeProcessBootstrap::Impl
         }
         if (tls_entry >= 0)
         {
+            // Only the kernel's "empty" pattern (read_exec_only and
+            // seg_not_present set, all else zero) clears the slot for reuse;
+            // any other not-present descriptor keeps one of the three TLS
+            // GDT entries occupied.
             user_desc descriptor = {};
             descriptor.entry_number = tls_entry;
+            descriptor.read_exec_only = 1;
             descriptor.seg_not_present = 1;
             syscall(SYS_set_thread_area, &descriptor);
         }
@@ -245,6 +234,7 @@ struct NativeProcessBootstrap::Impl
 
     bool Initialize(std::uint32_t image_base, std::string* error)
     {
+        this->image_base = image_base;
         const long page_size_value = sysconf(_SC_PAGESIZE);
         if (initialized || page_size_value <= 0)
         {
@@ -343,7 +333,7 @@ struct NativeProcessBootstrap::Impl
     template <typename Function>
     bool Execute(Function function, NativeGuestFault* fault, std::string* error)
     {
-        if (!initialized || fault == nullptr || error == nullptr)
+        if (!initialized || process_exited || fault == nullptr || error == nullptr)
         {
             if (error != nullptr) *error = "invalid guest execution arguments";
             return false;
@@ -363,6 +353,8 @@ struct NativeProcessBootstrap::Impl
         g_fault_edi = 0;
         g_fault_ebp = 0;
         g_fault_eflags = 0;
+        g_exit_requested = 0;
+        g_current_bootstrap = this;
         if (sigsetjmp(g_guest_jump, 1) == 0)
         {
             g_guest_active = 1;
@@ -370,11 +362,23 @@ struct NativeProcessBootstrap::Impl
             function();
             __asm__ volatile("movw %0, %%fs" : : "rm"(previous_fs));
             g_guest_active = 0;
+            g_current_bootstrap = nullptr;
             error->clear();
             return true;
         }
         __asm__ volatile("movw %0, %%fs" : : "rm"(previous_fs));
         g_guest_active = 0;
+        g_current_bootstrap = nullptr;
+        if (g_exit_requested != 0)
+        {
+            // The guest ended its process from an import; that is a normal
+            // completion, not a fault.
+            g_exit_requested = 0;
+            process_exited = true;
+            exit_code = g_exit_code;
+            error->clear();
+            return true;
+        }
         fault->status_code = static_cast<std::uint32_t>(g_fault_signal);
         fault->instruction_pointer = g_fault_eip;
         fault->stack_pointer = g_fault_esp;
@@ -394,111 +398,64 @@ struct NativeProcessBootstrap::Impl
     }
 };
 
+namespace
+{
+
+bool TryDispatchGuestSeh(NativeTrapRegisters* registers)
+{
+    NativeProcessBootstrap::Impl* bootstrap = g_current_bootstrap;
+    if (bootstrap == nullptr)
+    {
+        return false;
+    }
+    NativeGuestSehDispatch dispatch;
+    if (!PrepareNativeGuestBreakpointDispatch(*registers,
+                                              bootstrap->teb,
+                                              bootstrap->image_base,
+                                              bootstrap->stack_limit,
+                                              bootstrap->stack_base,
+                                              &dispatch))
+    {
+        return false;
+    }
+
+    auto handler_fn = reinterpret_cast<Win32ExceptionHandlerFunction>(
+        static_cast<std::uintptr_t>(dispatch.frame.handler));
+
+    std::uint16_t current_fs = 0;
+    __asm__ volatile("movw %%fs, %0" : "=rm"(current_fs));
+    if (current_fs != bootstrap->fs_selector)
+    {
+        __asm__ volatile("movw %0, %%fs" : : "rm"(bootstrap->fs_selector));
+    }
+
+    const std::uint32_t disposition =
+        handler_fn(&dispatch.record,
+                   reinterpret_cast<const Win32ExceptionRegistrationRecord32*>(
+                       static_cast<std::uintptr_t>(dispatch.frame_address)),
+                   &dispatch.context,
+                   nullptr);
+
+    if (current_fs != bootstrap->fs_selector)
+    {
+        __asm__ volatile("movw %0, %%fs" : : "rm"(current_fs));
+    }
+
+    if (disposition != kExceptionContinueExecution)
+    {
+        return false;
+    }
+    ApplyNativeGuestSehContext(dispatch.context, registers);
+    ++bootstrap->seh_dispatch_count;
+    bootstrap->last_seh_handler = dispatch.frame.handler;
+    bootstrap->last_seh_resumed_eip = dispatch.context.eip;
+    return true;
+}
+
+}  // namespace
+
 NativeProcessBootstrap::NativeProcessBootstrap() : impl_(new Impl) {}
 NativeProcessBootstrap::~NativeProcessBootstrap() { delete impl_; }
-
-bool ArmNativeInstructionTrace(NativeInstructionTrace* trace,
-                               std::uint32_t breakpoint,
-                               std::uint32_t image_base,
-                               std::uint32_t image_size,
-                               std::string* error)
-{
-    if (trace == nullptr || error == nullptr || breakpoint == 0 || image_base == 0 ||
-        image_size == 0 || breakpoint < image_base || breakpoint - image_base >= image_size ||
-        g_trace_armed != 0)
-    {
-        if (error != nullptr)
-        {
-            *error = "invalid native instruction trace arguments";
-        }
-        return false;
-    }
-    *trace = {};
-    auto* byte = reinterpret_cast<std::uint8_t*>(static_cast<std::uintptr_t>(breakpoint));
-    const std::uint8_t original_byte = *byte;
-    *byte = 0xCC;
-    g_trace_breakpoint = static_cast<sig_atomic_t>(breakpoint);
-    g_trace_original_byte = static_cast<sig_atomic_t>(original_byte);
-    g_trace_started = 0;
-    g_trace_paused = 0;
-    g_trace_breakpoint_pending = 1;
-    g_trace_limit_reached = 0;
-    g_trace_image_base = static_cast<sig_atomic_t>(image_base);
-    g_trace_image_size = static_cast<sig_atomic_t>(image_size);
-    g_trace_frame_count = 0;
-    g_trace_armed = 1;
-    trace->armed = true;
-    trace->breakpoint = breakpoint;
-    error->clear();
-    return true;
-}
-
-bool ResumeNativeInstructionTrace(std::uint32_t return_address)
-{
-    if (g_trace_armed == 0 || g_trace_started == 0 || g_trace_paused == 0 ||
-        g_trace_breakpoint_pending != 0 ||
-        !IsTraceGuestInstructionAddress(static_cast<sig_atomic_t>(return_address)))
-    {
-        return false;
-    }
-    auto* byte = reinterpret_cast<std::uint8_t*>(static_cast<std::uintptr_t>(return_address));
-    g_trace_breakpoint = static_cast<sig_atomic_t>(return_address);
-    g_trace_original_byte = static_cast<sig_atomic_t>(*byte);
-    *byte = 0xCC;
-    g_trace_breakpoint_pending = 1;
-    return true;
-}
-
-void FinalizeNativeInstructionTrace(NativeInstructionTrace* trace)
-{
-    if (trace == nullptr)
-    {
-        return;
-    }
-    if (g_trace_armed != 0 && g_trace_breakpoint_pending != 0 && g_trace_breakpoint != 0)
-    {
-        auto* breakpoint = reinterpret_cast<std::uint8_t*>(
-            static_cast<std::uintptr_t>(g_trace_breakpoint));
-        *breakpoint = static_cast<std::uint8_t>(g_trace_original_byte);
-    }
-    trace->armed = trace->armed || g_trace_breakpoint != 0;
-    trace->started = g_trace_started != 0;
-    trace->limit_reached = g_trace_limit_reached != 0;
-    if (trace->breakpoint == 0)
-    {
-        trace->breakpoint = static_cast<std::uint32_t>(g_trace_breakpoint);
-    }
-    trace->frame_count = static_cast<std::uint32_t>(g_trace_frame_count);
-    if (trace->frame_count > trace->frames.size())
-    {
-        trace->frame_count = static_cast<std::uint32_t>(trace->frames.size());
-    }
-    for (std::uint32_t index = 0; index < trace->frame_count; ++index)
-    {
-        const RawInstructionTraceFrame& source = g_trace_frames[index];
-        NativeInstructionTraceFrame& destination = trace->frames[index];
-        destination.instruction_pointer = static_cast<std::uint32_t>(source.instruction_pointer);
-        destination.stack_pointer = static_cast<std::uint32_t>(source.stack_pointer);
-        destination.eax = static_cast<std::uint32_t>(source.eax);
-        destination.ebx = static_cast<std::uint32_t>(source.ebx);
-        destination.ecx = static_cast<std::uint32_t>(source.ecx);
-        destination.edx = static_cast<std::uint32_t>(source.edx);
-        destination.esi = static_cast<std::uint32_t>(source.esi);
-        destination.edi = static_cast<std::uint32_t>(source.edi);
-        destination.ebp = static_cast<std::uint32_t>(source.ebp);
-        destination.eflags = static_cast<std::uint32_t>(source.eflags);
-    }
-    g_trace_armed = 0;
-    g_trace_started = 0;
-    g_trace_paused = 0;
-    g_trace_breakpoint_pending = 0;
-    g_trace_limit_reached = 0;
-    g_trace_breakpoint = 0;
-    g_trace_original_byte = 0;
-    g_trace_image_base = 0;
-    g_trace_image_size = 0;
-    g_trace_frame_count = 0;
-}
 
 bool NativeProcessBootstrap::Initialize(std::uint32_t image_base, std::string* error)
 {
@@ -524,8 +481,16 @@ bool NativeProcessBootstrap::RunEntry(std::uint32_t entry,
         if (error != nullptr) *error = "guest entry result is required";
         return false;
     }
-    return impl_->Execute(
-        [&]() { *result = CallGuestEntry(entry, impl_->stack_base); }, fault, error);
+    if (!impl_->Execute(
+            [&]() { *result = CallGuestEntry(entry, impl_->stack_base); }, fault, error))
+    {
+        return false;
+    }
+    if (impl_->process_exited)
+    {
+        *result = impl_->exit_code;
+    }
+    return true;
 }
 
 std::uint32_t NativeProcessBootstrap::GuestStackBase() const
@@ -542,6 +507,50 @@ bool NativeProcessBootstrap::IsGuestStackRange(std::uint32_t address, std::uint3
 {
     return impl_ != nullptr && address >= impl_->stack_limit && address <= impl_->stack_base &&
            size <= impl_->stack_base - address;
+}
+
+std::uint32_t NativeProcessBootstrap::Teb() const
+{
+    return impl_ == nullptr ? 0 : impl_->teb;
+}
+
+std::uint32_t NativeProcessBootstrap::SehDispatchCount() const
+{
+    return impl_ == nullptr ? 0 : impl_->seh_dispatch_count;
+}
+
+std::uint32_t NativeProcessBootstrap::LastSehHandler() const
+{
+    return impl_ == nullptr ? 0 : impl_->last_seh_handler;
+}
+
+std::uint32_t NativeProcessBootstrap::LastSehResumedEip() const
+{
+    return impl_ == nullptr ? 0 : impl_->last_seh_resumed_eip;
+}
+
+bool NativeProcessBootstrap::GuestProcessExited() const
+{
+    return impl_ != nullptr && impl_->process_exited;
+}
+
+std::uint32_t NativeProcessBootstrap::GuestExitCode() const
+{
+    return impl_ == nullptr ? 0 : impl_->exit_code;
+}
+
+void ExitNativeGuestProcess(std::uint32_t exit_code)
+{
+    // Called from the import bridge, which runs host code on the guest stack
+    // with the guest FS; glibc i386 keeps TLS in GS, and Execute restores FS
+    // once the jump lands.
+    if (g_current_bootstrap == nullptr || g_guest_active == 0)
+    {
+        std::abort();
+    }
+    g_exit_code = exit_code;
+    g_exit_requested = 1;
+    siglongjmp(g_guest_jump, 1);
 }
 
 }  // namespace re2dj::platform::linux

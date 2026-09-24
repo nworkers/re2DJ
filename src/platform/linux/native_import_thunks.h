@@ -3,17 +3,32 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "re2dj/exe/pe_image.h"
+#include "re2dj/hle/modules/guest_module_registry.h"
 #include "re2dj/runtime/pe_loader.h"
 
 namespace re2dj::platform::linux
 {
 
+struct NativeImportSlotBinding
+{
+    std::uint8_t* slot = nullptr;
+    runtime::ImportGate gate;
+};
+
 struct NativeImportThunkRegion
 {
     void* memory = nullptr;
     std::uint32_t size = 0;
+    std::vector<NativeImportSlotBinding> slots;
+};
+
+struct NativeGuestImportRebinding
+{
+    runtime::ImportGate gate;
+    runtime::GuestAddress thunk_address;
 };
 
 bool BindNativeImportThunks(const exe::PeImageInfo& info,
@@ -24,6 +39,12 @@ bool BindNativeImportThunks(const exe::PeImageInfo& info,
                             runtime::ImportGateTable* gates,
                             NativeImportThunkRegion* region,
                             std::string* error);
+
+bool RebindNativeGuestModuleImports(
+    NativeImportThunkRegion* region,
+    const hle::modules::GuestModuleRegistry& registry,
+    std::vector<NativeGuestImportRebinding>* rebindings,
+    std::string* error);
 
 void ReleaseNativeImportThunks(NativeImportThunkRegion* region);
 

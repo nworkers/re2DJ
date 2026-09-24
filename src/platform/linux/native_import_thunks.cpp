@@ -7,9 +7,11 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../native_helper_protocol.h"
+#include "native_low_memory.h"
 
 namespace re2dj::platform::linux
 {
@@ -22,12 +24,6 @@ struct ImageView
 {
     void* memory = nullptr;
     std::uint32_t size = 0;
-};
-
-struct IatBinding
-{
-    std::uint8_t* slot = nullptr;
-    runtime::GuestAddress gate_address;
 };
 
 std::uint8_t* ImagePointer(const ImageView& image, std::uint32_t rva, std::uint32_t size)
@@ -93,7 +89,7 @@ bool IsZeroDescriptor(const std::uint8_t* descriptor)
 bool ParseImports(const exe::PeImageInfo& info,
                   const ImageView& image,
                   runtime::ImportGateTable* gates,
-                  std::vector<IatBinding>* bindings,
+                  std::vector<NativeImportSlotBinding>* bindings,
                   std::string* error)
 {
     const exe::PeDataDirectory* directory = info.Directory(exe::PeDirectoryIndex::kImport);
@@ -168,7 +164,21 @@ bool ParseImports(const exe::PeImageInfo& info,
                     return false;
                 }
             }
-            bindings->push_back({iat, gate});
+            const runtime::ImportGate* bound_gate = nullptr;
+            for (const runtime::ImportGate& candidate : gates->gates())
+            {
+                if (candidate.address == gate)
+                {
+                    bound_gate = &candidate;
+                    break;
+                }
+            }
+            if (bound_gate == nullptr)
+            {
+                *error = "bound import gate is missing";
+                return false;
+            }
+            bindings->push_back({iat, *bound_gate});
         }
     }
     *error = "import descriptor table is not terminated";
@@ -176,7 +186,7 @@ bool ParseImports(const exe::PeImageInfo& info,
 }
 
 bool EmitThunks(const runtime::ImportGateTable& gates,
-                const std::vector<IatBinding>& bindings,
+                const std::vector<NativeImportSlotBinding>& bindings,
                 std::uintptr_t bridge_address,
                 std::uintptr_t cleanup_address,
                 NativeImportThunkRegion* region,
@@ -193,15 +203,17 @@ bool EmitThunks(const runtime::ImportGateTable& gates,
         *error = "native thunk count exceeds the limit";
         return false;
     }
-    region->size = static_cast<std::uint32_t>(gates.gates().size()) * kThunkBytes;
-    region->memory = mmap(nullptr, region->size, PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (region->memory == MAP_FAILED)
+    // Guest code calls the thunks and the IAT stores their addresses, so they
+    // must be guest-addressable.
+    NativeLowMemory mapping;
+    if (!MapNativeLowMemory(static_cast<std::uint32_t>(gates.gates().size()) * kThunkBytes,
+                            PROT_READ | PROT_WRITE, &mapping, error))
     {
-        region->memory = nullptr;
-        *error = "cannot allocate native import thunks";
+        *error = "cannot allocate native import thunks: " + *error;
         return false;
     }
+    region->memory = mapping.memory;
+    region->size = mapping.size;
     auto* bytes = static_cast<std::uint8_t*>(region->memory);
     const std::uint32_t bridge = static_cast<std::uint32_t>(bridge_address);
     const std::uint32_t cleanup = static_cast<std::uint32_t>(cleanup_address);
@@ -221,10 +233,11 @@ bool EmitThunks(const runtime::ImportGateTable& gates,
         thunk[17] = 0xFF;
         thunk[18] = 0xE1;
     }
-    for (const IatBinding& binding : bindings)
+    for (const NativeImportSlotBinding& binding : bindings)
     {
         std::size_t index = 0;
-        while (index < gates.gates().size() && gates.gates()[index].address != binding.gate_address)
+        while (index < gates.gates().size() &&
+               gates.gates()[index].address != binding.gate.address)
         {
             ++index;
         }
@@ -257,19 +270,55 @@ bool BindNativeImportThunks(const exe::PeImageInfo& info,
                             NativeImportThunkRegion* region,
                             std::string* error)
 {
+    constexpr std::uintptr_t kGuestAddressLimit = (std::numeric_limits<std::uint32_t>::max)();
     if (image_memory == nullptr || bridge_address == 0 || cleanup_address == 0 ||
+        bridge_address > kGuestAddressLimit || cleanup_address > kGuestAddressLimit ||
         gates == nullptr || region == nullptr || region->memory != nullptr || error == nullptr)
     {
         if (error != nullptr) *error = "invalid native import thunk arguments";
         return false;
     }
-    std::vector<IatBinding> bindings;
+    std::vector<NativeImportSlotBinding> bindings;
     if (!ParseImports(info, {image_memory, image_size}, gates, &bindings, error) ||
         !EmitThunks(*gates, bindings, bridge_address, cleanup_address, region, error))
     {
         ReleaseNativeImportThunks(region);
         return false;
     }
+    region->slots = std::move(bindings);
+    return true;
+}
+
+bool RebindNativeGuestModuleImports(
+    NativeImportThunkRegion* region,
+    const hle::modules::GuestModuleRegistry& registry,
+    std::vector<NativeGuestImportRebinding>* rebindings,
+    std::string* error)
+{
+    if (region == nullptr || region->memory == nullptr || rebindings == nullptr ||
+        error == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "invalid native guest import rebinding arguments";
+        }
+        return false;
+    }
+
+    std::vector<NativeGuestImportRebinding> staged;
+    for (const NativeImportSlotBinding& binding : region->slots)
+    {
+        const hle::modules::RegisteredGuestExport* export_entry =
+            registry.FindExport(binding.gate);
+        if (export_entry == nullptr)
+        {
+            continue;
+        }
+        WriteU32(binding.slot, export_entry->thunk_address.value());
+        staged.push_back({binding.gate, export_entry->thunk_address});
+    }
+    *rebindings = std::move(staged);
+    error->clear();
     return true;
 }
 

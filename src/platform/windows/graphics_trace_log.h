@@ -33,7 +33,7 @@ struct GraphicsCallLedger
     long remaining = 0;
 };
 
-// Records "<interface>::<method>:not-implemented" while the ledger has budget.
+// Records a FATAL HLE_UNIMPLEMENTED diagnostic while the ledger has budget.
 void ReportUnimplementedGraphicsCall(const char* interface_name,
                                      GraphicsCallLedger* ledger);
 

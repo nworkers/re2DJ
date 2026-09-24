@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/runtime/address_space.h"
@@ -15,6 +16,9 @@ namespace re2dj::platform::linux
 
 constexpr std::size_t kOriginalFaultInstructionWindowBytes = 80;
 constexpr std::size_t kOriginalInstructionTraceMaximumFrames = 128;
+constexpr std::size_t kOriginalApiCallLogMaximum = 256;
+constexpr std::size_t kOriginalApiCallMaximumArguments = 7;
+constexpr std::uint32_t kOriginalContinuationCallLimit = 4096;
 
 enum class OriginalRunBoundary
 {
@@ -28,6 +32,28 @@ enum class OriginalRunBoundary
     kGetVersionCallNotReached,
     kCreateFileCalled,
     kCreateFileCallNotReached,
+    kContinuationUnhandledImport,
+    kContinuationUnresolvedLookup,
+    kContinuationFault,
+    kContinuationCallLimit,
+};
+
+struct OriginalApiCall
+{
+    std::uint32_t sequence = 0;
+    std::string name;
+    std::uint32_t return_address = 0;
+    // Arguments are known only for facade exports, whose descriptors declare them.
+    std::uint32_t argument_count = 0;
+    std::array<std::uint32_t, kOriginalApiCallMaximumArguments> arguments = {};
+    // Raw ANSI bytes of the export's string arguments, which may be CP949.
+    bool text_observed = false;
+    std::string text;
+    // A second string argument, such as a MessageBoxA caption.
+    bool second_text_observed = false;
+    std::string second_text;
+    bool handled = false;
+    std::uint32_t eax = 0;
 };
 
 struct OriginalFaultObservation
@@ -50,6 +76,13 @@ struct OriginalFaultObservation
     bool stack_words_observed = false;
     std::array<std::uint32_t, 4> stack_words = {};
     std::uint32_t stack_word_count = 0;
+    bool seh_frame_observed = false;
+    runtime::GuestAddress fs_base;
+    runtime::GuestAddress seh_frame_address;
+    std::uint32_t seh_next = 0;
+    runtime::GuestAddress seh_handler;
+    bool seh_handler_window_observed = false;
+    std::array<std::uint8_t, 64> seh_handler_window = {};
 };
 
 struct OriginalInstructionTraceFrame
@@ -90,6 +123,23 @@ struct OriginalCreateFileObservation
     runtime::GuestAddress template_file;
 };
 
+struct OriginalResolverIdentity
+{
+    bool prepared = false;
+    // Addresses the registry holds after the facade is prepared.
+    runtime::GuestAddress registry_kernel32_base;
+    runtime::GuestAddress registry_get_version;
+    runtime::GuestAddress registry_create_file;
+    // Addresses the guest actually received from the run-time resolver. Zero
+    // means the guest never asked, which is distinct from a mismatch.
+    runtime::GuestAddress kernel32_base;
+    runtime::GuestAddress get_version_address;
+    runtime::GuestAddress create_file_address;
+    // Value read back from the rebound static IAT slot for CreateFileA.
+    runtime::GuestAddress static_create_file_slot;
+    bool static_imports_rebound = false;
+};
+
 struct OriginalRunResult
 {
     OriginalRunBoundary boundary = OriginalRunBoundary::kStopped;
@@ -104,8 +154,12 @@ struct OriginalRunResult
     std::uint32_t import_first_argument = 0;
     bool import_first_argument_text_observed = false;
     std::string import_first_argument_text;
+    // First GetProcAddress request the facade registry could not resolve.
     bool unhandled_dynamic_request_observed = false;
     std::string unhandled_dynamic_request;
+    // First static import gate outside the facade that the guest called.
+    bool unhandled_import_observed = false;
+    std::string unhandled_import;
     std::string module;
     std::string name;
     bool by_ordinal = false;
@@ -113,6 +167,16 @@ struct OriginalRunResult
     OriginalFaultObservation fault_observation;
     OriginalInstructionTrace instruction_trace;
     OriginalCreateFileObservation create_file_observation;
+    OriginalResolverIdentity resolver_identity;
+    // SEH dispatch diagnostic: number of guest exceptions dispatched to guest SEH.
+    std::uint32_t seh_dispatch_count = 0;
+    runtime::GuestAddress last_seh_handler;
+    runtime::GuestAddress last_seh_resumed_eip;
+    // Continuation diagnostic: calls in order, capped at kOriginalApiCallLogMaximum.
+    std::vector<OriginalApiCall> api_calls;
+    std::uint32_t api_call_count = 0;
+    // What the continuation stopped on: the import, the lookup, or the last call.
+    std::string continuation_stop_detail;
 };
 
 bool RunOriginalUntilBoundary(const std::filesystem::path& executable_path,
@@ -140,6 +204,11 @@ bool RunOriginalInProcessCreateFileCall(const std::filesystem::path& executable_
                                         const exe::PeImageInfo& image_info,
                                         OriginalRunResult* result,
                                         std::string* error);
+
+bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_path,
+                                      const exe::PeImageInfo& image_info,
+                                      OriginalRunResult* result,
+                                      std::string* error);
 
 }  // namespace re2dj::platform::linux
 

@@ -7,8 +7,9 @@
 
 #include <signal.h>
 
-#include "native_dynamic_thunk.h"
-#include "native_in_process_runner.h"
+#include "../native_dynamic_thunk.h"
+#include "../native_in_process_runner.h"
+#include "../native_instruction_trace.h"
 #include "re2dj/platform/linux/native_helper_backend.h"
 
 namespace re2dj::platform::windows
@@ -20,7 +21,7 @@ using NativeHelperBackend = re2dj::platform::linux::NativeHelperBackend;
 
 #define RE2DJ_PLATFORM_WINDOWS_NATIVE_HELPER_BACKEND_H_
 #define wmain LinuxFixtureMain
-#include "../windows/native_ipc_host_probe.cpp"
+#include "../../windows/native_ipc_host_probe.cpp"
 #undef wmain
 
 namespace
@@ -174,6 +175,17 @@ bool CompleteFirstKernel32Import(const re2dj::platform::linux::NativeImportGateE
     first->matched = true;
     result->eax = 1;
     result->stack_bytes_to_pop = sizeof(std::uint32_t);
+    return true;
+}
+
+// Ends the guest process from its first import, as ExitProcess(7) would.
+bool ExitFromFirstImport(const re2dj::platform::linux::NativeImportGateEvent&,
+                         re2dj::platform::linux::NativeImportGateResult* result,
+                         void* context)
+{
+    ++static_cast<HandlerContext*>(context)->calls;
+    result->exit_process = true;
+    result->exit_code = 7;
     return true;
 }
 
@@ -367,7 +379,10 @@ int main(int argc, char** argv)
                                     kRequestedBase + kEntryRva + 8 &&
                                 result.fault.status_code == SIGILL &&
                                 result.fault.instruction_pointer ==
-                                    kRequestedBase + kEntryRva + 8;
+                                    kRequestedBase + kEntryRva + 8 &&
+                                result.fault_observation.fs_base != 0 &&
+                                result.fault_observation.seh_frame_address == 0xFFFFFFFFU &&
+                                !result.fault_observation.seh_frame_observed;
     if (!trace_complete)
     {
         std::fprintf(stderr,
@@ -396,7 +411,37 @@ int main(int argc, char** argv)
         return 6;
     }
 
-    std::printf("linux-native-in-process-probe: imports=2 dynamic=2 exit=51 signal=%u\n",
-                result.fault.status_code);
+    // The guest never returns from an import that ends the process: the run
+    // completes without a fault, reporting exit code 7 after one import.
+    std::vector<std::uint8_t> exit_image = MakeSyntheticPe32();
+    re2dj::platform::linux::NativeInProcessRunResult exit_result;
+    HandlerContext exit_handler;
+    error.clear();
+    const bool exited = ReadInfo(exit_image, &info, &error) &&
+                        re2dj::platform::linux::RunNativePeInProcess(exit_image,
+                                                                     info,
+                                                                     kRequestedBase,
+                                                                     &ExitFromFirstImport,
+                                                                     &exit_handler,
+                                                                     &exit_result,
+                                                                     &error) &&
+                        exit_result.process_exited && exit_result.exit_code == 7 &&
+                        exit_handler.calls == 1 && exit_result.fault.status_code == 0;
+    if (!exited)
+    {
+        std::fprintf(stderr,
+                     "linux-native-exit-probe: %s exited=%u exit=%u calls=%u signal=%u\n",
+                     error.c_str(),
+                     exit_result.process_exited ? 1U : 0U,
+                     exit_result.exit_code,
+                     exit_handler.calls,
+                     exit_result.fault.status_code);
+        return 8;
+    }
+
+    std::printf("linux-native-in-process-probe: imports=2 dynamic=2 exit=51 signal=%u "
+                "process-exit=%u\n",
+                result.fault.status_code,
+                exit_result.exit_code);
     return 0;
 }

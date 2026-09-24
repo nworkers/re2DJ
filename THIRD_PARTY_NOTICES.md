@@ -8,6 +8,7 @@
 
 | 이름 / Name | 버전 / Version | 라이선스 / License | 경로 / Path |
 | --- | --- | --- | --- |
+| spdlog | 1.14.1 | MIT | [upstream license](https://github.com/gabime/spdlog/blob/v1.14.1/LICENSE) |
 | SDL | 3.4.14 (`147a8ee3`) | zlib | [upstream license](https://github.com/libsdl-org/SDL/blob/release-3.4.14/LICENSE.txt) |
 | SDL_mixer | 3.2.4 (`72a81869`) | zlib | [upstream license](https://github.com/libsdl-org/SDL_mixer/blob/release-3.2.4/LICENSE.txt) |
 | Dear ImGui | 1.92.9 (`01380c57`) | MIT | [upstream license](https://github.com/ocornut/imgui/blob/v1.92.9/LICENSE.txt) |

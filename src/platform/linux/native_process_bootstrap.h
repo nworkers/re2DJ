@@ -1,66 +1,17 @@
 #ifndef RE2DJ_PLATFORM_LINUX_NATIVE_PROCESS_BOOTSTRAP_H_
 #define RE2DJ_PLATFORM_LINUX_NATIVE_PROCESS_BOOTSTRAP_H_
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 #include <string>
+
+#include "native_guest_fault.h"
 
 namespace re2dj::platform::linux
 {
 
-constexpr std::size_t kNativeInstructionTraceMaximumFrames = 128;
-
-struct NativeInstructionTraceFrame
-{
-    std::uint32_t instruction_pointer = 0;
-    std::uint32_t stack_pointer = 0;
-    std::uint32_t eax = 0;
-    std::uint32_t ebx = 0;
-    std::uint32_t ecx = 0;
-    std::uint32_t edx = 0;
-    std::uint32_t esi = 0;
-    std::uint32_t edi = 0;
-    std::uint32_t ebp = 0;
-    std::uint32_t eflags = 0;
-};
-
-struct NativeInstructionTrace
-{
-    bool armed = false;
-    bool started = false;
-    bool limit_reached = false;
-    std::uint32_t breakpoint = 0;
-    std::uint32_t frame_count = 0;
-    std::array<NativeInstructionTraceFrame, kNativeInstructionTraceMaximumFrames> frames = {};
-};
-
-struct NativeGuestFault
-{
-    std::uint32_t status_code = 0;
-    std::uint32_t instruction_pointer = 0;
-    std::uint32_t stack_pointer = 0;
-    std::uint32_t fault_address = 0;
-    std::uint32_t signal_code = 0;
-    std::uint32_t cpu_error_code = 0;
-    std::uint32_t eax = 0;
-    std::uint32_t ebx = 0;
-    std::uint32_t ecx = 0;
-    std::uint32_t edx = 0;
-    std::uint32_t esi = 0;
-    std::uint32_t edi = 0;
-    std::uint32_t ebp = 0;
-    std::uint32_t eflags = 0;
-};
-
-bool ArmNativeInstructionTrace(NativeInstructionTrace* trace,
-                               std::uint32_t breakpoint,
-                               std::uint32_t image_base,
-                               std::uint32_t image_size,
-                               std::string* error);
-bool ResumeNativeInstructionTrace(std::uint32_t return_address);
-void FinalizeNativeInstructionTrace(NativeInstructionTrace* trace);
-
+// The guest stack, TEB/PEB, FS selector, and fault handling around guest
+// execution. x86/native_process_bootstrap.cpp runs the guest directly on an
+// i386 host; x64/native_process_bootstrap.cpp runs it in compatibility mode.
 class NativeProcessBootstrap
 {
 public:
@@ -82,11 +33,26 @@ public:
     std::uint32_t GuestStackBase() const;
     std::uint32_t GuestStackLimit() const;
     bool IsGuestStackRange(std::uint32_t address, std::uint32_t size) const;
+    std::uint32_t Teb() const;
+    std::uint32_t SehDispatchCount() const;
+    std::uint32_t LastSehHandler() const;
+    std::uint32_t LastSehResumedEip() const;
+    // Whether an import such as ExitProcess ended the guest process. The run
+    // that ended it returned as a normal completion.
+    bool GuestProcessExited() const;
+    std::uint32_t GuestExitCode() const;
+
+    struct Impl;
 
 private:
-    struct Impl;
     Impl* impl_ = nullptr;
 };
+
+// Ends the guest process from inside an import handler without returning to
+// the guest: the current RunTlsCallback or RunEntry returns true, and
+// GuestProcessExited() reports exit_code. Only valid while this thread is
+// running guest code through a NativeProcessBootstrap.
+[[noreturn]] void ExitNativeGuestProcess(std::uint32_t exit_code);
 
 }  // namespace re2dj::platform::linux
 

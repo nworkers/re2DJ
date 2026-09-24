@@ -3,34 +3,22 @@
 
 #include <cstdint>
 
+#include "native_import_gate.h"
+
 namespace re2dj::platform::linux
 {
 
-struct NativeImportGateEvent
-{
-    std::uint32_t gate_address = 0;
-    std::uint32_t instruction_pointer = 0;
-    std::uint32_t stack_pointer = 0;
-    std::uint32_t guest_stack_base = 0;
-    std::uint32_t guest_stack_limit = 0;
-};
-
-struct NativeImportGateResult
-{
-    std::uint32_t eax = 0;
-    std::uint32_t edx = 0;
-    std::uint32_t stack_bytes_to_pop = 0;
-};
-
-using NativeImportGateHandler = bool (*)(const NativeImportGateEvent& event,
-                                         NativeImportGateResult* result,
-                                         void* context);
-
+// The host side of guest import thunks. x86/native_import_bridge.cpp calls
+// the handler directly from i386 code; x64/native_import_bridge.cpp reaches
+// it through the compatibility-mode transition page.
 bool ConfigureNativeImportGateHandler(NativeImportGateHandler handler, void* context);
 void ConfigureNativeImportGateStackRange(std::uint32_t stack_limit,
                                          std::uint32_t stack_base);
 void ClearNativeImportGateHandler();
 
+// Guest-addressable (below 4 GiB) addresses baked into import thunks: the
+// one-argument stdcall bridge and the cleanup byte count it leaves behind.
+// Zero means the bridge is unavailable.
 std::uintptr_t NativeImportGateBridgeAddress();
 std::uintptr_t NativeImportGateCleanupAddress();
 

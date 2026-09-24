@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include "re2dj/logging/logging.h"
+
 namespace re2dj::hle
 {
 namespace
@@ -110,6 +112,11 @@ bool ImportDispatcher::Dispatch(const runtime::ImportGate& gate,
     const ImportBinding* binding = Find(gate);
     if (binding == nullptr)
     {
+        const std::string export_name = gate.by_ordinal
+                                            ? "#" + std::to_string(gate.ordinal)
+                                            : gate.name;
+        logging::Fatal("HLE_UNIMPLEMENTED",
+                       "module=" + gate.module + " export=" + export_name);
         SetError(error, "unimplemented import");
         return false;
     }
@@ -157,6 +164,11 @@ bool ImportDispatcher::Dispatch(const runtime::ImportGate& gate,
         binding->calling_convention == CallingConvention::kStdcall
             ? static_cast<std::uint32_t>(byte_count)
             : 0;
+    if (result.exit_process)
+    {
+        // The guest must not continue past a call that ends the process.
+        completion.action = runtime::ImportCompletionAction::kStop;
+    }
     return backend->CompleteImport(completion, error);
 }
 

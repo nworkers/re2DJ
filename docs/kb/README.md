@@ -16,6 +16,7 @@
 | [mame-chd-hunk-decompression.md](mame-chd-hunk-decompression.md) | MAME CHD의 hunk/unit 판독 단위, libchdr에 hunk 캐시가 없다는 점과 그로 인한 판독 비용 |
 | [win32-hle-boundary.md](win32-hle-boundary.md) | Win32 API를 HLE 경계로 삼는 방식과 호출 규약 |
 | [x86-32-guest-on-64-bit-host.md](x86-32-guest-on-64-bit-host.md) | 32비트 게스트를 64비트·WebAssembly 호스트에서 실행하는 선택지 |
+| [linux-x86-64-compatibility-mode.md](linux-x86-64-compatibility-mode.md) | Linux x86-64 프로세스 안의 `0x23`/`0x33` far transition, LDT FS와 host FS base 복원, signal 경로 |
 | [web-x86-execution-engines.md](web-x86-execution-engines.md) | Web용 x86 실행 엔진 후보, 라이선스와 제한된 검증 결정 |
 | [windows-wow64-process-introspection.md](windows-wow64-process-introspection.md) | suspended WOW64 process의 주 이미지 주소를 검증하는 제한된 방법 |
 | [hasp4-parallel-dongle.md](hasp4-parallel-dongle.md) | HASP4 병렬포트 API 형태, Hardlock 구분, Win32 IOCTL 반환 계약 |
@@ -29,6 +30,7 @@
 | [win32-dpi-window-frame.md](win32-dpi-window-frame.md) | DPI-aware Win32 client/outer frame 계산과 초기화 순서 |
 | [win32-cursor-and-child-window-input.md](win32-cursor-and-child-window-input.md) | 자식 창과 키보드 포커스, `GetAsyncKeyState`, `WM_SETCURSOR`와 커서 표시 카운트, 플랫폼 backend 없는 Dear ImGui |
 | [windows-timer-resolution.md](windows-timer-resolution.md) | `Sleep`·`timeGetTime` 해상도, Win9x와 NT 계열 기본값 차이, Windows 10 2004의 프로세스 단위 규칙, `timeGetTime`과 `Sleep`의 분리, SDL3의 기본 요청 |
+| [spdlog-runtime-logging.md](spdlog-runtime-logging.md) | spdlog multi-sink, immediate flush, `critical`과 프로젝트 `FATAL` 의미의 분리 |
 
 새 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 

@@ -61,6 +61,40 @@ void CaptureNativeFaultObservation(const NativePeImage& image,
         ++observation->stack_word_count;
     }
     observation->stack_words_observed = observation->stack_word_count != 0;
+
+    observation->fs_base = bootstrap.Teb();
+    if (observation->fs_base != 0)
+    {
+        std::uint32_t exception_list = 0;
+        std::memcpy(&exception_list,
+                    reinterpret_cast<const void*>(
+                        static_cast<std::uintptr_t>(observation->fs_base)),
+                    sizeof(exception_list));
+        observation->seh_frame_address = exception_list;
+        if (exception_list != 0 && exception_list != 0xFFFFFFFFU &&
+            bootstrap.IsGuestStackRange(exception_list, sizeof(std::uint32_t) * 2))
+        {
+            std::memcpy(&observation->seh_next,
+                        reinterpret_cast<const void*>(
+                            static_cast<std::uintptr_t>(exception_list)),
+                        sizeof(observation->seh_next));
+            std::memcpy(&observation->seh_handler,
+                        reinterpret_cast<const void*>(
+                            static_cast<std::uintptr_t>(exception_list + sizeof(std::uint32_t))),
+                        sizeof(observation->seh_handler));
+            observation->seh_frame_observed = true;
+            if (observation->seh_handler >= image_base &&
+                observation->seh_handler - image_base + observation->seh_handler_window.size() <=
+                    image.size)
+            {
+                std::memcpy(observation->seh_handler_window.data(),
+                            static_cast<const std::uint8_t*>(image.memory) +
+                                (observation->seh_handler - image_base),
+                            observation->seh_handler_window.size());
+                observation->seh_handler_window_observed = true;
+            }
+        }
+    }
 }
 
 }  // namespace re2dj::platform::linux

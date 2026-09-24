@@ -167,24 +167,32 @@ int main()
 ## 디렉터리 정책
 
 * 플랫폼 공용 로더와 런타임 코어는 `src/` 아래의 공용 영역에 둔다.
-* 64비트 Windows 전용 코드는 `src/platform/windows/` 아래에 둔다.
-* Linux 전용 코드는 `src/platform/linux/` 아래에 둔다.
+* Windows 전용 코드는 `src/platform/windows/`, Linux 전용 코드는 `src/platform/linux/` 아래에 둔다.
+* 각 OS 디렉터리의 루트에는 host 32비트·64비트에 중립인 코드와 두 비트 폭이 공유하는 코드만 둔다.
+* host 32비트 전용 구현은 `src/platform/<os>/x86/`, host 64비트 전용 구현은 `src/platform/<os>/x64/` 아래에 둔다.
+* 공개 플랫폼 구현 헤더가 특정 비트 폭에 종속되면 `include/re2dj/platform/<os>/x86/` 또는 `x64/`에 두고, 공용 interface와 adapter 선언은 상위 `<os>/`에 둔다.
+* PE32, `GuestAddress`, 고정 폭 정수처럼 게스트 32비트 의미만 다루고 host 양쪽에서 같은 코드가 빌드되면 OS 루트에 둔다. host pointer width, native ABI·register·instruction 또는 한 비트 폭 전용 CMake 조건에 의존할 때만 `x86/`·`x64/`로 분리한다.
+* 같은 기능의 x86/x64 구현이 갈리면 공용 policy·state·interface는 OS 루트에 두고 architecture adapter와 native entry만 하위 디렉터리에 둔다. 대규모 `#if`로 두 구현을 한 파일에 섞지 않는다.
 * 실행 진입점은 `src/host/` 아래에 둔다.
 * 비실행 분석 도구는 `src/tools/<도구 이름>/` 아래에 둔다.
 * 공개 헤더는 `include/re2dj/<subsystem>/`에 두고, 한 하위 시스템 안에서만 쓰는 헤더는 해당 `src/` 디렉터리에 둔다.
 
-> rePIU는 32비트 Win32 호스트를 전제로 `src/platform/win32/`를 사용했다. re2DJ의 Windows 호스트는 64비트이므로 비트 폭을 이름에 넣지 않고 `src/platform/windows/`를 사용한다.
+> OS 이름과 host 비트 폭은 별도 축입니다. `windows/`와 `linux/`가 OS를 나타내고, 필요한 경우에만 그 아래 `x86/`와 `x64/`가 host 비트 폭을 나타냅니다.
 
 ## Directory Policy
 
 * Put platform-neutral loader and runtime core code in shared areas under `src/`.
-* Put 64-bit Windows-specific code under `src/platform/windows/`.
-* Put Linux-specific code under `src/platform/linux/`.
+* Put Windows-specific code under `src/platform/windows/` and Linux-specific code under `src/platform/linux/`.
+* At each OS-directory root, keep only code neutral across 32-bit and 64-bit hosts or shared by both widths.
+* Put 32-bit-host-only implementations under `src/platform/<os>/x86/` and 64-bit-host-only implementations under `src/platform/<os>/x64/`.
+* Put width-specific public platform-implementation headers under `include/re2dj/platform/<os>/x86/` or `x64/`, while shared interfaces and adapter declarations remain in the parent `<os>/`.
+* Code that only handles guest 32-bit concepts such as PE32, `GuestAddress`, or fixed-width integers stays at the OS root when it builds identically for both hosts. Split into `x86/` or `x64/` only for dependencies on host pointer width, native ABI, registers, instructions, or a one-width-only CMake condition.
+* When x86 and x64 implementations of one feature diverge, keep shared policy, state, and interfaces at the OS root and only architecture adapters and native entries in the child directories. Do not hide substantial dual implementations behind large `#if` blocks in one file.
 * Put execution entry points under `src/host/`.
 * Put non-executing analysis tools under `src/tools/<tool-name>/`.
 * Put public headers in `include/re2dj/<subsystem>/`, and keep headers used only inside one subsystem next to its sources under `src/`.
 
-> rePIU used `src/platform/win32/` because its host was a 32-bit Win32 process. The re2DJ Windows host is 64-bit, so the directory name omits the bit width and reads `src/platform/windows/`.
+> OS name and host bit width are separate axes. `windows/` and `linux/` identify the OS; only when needed do child `x86/` and `x64/` directories identify host width.
 
 ---
 

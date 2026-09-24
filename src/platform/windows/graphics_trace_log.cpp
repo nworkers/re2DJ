@@ -157,7 +157,9 @@ void ReportUnimplementedGraphicsCall(const char* interface_name,
         return;
     }
     WriteGraphicsTraceFormat(
-        "re2dj:hle:%s::%s:not-implemented", interface_name, ledger->method);
+        "re2dj:FATAL:HLE_UNIMPLEMENTED:interface=%s:method=%s",
+        interface_name,
+        ledger->method);
 }
 
 }  // namespace re2dj::platform::windows

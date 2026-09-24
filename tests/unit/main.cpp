@@ -12,7 +12,12 @@ int main()
     RunPortHelperScanTests(context);
     RunImmediateScanTests(context);
     RunExecutionBackendTests(context);
+    RunLoggingTests(context);
     RunImportDispatcherTests(context);
+    RunGuestModuleRegistryTests(context);
+    RunGuestPeFacadeTests(context);
+    RunKernel32ModuleTests(context);
+    RunUser32ModuleTests(context);
     RunImportEventLoopTests(context);
     RunGuestPathTests(context);
     RunPeImageTests(context);

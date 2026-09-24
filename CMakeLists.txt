@@ -16,6 +16,22 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(FetchContent)
+
+find_package(spdlog 1.14.1 EXACT CONFIG QUIET)
+if(NOT spdlog_FOUND)
+    set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+    set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG v1.14.1
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(spdlog)
+endif()
+
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 endif()
@@ -29,7 +45,6 @@ option(RE2DJ_BUILD_LINUX_NATIVE_HELPER
 option(RE2DJ_ENABLE_SDL3_AUDIO "Build the SDL3/SDL3_mixer audio backend" ON)
 
 if(NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
-    include(FetchContent)
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)
     set(SDL_TESTS OFF CACHE BOOL "" FORCE)
@@ -85,13 +100,16 @@ if(RE2DJ_BUILD_LINUX_NATIVE_HELPER)
             "RE2DJ_BUILD_LINUX_NATIVE_HELPER requires a Linux i386 build")
     endif()
     add_executable(re2dj_linux_native_ipc_helper
-        src/platform/linux/native_import_bridge.cpp
+        src/platform/linux/x86/native_import_bridge.cpp
+        src/platform/linux/native_guest_seh.cpp
         src/platform/linux/native_import_thunks.cpp
-        src/platform/linux/native_ipc_helper.cpp
-        src/platform/linux/native_ipc_helper_main.cpp
+        src/platform/linux/native_instruction_trace.cpp
+        src/platform/linux/x86/native_ipc_helper.cpp
+        src/platform/linux/x86/native_ipc_helper_main.cpp
         src/platform/linux/native_pe_image.cpp
         src/platform/linux/native_pe_session.cpp
-        src/platform/linux/native_process_bootstrap.cpp
+        src/platform/linux/x86/native_low_memory.cpp
+        src/platform/linux/x86/native_process_bootstrap.cpp
     )
     target_compile_options(re2dj_linux_native_ipc_helper
         PRIVATE -fno-omit-frame-pointer
@@ -101,24 +119,59 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT RE2DJ_BUILD_LINUX_NATIVE_HELPER)
     add_library(re2dj_linux_native_backend STATIC
+        src/platform/linux/native_continuation_observation.cpp
         src/platform/linux/native_create_file_observation.cpp
+        src/platform/linux/native_dynamic_thunk.cpp
+        src/platform/linux/native_fault_observation.cpp
+        src/platform/linux/native_getversion_observation.cpp
+        src/platform/linux/native_guest_module_image.cpp
+        src/platform/linux/native_guest_module_set.cpp
+        src/platform/linux/native_guest_seh.cpp
         src/platform/linux/native_helper_backend.cpp
+        src/platform/linux/native_import_thunks.cpp
+        src/platform/linux/native_in_process_runner.cpp
+        src/platform/linux/native_instruction_trace.cpp
+        src/platform/linux/native_kernel32_diagnostic.cpp
+        src/platform/linux/native_pe_image.cpp
+        src/platform/linux/native_pe_session.cpp
         src/platform/linux/original_runner.cpp
     )
     if(CMAKE_SIZEOF_VOID_P EQUAL 4)
         target_sources(re2dj_linux_native_backend PRIVATE
-            src/platform/linux/native_dynamic_thunk.cpp
-            src/platform/linux/native_fault_observation.cpp
-            src/platform/linux/native_import_bridge.cpp
-            src/platform/linux/native_import_thunks.cpp
-            src/platform/linux/native_in_process_runner.cpp
-            src/platform/linux/native_pe_image.cpp
-            src/platform/linux/native_pe_session.cpp
-            src/platform/linux/native_process_bootstrap.cpp
+            src/platform/linux/x86/native_import_bridge.cpp
+            src/platform/linux/x86/native_low_memory.cpp
+            src/platform/linux/x86/native_process_bootstrap.cpp
         )
         target_compile_options(re2dj_linux_native_backend PRIVATE -fno-omit-frame-pointer)
         add_executable(re2dj_linux_native_in_process_probe
-            src/platform/linux/native_in_process_probe.cpp
+            src/platform/linux/x86/native_in_process_probe.cpp
+        )
+        target_link_libraries(re2dj_linux_native_in_process_probe
+            PRIVATE re2dj_linux_native_backend re2dj_warnings
+        )
+        add_executable(re2dj_linux_native_guest_module_probe
+            src/platform/linux/x86/native_guest_module_probe.cpp
+        )
+        target_link_libraries(re2dj_linux_native_guest_module_probe
+            PRIVATE re2dj_linux_native_backend re2dj_warnings
+        )
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        target_sources(re2dj_linux_native_backend PRIVATE
+            src/platform/linux/x64/native_compat_mode.cpp
+            src/platform/linux/x64/native_compat_mode_transition.cpp
+            src/platform/linux/x64/native_import_bridge.cpp
+            src/platform/linux/x64/native_low_memory.cpp
+            src/platform/linux/x64/native_process_bootstrap.cpp
+        )
+        target_compile_options(re2dj_linux_native_backend PRIVATE -fno-omit-frame-pointer)
+        add_executable(re2dj_linux_compat_mode_probe
+            src/platform/linux/x64/native_compat_mode_probe.cpp
+        )
+        target_link_libraries(re2dj_linux_compat_mode_probe
+            PRIVATE re2dj_linux_native_backend re2dj_warnings
+        )
+        add_executable(re2dj_linux_native_in_process_probe
+            src/platform/linux/x64/native_in_process_probe.cpp
         )
         target_link_libraries(re2dj_linux_native_in_process_probe
             PRIVATE re2dj_linux_native_backend re2dj_warnings
@@ -223,6 +276,15 @@ add_library(re2dj_storage_common STATIC
 target_include_directories(re2dj_storage_common PUBLIC include)
 target_link_libraries(re2dj_storage_common PRIVATE re2dj_warnings)
 
+add_library(re2dj_logging STATIC
+    src/logging/logging.cpp
+)
+target_include_directories(re2dj_logging PUBLIC include)
+target_link_libraries(re2dj_logging
+    PUBLIC spdlog::spdlog
+    PRIVATE re2dj_warnings
+)
+
 add_library(re2dj_chd_storage STATIC
     src/storage/chd_hunk_cache.cpp
     src/storage/fat32_chd.cpp
@@ -300,6 +362,11 @@ add_library(re2dj_core STATIC
     src/hle/hardlock/transform_responses.cpp
     src/hle/import_dispatcher.cpp
     src/hle/import_event_loop.cpp
+    src/hle/modules/guest_module.cpp
+    src/hle/modules/guest_module_registry.cpp
+    src/hle/modules/guest_pe_facade.cpp
+    src/hle/modules/kernel32_module.cpp
+    src/hle/modules/user32_module.cpp
     src/device/lptdi_challenge_response.cpp
     src/device/lptdi_response_profile.cpp
     src/input/ez2dj_io_board.cpp
@@ -333,7 +400,7 @@ target_compile_definitions(re2dj_core
 
 target_link_libraries(re2dj_core
     PUBLIC re2dj_legacy_graphics re2dj_chd_storage
-    PRIVATE re2dj_warnings
+    PRIVATE re2dj_logging re2dj_warnings
 )
 
 if(RE2DJ_BUILD_NATIVE_HELPER_PROBE)
@@ -539,7 +606,7 @@ endif()
 add_executable(re2dj
     src/host/cli/main.cpp
 )
-target_link_libraries(re2dj PRIVATE re2dj_core re2dj_warnings)
+target_link_libraries(re2dj PRIVATE re2dj_core re2dj_logging re2dj_warnings)
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     target_link_libraries(re2dj PRIVATE re2dj_windows_original_process_backend)
 endif()
@@ -587,6 +654,11 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/execution_backend_test.cpp
         tests/unit/import_dispatcher_test.cpp
         tests/unit/import_event_loop_test.cpp
+        tests/unit/guest_module_registry_test.cpp
+        tests/unit/guest_pe_facade_test.cpp
+        tests/unit/kernel32_module_test.cpp
+        tests/unit/user32_module_test.cpp
+        tests/unit/logging_test.cpp
         tests/unit/ez2dj_io_board_test.cpp
         tests/unit/ez2dancer_io_board_test.cpp
         tests/unit/guest_path_test.cpp
@@ -629,8 +701,20 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/vfs_file_table_test.cpp
     )
     target_include_directories(re2dj_unit_tests PRIVATE tests/unit src/tools/chd_probe)
-    target_link_libraries(re2dj_unit_tests PRIVATE re2dj_core re2dj_warnings)
+    target_link_libraries(re2dj_unit_tests PRIVATE re2dj_core re2dj_logging re2dj_warnings)
     add_test(NAME re2dj_unit_tests COMMAND re2dj_unit_tests)
+    if(TARGET re2dj_linux_native_guest_module_probe)
+        add_test(NAME re2dj_linux_native_guest_module_probe
+                 COMMAND re2dj_linux_native_guest_module_probe)
+    endif()
+    if(TARGET re2dj_linux_native_in_process_probe)
+        add_test(NAME re2dj_linux_native_in_process_probe
+                 COMMAND re2dj_linux_native_in_process_probe)
+    endif()
+    if(TARGET re2dj_linux_compat_mode_probe)
+        add_test(NAME re2dj_linux_compat_mode_probe
+                 COMMAND re2dj_linux_compat_mode_probe)
+    endif()
 
     # Run explicitly on a desktop with an OpenGL driver, not in headless CTest.
     if(TARGET re2dj_sdl3_opengl_backend)

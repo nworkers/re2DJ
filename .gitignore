@@ -14,7 +14,8 @@
 # Directories a dump commonly lands in. Every one is anchored with a leading
 # slash: an unanchored `hdd/` also matches `src/hdd/` and `include/re2dj/hdd/`,
 # which silently dropped this project's own source from version control.
-/roms/
+/roms/*
+!/roms/dir.txt
 /hdd/
 /HDD/
 /dump/
@@ -60,7 +61,8 @@
 # settings and score data here, so a user's local run never shows up as a
 # repository change.
 /overlay/
-/overlays/
+/overlays/*
+!/overlays/dir.txt
 /nvram/
 /cfg/
 /cfg*/

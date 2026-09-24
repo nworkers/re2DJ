@@ -13,11 +13,11 @@ rePIU는 32비트 Win32 프로세스 안에서 게스트 코드를 **호스트 C
 | 호스트 | 게스트와 같은 실행 모드인가 | 결론 |
 | --- | --- | --- |
 | 64-bit Windows | 별도 x86 process는 가능 | WOW64/native helper 경로 검증됨 |
-| Linux x86-64 | 별도 i386 process는 가능 | i386 native helper 경로 검증됨 |
+| Linux x86-64 | 같은 프로세스의 compatibility mode 가능, 별도 i386 process도 가능 | compatibility-mode 전환 합성 probe 검증됨(작업 353). i386 helper는 진단 fallback |
 
-64비트 프로세스 안에서 임의로 32비트 코드를 실행하는 것은 운영체제 지원 없이는 성립하지 않는다. 따라서 x86-64 host와 i386 helper를 `ExecutionBackend`와 IPC 경계로 분리한다.
+64비트 프로세스 안에서 32비트 코드를 실행하려면 운영체제가 32비트 code selector를 사용자 공간에 제공해야 한다. Linux x86-64는 `__USER32_CS`(`0x23`)를 제공하므로 far transition으로 같은 프로세스 안에서 실행할 수 있다([Linux x86-64 compatibility mode](linux-x86-64-compatibility-mode.md)). 2026-09-24 결정에 따라 Linux x64 제품 경로는 이 방식을 쓰고, i386 helper IPC는 진단 fallback으로만 남긴다([작업 353 설계](../design/20260924-353-linux-x64-compat-mode-adapter.md)). Windows는 WOW64 32비트 프로세스를 쓴다.
 
-*Running arbitrary 32-bit code inside a 64-bit process is not portable without operating-system support. The design therefore separates the x86-64 host and i386 helper behind `ExecutionBackend` and an IPC boundary.*
+*Running 32-bit code inside a 64-bit process requires the operating system to expose a 32-bit code selector to user space. Linux x86-64 exposes `__USER32_CS` (`0x23`), so the code can run in the same process through far transitions ([Linux x86-64 compatibility mode](linux-x86-64-compatibility-mode.md)). Per the 2026-09-24 decision, the Linux x64 product path uses this approach and keeps the i386 helper IPC only as a diagnostic fallback ([Task 353 design](../design/20260924-353-linux-x64-compat-mode-adapter.md)). Windows uses a WOW64 32-bit process.*
 
 ```mermaid
 flowchart LR
@@ -44,9 +44,9 @@ Windows x64의 WOW64와 Linux x86-64의 32비트 실행 환경을 이용하는 �
 
 ## 3. 결론 / Conclusion
 
-**`ExecutionBackend` 경계를 고정하고 Windows/Linux 데스크톱 native helper를 확장한다.** 원본 x86 코드는 두 host의 실행 주체로 유지하며, 공용 HLE는 import thunk와 IPC 경계 뒤에 둔다.
+**`ExecutionBackend` 경계를 고정한다. Windows는 WOW64 native helper를, Linux x64는 같은 프로세스의 compatibility mode를 쓴다.** 원본 x86 코드는 모든 host의 실행 주체로 유지하며, 공용 HLE는 import thunk 경계 뒤에 둔다.
 
-***Fix the `ExecutionBackend` boundary and extend the Windows/Linux desktop native-helper paths.*** Original x86 code remains the executing subject on both hosts, while shared HLE stays behind import-thunk and IPC boundaries.
+***Fix the `ExecutionBackend` boundary: Windows uses the WOW64 native helper and Linux x64 uses same-process compatibility mode.*** Original x86 code remains the executing subject on every host, while shared HLE stays behind the import-thunk boundary.
 
 ## 4. 게스트 주소 규칙 / Guest address rule
 

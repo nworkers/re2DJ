@@ -155,3 +155,27 @@ thunk 값의 최상위 비트가 1이면 하위 16비트가 **ordinal**이고, 0
 re2DJ는 실제 DLL을 적재하지 않는다. 대신 각 import에 합성 gate 주소를 배정해 IAT에 써 넣고, 실행 backend가 그 주소로의 제어 이동을 HLE dispatcher로 돌린다. 이것이 프로젝트의 HLE 경계다.
 
 *re2DJ loads no real DLL. It assigns each import a synthetic gate address, writes that into the IAT, and has the execution backend route a transfer to that address into the HLE dispatcher. That is the project's HLE boundary.*
+
+---
+
+## 8. export 해석 / Export resolution
+
+export data directory는 `IMAGE_EXPORT_DIRECTORY`를 가리킵니다. 주요 필드는 module 이름 RVA, ordinal `Base`, EAT 항목 수인 `NumberOfFunctions`, named export 수인 `NumberOfNames`, 그리고 세 table RVA입니다.
+
+*The export data directory points at an `IMAGE_EXPORT_DIRECTORY`. Its main fields are the module-name RVA, ordinal `Base`, `NumberOfFunctions` for the EAT span, `NumberOfNames` for named exports, and three table RVAs.*
+
+| table | 항목 | 의미 |
+| --- | --- | --- |
+| Export Address Table (EAT) | 32-bit RVA | `Base + index` ordinal의 code/data RVA. gap은 0일 수 있음 |
+| Name Pointer Table | 32-bit RVA | NUL-terminated export name. loader binary search를 위해 lexical order로 정렬 |
+| Ordinal Table | 16-bit index | 같은 위치의 name이 가리키는 **EAT index**이며 public ordinal 자체가 아님 |
+
+| Table | Entry | Meaning |
+| --- | --- | --- |
+| Export Address Table (EAT) | 32-bit RVA | Code or data RVA for ordinal `Base + index`; gaps may be zero |
+| Name Pointer Table | 32-bit RVA | NUL-terminated export name, lexically sorted for loader binary search |
+| Ordinal Table | 16-bit index | **EAT index** for the corresponding name, not the public ordinal itself |
+
+따라서 named export의 public ordinal은 `Base + OrdinalTable[i]`이고 함수 RVA는 `EAT[OrdinalTable[i]]`입니다. ordinal-only export는 EAT에는 있지만 name table에는 없습니다. EAT 값이 export directory 범위 안을 가리키면 일반 code RVA가 아니라 forwarder string으로 해석해야 합니다.
+
+*For a named export, the public ordinal is `Base + OrdinalTable[i]` and the function RVA is `EAT[OrdinalTable[i]]`. An ordinal-only export appears in the EAT but not in the name table. An EAT value that points inside the export-directory range denotes a forwarder string rather than an ordinary code RVA.*

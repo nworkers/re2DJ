@@ -245,6 +245,9 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## 구현 규칙
 
 * 플랫폼 종속 코드는 `src/platform/windows/`, `src/platform/linux/` 아래에 둔다.
+* `src/platform/windows/`와 `src/platform/linux/`의 루트에는 해당 OS 전용이면서 32비트·64비트에 중립인 코드 또는 두 비트 폭이 공유하는 코드만 둔다.
+* host 32비트 전용 코드는 해당 OS 디렉터리의 `x86/` 하위에, host 64비트 전용 코드는 `x64/` 하위에 둔다. 공개 플랫폼 구현 헤더도 `include/re2dj/platform/<os>/x86/` 또는 `x64/`로 같은 구조를 따른다.
+* 게스트 PE32·32비트 주소를 다루는 것만으로 `x86/`에 두지 않는다. host pointer width, native ABI·register·instruction 또는 특정 비트 폭에서만 선택되는 build 조건에 종속될 때만 비트 폭 전용으로 분류한다.
 * 새 기능을 추가할 때는 테스트 전략 또는 최소 검증 절차를 문서에 함께 남긴다.
 * 코드 수정이 있는 작업은 영향 범위에 맞는 빌드 검증을 수행하고, 불가능하면 이유를 작업 로그에 남긴다.
 * 구현과 검증은 같은 작업 단위에서 끝낸다. 후속 작업으로 검증만 넘기는 것은 허용하지 않는다.
@@ -261,6 +264,9 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## Implementation Rules
 
 * Put platform-specific code under `src/platform/windows/` or `src/platform/linux/`.
+* At the roots of `src/platform/windows/` and `src/platform/linux/`, keep only code that is specific to that OS but neutral across 32-bit and 64-bit hosts, or shared by both widths.
+* Put 32-bit-host-only code under the OS directory's `x86/` child and 64-bit-host-only code under `x64/`. Mirror the structure for public platform-implementation headers under `include/re2dj/platform/<os>/x86/` or `x64/`.
+* Handling guest PE32 data or 32-bit guest addresses alone does not make code `x86/`-specific. Classify code by host pointer width, native ABI, registers, instructions, or build selection limited to one host width.
 * When adding a feature, document the test strategy or minimum verification procedure.
 * For tasks that modify code, run build verification appropriate to the impact. If verification is impossible, record the reason in the work log.
 * Finish implementation and verification in the same task unit. Do not defer verification alone to a later task.
@@ -310,6 +316,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 * tag 메시지에는 해당 버전의 핵심 변경을 한 줄로 남긴다.
 * tag는 로컬까지만 만들고 원격 push는 사용자가 직접 수행한다.
 * 머지가 완료되면 현재 작업 브랜치를 삭제한다.
+* 저장소 루트의 `roms/`와 `overlays/`는 서로 독립된 디렉터리이며, 각각 0바이트 `dir.txt`만 Git으로 추적한다. 그 밖의 모든 내용은 ignore한다.
+* 저장소 루트의 `logs/`는 전체를 ignore하며 생성된 로그를 Git에 추가하지 않는다. 이미 추적된 로그가 발견되면 저장소에서 제거한다.
 
 ## Git Workflow Rules
 
@@ -327,6 +335,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 * Put a one-line summary of the version's key change in the tag message.
 * Create tags locally only; the user pushes them to the remote.
 * Delete the task branch after the merge is complete.
+* The repository-root `roms/` and `overlays/` are separate directories. Track only a zero-byte `dir.txt` in each and ignore all other contents.
+* Ignore the entire repository-root `logs/` directory and never add generated logs to Git. Remove any tracked logs found there from the repository.
 
 ---
 

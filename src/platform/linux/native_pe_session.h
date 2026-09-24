@@ -34,6 +34,8 @@ public:
     const NativePeImage& image() const;
     const NativeProcessBootstrap& bootstrap() const;
     const runtime::ImportGateTable& gates() const;
+    runtime::ImportGateTable* mutable_gates();
+    NativeImportThunkRegion* mutable_import_thunks();
 
 private:
     NativePeImage image_;

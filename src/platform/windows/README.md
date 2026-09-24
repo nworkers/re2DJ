@@ -12,6 +12,6 @@ Windows 전용 backend와 probe를 둡니다. `native_helper_backend.cpp`는 x86
 
 *The `ez2dj2nd` execution policy does not inject demo-volume by default because its static IAT has no `GetPrivateProfileIntA`. Raw I/O uses the runtime-confirmed input/output helper RVAs `0x000782d7` and `0x0007832b`. The launcher's `DirectDrawCreateEx` IAT patch exception is limited to `ez2dj4th`, whose packer import table must be preserved.*
 
-rePIU와 달리 주 host는 64비트이므로 디렉터리 이름에 비트 폭을 넣지 않습니다. 32비트 helper도 Windows platform 구현이므로 이 아래에 둡니다. 여기서만 `<windows.h>`를 포함할 수 있습니다.
+이 디렉터리의 루트는 Windows 전용이면서 host 비트 폭 중립인 코드 또는 x86/x64 공용 코드용입니다. 32비트 process·i386 ABI에만 성립하는 injected runtime, COM facade와 native helper 구현은 향후 `x86/`로, 64비트 process에만 성립하는 구현은 `x64/`로 분리합니다. 현재 파일의 대량 이동은 CMake, include 경로와 runtime DLL 계약을 함께 바꾸는 별도 구조 작업입니다. Windows host API header는 이 플랫폼 트리 안에서만 포함할 수 있습니다.
 
-*Unlike rePIU the primary host is 64-bit, so the directory name carries no bit width. The 32-bit helper also lives here as a Windows platform implementation. This is the only place that may include `<windows.h>`.*
+*This directory root is for Windows-specific code that is host-width-neutral or shared by x86 and x64. The injected runtime, COM facades, and native-helper implementations valid only in a 32-bit process or i386 ABI will move under `x86/`; 64-bit-process-only implementations will move under `x64/`. Bulk movement of current files is a separate structural task that updates CMake, include paths, and the runtime-DLL contract together. Host Windows API headers may be included only inside this platform tree.*

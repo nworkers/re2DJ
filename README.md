@@ -48,9 +48,9 @@ flowchart LR
     HLE --> PLAT["Platform backend<br/>windows / linux"]
 ```
 
-x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86-64 제품 CLI가 별도 i386 helper를 통해 원본 PE32 entry의 첫 import·exit·fault 경계까지 실행합니다. Linux는 아직 Win32 import를 처리하지 않으므로 게임 창까지 진행되지는 않습니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86·x86-64 제품 CLI의 `re2dj --run`이 별도 helper 없이 같은 프로세스 안에서 원본 PE32를 실행합니다. x86-64는 CPU compatibility mode를 씁니다. 실행은 `kernel32`·`user32` facade와 게스트 SEH를 거쳐, 첫 미처리 import·미해석 lookup·fault·종료에서 멈춥니다. Linux는 아직 필요한 Win32 API를 모두 제공하지 않으므로 게임 창까지 진행되지는 않습니다. 별도 i386 helper 경로는 `--linux-helper <path>`로 고르는 진단 fallback입니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, the x86-64 product CLI uses a separate i386 helper to execute the original PE32 entry up to its first import, exit, or fault boundary; it does not reach a game window yet because Win32 imports are not handled. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, `re2dj --run` in the x86 and x86-64 product CLIs executes the original PE32 in the same process without a separate helper (x86-64 uses CPU compatibility mode), through the `kernel32`/`user32` facades and guest SEH, stopping at the first unhandled import, unresolved lookup, fault, or exit; it does not reach a game window yet because Linux does not provide every required Win32 API. The separate i386 helper path is a diagnostic fallback selected with `--linux-helper <path>`. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -227,7 +227,7 @@ re2dj --hdd <directory> [options]
   --list-targets      후보 타깃 프로파일을 나열하고 종료.
   --resolve <path>    게스트 경로 하나를 해석하고 종료.
   --run               게스트 실행. positional 프로파일은 자동으로 --run을 선택.
-  --linux-helper      Linux --run에서 사용하는 i386 helper 경로.
+  --linux-helper      Linux 진단 fallback. 기본 in-process 실행 대신 이 i386 helper로 실행.
   --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 0).
   --demo-volume       Windows title/demo 프로필(0..3, 기본값 3=0 dB).
   --audio-volume-trace
@@ -319,9 +319,13 @@ HLE/Hardlock boundary remains a runtime observation item.
 
 *`--audio-volume-trace` writes bounded per-buffer dB, PCM peak/RMS, and WINMM mixer values to an `.audio.log` beside the launcher diagnostic log. It does not record original WAV samples.*
 
-종료 코드: `0` 성공, `1` 잘못된 사용, `2` HDD 디렉터리 오류, `3` 지원되지 않는 실행 경로.
+제품 CLI의 host 진단은 시작과 동시에 stderr에 출력되고 같은 내용이 실행별 `logs/re2dj-YYYYMMDD-HHMMSS-mmm.log`에 기록됩니다. 모든 메시지는 즉시 flush됩니다. 미구현 HLE와 지원되지 않는 실행 경계는 `[critical]` 레벨과 `FATAL <분류>` marker로 남습니다. 구조화된 launcher·VFS·graphics·audio 분석 trace와 stdout 명령 결과는 기존 파일 및 채널을 유지합니다.
 
-*Exit codes: `0` success, `1` usage error, `2` HDD directory error, and `3` unsupported execution path.*
+*Product-CLI host diagnostics appear on stderr from startup and are mirrored to a per-run `logs/re2dj-YYYYMMDD-HHMMSS-mmm.log`. Every message is flushed immediately. Unimplemented HLE and unsupported execution boundaries carry `[critical]` severity plus a `FATAL <classification>` marker. Structured launcher, VFS, graphics, and audio analysis traces and stdout command results keep their existing files and channels.*
+
+종료 코드: `0` 성공, `1` 잘못된 사용, `2` HDD 디렉터리 오류, `3` 지원되지 않는 실행 경로, `4` 로깅 초기화 실패.
+
+*Exit codes: `0` success, `1` usage error, `2` HDD directory error, `3` unsupported execution path, and `4` logging-initialization failure.*
 
 ---
 
@@ -330,13 +334,17 @@ HLE/Hardlock boundary remains a runtime observation item.
 | 경로 | 내용 |
 | --- | --- |
 | `include/re2dj/`, `src/` | C++20 공용 코어: HDD·CHD 입력, 게스트 경로, PE 판독, 타깃 프로파일 |
-| `src/platform/{windows,linux}/` | 플랫폼별 backend (예정) |
+| `src/platform/{windows,linux}/` | OS별 backend. 루트는 host 비트 폭 중립/공용, 전용 구현은 `x86/`·`x64/` |
 | `src/host/cli/` | 명령행 진입점 |
 | `src/tools/` | 비실행 분석 도구 |
 | `tests/unit/` | 단위 테스트 |
+| `roms/`, `overlays/` | 사용자 제공 ROM과 guest overlay 위치. 각 디렉터리의 0바이트 `dir.txt`만 추적하고 나머지는 Git ignore |
+| `logs/` | 실행·분석 로그 출력. 전체 Git ignore |
 | `docs/analysis/` | 원본 바이너리와 HDD 자산에서 확인한 분석 |
 | `docs/kb/` | PE, Win32, x86 배경 지식 |
 | `docs/design/`, `docs/work-orders/`, `docs/work-logs/` | 설계와 작업 이력 |
+
+*The separate `roms/` and `overlays/` directories retain only a tracked zero-byte `dir.txt` placeholder in each; all runtime contents are ignored. The entire `logs/` directory is also ignored.*
 
 자세한 구성은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
