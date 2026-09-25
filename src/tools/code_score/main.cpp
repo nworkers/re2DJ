@@ -34,7 +34,7 @@ constexpr int kExitNotCodeLike = 3;
 void PrintUsage()
 {
     std::printf(
-        "re2dj_code_score %s - judge whether a byte region reads as x86 code or ciphertext\n"
+        "%s - judge whether a byte region reads as x86 code or ciphertext\n"
         "\n"
         "Usage:\n"
         "  re2dj_code_score <file> [options]\n"
@@ -50,7 +50,7 @@ void PrintUsage()
         "  --require-code     exit %d unless some scored region reads as code\n"
         "\n"
         "Numbers accept decimal or 0x hexadecimal.\n",
-        std::string(re2dj::VersionString()).c_str(),
+        re2dj::VersionBanner("re2dj_code_score", re2dj::VersionString()).c_str(),
         kExitNotCodeLike);
 }
 

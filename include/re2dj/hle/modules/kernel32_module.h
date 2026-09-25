@@ -14,6 +14,21 @@ namespace re2dj::hle::modules
 // observed under; the original cabinet OS value is not established.
 inline constexpr std::uint32_t kKernel32GuestVersion = 0x23F00206U;
 
+// INVALID_HANDLE_VALUE as a 32-bit guest handle.
+inline constexpr std::uint32_t kKernel32InvalidHandle = 0xFFFFFFFFU;
+
+// GetCurrentProcess's pseudo-handle, (HANDLE)-1 on every Windows version.
+inline constexpr std::uint32_t kKernel32CurrentProcess = 0xFFFFFFFFU;
+
+// dwOSVersionInfoSize values GetVersionExA accepts: OSVERSIONINFOA and
+// OSVERSIONINFOEXA.
+inline constexpr std::uint32_t kKernel32OsVersionInfoSize = 148;
+inline constexpr std::uint32_t kKernel32OsVersionInfoExSize = 156;
+
+// The largest DeviceIoControl buffer the facade copies. The Hardlock packets
+// it serves are at most a few hundred bytes.
+inline constexpr std::uint32_t kKernel32MaximumIoBufferSize = 64U * 1024U;
+
 GuestModuleDescriptor MakeKernel32ModuleDescriptor();
 
 }  // namespace re2dj::hle::modules

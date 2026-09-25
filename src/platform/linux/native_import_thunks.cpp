@@ -10,15 +10,12 @@
 #include <utility>
 #include <vector>
 
-#include "../native_helper_protocol.h"
 #include "native_low_memory.h"
 
 namespace re2dj::platform::linux
 {
 namespace
 {
-
-namespace protocol = native_protocol;
 
 struct ImageView
 {
@@ -54,7 +51,7 @@ void WriteU32(std::uint8_t* bytes, std::uint32_t value)
 bool ReadImageString(const ImageView& image, std::uint32_t rva, std::string* value)
 {
     value->clear();
-    for (std::uint32_t index = 0; index < protocol::kMaximumImportStringSize; ++index)
+    for (std::uint32_t index = 0; index < kMaximumImportStringSize; ++index)
     {
         if (index > (std::numeric_limits<std::uint32_t>::max)() - rva)
         {
@@ -197,7 +194,7 @@ bool EmitThunks(const runtime::ImportGateTable& gates,
     {
         return true;
     }
-    if (gates.gates().size() > protocol::kMaximumImportCount ||
+    if (gates.gates().size() > kMaximumImportCount ||
         gates.gates().size() > (std::numeric_limits<std::uint32_t>::max)() / kThunkBytes)
     {
         *error = "native thunk count exceeds the limit";

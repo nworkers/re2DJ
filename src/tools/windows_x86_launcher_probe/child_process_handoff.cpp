@@ -396,6 +396,11 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                result->runtime_base + rva,
                                options.vfs_trace_path.string(),
                                error);
+    prepared = prepared && find_export("g_re2dj_runtime_log_path", &rva) &&
+               WriteRemoteAnsi(result->process,
+                               result->runtime_base + rva,
+                               options.runtime_log_path.string(),
+                               error);
     const char* const vfs_exports[] = {"_Re2djVfsCreateFileA@28",
                                        "_Re2djVfsReadFile@20",
                                        "_Re2djVfsWriteFile@20",

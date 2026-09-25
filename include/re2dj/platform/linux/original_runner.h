@@ -9,6 +9,9 @@
 #include <vector>
 
 #include "re2dj/exe/pe_image.h"
+#include "re2dj/hle/guest_devices.h"
+#include "re2dj/hle/guest_files.h"
+#include "re2dj/hle/host_presentation.h"
 #include "re2dj/runtime/address_space.h"
 
 namespace re2dj::platform::linux
@@ -16,8 +19,11 @@ namespace re2dj::platform::linux
 
 constexpr std::size_t kOriginalFaultInstructionWindowBytes = 80;
 constexpr std::size_t kOriginalInstructionTraceMaximumFrames = 128;
-constexpr std::size_t kOriginalApiCallLogMaximum = 256;
-constexpr std::size_t kOriginalApiCallMaximumArguments = 7;
+// The continuation keeps the first and the last calls of a run, so both its
+// start and what led to its stop stay visible.
+constexpr std::size_t kOriginalApiCallLogHead = 128;
+constexpr std::size_t kOriginalApiCallLogTail = 128;
+constexpr std::size_t kOriginalApiCallMaximumArguments = 13;
 constexpr std::uint32_t kOriginalContinuationCallLimit = 4096;
 
 enum class OriginalRunBoundary
@@ -172,18 +178,17 @@ struct OriginalRunResult
     std::uint32_t seh_dispatch_count = 0;
     runtime::GuestAddress last_seh_handler;
     runtime::GuestAddress last_seh_resumed_eip;
-    // Continuation diagnostic: calls in order, capped at kOriginalApiCallLogMaximum.
+    // Continuation diagnostic: the first kOriginalApiCallLogHead and the last
+    // kOriginalApiCallLogTail calls in order; sequence numbers show any gap.
     std::vector<OriginalApiCall> api_calls;
     std::uint32_t api_call_count = 0;
     // What the continuation stopped on: the import, the lookup, or the last call.
     std::string continuation_stop_detail;
+    // Requests the guest devices answered during the continuation, by kind.
+    hle::hardlock::HardlockDeviceActivity device_activity;
+    // Whether the device set held Hardlock material; never the material itself.
+    bool hardlock_material_applied = false;
 };
-
-bool RunOriginalUntilBoundary(const std::filesystem::path& executable_path,
-                              const exe::PeImageInfo& image_info,
-                              const std::filesystem::path& helper_path,
-                              OriginalRunResult* result,
-                              std::string* error);
 
 bool RunOriginalInProcessFirstImport(const std::filesystem::path& executable_path,
                                      const exe::PeImageInfo& image_info,
@@ -205,8 +210,23 @@ bool RunOriginalInProcessCreateFileCall(const std::filesystem::path& executable_
                                         OriginalRunResult* result,
                                         std::string* error);
 
+// devices: what the guest may open, from the target profile and the user's
+// Hardlock material.
+// What a continuation run provides the guest beyond its image.
+struct OriginalRunEnvironment
+{
+    hle::GuestDeviceConfig devices;
+    // The main image's guest path, for example "D:\\ez2dj\\EZ2DJ.EXE".
+    std::string module_path;
+    hle::GuestFileConfig files;
+    // Where the guest's window appears on the host, or null to show nothing.
+    // The caller owns it, so the window can outlive the run.
+    hle::HostPresentation* presentation = nullptr;
+};
+
 bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_path,
                                       const exe::PeImageInfo& image_info,
+                                      const OriginalRunEnvironment& environment,
                                       OriginalRunResult* result,
                                       std::string* error);
 

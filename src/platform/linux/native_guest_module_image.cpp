@@ -146,6 +146,12 @@ MapResult MapFacadeBytes(const hle::modules::GuestPeFacadeImage& facade,
         *error = "cannot protect native guest facade as read-only";
         return MapResult::kFailure;
     }
+    // Code sections stay writable. The Hardlock envelope hooks ExitProcess by
+    // patching its first bytes, as Windows lets a process patch its own
+    // kernel32; the guest's protection changes are only recorded
+    // (GuestProcess), because every facade thunk shares one page and applying
+    // a guest's temporary PAGE_READWRITE there would fault calls Windows
+    // serves from other pages.
     for (const exe::PeSection& section : info.sections)
     {
         if ((section.characteristics & kSectionMemExecute) == 0)
@@ -159,7 +165,7 @@ MapResult MapFacadeBytes(const hle::modules::GuestPeFacadeImage& facade,
             protection_size > info.size_of_image - section.virtual_address ||
             mprotect(static_cast<std::uint8_t*>(memory) + section.virtual_address,
                      protection_size,
-                     PROT_READ | PROT_EXEC) != 0)
+                     PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
         {
             munmap(memory, facade.image_size);
             *error = "cannot protect native guest facade code";

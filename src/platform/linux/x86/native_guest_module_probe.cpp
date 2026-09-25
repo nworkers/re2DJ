@@ -66,31 +66,6 @@ std::string PermissionsAt(std::uint32_t address)
     return {};
 }
 
-bool HasWritableExecutablePage(std::uint32_t base, std::uint32_t size)
-{
-    const std::uint64_t image_begin = base;
-    const std::uint64_t image_end = image_begin + size;
-    std::ifstream maps("/proc/self/maps");
-    std::string line;
-    while (std::getline(maps, line))
-    {
-        unsigned long begin = 0;
-        unsigned long end = 0;
-        char permissions[5] = {};
-        if (std::sscanf(line.c_str(), "%lx-%lx %4s", &begin, &end, permissions) != 3)
-        {
-            continue;
-        }
-        const bool overlaps = static_cast<std::uint64_t>(begin) < image_end &&
-                              image_begin < static_cast<std::uint64_t>(end);
-        if (overlaps && permissions[1] == 'w' && permissions[2] == 'x')
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool Fail(const std::string& message)
 {
     std::fprintf(stderr, "native guest module probe: %s\n", message.c_str());
@@ -164,10 +139,9 @@ bool RunProbe()
         header_permissions[1] == 'w' || header_permissions[2] == 'x' ||
         export_permissions[0] != 'r' || export_permissions[1] == 'w' ||
         export_permissions[2] == 'x' || code_permissions[0] != 'r' ||
-        code_permissions[1] == 'w' || code_permissions[2] != 'x' ||
-        HasWritableExecutablePage(module->base.value(), module->image_size))
+        code_permissions[1] != 'w' || code_permissions[2] != 'x')
     {
-        return Fail("facade page protections are not R/RX without W+X");
+        return Fail("facade page protections are not R headers and RWX code");
     }
 
     DispatchContext dispatch_context{&modules, {}, 0, 0};

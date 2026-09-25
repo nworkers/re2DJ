@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,8 +14,13 @@
 
 #include <signal.h>
 
+#include <spdlog/logger.h>
+
 #include "native_in_process_runner.h"
 #include "native_kernel32_diagnostic.h"
+#include "re2dj/hle/api_call_record.h"
+#include "re2dj/hle/modules/guest_module.h"
+#include "re2dj/logging/logging.h"
 
 namespace re2dj::platform::linux
 {
@@ -50,7 +57,8 @@ struct StringArguments
 
 StringArguments StringArgumentIndices(std::string_view export_name)
 {
-    if (export_name == "GetModuleHandleA" || export_name == "CreateFileA")
+    if (export_name == "GetModuleHandleA" || export_name == "CreateFileA" ||
+        export_name == "LoadLibraryA" || export_name == "GetEnvironmentVariableA")
     {
         return {0, -1};
     }
@@ -75,12 +83,95 @@ struct ContinuationContext
 
     NativeKernel32Diagnostic kernel32;
     std::vector<OriginalApiCall> calls;
+    std::deque<OriginalApiCall> tail_calls;
     std::uint32_t call_count = 0;
+    // Calls being handled; above one, the guest is inside a guest call.
+    std::uint32_t depth = 0;
     bool stop_requested = false;
     bool stop_redirect_failed = false;
     OriginalRunBoundary stop = OriginalRunBoundary::kStopped;
     std::string stop_detail;
 };
+
+// Writes the start of one call to the API log: its name, return address,
+// arguments, and string arguments. Calls the guest makes from a guest call
+// (a window procedure, say) come before their parent's outcome, indented by
+// depth.
+void LogApiCallHead(const OriginalApiCall& call, std::uint32_t depth)
+{
+    const std::shared_ptr<spdlog::logger> logger = logging::GetApiLogger();
+    if (logger == nullptr)
+    {
+        return;
+    }
+    const std::string indent(depth * 4, ' ');
+    std::string arguments;
+    char word[12] = {};
+    for (std::uint32_t index = 0; index < call.argument_count; ++index)
+    {
+        std::snprintf(word, sizeof(word), index == 0 ? "%08x" : ", %08x", call.arguments[index]);
+        arguments += word;
+    }
+    char head[256] = {};
+    std::snprintf(head,
+                  sizeof(head),
+                  "#%04u %s ret=%08x args=(%s)",
+                  call.sequence,
+                  call.name.c_str(),
+                  call.return_address,
+                  arguments.c_str());
+    logger->info("{}{}", indent, head);
+    // String arguments read for the call summary, whether or not the handler
+    // itself reads them.
+    if (call.text_observed)
+    {
+        logger->info("{}      arg   \"{}\"", indent, call.text);
+    }
+    if (call.second_text_observed)
+    {
+        logger->info("{}      arg   \"{}\"", indent, call.second_text);
+    }
+}
+
+// Writes the rest of one call to the API log: what the handler read, wrote,
+// and called, and its outcome. DeviceIoControl buffers carry Hardlock data
+// derived from the user's material, so only their lengths are logged.
+void LogApiCallOutcome(const NativeKernel32Diagnostic& kernel32,
+                       const OriginalApiCall& call,
+                       bool facade_call,
+                       const NativeImportGateResult* output,
+                       std::uint32_t depth)
+{
+    const std::shared_ptr<spdlog::logger> logger = logging::GetApiLogger();
+    if (logger == nullptr)
+    {
+        return;
+    }
+    const std::string indent(depth * 4, ' ');
+    if (!facade_call)
+    {
+        logger->info("{}      -> UNHANDLED: no facade export", indent);
+        return;
+    }
+    const bool withhold = call.name == "kernel32.dll!DeviceIoControl";
+    for (const std::string& line : hle::FormatApiCallEvents(kernel32.last_record(), withhold))
+    {
+        logger->info("{}      {}", indent, line);
+    }
+    if (!call.handled)
+    {
+        logger->info("{}      -> UNHANDLED: {}", indent, kernel32.dispatch_error());
+        return;
+    }
+    char result[96] = {};
+    std::snprintf(result,
+                  sizeof(result),
+                  "      -> eax=%08x edx=%08x last_error=%u",
+                  output->eax,
+                  output->edx,
+                  kernel32.LastError());
+    logger->info("{}{}", indent, result);
+}
 
 void RequestStop(ContinuationContext* state,
                  const NativeImportGateEvent& event,
@@ -141,11 +232,23 @@ bool HandleContinuationGate(const NativeImportGateEvent& event,
         }
     }
 
+    LogApiCallHead(call, state->depth);
+    ++state->depth;
     call.handled = state->kernel32.Dispatch(event, output);
+    --state->depth;
     call.eax = call.handled ? output->eax : 0;
-    if (state->calls.size() < kOriginalApiCallLogMaximum)
+    LogApiCallOutcome(state->kernel32, call, facade_export != nullptr, output, state->depth);
+    if (state->calls.size() < kOriginalApiCallLogHead)
     {
         state->calls.push_back(call);
+    }
+    else
+    {
+        state->tail_calls.push_back(call);
+        if (state->tail_calls.size() > kOriginalApiCallLogTail)
+        {
+            state->tail_calls.pop_front();
+        }
     }
 
     if (!call.handled)
@@ -154,11 +257,26 @@ bool HandleContinuationGate(const NativeImportGateEvent& event,
         return false;
     }
     // A null GetModuleHandleA result is a legitimate Win32 outcome the guest
-    // may tolerate, so it is only logged. A null GetProcAddress result, including
-    // one for a null module handle, leaves the guest holding no entry point.
+    // may tolerate, so it is only logged. A null GetProcAddress or LoadLibraryA
+    // result, including one for a null module handle, leaves the guest without
+    // something Windows would have given it, unless the name is declared
+    // absent on Windows too.
     const bool resolver = facade_export != nullptr &&
                           facade_export->descriptor.name == "GetProcAddress";
-    if (resolver && call.eax == 0)
+    const bool loader = facade_export != nullptr &&
+                        facade_export->descriptor.name == "LoadLibraryA";
+    const bool absent =
+        call.text_observed &&
+        ((resolver && state->kernel32.IsAbsentExport(call.arguments[0], call.text)) ||
+         (loader && hle::modules::IsAbsentGuestModule(call.text)));
+    if (loader && call.eax == 0 && !absent)
+    {
+        RequestStop(state,
+                    event,
+                    OriginalRunBoundary::kContinuationUnresolvedLookup,
+                    "LoadLibraryA(" + (call.text_observed ? call.text : std::string("?")) + ")");
+    }
+    else if (resolver && call.eax == 0 && !absent)
     {
         const std::string requested = call.text_observed
             ? call.text
@@ -181,6 +299,7 @@ bool HandleContinuationGate(const NativeImportGateEvent& event,
 
 bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_path,
                                       const exe::PeImageInfo& image_info,
+                                      const OriginalRunEnvironment& environment,
                                       OriginalRunResult* result,
                                       std::string* error)
 {
@@ -197,6 +316,13 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
 
     ContinuationContext context(static_cast<std::uint32_t>(image_info.image_base),
                                 image_info.size_of_image);
+    context.kernel32.ConfigureDevices(environment.devices);
+    context.kernel32.SetPresentation(environment.presentation);
+    context.kernel32.DescribeImage(image_info, environment.module_path);
+    if (!context.kernel32.ConfigureFiles(environment.files, error))
+    {
+        return false;
+    }
     if (!context.kernel32.PrepareStopStub(error))
     {
         return false;
@@ -258,9 +384,14 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
     result->last_seh_handler = runtime::GuestAddress(run.last_seh_handler);
     result->last_seh_resumed_eip = runtime::GuestAddress(run.last_seh_resumed_eip);
     result->api_calls = std::move(context.calls);
+    result->api_calls.insert(result->api_calls.end(),
+                             context.tail_calls.begin(),
+                             context.tail_calls.end());
     result->api_call_count = context.call_count;
     result->continuation_stop_detail = context.stop_detail;
     context.kernel32.CopyTo(result);
+    result->device_activity = context.kernel32.devices().activity();
+    result->hardlock_material_applied = environment.devices.hardlock.has_value();
     error->clear();
     return true;
 }

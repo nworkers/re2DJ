@@ -15,7 +15,18 @@ bool IsStackRange(std::uint32_t address,
     return address >= stack_limit && address <= stack_base && size <= stack_base - address;
 }
 
+// Written by the diagnostic before the guest runs and read in the trap
+// handler; one guest thread runs at a time.
+std::uint32_t g_host_trap_begin = 0;
+std::uint32_t g_host_trap_size = 0;
+
 }  // namespace
+
+void SetNativeHostTrapRange(std::uint32_t address, std::uint32_t size)
+{
+    g_host_trap_begin = address;
+    g_host_trap_size = size;
+}
 
 bool PrepareNativeGuestBreakpointDispatch(const NativeTrapRegisters& registers,
                                           std::uint32_t teb,
@@ -30,7 +41,9 @@ bool PrepareNativeGuestBreakpointDispatch(const NativeTrapRegisters& registers,
     }
     // A breakpoint trap reports the address after the INT3 byte.
     const std::uint32_t int3_address = registers.eip - 1;
-    if (image_base != 0 && int3_address < image_base)
+    if ((image_base != 0 && int3_address < image_base) ||
+        (g_host_trap_size != 0 && int3_address >= g_host_trap_begin &&
+         int3_address - g_host_trap_begin < g_host_trap_size))
     {
         return false;
     }

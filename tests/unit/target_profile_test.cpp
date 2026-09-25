@@ -316,7 +316,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             // VFS file open and the protection stops after its first device
             // request. Both are product policy.
             RE2DJ_CHECK(context, fourth->profile.run_defaults.run_detached);
-            RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_wts_active_console);
+            RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_wts_console_session);
             RE2DJ_CHECK(context,
                         fourth->profile.run_defaults.lptdi
                             .device_mock_target_state_hex.empty());
@@ -384,7 +384,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::string("\\\\.\\FEnteDev"));
             RE2DJ_CHECK(context,
                         profile->profile.run_defaults.lptdi.hardlock_cfg_material_default);
-            RE2DJ_CHECK(context, profile->profile.run_defaults.hle_wts_active_console);
+            RE2DJ_CHECK(context, profile->profile.run_defaults.hle_wts_console_session);
             RE2DJ_CHECK_EQ(context,
                            profile->profile.run_defaults.follow_child_process,
                            follow_child);
@@ -443,7 +443,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, profile.run_defaults.hle_dynamic_vfs);
             RE2DJ_CHECK(context, profile.run_defaults.hle_d3d3);
             RE2DJ_CHECK(context, profile.run_defaults.hle_directsound);
-            RE2DJ_CHECK(context, profile.run_defaults.hle_wts_active_console);
+            RE2DJ_CHECK(context, profile.run_defaults.hle_wts_console_session);
             RE2DJ_CHECK(context, profile.run_defaults.run_detached);
             // Absent from the packed import directory, so none of these can be
             // prepared for this build.
@@ -532,9 +532,9 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                         canonical->run_defaults.lptdi.device_mock_target_state_hex.empty());
             RE2DJ_CHECK(context,
                         canonical->run_defaults.lptdi.hardlock_cfg_material_default);
-            // Runs with and without the active-console report behaved
+            // Runs with and without the console-session report behaved
             // identically, so it stays off rather than being copied from 3rd.
-            RE2DJ_CHECK(context, !canonical->run_defaults.hle_wts_active_console);
+            RE2DJ_CHECK(context, !canonical->run_defaults.hle_wts_console_session);
             RE2DJ_CHECK_EQ(context,
                            canonical->run_defaults.lptdi.legacy_io_in_rva,
                            std::uintptr_t{0x00038987});
@@ -634,11 +634,11 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, third->run_defaults.hle_vfs);
             RE2DJ_CHECK(context, third->run_defaults.hle_directsound);
             RE2DJ_CHECK(context, third->run_defaults.run_detached);
-            // The active-console policy is confirmed for 3rd as well: its
-            // protection initialization reads the session connect state, and
-            // supplying an active console advances execution from 0x9c402468 to
+            // The console-session policy is confirmed for 3rd as well: its
+            // protection initialization reads the current session ID, and
+            // reporting session 0 advances execution from 0x9c402468 to
             // 0x9c402450. It stays absent from profiles with no such evidence.
-            RE2DJ_CHECK(context, third->run_defaults.hle_wts_active_console);
+            RE2DJ_CHECK(context, third->run_defaults.hle_wts_console_session);
             RE2DJ_CHECK(context, third->run_defaults.hle_dynamic_vfs);
             RE2DJ_CHECK(context, third->run_defaults.lptdi.hardlock_cfg_material_default);
             RE2DJ_CHECK(context, !third->run_defaults.fullscreen);

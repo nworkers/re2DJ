@@ -87,11 +87,13 @@ struct TargetRunDefaults
     bool hle_dynamic_vfs = false;
     bool hle_d3d3 = false;
     bool hle_directsound = false;
-    // Reports the current session as an active console. The cabinet's original
-    // ran as the console shell, so this is an operating-system boundary rather
-    // than a diagnostic. Only a successful WTS_CURRENT_SESSION class-4 result
-    // is rewritten; other queries and failures are preserved.
-    bool hle_wts_active_console = false;
+    // Reports the current session ID as 0, the console session of the Windows
+    // XP era the cabinet ran. Since Vista session 0 is reserved for services,
+    // so a modern host returns 1 or higher. The cabinet's original ran as the
+    // console shell, so this is an operating-system boundary rather than a
+    // diagnostic. Only a successful WTS_CURRENT_SESSION WTSSessionId (class 4)
+    // result is rewritten; other queries and failures are preserved.
+    bool hle_wts_console_session = false;
     TargetLptdiPolicy lptdi;
     // Starts a known bootstrap executable and follows its version-specific
     // game child before applying the HLE boundary.
@@ -232,6 +234,15 @@ const TargetProfile* FindTargetProfileById(const std::vector<TargetProfile>& pro
 std::string MakeProfileId(std::string_view executable_relative_path);
 
 std::string_view ExecutableFormatHintName(ExecutableFormatHint format_hint);
+
+// The Win32 directory the guest runs from: the profile's drive and directory,
+// or "D:\\ez2dj" when the dump carries no evidence of one, the root the
+// Windows launcher has always given the VFS.
+std::string GuestRootPath(const TargetProfile& profile);
+
+// The guest's full path of the profile executable under GuestRootPath, for
+// example "D:\\ez2dj\\EZ2DJ.EXE".
+std::string GuestExecutablePath(const TargetProfile& profile);
 
 }  // namespace re2dj::target
 

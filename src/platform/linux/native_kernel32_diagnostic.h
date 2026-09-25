@@ -2,6 +2,7 @@
 #define RE2DJ_PLATFORM_LINUX_NATIVE_KERNEL32_DIAGNOSTIC_H_
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -9,6 +10,12 @@
 #include "native_guest_module_set.h"
 #include "native_import_bridge.h"
 #include "native_import_thunks.h"
+#include "native_low_memory.h"
+#include "re2dj/exe/pe_image.h"
+#include "re2dj/hle/api_call_record.h"
+#include "re2dj/hle/guest_devices.h"
+#include "re2dj/hle/guest_files.h"
+#include "re2dj/hle/guest_process.h"
 #include "re2dj/hle/import_dispatcher.h"
 #include "re2dj/platform/linux/original_runner.h"
 #include "re2dj/runtime/pe_loader.h"
@@ -18,8 +25,8 @@ namespace re2dj::platform::linux
 
 class NativePeSession;
 
-// Shared state for the Linux i386 in-process diagnostics that run the original
-// image against the kernel32 and user32 facades. It owns facade registration,
+// Shared state for the Linux in-process diagnostics that run the original
+// image against the guest facade modules. It owns facade registration,
 // static IAT rebinding, the bounded guest-memory services the kernel32 handlers need, and
 // the resolver-identity observation. Diagnostics keep only their own boundary.
 class NativeKernel32Diagnostic final : public hle::ImportCallServices
@@ -38,6 +45,11 @@ public:
     // facade. A gate outside the facade is recorded as the first unhandled
     // import and reported as unhandled so the bridge returns zero.
     bool Dispatch(const NativeImportGateEvent& event, NativeImportGateResult* output);
+
+    // What the last facade dispatch did through its services, and the
+    // handler's failure text when it failed.
+    const hle::ApiCallRecord& last_record() const { return last_record_; }
+    const std::string& dispatch_error() const { return dispatch_error_; }
 
     // True when the event is a call through the named kernel32 facade export.
     bool IsExportCall(const NativeImportGateEvent& event, std::string_view export_name) const;
@@ -86,12 +98,53 @@ public:
                                           std::string_view name) const override;
     runtime::GuestAddress FindGuestExport(runtime::GuestAddress module,
                                           std::uint16_t ordinal) const override;
+    // Guest strings and bytes may lie in the image, the guest stack, a live
+    // guest heap block, or committed VirtualAlloc pages.
+    bool ReadGuestBytes(runtime::GuestAddress address,
+                        std::span<std::uint8_t> bytes,
+                        std::string* error) const override;
+    bool WriteGuestBytes(runtime::GuestAddress address,
+                         std::span<const std::uint8_t> bytes,
+                         std::string* error) const override;
+    bool IsGuestModule(runtime::GuestAddress handle) const override;
+    std::string GuestModuleName(runtime::GuestAddress handle) const override;
+    hle::GuestDeviceSet* Devices() const override;
+    hle::GuestProcess* Process() const override;
+    // The host's CLOCK_REALTIME with its local offset, and CLOCK_MONOTONIC.
+    bool ReadClock(hle::GuestClockReading* reading) const override;
+    void SetLastError(std::uint32_t value) const override;
+    std::uint32_t LastError() const override;
+    // Calls the guest function on the guest stack below the import being
+    // dispatched; its own imports dispatch as nested calls.
+    bool CallGuest(hle::GuestCall* call, std::uint32_t* result, std::string* error) const override;
+    // The host's presentation for this run, or null to show nothing.
+    void SetPresentation(hle::HostPresentation* presentation) { presentation_ = presentation; }
+    hle::HostPresentation* Presentation() const override { return presentation_; }
+
+    // The devices the guest may open during this run, sharing the guest
+    // process's handle space.
+    void ConfigureDevices(hle::GuestDeviceConfig config);
+    // The files the guest may open, from the CHD and overlay; false when the
+    // CHD cannot be opened.
+    bool ConfigureFiles(hle::GuestFileConfig config, std::string* error);
+    hle::GuestFiles* Files() const override;
+
+    // Records the mapped image's pages with the Windows loader's protections
+    // and its guest path.
+    void DescribeImage(const exe::PeImageInfo& image_info, std::string module_path);
+    const hle::GuestDeviceSet& devices() const { return devices_; }
+
+    // True when the module at module_handle declares name absent, so a NULL
+    // GetProcAddress for it is the answer Windows gives too.
+    bool IsAbsentExport(std::uint32_t module_handle, std::string_view name) const;
 
 private:
     const runtime::ImportGate* FindSessionGate(std::uint32_t address) const;
     void RecordUnresolvedLookup(std::string request) const;
+    bool GuestRangeReadable(std::uint32_t address, std::size_t size) const;
 
     std::uint32_t image_base_ = 0;
+    hle::HostPresentation* presentation_ = nullptr;
     std::uint32_t image_size_ = 0;
     mutable std::uint32_t stack_base_ = 0;
     mutable std::uint32_t stack_limit_ = 0;
@@ -114,6 +167,15 @@ private:
     std::uint32_t stop_stub_ = 0;
     std::uint32_t stopped_return_address_ = 0;
     std::string dispatch_error_;
+    hle::ApiCallRecord last_record_;
+    mutable hle::GuestDeviceSet devices_;
+    mutable hle::GuestFiles files_;
+    // The guest heap's region below 4 GiB, mapped during Setup.
+    NativeLowMemory heap_;
+    // The VirtualAlloc arena below 4 GiB, mapped during Setup.
+    NativeLowMemory private_arena_;
+    mutable hle::GuestProcess process_;
+    mutable std::uint32_t last_error_ = 0;
 };
 
 }  // namespace re2dj::platform::linux

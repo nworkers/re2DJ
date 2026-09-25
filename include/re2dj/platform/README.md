@@ -12,6 +12,6 @@
 
 *Public platform-implementation headers live under `include/re2dj/platform/<os>/`. Keep host-width-neutral or x86/x64-shared declarations at that root, 32-bit-only declarations under `x86/`, and 64-bit-only declarations under `x64/`. A 32-bit guest address alone does not place a header under `x86/`.*
 
-`windows/native_helper_backend.h`는 Windows native helper의 구체적인 `ExecutionBackend` adapter를 선언하지만 PImpl을 사용해 Win32 type을 공개하지 않습니다.
+공개 header에는 Win32·Linux host type을 드러내지 않습니다. native helper의 `ExecutionBackend` adapter header는 작업 379에서 제거했습니다.
 
-*`windows/native_helper_backend.h` declares the concrete Windows native-helper `ExecutionBackend` adapter but uses PImpl so no Win32 type is exposed.*
+*Public headers expose no Win32 or Linux host types. The native helper's `ExecutionBackend` adapter headers were removed in Task 379.*

@@ -22,12 +22,12 @@ constexpr int kExitReadError = 2;
 void PrintUsage()
 {
     std::printf(
-        "re2dj_pe_analyzer %s - dump PE32 headers without loading the image\n"
+        "%s - dump PE32 headers without loading the image\n"
         "\n"
         "Usage:\n"
         "  re2dj_pe_analyzer <file>\n"
         "  re2dj_pe_analyzer --hdd <directory> <guest-relative-path>\n",
-        std::string(re2dj::VersionString()).c_str());
+        re2dj::VersionBanner("re2dj_pe_analyzer", re2dj::VersionString()).c_str());
 }
 
 const char* DirectoryName(std::size_t index)

@@ -1,5 +1,7 @@
 #include "audio_volume_trace.h"
 
+#include "runtime_log.h"
+
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -40,30 +42,6 @@ void Re2djAudioTrace(const char* format, ...)
     {
         return;
     }
-    char directory[MAX_PATH] = {};
-    std::strncpy(directory, g_re2dj_audio_trace_path, sizeof(directory) - 1);
-    char* last_slash = std::strrchr(directory, '/');
-    if (!last_slash)
-    {
-        last_slash = std::strrchr(directory, '\\');
-    }
-    if (last_slash != nullptr)
-    {
-        *last_slash = '\0';
-        CreateDirectoryA(directory, nullptr);
-    }
-    HANDLE trace = CreateFileA(g_re2dj_audio_trace_path,
-                               FILE_APPEND_DATA,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               nullptr,
-                               OPEN_ALWAYS,
-                               FILE_ATTRIBUTE_NORMAL,
-                               nullptr);
-    if (trace == INVALID_HANDLE_VALUE)
-    {
-        return;
-    }
-    DWORD written = 0;
-    WriteFile(trace, message, static_cast<DWORD>(used + 2), &written, nullptr);
-    CloseHandle(trace);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kAudio,
+                                              message);
 }

@@ -59,6 +59,9 @@ COM 인터페이스(DirectDraw, Direct3D, DirectSound 등)는 vtable 기반이�
 
 ## 3. 데스크톱 native helper thunk / Desktop native-helper thunks
 
+> 이 helper 경로는 작업 379에서 제거되었다. 같은 thunk 방식은 Linux in-process 실행의 facade import thunk로 이어진다.
+> *This helper path was removed in Task 379; the same thunk approach continues as the facade import thunks of Linux in-process execution.*
+
 별도 32비트 helper에서 게스트 x86을 네이티브 실행할 때 IAT에는 64비트 host의 synthetic gate 주소를 직접 쓸 수 없습니다. helper 주소 공간에 실행 가능한 import별 thunk를 만들고 IAT에는 그 실제 주소를 씁니다. thunk는 별도의 synthetic gate identity를 bridge에 전달하므로 host dispatcher는 backend 구현 주소가 아니라 `ImportGateTable` metadata로 API를 식별합니다.
 
 *When guest x86 runs natively in a separate 32-bit helper, the IAT cannot directly contain a synthetic gate address owned by the 64-bit host model. Each import gets an executable thunk in the helper address space, and the IAT receives that real address. The thunk separately passes its synthetic gate identity to the bridge, allowing the host dispatcher to identify APIs through `ImportGateTable` metadata rather than backend implementation addresses.*

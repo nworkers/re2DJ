@@ -2,6 +2,7 @@
 
 #include "graphics_trace_log.h"
 #include "host_window_shell.h"
+#include "re2dj/version.h"
 
 #include <dwmapi.h>
 
@@ -19,8 +20,7 @@ extern "C" __declspec(dllexport) volatile DWORD g_re2dj_fullscreen = FALSE;
 namespace
 {
 
-constexpr char kWindowTitleFormat[] =
-    "re2DJ v%s - Build %s - SDL3 OpenGL - FPS : %.1f";
+// "re2DJ v0.0.52 (Win/x86 Debug) - Build Sep 26 2026 - SDL3 OpenGL - FPS : 60.0"
 constexpr DWORD kDefaultWindowScale = 2;
 constexpr DWORD kWindowedStyle = WS_OVERLAPPEDWINDOW;
 constexpr DWORD kFullscreenStyle = WS_POPUP;
@@ -265,8 +265,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djUpdateWindowTitle(HWND window,
         return FALSE;
     }
     char title[192] = {};
-    const int length = std::snprintf(
-        title, sizeof(title), kWindowTitleFormat, RE2DJ_VERSION, __DATE__, fps);
+    const std::string text = re2dj::WindowTitle(RE2DJ_VERSION, fps);
+    const int length = std::snprintf(title, sizeof(title), "%s", text.c_str());
     if (length <= 0 || static_cast<std::size_t>(length) >= sizeof(title))
     {
         SetLastError(ERROR_INSUFFICIENT_BUFFER);

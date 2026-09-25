@@ -1,16 +1,26 @@
 #include "native_kernel32_diagnostic.h"
 
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
+#include "native_guest_seh.h"
 #include "native_low_memory.h"
 #include "native_pe_session.h"
+#include "re2dj/hle/modules/advapi32_module.h"
+#include "re2dj/hle/win32_time.h"
 #include "re2dj/hle/modules/kernel32_module.h"
+#include "re2dj/hle/modules/resolve_only_modules.h"
 #include "re2dj/hle/modules/user32_module.h"
+#include "re2dj/hle/modules/ddraw_module.h"
+#include "re2dj/hle/modules/gdi32_module.h"
+#include "re2dj/hle/modules/winmm_module.h"
+#include "re2dj/hle/modules/wtsapi32_module.h"
 
 namespace re2dj::platform::linux
 {
@@ -19,6 +29,13 @@ namespace
 
 constexpr std::size_t kMaximumGuestStringLength = 260;
 constexpr std::string_view kKernel32Module = "kernel32.dll";
+// Room for the guest heap blocks facade calls hand out, such as WTS buffers.
+constexpr std::uint32_t kGuestHeapSize = 1024U * 1024U;
+// Room for VirtualAlloc regions and HeapCreate heaps, plus one allocation
+// granule so the first region can start on a 64 KiB boundary. Pages are
+// backed only once the guest touches them.
+constexpr std::uint32_t kGuestPrivateArenaSize =
+    512U * 1024U * 1024U + hle::GuestProcess::kAllocationGranularity;
 
 bool StackContains(const NativeImportGateEvent& event,
                    std::uint32_t address,
@@ -44,8 +61,11 @@ NativeKernel32Diagnostic::NativeKernel32Diagnostic(std::uint32_t image_base,
 
 NativeKernel32Diagnostic::~NativeKernel32Diagnostic()
 {
+    ReleaseNativeLowMemory(&heap_);
+    ReleaseNativeLowMemory(&private_arena_);
     if (stop_stub_ != 0)
     {
+        SetNativeHostTrapRange(0, 0);
         munmap(reinterpret_cast<void*>(static_cast<std::uintptr_t>(stop_stub_)),
                static_cast<std::size_t>(sysconf(_SC_PAGESIZE)));
     }
@@ -54,20 +74,73 @@ NativeKernel32Diagnostic::~NativeKernel32Diagnostic()
 bool NativeKernel32Diagnostic::Setup(NativePeSession* session, void* context, std::string* error)
 {
     auto* state = static_cast<NativeKernel32Diagnostic*>(context);
-    if (session == nullptr || state == nullptr || error == nullptr ||
-        !state->modules_.Add(hle::modules::MakeKernel32ModuleDescriptor(),
-                             session->mutable_gates(),
-                             NativeImportGateBridgeAddress(),
-                             NativeImportGateCleanupAddress(),
-                             kDefaultNativeGuestModuleBase,
-                             error) ||
-        !state->modules_.Add(hle::modules::MakeUser32ModuleDescriptor(),
-                             session->mutable_gates(),
-                             NativeImportGateBridgeAddress(),
-                             NativeImportGateCleanupAddress(),
-                             kDefaultNativeGuestModuleBase,
-                             error) ||
-        !RebindNativeGuestModuleImports(session->mutable_import_thunks(),
+    if (session == nullptr || state == nullptr || error == nullptr)
+    {
+        return false;
+    }
+    std::vector<hle::modules::GuestModuleDescriptor> descriptors = {
+        hle::modules::MakeKernel32ModuleDescriptor(),
+        hle::modules::MakeUser32ModuleDescriptor(),
+        hle::modules::MakeAdvapi32ModuleDescriptor(),
+        hle::modules::MakeWtsapi32ModuleDescriptor(),
+        hle::modules::MakeWinmmModuleDescriptor(),
+        hle::modules::MakeGdi32ModuleDescriptor(),
+        hle::modules::MakeDdrawModuleDescriptor()};
+    for (hle::modules::GuestModuleDescriptor& descriptor :
+         hle::modules::MakeResolveOnlyModuleDescriptors())
+    {
+        descriptors.push_back(std::move(descriptor));
+    }
+    for (hle::modules::GuestModuleDescriptor& descriptor : descriptors)
+    {
+        if (!state->modules_.Add(std::move(descriptor),
+                                 session->mutable_gates(),
+                                 NativeImportGateBridgeAddress(),
+                                 NativeImportGateCleanupAddress(),
+                                 kDefaultNativeGuestModuleBase,
+                                 error))
+        {
+            return false;
+        }
+    }
+    if (state->heap_.memory == nullptr &&
+        !MapNativeLowMemory(kGuestHeapSize, PROT_READ | PROT_WRITE, &state->heap_, error))
+    {
+        return false;
+    }
+    state->process_.SetHeapRegion(state->heap_.address, state->heap_.size);
+    // Facade modules are images too: the guest may change their pages'
+    // protection and patch their exports, as it can with a system DLL.
+    for (const hle::modules::RegisteredGuestModule* module : state->modules_.registry().modules())
+    {
+        exe::PeImageInfo facade_info;
+        std::string facade_error;
+        if (!exe::ReadPeImageInfo(reinterpret_cast<const std::uint8_t*>(
+                                      static_cast<std::uintptr_t>(module->base.value())),
+                                  module->image_size,
+                                  &facade_info,
+                                  &facade_error))
+        {
+            *error = "cannot read a guest facade's headers: " + facade_error;
+            return false;
+        }
+        std::vector<hle::GuestImageSection> sections;
+        for (const exe::PeSection& section : facade_info.sections)
+        {
+            sections.push_back({section.virtual_address, section.virtual_size, section.characteristics});
+        }
+        state->process_.AddImageRegion(module->base.value(), module->image_size, sections);
+    }
+    if (state->private_arena_.memory == nullptr &&
+        !MapNativeLowMemory(kGuestPrivateArenaSize,
+                            PROT_READ | PROT_WRITE,
+                            &state->private_arena_,
+                            error))
+    {
+        return false;
+    }
+    state->process_.SetPrivateArena(state->private_arena_.address, state->private_arena_.size);
+    if (!RebindNativeGuestModuleImports(session->mutable_import_thunks(),
                                         state->modules_.registry(),
                                         &state->rebindings_,
                                         error))
@@ -122,7 +195,38 @@ bool NativeKernel32Diagnostic::Dispatch(const NativeImportGateEvent& event,
         }
         return false;
     }
-    return modules_.Dispatch(event, output, &dispatch_error_, this);
+    // A handler that calls into the guest dispatches nested imports before it
+    // returns, so the record and error stay local until this call is done.
+    hle::ApiCallRecord record;
+    std::string dispatch_error;
+    const hle::RecordingImportCallServices recording(*this, &record);
+    const bool handled = modules_.Dispatch(event, output, &dispatch_error, &recording);
+    last_record_ = std::move(record);
+    dispatch_error_ = std::move(dispatch_error);
+    return handled;
+}
+
+bool NativeKernel32Diagnostic::CallGuest(hle::GuestCall* call,
+                                         std::uint32_t* result,
+                                         std::string* error) const
+{
+    if (call == nullptr || result == nullptr)
+    {
+        if (error != nullptr) *error = "guest call is null";
+        return false;
+    }
+    std::string call_error;
+    const bool called = CallNativeGuestStdcall(call->function,
+                                               call->arguments,
+                                               call->data,
+                                               call->data_argument,
+                                               result,
+                                               &call_error);
+    if (error != nullptr)
+    {
+        *error = std::move(call_error);
+    }
+    return called;
 }
 
 bool NativeKernel32Diagnostic::IsExportCall(const NativeImportGateEvent& event,
@@ -222,6 +326,9 @@ bool NativeKernel32Diagnostic::PrepareStopStub(std::string* error)
         return false;
     }
     stop_stub_ = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(page));
+    // The stub's INT3 ends the diagnostic; it must not reach a guest SEH frame
+    // such as the CRT's.
+    SetNativeHostTrapRange(stop_stub_, static_cast<std::uint32_t>(page_size));
     return true;
 }
 
@@ -285,9 +392,7 @@ bool NativeKernel32Diagnostic::ReadGuestString(runtime::GuestAddress address,
     for (std::size_t index = 0; index < kMaximumGuestStringLength; ++index)
     {
         const std::uint32_t current = address.value() + static_cast<std::uint32_t>(index);
-        const bool in_image = ImageContains(current, 1);
-        const bool in_stack = current >= stack_limit_ && current < stack_base_;
-        if (!in_image && !in_stack)
+        if (!GuestRangeReadable(current, 1))
         {
             *error = "guest string lies outside readable diagnostic ranges";
             return false;
@@ -310,7 +415,10 @@ runtime::GuestAddress NativeKernel32Diagnostic::FindGuestModule(std::string_view
     const hle::modules::RegisteredGuestModule* module = modules_.registry().FindModule(name);
     if (module == nullptr)
     {
-        RecordUnresolvedLookup("GetModuleHandleA(" + std::string(name) + ")");
+        if (!hle::modules::IsAbsentGuestModule(name))
+        {
+            RecordUnresolvedLookup("GetModuleHandleA(" + std::string(name) + ")");
+        }
         return {};
     }
     if (module->base == registry_kernel32_base_)
@@ -327,7 +435,10 @@ runtime::GuestAddress NativeKernel32Diagnostic::FindGuestExport(runtime::GuestAd
         modules_.registry().FindExport(module, name);
     if (export_entry == nullptr)
     {
-        RecordUnresolvedLookup("GetProcAddress(" + std::string(name) + ")");
+        if (!modules_.registry().IsAbsentExport(module, name))
+        {
+            RecordUnresolvedLookup("GetProcAddress(" + std::string(name) + ")");
+        }
         return {};
     }
     if (name == "GetVersion")
@@ -372,6 +483,146 @@ const runtime::ImportGate* NativeKernel32Diagnostic::FindSessionGate(std::uint32
         }
     }
     return nullptr;
+}
+
+bool NativeKernel32Diagnostic::GuestRangeReadable(std::uint32_t address, std::size_t size) const
+{
+    if (size == 0)
+    {
+        return true;
+    }
+    const bool in_stack = address >= stack_limit_ && address <= stack_base_ &&
+                          size <= stack_base_ - address;
+    if (size > std::numeric_limits<std::uint32_t>::max())
+    {
+        return false;
+    }
+    const auto size32 = static_cast<std::uint32_t>(size);
+    return ImageContains(address, size) || in_stack || process_.BlockContains(address, size32) ||
+           process_.Accessible(address, size32);
+}
+
+bool NativeKernel32Diagnostic::IsGuestModule(runtime::GuestAddress handle) const
+{
+    return modules_.registry().FindModule(handle) != nullptr;
+}
+
+std::string NativeKernel32Diagnostic::GuestModuleName(runtime::GuestAddress handle) const
+{
+    const hle::modules::RegisteredGuestModule* module = modules_.registry().FindModule(handle);
+    return module == nullptr ? std::string() : module->name;
+}
+
+bool NativeKernel32Diagnostic::IsAbsentExport(std::uint32_t module_handle,
+                                              std::string_view name) const
+{
+    return modules_.registry().IsAbsentExport(runtime::GuestAddress(module_handle), name);
+}
+
+hle::GuestProcess* NativeKernel32Diagnostic::Process() const
+{
+    return &process_;
+}
+
+bool NativeKernel32Diagnostic::ReadClock(hle::GuestClockReading* reading) const
+{
+    timespec now = {};
+    timespec monotonic = {};
+    tm local = {};
+    if (reading == nullptr || clock_gettime(CLOCK_REALTIME, &now) != 0 ||
+        clock_gettime(CLOCK_MONOTONIC, &monotonic) != 0 || now.tv_sec < 0 ||
+        localtime_r(&now.tv_sec, &local) == nullptr)
+    {
+        return false;
+    }
+    reading->utc_file_time = hle::kFileTimeUnixEpoch +
+                             static_cast<std::uint64_t>(now.tv_sec) * hle::kFileTimeTicksPerSecond +
+                             static_cast<std::uint64_t>(now.tv_nsec) / 100U;
+    reading->local_offset_minutes = static_cast<std::int32_t>(local.tm_gmtoff / 60);
+    reading->tick_ms = static_cast<std::uint32_t>(static_cast<std::uint64_t>(monotonic.tv_sec) * 1000U +
+                                                  static_cast<std::uint64_t>(monotonic.tv_nsec) / 1000000U);
+    return true;
+}
+
+bool NativeKernel32Diagnostic::ReadGuestBytes(runtime::GuestAddress address,
+                                              std::span<std::uint8_t> bytes,
+                                              std::string* error) const
+{
+    if (!GuestRangeReadable(address.value(), bytes.size()))
+    {
+        if (error != nullptr) *error = "guest bytes lie outside readable diagnostic ranges";
+        return false;
+    }
+    if (!bytes.empty())
+    {
+        std::memcpy(bytes.data(),
+                    reinterpret_cast<const void*>(static_cast<std::uintptr_t>(address.value())),
+                    bytes.size());
+    }
+    return true;
+}
+
+bool NativeKernel32Diagnostic::WriteGuestBytes(runtime::GuestAddress address,
+                                               std::span<const std::uint8_t> bytes,
+                                               std::string* error) const
+{
+    if (!GuestRangeReadable(address.value(), bytes.size()))
+    {
+        if (error != nullptr) *error = "guest bytes lie outside writable diagnostic ranges";
+        return false;
+    }
+    if (!bytes.empty())
+    {
+        std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(address.value())),
+                    bytes.data(),
+                    bytes.size());
+    }
+    return true;
+}
+
+hle::GuestDeviceSet* NativeKernel32Diagnostic::Devices() const
+{
+    return &devices_;
+}
+
+void NativeKernel32Diagnostic::SetLastError(std::uint32_t value) const
+{
+    last_error_ = value;
+}
+
+std::uint32_t NativeKernel32Diagnostic::LastError() const
+{
+    return last_error_;
+}
+
+void NativeKernel32Diagnostic::ConfigureDevices(hle::GuestDeviceConfig config)
+{
+    devices_ = hle::GuestDeviceSet(std::move(config));
+    devices_.SetHandleAllocator(&process_.handles());
+}
+
+bool NativeKernel32Diagnostic::ConfigureFiles(hle::GuestFileConfig config, std::string* error)
+{
+    files_.SetHandleAllocator(&process_.handles());
+    return files_.Configure(std::move(config), error);
+}
+
+hle::GuestFiles* NativeKernel32Diagnostic::Files() const
+{
+    return files_.configured() ? &files_ : nullptr;
+}
+
+void NativeKernel32Diagnostic::DescribeImage(const exe::PeImageInfo& image_info,
+                                             std::string module_path)
+{
+    process_.SetMainImage(image_base_, std::move(module_path));
+    std::vector<hle::GuestImageSection> sections;
+    sections.reserve(image_info.sections.size());
+    for (const exe::PeSection& section : image_info.sections)
+    {
+        sections.push_back({section.virtual_address, section.virtual_size, section.characteristics});
+    }
+    process_.AddImageRegion(image_base_, image_info.size_of_image, sections);
 }
 
 }  // namespace re2dj::platform::linux

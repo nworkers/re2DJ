@@ -14,8 +14,11 @@
 #include <vector>
 
 #include "re2dj/hle/hardlock/api_descriptor.h"
+#include "runtime_log.h"
 #include "re2dj/hle/hardlock/protocol.h"
 #include "re2dj/hle/hardlock/device.h"
+#include "re2dj/hle/hardlock/device_call.h"
+#include "re2dj/hle/guest_device_path.h"
 #include "re2dj/hle/hardlock/transform_responses.h"
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/input/legacy_io_port_bus.h"
@@ -280,6 +283,8 @@ bool ClaimWtsQueryTraceBudget()
            kMaximumWtsQueryDiagnostics;
 }
 
+// Appends raw text to a data file, such as the Hardlock transform input dump,
+// whose exact format a reader relies on. Records go through WriteRuntimeLog.
 void AppendDiagnosticFile(const char* path, const char* message)
 {
     if (path == nullptr || path[0] == '\0' || message == nullptr)
@@ -308,7 +313,8 @@ void AppendDiagnosticFile(const char* path, const char* message)
 
 void AppendVfsTraceMessage(const char* message)
 {
-    AppendDiagnosticFile(g_re2dj_vfs_trace_path, message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kVfs,
+                                              message);
 }
 
 // A file handle the guest opens and then abandons leaves no trace of its own,
@@ -438,20 +444,7 @@ void ReportDynamicResolverCallerWindow(std::uintptr_t caller)
 // Running totals of the Hardlock requests this process answered, kept so the
 // exit record can say whether the protection was involved. Log order alone
 // cannot: a request can be the last line written and still be seconds old.
-struct HardlockActivity
-{
-    unsigned total = 0;
-    unsigned initialize = 0;
-    unsigned handshake = 0;
-    unsigned descriptor = 0;
-    unsigned transform = 0;
-    unsigned other = 0;
-    unsigned rejected = 0;
-    const char* last_kind = "none";
-    const char* last_outcome = "none";
-    unsigned last_bytes = 0;
-    ULONGLONG last_tick = 0;
-};
+using HardlockActivity = re2dj::hle::hardlock::HardlockDeviceActivity;
 
 HardlockActivity g_hardlock_activity;
 
@@ -791,7 +784,7 @@ void ReportCrashException(EXCEPTION_POINTERS* exception)
                   code_hex,
                   stack_hex);
     AppendVfsTraceMessage(message);
-    OutputDebugStringA(message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
 
     // Read 128-byte code window around faulting address (64 bytes before, 64 bytes after)
     const std::uintptr_t code_win_start = address >= 64 ? address - 64 : 0;
@@ -857,7 +850,7 @@ void ReportCrashException(EXCEPTION_POINTERS* exception)
                   ebp_hex,
                   ecx_hex);
     AppendVfsTraceMessage(detail_msg);
-    OutputDebugStringA(detail_msg);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, detail_msg);
 
     // A divide-by-zero through a struct field says which field, but not where
     // that field is written. The packed image is decrypted by the time it
@@ -1607,80 +1600,28 @@ bool CompleteHardlockRequest(DWORD control_code,
                                 : std::span<std::uint8_t>(output_bytes, output_size);
 
     re2dj::hle::hardlock::HardlockDevice device(BuildHardlockDeviceOptions());
-    const re2dj::hle::hardlock::HardlockDeviceResult result =
-        device.Complete(control_code, input_span, output_span);
-    if (result.outcome == re2dj::hle::hardlock::HardlockOutcome::kNotHandled)
+    const re2dj::hle::hardlock::HardlockDeviceCall call =
+        re2dj::hle::hardlock::CompleteHardlockDeviceIoControl(
+            device, control_code, input_span, output_span);
+    if (!call.handled)
     {
         return false;
     }
 
-    char message[256] = {};
-    std::snprintf(message,
-                  sizeof(message),
-                  "re2dj:vfs:hardlock-device:request=%s:outcome=%s:bytes=%u:"
-                  "handshake_answered=%u:status_cleared=%u:tail=%u:"
-                  "mapped=%u:unmapped=%u:payload=%u:tick_ms=%llu\r\n",
-                  re2dj::hle::hardlock::HardlockRequestKindName(result.kind),
-                  re2dj::hle::hardlock::HardlockOutcomeName(result.outcome),
-                  static_cast<unsigned>(result.bytes_written),
-                  result.handshake_answered ? 1u : 0u,
-                  result.descriptor_status_cleared ? 1u : 0u,
-                  result.descriptor_tail_written ? 1u : 0u,
-                  static_cast<unsigned>(result.transform_blocks_mapped),
-                  static_cast<unsigned>(result.transform_blocks_unmapped),
-                  result.transform_payload_mapped ? 1u : 0u,
-                  static_cast<unsigned long long>(GetTickCount64()));
-    AppendVfsTraceMessage(message);
-
+    const ULONGLONG tick = GetTickCount64();
+    AppendVfsTraceMessage(
+        re2dj::hle::hardlock::FormatHardlockDeviceTrace(call.result, tick).c_str());
     // Same place, same facts, kept for the exit record. Counting here rather
     // than parsing the trace back keeps the two in step even when the trace
     // file is absent.
-    ++g_hardlock_activity.total;
-    switch (result.kind)
-    {
-        case re2dj::hle::hardlock::HardlockRequestKind::kInitialize:
-            ++g_hardlock_activity.initialize;
-            break;
-        case re2dj::hle::hardlock::HardlockRequestKind::kHandshake:
-            ++g_hardlock_activity.handshake;
-            break;
-        case re2dj::hle::hardlock::HardlockRequestKind::kDescriptor:
-            ++g_hardlock_activity.descriptor;
-            break;
-        case re2dj::hle::hardlock::HardlockRequestKind::kTransform:
-            ++g_hardlock_activity.transform;
-            break;
-        default:
-            ++g_hardlock_activity.other;
-            break;
-    }
-    if (result.outcome == re2dj::hle::hardlock::HardlockOutcome::kRejectedShape)
-    {
-        ++g_hardlock_activity.rejected;
-    }
-    g_hardlock_activity.last_kind =
-        re2dj::hle::hardlock::HardlockRequestKindName(result.kind);
-    g_hardlock_activity.last_outcome =
-        re2dj::hle::hardlock::HardlockOutcomeName(result.outcome);
-    g_hardlock_activity.last_bytes = static_cast<unsigned>(result.bytes_written);
-    g_hardlock_activity.last_tick = GetTickCount64();
+    re2dj::hle::hardlock::RecordHardlockDeviceCall(call.result, tick, &g_hardlock_activity);
 
-    if (result.outcome == re2dj::hle::hardlock::HardlockOutcome::kRejectedShape)
-    {
-        if (bytes_returned != nullptr)
-        {
-            *bytes_returned = 0;
-        }
-        SetLastError(ERROR_INVALID_DATA);
-        *completed = FALSE;
-        return true;
-    }
     if (bytes_returned != nullptr)
     {
-        *bytes_returned = static_cast<DWORD>(result.bytes_written);
+        *bytes_returned = static_cast<DWORD>(call.bytes_returned);
     }
-    SetLastError(ERROR_SUCCESS);
-    *completed = TRUE;
+    SetLastError(static_cast<DWORD>(call.win32_error));
+    *completed = call.succeeded ? TRUE : FALSE;
     return true;
 }
 
@@ -1798,7 +1739,7 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
             else
             {
                 const std::string message = "re2dj:io-config:" + error + "\n";
-                OutputDebugStringA(message.c_str());
+                re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message.c_str());
                 AppendVfsTraceMessage(profile_is_word
                                           ? "re2dj:vfs:io-config:profile=ez2dancer:status=error\r\n"
                                           : "re2dj:vfs:io-config:profile=ez2dj:status=error\r\n");
@@ -2219,8 +2160,7 @@ bool HasDeviceMockPrefix(const char* name)
     {
         prefix = "\\\\.\\lptdi";
     }
-    const std::size_t prefix_length = std::strlen(prefix);
-    return prefix_length != 0 && _strnicmp(name, prefix, prefix_length) == 0;
+    return re2dj::hle::MatchesGuestDevicePrefix(name, prefix);
 }
 
 bool MapVfsPath(const char* name, bool write, char path[MAX_PATH], char source[MAX_PATH])
@@ -2846,7 +2786,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
     // Taken before any other call so it names the guest's own call site.
     const std::uintptr_t caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     EnsureDiagnosticBoundariesInstalled();
-    OutputDebugStringA(kCreateFileMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kCreateFileMessage);
     ReportVfsCreateFileRequest(name, access, disposition, flags);
     ReportAssetOpenCallerWindow(name, caller);
     if (name == nullptr)
@@ -2985,7 +2925,7 @@ extern "C" __declspec(dllexport) HANDLE WINAPI Re2djVfsCreateFileA(
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
     HANDLE handle, LPVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped)
 {
-    OutputDebugStringA(kFileApiMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFileApiMessage);
     ChdFileHandle* chd_handle = LookupChdFileHandle(handle);
     const char* kind = IsDeviceMockHandle(handle)
                            ? "device"
@@ -3057,7 +2997,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsReadFile(
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsWriteFile(
     HANDLE handle, LPCVOID buffer, DWORD size, LPDWORD transferred, LPOVERLAPPED overlapped)
 {
-    OutputDebugStringA(kFileApiMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFileApiMessage);
     if (IsDeviceMockHandle(handle))
     {
         if (transferred != nullptr)
@@ -3082,7 +3022,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsWriteFile(
 extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsSetFilePointer(
     HANDLE handle, LONG distance, PLONG distance_high, DWORD method)
 {
-    OutputDebugStringA(kFileApiMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFileApiMessage);
     if (IsDeviceMockHandle(handle))
     {
         SetLastError(ERROR_INVALID_FUNCTION);
@@ -3151,7 +3091,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsSetFilePointer(
 extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileSize(
     HANDLE handle, LPDWORD high)
 {
-    OutputDebugStringA(kFileApiMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFileApiMessage);
     if (IsDeviceMockHandle(handle))
     {
         SetLastError(ERROR_INVALID_FUNCTION);
@@ -3176,7 +3116,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsFindClose(HANDLE handle);
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle)
 {
-    OutputDebugStringA(kFileApiMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFileApiMessage);
     if (IsDeviceMockHandle(handle))
     {
         SetLastError(ERROR_SUCCESS);
@@ -3200,7 +3140,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsCloseHandle(HANDLE handle)
 
 extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileType(HANDLE handle)
 {
-    OutputDebugStringA(kFileApiMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFileApiMessage);
     if (IsDeviceMockHandle(handle))
     {
         SetLastError(ERROR_SUCCESS);
@@ -3477,7 +3417,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI Re2djDeviceIoControlMock(
     LPDWORD bytes_returned,
     LPOVERLAPPED overlapped)
 {
-    OutputDebugStringA(kDeviceIoControlMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kDeviceIoControlMessage);
     if (IsDeviceMockHandle(handle))
     {
         ReportDeviceIoControlCode(control_code, input, input_size, output_size);
@@ -3701,15 +3641,19 @@ BOOL WINAPI Re2djObserveWtsQuerySessionInformationA(
     const BOOL result = g_original_wts_query_session_information_a(
         server, session_id, info_class, buffer, bytes_returned);
     const DWORD error = GetLastError();
+    // WTS_INFO_CLASS value 4 is WTSSessionId (WTSConnectState is 8). The
+    // protection checks for session 0, the Windows XP console session; since
+    // Vista that session belongs to services and user sessions are 1 or
+    // higher, so only a successful current-session ID query is rewritten.
     constexpr DWORD kWtsCurrentSession = 0xffffffffu;
-    constexpr DWORD kWtsConnectState = 4;
+    constexpr DWORD kWtsSessionId = 4;
     if (result != FALSE && g_re2dj_wts_console_session_mock != 0 &&
-        session_id == kWtsCurrentSession && info_class == kWtsConnectState &&
+        session_id == kWtsCurrentSession && info_class == kWtsSessionId &&
         buffer != nullptr && *buffer != nullptr && bytes_returned != nullptr &&
         *bytes_returned == sizeof(std::uint32_t))
     {
-        const std::uint32_t active_state = 0;
-        std::memcpy(*buffer, &active_state, sizeof(active_state));
+        const std::uint32_t console_session_id = 0;
+        std::memcpy(*buffer, &console_session_id, sizeof(console_session_id));
     }
     ReportWtsQuery(session_id, info_class, result, buffer, bytes_returned);
     SetLastError(error);
@@ -4033,8 +3977,8 @@ extern "C" __declspec(dllexport) __declspec(noinline) void WINAPI Re2djProbeExit
                   "re2dj:probe:ExitProcess:code=0x%08x:return=0x%08x",
                   static_cast<unsigned>(code),
                   static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(_ReturnAddress())));
-    OutputDebugStringA(message);
-    OutputDebugStringA(kExitProcessMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kExitProcessMessage);
     ExitProcess(code);
 }
 

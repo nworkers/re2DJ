@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "re2dj/hle/import_dispatcher.h"
@@ -26,6 +27,9 @@ struct GuestModuleDescriptor
     std::string name;
     std::vector<std::string> aliases;
     std::vector<GuestExportDescriptor> exports;
+    // Names the real DLL does not export either. A lookup for one returns NULL
+    // on Windows too, so it is an expected answer rather than a missing export.
+    std::vector<std::string> absent_exports;
 };
 
 struct GuestModuleMapping
@@ -48,10 +52,21 @@ struct RegisteredGuestModule
     runtime::GuestAddress base;
     std::uint32_t image_size = 0;
     std::vector<RegisteredGuestExport> exports;
+    std::vector<std::string> absent_exports;
 };
 
 bool ValidateGuestModuleDescriptor(const GuestModuleDescriptor& descriptor,
                                    std::string* error);
+
+// Handler for an export the guest has only been seen to resolve. The address
+// is real, but a call fails with a message naming the export instead of
+// returning a guessed result.
+bool UnimplementedExport(const ImportCall& call, ImportReturn* result, std::string* error);
+
+// True for a DLL a normal Windows installation does not have, such as the
+// Citrix client's wfapi.dll, so LoadLibraryA failing for it matches Windows.
+// Case-insensitive; the ".dll" extension is optional.
+bool IsAbsentGuestModule(std::string_view name);
 
 }  // namespace re2dj::hle::modules
 

@@ -12,19 +12,9 @@
 #include "../native_instruction_trace.h"
 #include "native_compat_mode.h"
 #include "re2dj/hle/modules/kernel32_module.h"
-#include "re2dj/platform/linux/native_helper_backend.h"
+#include "../../native_probe_fixture.h"
 
-namespace re2dj::platform::windows
-{
-
-using NativeHelperBackend = re2dj::platform::linux::NativeHelperBackend;
-
-}  // namespace re2dj::platform::windows
-
-#define RE2DJ_PLATFORM_WINDOWS_NATIVE_HELPER_BACKEND_H_
-#define wmain LinuxFixtureMain
-#include "../../windows/native_ipc_host_probe.cpp"
-#undef wmain
+using namespace re2dj::platform::native_probe;
 
 namespace
 {

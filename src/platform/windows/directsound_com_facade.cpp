@@ -1,4 +1,5 @@
 #include "directsound_com_facade.h"
+#include "runtime_log.h"
 
 #include <atomic>
 #include <cmath>
@@ -70,7 +71,7 @@ void TraceBuffer(const char* operation, DWORD flags, DWORD bytes)
     std::snprintf(message, sizeof(message),
                   "re2dj:audio:%s:flags=0x%08x:bytes=%u", operation,
                   static_cast<unsigned>(flags), static_cast<unsigned>(bytes));
-    OutputDebugStringA(message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
 }
 
 void ForwardBackendTrace(const char* message, void*)
@@ -310,7 +311,7 @@ public:
                       static_cast<void*>(original), static_cast<void*>(*output),
                       static_cast<unsigned>(source->flags()),
                       static_cast<unsigned>(source->byte_count()));
-        OutputDebugStringA(message);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
         return DS_OK;
     }
     HRESULT STDMETHODCALLTYPE SetCooperativeLevel(HWND, DWORD) override { return DS_OK; }
@@ -335,12 +336,12 @@ extern "C" HRESULT WINAPI Re2djHleDirectSoundCreate(GUID*, LPDIRECTSOUND* direct
     auto& backend = Sdl3MixerAudioBackend::Instance();
     re2dj::platform::windows::NoteTimerResolution("post-audio");
     backend.SetDiagnosticCallback(&ForwardBackendTrace, nullptr);
-    OutputDebugStringA("re2dj:audio:DirectSoundCreate");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:audio:DirectSoundCreate");
     if (!backend.has_playback_device())
     {
         char message[512] = {};
         std::snprintf(message, sizeof(message), "re2dj:audio:sdl3-headless:%s", backend.error().c_str());
-        OutputDebugStringA(message);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
     }
     if (!backend.ready() ||
         !backend.SetMasterGain(static_cast<float>(g_re2dj_audio_master_gain)))

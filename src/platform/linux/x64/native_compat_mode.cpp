@@ -1,6 +1,7 @@
 #include "native_compat_mode.h"
 
 #include "../native_guest_seh.h"
+#include "../native_import_bridge.h"
 #include "../native_instruction_trace.h"
 #include "../native_process_bootstrap.h"
 
@@ -226,6 +227,9 @@ struct NativeCompatModeRuntime::Impl
 
     NativeImportGateHandler handler = nullptr;
     void* handler_context = nullptr;
+    // The guest stack pointer at the innermost import being handled, 0 when
+    // none is; guest calls go below it.
+    std::uint32_t import_stack_pointer = 0;
     NativeCompatEnterFunction pending_enter = nullptr;
     std::uint32_t pending_entry = 0;
     std::uint32_t pending_stack_pointer = 0;
@@ -494,6 +498,7 @@ struct NativeCompatModeRuntime::Impl
         g_fault_ebp = 0;
         g_fault_eflags = 0;
         g_exit_requested = 0;
+        import_stack_pointer = 0;
         g_active_runtime = this;
         if (sigsetjmp(g_guest_jump, 1) == 0)
         {
@@ -706,6 +711,69 @@ bool TryDispatchGuestSeh(NativeCompatModeRuntime::Impl* runtime, NativeTrapRegis
 
 }  // namespace
 
+// A nested transition like TryDispatchGuestSeh's, from the host stack of the
+// import being handled: the data and arguments go on the guest stack below
+// that import's landing frame.
+bool CallNativeGuestStdcall(std::uint32_t function,
+                            std::span<const std::uint32_t> arguments,
+                            std::span<std::uint8_t> data,
+                            int data_argument,
+                            std::uint32_t* eax,
+                            std::string* error)
+{
+    constexpr std::uint32_t kGap = 64;
+    constexpr std::uint32_t kReserve = 16 * 1024;
+    NativeCompatModeRuntime::Impl* runtime = g_active_runtime;
+    if (runtime == nullptr || runtime->import_stack_pointer == 0 || function == 0)
+    {
+        *error = "no guest import is being handled";
+        return false;
+    }
+    if (arguments.size() > 16 || data.size() > kNativeGuestCallMaximumData ||
+        (!data.empty() && (data_argument < 0 || static_cast<std::size_t>(data_argument) >= arguments.size())))
+    {
+        *error = "guest call shape is invalid";
+        return false;
+    }
+    const std::uint32_t top = runtime->import_stack_pointer;
+    const std::uint32_t needed = kGap + kNativeGuestCallMaximumData + 16 * 4 + 32 + kReserve;
+    if (top > runtime->stack_base || top < runtime->stack_limit || top - runtime->stack_limit < needed)
+    {
+        *error = "guest stack has no room for a guest call";
+        return false;
+    }
+    const std::uint32_t data_address =
+        (top - kGap - static_cast<std::uint32_t>(data.size())) & ~0xFU;
+    const auto count = static_cast<std::uint32_t>(arguments.size());
+    // The arguments start 16-byte aligned, with the return address below.
+    const std::uint32_t arguments_address = (data_address - count * 4) & ~0xFU;
+    const std::uint32_t call_stack_pointer = arguments_address - 4;
+    if (!data.empty())
+    {
+        std::memcpy(LowPointer(data_address), data.data(), data.size());
+    }
+    WriteGuestU32(call_stack_pointer, TransitionCodeAddress(native_compat_exit32));
+    for (std::uint32_t index = 0; index < count; ++index)
+    {
+        const std::uint32_t value =
+            !data.empty() && index == static_cast<std::uint32_t>(data_argument) ? data_address
+                                                                                : arguments[index];
+        WriteGuestU32(arguments_address + index * 4, value);
+    }
+
+    NativeCompatTransitionState* state = TransitionState();
+    const std::uint64_t saved_host_stack_pointer = state->host_stack_pointer;
+    const std::uint64_t result = NativeCompatEnterGuest(state, function, call_stack_pointer);
+    state->host_stack_pointer = saved_host_stack_pointer;
+    *eax = static_cast<std::uint32_t>(result);
+    if (!data.empty())
+    {
+        std::memcpy(data.data(), LowPointer(data_address), data.size());
+    }
+    error->clear();
+    return true;
+}
+
 }  // namespace re2dj::platform::linux
 
 namespace linux_platform = re2dj::platform::linux;
@@ -730,7 +798,11 @@ extern "C" std::uint64_t NativeCompatImportDispatch(
     }
     event.guest_stack_base = runtime->stack_base;
     event.guest_stack_limit = runtime->stack_limit;
-    if (!runtime->handler(event, &result, runtime->handler_context))
+    const std::uint32_t outer_import_stack_pointer = runtime->import_stack_pointer;
+    runtime->import_stack_pointer = guest_stack_pointer;
+    const bool handled = runtime->handler(event, &result, runtime->handler_context);
+    runtime->import_stack_pointer = outer_import_stack_pointer;
+    if (!handled)
     {
         state->cleanup_bytes = 0;
         linux_platform::ResumeNativeInstructionTrace(event.instruction_pointer);

@@ -27,8 +27,12 @@ public:
     const RegisteredGuestExport* FindExport(runtime::GuestAddress module_handle,
                                             std::uint16_t ordinal) const;
     const RegisteredGuestExport* FindExport(const runtime::ImportGate& gate) const;
+    // True when the module at module_handle declares name absent.
+    bool IsAbsentExport(runtime::GuestAddress module_handle, std::string_view name) const;
 
     std::size_t module_count() const;
+    // Every registered module, in registration order.
+    std::vector<const RegisteredGuestModule*> modules() const;
 
 private:
     std::vector<std::unique_ptr<RegisteredGuestModule>> modules_;

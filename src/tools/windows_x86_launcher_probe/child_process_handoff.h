@@ -28,6 +28,8 @@ struct BootstrapChildHandoffOptions
     std::filesystem::path chd_path;
     std::filesystem::path vfs_trace_path;
     std::filesystem::path graphics_trace_path;
+    // The runtime channel's record, the child's sibling of the JSONL log.
+    std::filesystem::path runtime_log_path;
     // The name the guest uses for its own root, from the profile's guest drive
     // letter and directory. Empty leaves the runtime's own default in place.
     std::string guest_root;

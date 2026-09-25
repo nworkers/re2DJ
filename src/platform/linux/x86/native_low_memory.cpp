@@ -17,7 +17,7 @@ bool MapNativeLowMemory(std::uint32_t size,
         return false;
     }
     // Every i386 user address is below 4 GiB, so any placement will do.
-    void* memory = mmap(nullptr, size, protection, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* memory = mmap(nullptr, size, protection, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (memory == MAP_FAILED)
     {
         *error = "cannot map guest-addressable memory";

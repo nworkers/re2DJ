@@ -12,6 +12,11 @@
 namespace re2dj::platform::linux
 {
 
+// Bounds on what an import table may ask of the thunk builder: the longest
+// module or import name it reads, and the most gates it builds.
+inline constexpr std::uint32_t kMaximumImportStringSize = 4096;
+inline constexpr std::uint32_t kMaximumImportCount = 65536;
+
 struct NativeImportSlotBinding
 {
     std::uint8_t* slot = nullptr;

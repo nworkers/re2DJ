@@ -40,7 +40,7 @@ bool MapNativeLowMemory(std::uint32_t size,
     {
         void* requested = reinterpret_cast<void*>(static_cast<std::uintptr_t>(hint));
         void* memory = mmap(requested, rounded, protection,
-                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
         if (memory == MAP_FAILED)
         {
             if (errno == EEXIST)

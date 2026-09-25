@@ -11,7 +11,9 @@
 #include "direct3d7_com_facade.h"
 #include "direct3d7_vertex_buffer_facade.h"
 #include "directdraw_legacy_interop.h"
+#include "directx_abi_windows.h"
 #include "graphics_trace_log.h"
+#include "re2dj/directx/directdraw_description.h"
 
 // IDirectDraw7 and IDirectDrawSurface7 repeat their version 4 predecessors slot
 // for slot and append to them, so this file is mostly a table of adoptions: a
@@ -399,64 +401,18 @@ HRESULT WINAPI Dd7QueryInterface(IDirectDraw7* self, REFIID iid, void** object)
     return LegacyDirectDrawVtable()->QueryInterface(LegacyRoot(self), iid, object);
 }
 
-// A DirectX 7 driver reports capabilities the DirectX 6 facade does not, and
-// the 4th guest's driver stage keeps a device only when the driver publishes
-// DDCAPS2_CANRENDERWINDOWED. The rest are properties this facade genuinely has:
-// it vouches for its own behavior, its surfaces live in host memory with no
-// page lock, and it does not reject surfaces wider than the display.
+// The capabilities are the shared core's; see DirectDraw7Caps.
 HRESULT WINAPI Dd7GetCaps(IDirectDraw7*, DDCAPS* driver_caps, DDCAPS* hel_caps)
 {
     WriteGraphicsTraceLine("re2dj:hle:IDirectDraw7::GetCaps");
-    const auto fill = [](DDCAPS* caps) {
+    for (DDCAPS* caps : {driver_caps, hel_caps})
+    {
         if (caps != nullptr)
         {
-            std::memset(caps, 0, sizeof(*caps));
-            caps->dwSize = sizeof(*caps);
-            caps->dwCaps = DDCAPS_3D | DDCAPS_BLT | DDCAPS_COLORKEY;
-            caps->dwCaps2 = DDCAPS2_CERTIFIED | DDCAPS2_NOPAGELOCKREQUIRED |
-                            DDCAPS2_WIDESURFACES | DDCAPS2_CANRENDERWINDOWED;
-            caps->ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_BACKBUFFER |
-                                   DDSCAPS_3DDEVICE | DDSCAPS_VIDEOMEMORY;
+            CopyFromCore(caps, re2dj::directx::DirectDraw7Caps());
         }
-    };
-    fill(driver_caps);
-    fill(hel_caps);
-    return DD_OK;
-}
-
-// Fills one mode descriptor. The RGB masks follow the standard 5-6-5, 8-8-8,
-// and 8-8-8-8 layouts a DirectX 7 driver reports for these depths.
-void FillDisplayMode(DDSURFACEDESC2* mode, DWORD width, DWORD height, DWORD depth)
-{
-    std::memset(mode, 0, sizeof(*mode));
-    mode->dwSize = sizeof(*mode);
-    mode->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH | DDSD_PIXELFORMAT |
-                    DDSD_REFRESHRATE;
-    mode->dwWidth = width;
-    mode->dwHeight = height;
-    mode->dwRefreshRate = 60;
-    mode->lPitch = static_cast<LONG>(width * (depth / 8));
-    mode->ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
-    mode->ddpfPixelFormat.dwFlags = DDPF_RGB;
-    mode->ddpfPixelFormat.dwRGBBitCount = depth;
-    switch (depth)
-    {
-        case 16:
-            mode->ddpfPixelFormat.dwRBitMask = 0x0000f800;
-            mode->ddpfPixelFormat.dwGBitMask = 0x000007e0;
-            mode->ddpfPixelFormat.dwBBitMask = 0x0000001f;
-            break;
-        case 32:
-            mode->ddpfPixelFormat.dwFlags |= DDPF_ALPHAPIXELS;
-            mode->ddpfPixelFormat.dwRGBAlphaBitMask = 0xff000000;
-            [[fallthrough]];
-        case 24:
-        default:
-            mode->ddpfPixelFormat.dwRBitMask = 0x00ff0000;
-            mode->ddpfPixelFormat.dwGBitMask = 0x0000ff00;
-            mode->ddpfPixelFormat.dwBBitMask = 0x000000ff;
-            break;
     }
+    return DD_OK;
 }
 
 HRESULT WINAPI Dd7EnumDisplayModes(IDirectDraw7*,
@@ -473,37 +429,27 @@ HRESULT WINAPI Dd7EnumDisplayModes(IDirectDraw7*,
     {
         return DDERR_INVALIDPARAMS;
     }
-    struct ModeEntry
+    for (const re2dj::directx::DisplayMode& display_mode : re2dj::directx::DisplayModes())
     {
-        DWORD width;
-        DWORD height;
-    };
-    constexpr ModeEntry kSizes[] = {
-        {320, 240}, {512, 384}, {640, 480}, {800, 600}, {1024, 768}};
-    constexpr DWORD kDepths[] = {16, 24, 32};
-
-    for (const ModeEntry& size : kSizes)
-    {
-        for (const DWORD depth : kDepths)
+        DDSURFACEDESC2 mode = {};
+        CopyFromCore(&mode, re2dj::directx::DisplayModeDescription(display_mode));
+        if (callback(&mode, arg) == DDENUMRET_CANCEL)
         {
-            DDSURFACEDESC2 mode = {};
-            FillDisplayMode(&mode, size.width, size.height, depth);
-            if (callback(&mode, arg) == DDENUMRET_CANCEL)
-            {
-                return DD_OK;
-            }
+            return DD_OK;
         }
     }
     return DD_OK;
 }
 
-HRESULT WINAPI Dd7GetDisplayMode(IDirectDraw7*, LPDDSURFACEDESC2 desc)
+HRESULT WINAPI Dd7GetDisplayMode(IDirectDraw7* self, LPDDSURFACEDESC2 desc)
 {
     if (desc == nullptr)
     {
         return DDERR_INVALIDPARAMS;
     }
-    FillDisplayMode(desc, 640, 480, 16);
+    const re2dj::directx::DirectDrawDisplay* display = LegacyRootDisplay(LegacyRoot(self));
+    CopyFromCore(desc, re2dj::directx::DisplayModeDescription(
+                           display != nullptr ? display->mode : re2dj::directx::kDefaultDisplayMode));
     return DD_OK;
 }
 
@@ -513,7 +459,7 @@ HRESULT WINAPI Dd7GetMonitorFrequency(IDirectDraw7*, LPDWORD frequency)
     {
         return DDERR_INVALIDPARAMS;
     }
-    *frequency = 60;
+    *frequency = re2dj::directx::kMonitorFrequency;
     return DD_OK;
 }
 
@@ -538,16 +484,13 @@ HRESULT WINAPI Dd7WaitForVerticalBlank(IDirectDraw7*, DWORD, HANDLE)
 
 HRESULT WINAPI Dd7GetAvailableVidMem(IDirectDraw7*, LPDDSCAPS2, LPDWORD total, LPDWORD free)
 {
-    // Surfaces live in host memory, so the guest is told it has a fixed budget
-    // large enough not to gate its allocations.
-    constexpr DWORD kReportedBytes = 128u * 1024u * 1024u;
     if (total != nullptr)
     {
-        *total = kReportedBytes;
+        *total = re2dj::directx::kReportedVideoMemory;
     }
     if (free != nullptr)
     {
-        *free = kReportedBytes;
+        *free = re2dj::directx::kReportedVideoMemory;
     }
     return DD_OK;
 }
@@ -558,11 +501,7 @@ HRESULT WINAPI Dd7GetDeviceIdentifier(IDirectDraw7*, LPDDDEVICEIDENTIFIER2 ident
     {
         return DDERR_INVALIDPARAMS;
     }
-    std::memset(identifier, 0, sizeof(*identifier));
-    std::strncpy(identifier->szDriver, "re2dj.dll", sizeof(identifier->szDriver) - 1);
-    std::strncpy(identifier->szDescription,
-                 "re2DJ HLE Direct3D 7",
-                 sizeof(identifier->szDescription) - 1);
+    CopyFromCore(identifier, re2dj::directx::DeviceIdentifier());
     return DD_OK;
 }
 

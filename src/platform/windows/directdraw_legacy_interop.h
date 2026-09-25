@@ -27,6 +27,8 @@
 #include <ddraw.h>
 #include <d3d.h>
 
+#include "re2dj/directx/directdraw_display.h"
+
 namespace re2dj::platform::windows
 {
 
@@ -54,6 +56,10 @@ HRESULT CreateLegacyDirectDrawRoot(const LegacyFacadeVtables& vtables,
 // table so that construction is complete before the caller decides which
 // version it hands to the guest.
 void SetLegacyDirectDrawVtable(IDirectDraw4* root, const IDirectDraw4Vtbl* vtable);
+
+// The window and mode a root's guest set, for a later version's facade to
+// report.
+const re2dj::directx::DirectDrawDisplay* LegacyRootDisplay(IDirectDraw4* root);
 
 // The Direct3D interface that belongs to a root, for a later version's facade
 // to build its own Direct3D object on.

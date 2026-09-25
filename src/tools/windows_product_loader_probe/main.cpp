@@ -167,7 +167,7 @@ int main()
         first_profile->profile.run_defaults.hle_dynamic_vfs &&
         first_profile->profile.run_defaults.lptdi.hardlock_cfg_material_default &&
         first_profile->profile.run_defaults.lptdi.device_mock_target_state_hex.empty() &&
-        !first_profile->profile.run_defaults.hle_wts_active_console &&
+        !first_profile->profile.run_defaults.hle_wts_console_session &&
         first_profile->profile.run_defaults.lptdi.legacy_io_ports &&
         first_profile->profile.run_defaults.lptdi.legacy_io_ports_default &&
         first_profile->profile.run_defaults.lptdi.legacy_io_in_rva == 0x00038987 &&
@@ -422,7 +422,7 @@ int main()
         return true;
     }();
 
-    // An active-console policy without a device policy is rejected rather than
+    // A console-session policy without a device policy is rejected rather than
     // silently forwarded, because the launcher option turns on both.
     const bool invalid_console_policy = [&]() {
         re2dj::platform::windows::OriginalProcessOptions console_options = options;
@@ -435,11 +435,11 @@ int main()
         // Cleared so this isolates the console policy: Hardlock material also
         // requires the device boundary and would report its own rejection.
         console_options.profile_defaults.lptdi.hardlock_cfg_material_default = false;
-        console_options.profile_defaults.hle_wts_active_console = true;
+        console_options.profile_defaults.hle_wts_console_session = true;
         std::vector<std::string> rejected_arguments;
         return !re2dj::platform::windows::BuildOriginalProcessArguments(
                    console_options, &rejected_arguments, &error) &&
-               error.find("active console without a device policy") != std::string::npos;
+               error.find("console session without a device policy") != std::string::npos;
     }();
 
     // Hardlock material is applied at the device boundary, so a profile that
@@ -452,7 +452,7 @@ int main()
         material_options.profile_defaults.lptdi.legacy_io_out_rva = 0;
         material_options.profile_defaults.lptdi.device_mock_enabled = false;
         material_options.profile_defaults.lptdi.device_mock_path_prefix.clear();
-        material_options.profile_defaults.hle_wts_active_console = false;
+        material_options.profile_defaults.hle_wts_console_session = false;
         material_options.profile_defaults.lptdi.hardlock_cfg_material_default = true;
         std::vector<std::string> rejected_arguments;
         return !re2dj::platform::windows::BuildOriginalProcessArguments(

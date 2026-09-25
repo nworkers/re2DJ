@@ -140,6 +140,7 @@ bool GuestModuleRegistry::Register(GuestModuleDescriptor descriptor,
     registered->aliases = std::move(descriptor.aliases);
     registered->base = mapping.base;
     registered->image_size = mapping.image_size;
+    registered->absent_exports = std::move(descriptor.absent_exports);
     registered->exports.reserve(descriptor.exports.size());
     for (std::size_t index = 0; index < descriptor.exports.size(); ++index)
     {
@@ -239,9 +240,38 @@ const RegisteredGuestExport* GuestModuleRegistry::FindExport(
                            : FindExport(module->base, gate.name);
 }
 
+bool GuestModuleRegistry::IsAbsentExport(runtime::GuestAddress module_handle,
+                                         std::string_view name) const
+{
+    const RegisteredGuestModule* module = FindModule(module_handle);
+    if (module == nullptr)
+    {
+        return false;
+    }
+    for (const std::string& absent : module->absent_exports)
+    {
+        if (absent == name)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::size_t GuestModuleRegistry::module_count() const
 {
     return modules_.size();
+}
+
+std::vector<const RegisteredGuestModule*> GuestModuleRegistry::modules() const
+{
+    std::vector<const RegisteredGuestModule*> result;
+    result.reserve(modules_.size());
+    for (const std::unique_ptr<RegisteredGuestModule>& module : modules_)
+    {
+        result.push_back(module.get());
+    }
+    return result;
 }
 
 }  // namespace re2dj::hle::modules

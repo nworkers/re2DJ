@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "message_box_boundary.h"
+#include "runtime_log.h"
 
 namespace re2dj::platform::windows
 {
@@ -44,7 +45,7 @@ void ReportCapture(const char* which, const char* text, const char* caption, UIN
     {
         return;
     }
-    OutputDebugStringA(message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
     g_sink(message);
 }
 
@@ -150,7 +151,7 @@ bool InstallMessageBoxBoundary(MessageBoxBoundarySink sink, int result)
                       ansi_redirected ? 1 : 0,
                       wide_redirected ? 1 : 0,
                       result);
-        OutputDebugStringA(message);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
         sink(message);
     }
     return true;

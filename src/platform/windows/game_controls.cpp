@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/version.h"
+
 extern "C" __declspec(dllexport) unsigned long g_re2dj_autoplay_flag_address = 0;
 extern "C" __declspec(dllexport) char g_re2dj_target_id[32] = {};
 extern "C" __declspec(dllexport) char g_re2dj_executable_name[64] = {};
@@ -50,9 +52,9 @@ void RegisterGameControls(re2dj::ui::Osd* osd)
     }
     g_re2dj_target_id[sizeof(g_re2dj_target_id) - 1] = '\0';
     g_re2dj_executable_name[sizeof(g_re2dj_executable_name) - 1] = '\0';
-    // Version and build date match what the window title shows.
+    // The banner and build date match what the window title shows.
     std::vector<std::string> lines;
-    lines.push_back(std::string("re2DJ v") + RE2DJ_VERSION + " " + __DATE__);
+    lines.push_back(re2dj::VersionBanner("re2DJ", RE2DJ_VERSION) + " - Build " + __DATE__);
     lines.push_back(std::string("Target Profile : ") + g_re2dj_target_id);
     lines.push_back(std::string("Executable : ") + g_re2dj_executable_name);
     osd->SetInfoLines(lines);

@@ -20,6 +20,7 @@
 #include <string>
 
 #include "re2dj/graphics/legacy_draw_command.h"
+#include "runtime_log.h"
 #include "re2dj/graphics/legacy_texture.h"
 #include "re2dj/graphics/legacy_transform.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
@@ -28,7 +29,10 @@
 #include "guest_wait_accounting.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 #include "directdraw_legacy_interop.h"
+#include "directx_abi_windows.h"
 #include "graphics_trace_log.h"
+#include "re2dj/directx/directdraw_description.h"
+#include "re2dj/directx/directdraw_display.h"
 #include "host_window_shell.h"
 #include "osd_host.h"
 #include "timer_resolution_probe.h"
@@ -429,9 +433,9 @@ struct RootFacade
     const IDirectDrawSurface4Vtbl* surface_vtable = nullptr;
     const IDirect3DDevice3Vtbl* device_vtable = nullptr;
     const IDirect3DVertexBufferVtbl* vertex_buffer_vtable = nullptr;
-    DWORD width = 640;
-    DWORD height = 480;
-    DWORD bits_per_pixel = 16;
+    // The window and mode the guest set, under the shared core's rules. The
+    // window is kept typed as well, for the Win32 calls made on it.
+    re2dj::directx::DirectDrawDisplay display;
     HWND window = nullptr;
     std::uint64_t next_texture_identity = 1;
     std::uint32_t next_surface_diagnostic_id = 1;
@@ -1542,12 +1546,12 @@ HRESULT CopySurfaceRectangle(SurfaceFacade* destination,
     std::string error;
     if (!destination->root->render_backend->Draw(command,
                                                   state,
-                                                  destination->root->width,
-                                                  destination->root->height,
+                                                  destination->root->display.mode.width,
+                                                  destination->root->display.mode.height,
                                                   &source_view,
                                                   &error))
     {
-        OutputDebugStringA(kOpenGlFailureMessage);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
         return DDERR_GENERIC;
     }
     return DD_OK;
@@ -2124,7 +2128,7 @@ HRESULT WINAPI RootQueryInterface(IDirectDraw4* self, REFIID iid, void** object)
                   iid.Data1, iid.Data2, iid.Data3,
                   iid.Data4[0], iid.Data4[1], iid.Data4[2], iid.Data4[3],
                   iid.Data4[4], iid.Data4[5], iid.Data4[6], iid.Data4[7]);
-    OutputDebugStringA(qi_buf);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, qi_buf);
     if (object == nullptr)
     {
         return E_POINTER;
@@ -2167,7 +2171,7 @@ ULONG WINAPI RootRelease(IDirectDraw4* self)
 HRESULT WINAPI RootGetCaps(IDirectDraw4* self, DDCAPS* driver_caps, DDCAPS* hel_caps)
 {
     (void)self;
-    OutputDebugStringA("re2dj:hle:IDirectDraw4::GetCaps");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectDraw4::GetCaps");
     bool valid = true;
     const auto fill = [&valid](DDCAPS* caps) {
         if (caps != nullptr)
@@ -2177,10 +2181,7 @@ HRESULT WINAPI RootGetCaps(IDirectDraw4* self, DDCAPS* driver_caps, DDCAPS* hel_
                 valid = false;
                 return;
             }
-            const DWORD size = caps->dwSize;
-            std::memset(caps, 0, size);
-            caps->dwSize = size;
-            caps->dwCaps = DDCAPS_3D;
+            re2dj::platform::windows::CopyFromCore(caps, re2dj::directx::DirectDraw4Caps());
         }
     };
     fill(driver_caps);
@@ -2194,7 +2195,7 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
                                  IDirectDrawSurface4** surface,
                                  IUnknown* outer)
 {
-    OutputDebugStringA("re2dj:hle:IDirectDraw4::CreateSurface");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectDraw4::CreateSurface");
     if (descriptor == nullptr || surface == nullptr || outer != nullptr ||
         descriptor->dwSize != sizeof(DDSURFACEDESC2))
     {
@@ -2247,8 +2248,8 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
             return finish(DDERR_OUTOFMEMORY);
         }
         depth->root = root;
-        depth->width = descriptor->dwWidth != 0 ? descriptor->dwWidth : root->width;
-        depth->height = descriptor->dwHeight != 0 ? descriptor->dwHeight : root->height;
+        depth->width = descriptor->dwWidth != 0 ? descriptor->dwWidth : root->display.mode.width;
+        depth->height = descriptor->dwHeight != 0 ? descriptor->dwHeight : root->display.mode.height;
         depth->bits_per_pixel = 16;
         depth->capabilities = descriptor->ddsCaps.dwCaps;
         depth->diagnostic_id = AllocateSurfaceDiagnosticId(root);
@@ -2287,7 +2288,7 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
         InstallSurfaceVtable(root, texture);
         AddRootReference(root);
         *surface = &texture->interface_value;
-        OutputDebugStringA(kCreateTextureSurfaceMessage);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kCreateTextureSurfaceMessage);
         return finish(DD_OK, texture);
     }
     if ((descriptor->ddsCaps.dwCaps & DDSCAPS_OFFSCREENPLAIN) != 0)
@@ -2337,9 +2338,9 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
         return finish(DDERR_OUTOFMEMORY);
     }
     primary->root = root;
-    primary->width = root->width;
-    primary->height = root->height;
-    primary->bits_per_pixel = root->bits_per_pixel;
+    primary->width = root->display.mode.width;
+    primary->height = root->display.mode.height;
+    primary->bits_per_pixel = root->display.mode.bits_per_pixel;
     // The guest may ask for the primary itself to be the 3D render target, as
     // the 4th does. Carrying that request through means CreateDevice accepts
     // the surface the guest hands it either way.
@@ -2358,9 +2359,9 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
     if (has_back_buffer)
     {
         back->root = root;
-        back->width = root->width;
-        back->height = root->height;
-        back->bits_per_pixel = root->bits_per_pixel;
+        back->width = root->display.mode.width;
+        back->height = root->display.mode.height;
+        back->bits_per_pixel = root->display.mode.bits_per_pixel;
         back->capabilities = DDSCAPS_BACKBUFFER | DDSCAPS_3DDEVICE;
         back->diagnostic_id = AllocateSurfaceDiagnosticId(root);
         back->texture_identity = AllocateSurfaceIdentity(root);
@@ -2385,15 +2386,20 @@ HRESULT WINAPI RootSetCooperativeLevel(IDirectDraw4* self, HWND window, DWORD fl
     char coop_buf[80] = {};
     std::snprintf(coop_buf, sizeof(coop_buf), "re2dj:hle:IDirectDraw4::SetCooperativeLevel hwnd=0x%08x flags=0x%08x",
                   static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(window)), static_cast<unsigned>(flags));
-    OutputDebugStringA(coop_buf);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, coop_buf);
     RootFacade* const root = RootFromDirectDraw(self);
-    if (window == nullptr)
+    // The host's policy is the Win32 window mode: the guest's window becomes
+    // the presentation window at the display's size.
+    const HRESULT result = static_cast<HRESULT>(re2dj::directx::SetCooperativeLevel(
+        &root->display,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(window)),
+        flags,
+        [window](std::uint32_t, const re2dj::directx::DisplayMode& mode) {
+            return ApplyRe2djWindowMode(window, mode.width, mode.height);
+        }));
+    if (result != DD_OK)
     {
-        return DDERR_INVALIDPARAMS;
-    }
-    if (!ApplyRe2djWindowMode(window, root->width, root->height))
-    {
-        return DDERR_GENERIC;
+        return result;
     }
     root->window = window;
     root->fps_frequency = {};
@@ -2412,16 +2418,10 @@ HRESULT WINAPI RootSetDisplayMode(IDirectDraw4* self,
     char mode_buf[80] = {};
     std::snprintf(mode_buf, sizeof(mode_buf), "re2dj:hle:IDirectDraw4::SetDisplayMode %ux%ux%u",
                   static_cast<unsigned>(width), static_cast<unsigned>(height), static_cast<unsigned>(bits_per_pixel));
-    OutputDebugStringA(mode_buf);
-    if (width != 640 || height != 480 || bits_per_pixel != 16)
-    {
-        return DDERR_UNSUPPORTEDMODE;
-    }
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, mode_buf);
     RootFacade* const root = RootFromDirectDraw(self);
-    root->width = width;
-    root->height = height;
-    root->bits_per_pixel = bits_per_pixel;
-    return DD_OK;
+    return static_cast<HRESULT>(
+        re2dj::directx::SetDisplayMode(&root->display, {width, height, bits_per_pixel}));
 }
 
 HRESULT WINAPI RootRestoreAllSurfaces(IDirectDraw4*)
@@ -2474,7 +2474,7 @@ HRESULT WINAPI D3dFindDevice(IDirect3D3*,
                              D3DFINDDEVICESEARCH* search,
                              D3DFINDDEVICERESULT* result)
 {
-    OutputDebugStringA(kFindDeviceMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFindDeviceMessage);
     if (search == nullptr || result == nullptr ||
         search->dwSize != sizeof(D3DFINDDEVICESEARCH) ||
         result->dwSize != sizeof(D3DFINDDEVICERESULT))
@@ -2503,7 +2503,7 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
                                IDirect3DDevice3** device,
                                IUnknown* outer)
 {
-    OutputDebugStringA(kCreateDeviceMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kCreateDeviceMessage);
     if (device == nullptr || render_target == nullptr || outer != nullptr)
     {
         return DDERR_INVALIDPARAMS;
@@ -2600,7 +2600,7 @@ HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
                   descriptor->dwFVF,
                   static_cast<unsigned long>(descriptor->dwNumVertices),
                   flags);
-    OutputDebugStringA(message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
     auto* const facade = new (std::nothrow) VertexBufferFacade;
     if (facade == nullptr)
     {
@@ -2630,7 +2630,7 @@ HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
                   "re2dj:hle:IDirect3D3::CreateVertexBuffer:result=%p:vtable=%p",
                   static_cast<void*>(*vertex_buffer),
                   static_cast<void*>((*vertex_buffer)->lpVtbl));
-    OutputDebugStringA(result_message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, result_message);
     return DD_OK;
 }
 
@@ -2735,7 +2735,7 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
                 Re2djExitIfWindowClosed(surface->root->window);
                 if (!presented)
                 {
-                    OutputDebugStringA(kOpenGlFailureMessage);
+                    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
                     return finish(DDERR_GENERIC);
                 }
             }
@@ -2797,7 +2797,7 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         std::string clear_error;
         if (!RequestRenderTargetClear(root, color, &clear_error))
         {
-            OutputDebugStringA(kOpenGlFailureMessage);
+            re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             return finish(DDERR_GENERIC);
         }
     }
@@ -2853,7 +2853,7 @@ HRESULT WINAPI SurfaceBltFast(IDirectDrawSurface4* self,
             Re2djExitIfWindowClosed(destination_surface->root->window);
             if (!presented)
             {
-                OutputDebugStringA(kOpenGlFailureMessage);
+                re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
                 return finish(DDERR_GENERIC);
             }
         }
@@ -2942,7 +2942,7 @@ HRESULT WINAPI SurfaceFlip(IDirectDrawSurface4* self,
         Re2djExitIfWindowClosed(surface->root->window);
         if (!presented)
         {
-            OutputDebugStringA(kOpenGlFailureMessage);
+            re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             return finish(DDERR_GENERIC);
         }
     }
@@ -3505,7 +3505,7 @@ HRESULT WINAPI DeviceSetRenderState(IDirect3DDevice3* self,
                       "re2dj:hle:render-state:state=%u:value=0x%08x",
                       state_index,
                       static_cast<unsigned>(value));
-        OutputDebugStringA(message);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
         char detail[160] = {};
         std::snprintf(detail,
                       sizeof(detail),
@@ -3649,7 +3649,7 @@ HRESULT WINAPI DeviceSetTextureStageState(IDirect3DDevice3* self,
                       static_cast<unsigned>(stage),
                       state_index,
                       static_cast<unsigned>(value));
-        OutputDebugStringA(message);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
         ++reports;
     }
     return DD_OK;
@@ -3812,8 +3812,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         auto* const backend = new (std::nothrow) re2dj::graphics::Sdl3OpenGlBackend;
         const re2dj::graphics::Sdl3OpenGlWindowConfig window_config = {
             root->window,
-            root->width,
-            root->height,
+            root->display.mode.width,
+            root->display.mode.height,
             "re2DJ",
             re2dj::platform::windows::AreGraphicsDrawDiagnosticsEnabled(),
             root->presentation_retains_frames,
@@ -3824,10 +3824,10 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         const bool input_restored =
             input_suspended && EnsureRe2djGuestWindowInput(root->window);
         if (!backend_initialized || !input_restored ||
-            !ApplyRe2djWindowMode(root->window, root->width, root->height))
+            !ApplyRe2djWindowMode(root->window, root->display.mode.width, root->display.mode.height))
         {
             delete backend;
-            OutputDebugStringA(kOpenGlFailureMessage);
+            re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             ReportDrawDiagnostic(device,
                                  primitive,
                                  vertex_type,
@@ -3853,7 +3853,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         const std::uint16_t color = root->pending_render_target_clear_color;
         if (!root->render_backend->ClearRenderTarget(color, &error))
         {
-            OutputDebugStringA(kOpenGlFailureMessage);
+            re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             ReportDrawDiagnostic(device,
                                  primitive,
                                  vertex_type,
@@ -3903,8 +3903,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
         !fixed_function_state.alpha_test_enabled &&
         IsFullScreenBlackFadeCandidate(command,
                                        texture,
-                                       root->width,
-                                       root->height,
+                                       root->display.mode.width,
+                                       root->display.mode.height,
                                        guest_blend_is_explicit))
     {
         fixed_function_state.alpha_blend_enabled = true;
@@ -3923,21 +3923,21 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     const bool drawn = state_built && root->render_backend->Draw(command,
                                                                  fixed_function_state,
-                                                                 root->width,
-                                                                 root->height,
+                                                                 root->display.mode.width,
+                                                                 root->display.mode.height,
                                                                  texture,
                                                                  &error);
     if (!drawn)
     {
         if (!device->draw_failure_reported)
         {
-            OutputDebugStringA(kOpenGlFailureMessage);
+            re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             char message[256] = {};
             std::snprintf(message,
                           sizeof(message),
                           "re2dj:hle:draw-failure:%s",
                           error.c_str());
-            OutputDebugStringA(message);
+            re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
             device->draw_failure_reported = true;
         }
         ReportDrawDiagnostic(device,
@@ -3952,7 +3952,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     if (!device->draw_success_reported)
     {
-        OutputDebugStringA(kDrawPrimitiveMessage);
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kDrawPrimitiveMessage);
         device->draw_success_reported = true;
     }
     ReportDrawDiagnostic(
@@ -4259,7 +4259,7 @@ HRESULT WINAPI VbLock(IDirect3DVertexBuffer* self, DWORD flags, void** data, DWO
                   static_cast<void*>(data),
                   static_cast<void*>(size),
                   flags);
-    OutputDebugStringA(entry_message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, entry_message);
     if (data == nullptr)
     {
         return DDERR_INVALIDPARAMS;
@@ -4286,7 +4286,7 @@ HRESULT WINAPI VbLock(IDirect3DVertexBuffer* self, DWORD flags, void** data, DWO
                   static_cast<unsigned long>(vertices.size()),
                   static_cast<void*>(vertices.data()),
                   flags);
-    OutputDebugStringA(message);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, message);
     *data = vertices.data();
     if (size != nullptr)
     {
@@ -4304,10 +4304,10 @@ HRESULT WINAPI VbUnlock(IDirect3DVertexBuffer* self)
     }
     if (!facade->buffer->Unlock())
     {
-        OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Unlock:not-locked");
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirect3DVertexBuffer::Unlock:not-locked");
         return DDERR_NOTLOCKED;
     }
-    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Unlock");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirect3DVertexBuffer::Unlock");
     return DD_OK;
 }
 
@@ -4325,7 +4325,7 @@ HRESULT WINAPI VbProcessVertices(IDirect3DVertexBuffer* self,
     {
         return DDERR_INVALIDOBJECT;
     }
-    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::ProcessVertices");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirect3DVertexBuffer::ProcessVertices");
     return E_NOTIMPL;
 }
 
@@ -4344,7 +4344,7 @@ HRESULT WINAPI VbGetVertexBufferDesc(IDirect3DVertexBuffer* self, D3DVERTEXBUFFE
     descriptor->dwCaps = facade->descriptor.caps;
     descriptor->dwFVF = facade->descriptor.fvf;
     descriptor->dwNumVertices = facade->descriptor.vertex_count;
-    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::GetVertexBufferDesc");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirect3DVertexBuffer::GetVertexBufferDesc");
     return DD_OK;
 }
 
@@ -4355,7 +4355,7 @@ HRESULT WINAPI VbOptimize(IDirect3DVertexBuffer* self, IDirect3DDevice3*, DWORD)
     {
         return DDERR_INVALIDOBJECT;
     }
-    OutputDebugStringA("re2dj:hle:IDirect3DVertexBuffer::Optimize");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirect3DVertexBuffer::Optimize");
     return E_NOTIMPL;
 }
 
@@ -4415,6 +4415,11 @@ void SetLegacyDirectDrawVtable(IDirectDraw4* root, const IDirectDraw4Vtbl* vtabl
         return;
     }
     root->lpVtbl = const_cast<IDirectDraw4Vtbl*>(vtable);
+}
+
+const re2dj::directx::DirectDrawDisplay* LegacyRootDisplay(IDirectDraw4* root)
+{
+    return root == nullptr ? nullptr : &RootFromDirectDraw(root)->display;
 }
 
 IDirect3D3* LegacyDirect3DOfRoot(IDirectDraw4* root)
@@ -4524,7 +4529,7 @@ HRESULT LegacyDeviceClear(IDirect3DDevice3* device,
         std::string clear_error;
         if (!RequestRenderTargetClear(facade->root, color565, &clear_error))
         {
-            OutputDebugStringA(kOpenGlFailureMessage);
+            re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             return DDERR_GENERIC;
         }
     }
@@ -4574,7 +4579,7 @@ extern "C" __declspec(dllexport) HRESULT WINAPI Re2djHleDirectDrawCreate(
     LPDIRECTDRAW* direct_draw,
     IUnknown* outer)
 {
-    OutputDebugStringA(kDirectDrawCreateMessage);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kDirectDrawCreateMessage);
     if (direct_draw == nullptr)
     {
         return DDERR_INVALIDPARAMS;

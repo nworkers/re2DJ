@@ -1,5 +1,6 @@
 #include "re2dj/hle/modules/guest_module.h"
 
+#include <array>
 #include <cstdint>
 #include <string_view>
 #include <unordered_set>
@@ -73,6 +74,22 @@ bool ValidateGuestModuleDescriptor(const GuestModuleDescriptor& descriptor,
     }
 
     std::unordered_set<std::string> export_names;
+    for (const GuestExportDescriptor& export_descriptor : descriptor.exports)
+    {
+        if (!export_descriptor.name.empty())
+        {
+            export_names.insert(export_descriptor.name);
+        }
+    }
+    for (const std::string& absent : descriptor.absent_exports)
+    {
+        if (absent.empty() || ContainsEmbeddedNull(absent) || export_names.count(absent) != 0)
+        {
+            SetError(error, "guest module contains an invalid or exported absent name");
+            return false;
+        }
+    }
+    export_names.clear();
     std::unordered_set<std::uint16_t> export_ordinals;
     for (const GuestExportDescriptor& export_descriptor : descriptor.exports)
     {
@@ -108,6 +125,38 @@ bool ValidateGuestModuleDescriptor(const GuestModuleDescriptor& descriptor,
         error->clear();
     }
     return true;
+}
+
+bool UnimplementedExport(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result != nullptr)
+    {
+        *result = {};
+    }
+    if (error != nullptr)
+    {
+        *error = call.gate.module + "!" + call.gate.name +
+                 " is resolvable but not implemented";
+    }
+    return false;
+}
+
+bool IsAbsentGuestModule(std::string_view name)
+{
+    static constexpr std::array<std::string_view, 1> kAbsentModules = {"wfapi.dll"};
+    std::string normalized = NormalizeModuleName(name);
+    if (normalized.find('.') == std::string::npos)
+    {
+        normalized += ".dll";
+    }
+    for (const std::string_view absent : kAbsentModules)
+    {
+        if (normalized == absent)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace re2dj::hle::modules

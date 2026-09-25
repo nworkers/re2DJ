@@ -14,7 +14,7 @@ bool HasExecutionPolicy(const re2dj::target::TargetRunDefaults& defaults)
 {
     return defaults.hle_command_line || defaults.hle_windows_directory || defaults.hle_vfs ||
            defaults.hle_d3d3 || defaults.hle_directsound ||
-           defaults.hle_wts_active_console ||
+           defaults.hle_wts_console_session ||
            defaults.lptdi.legacy_io_ports || defaults.lptdi.device_mock_enabled ||
            defaults.follow_child_process ||
            defaults.run_detached;
@@ -100,13 +100,13 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         *error = "profile cannot follow a child process and detach at the same time";
         return false;
     }
-    // The launcher option that reports an active console also turns on the
+    // The launcher option that reports a console session also turns on the
     // synthetic device boundary, so a profile cannot request one without the
     // other.
-    if (options.profile_defaults.hle_wts_active_console &&
+    if (options.profile_defaults.hle_wts_console_session &&
         !options.profile_defaults.lptdi.device_mock_enabled)
     {
-        *error = "profile reports an active console without a device policy";
+        *error = "profile reports a console session without a device policy";
         return false;
     }
     if (options.profile_defaults.audio_gain_db.has_value() &&
@@ -189,7 +189,7 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         arguments->push_back("--device-mock-lptdi-path-prefix");
         arguments->push_back(defaults.lptdi.device_mock_path_prefix);
     }
-    if (defaults.hle_wts_active_console)
+    if (defaults.hle_wts_console_session)
     {
         arguments->push_back("--device-mock-wts-console-session");
     }

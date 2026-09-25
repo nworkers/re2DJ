@@ -9,40 +9,15 @@
 
 #include <signal.h>
 
-#include "re2dj/platform/linux/native_helper_backend.h"
 #include "native_in_process_runner.h"
 #include "native_kernel32_diagnostic.h"
 #include "re2dj/runtime/execution_backend.h"
 #include "re2dj/runtime/pe_loader.h"
-#include "../native_helper_protocol.h"
 
 namespace re2dj::platform::linux
 {
 namespace
 {
-
-namespace protocol = re2dj::platform::native_protocol;
-
-const runtime::ImportGate* FindImport(const runtime::LoadedPeImage& image,
-                                      runtime::GuestAddress gate_address)
-{
-    for (const runtime::ImportGate& gate : image.imports)
-    {
-        if (gate.address == gate_address)
-        {
-            return &gate;
-        }
-    }
-    return nullptr;
-}
-
-std::uint32_t ReadLe32(const std::uint8_t* bytes)
-{
-    return static_cast<std::uint32_t>(bytes[0]) |
-           (static_cast<std::uint32_t>(bytes[1]) << 8) |
-           (static_cast<std::uint32_t>(bytes[2]) << 16) |
-           (static_cast<std::uint32_t>(bytes[3]) << 24);
-}
 
 bool ReadExecutable(const std::filesystem::path& path,
                     std::vector<std::uint8_t>* bytes,
@@ -188,124 +163,6 @@ bool RunOriginalInProcessFirstResolver(const std::filesystem::path& executable_p
     result->import_first_argument_text_observed = true;
     result->import_first_argument_text = "GetVersion";
     context.kernel32.CopyTo(result);
-    error->clear();
-    return true;
-}
-
-bool RunOriginalUntilBoundary(const std::filesystem::path& executable_path,
-                              const exe::PeImageInfo& image_info,
-                              const std::filesystem::path& helper_path,
-                              OriginalRunResult* result,
-                              std::string* error)
-{
-    if (executable_path.empty() || helper_path.empty() || result == nullptr || error == nullptr)
-    {
-        if (error != nullptr)
-        {
-            *error = "invalid Linux original-run arguments";
-        }
-        return false;
-    }
-
-    *result = OriginalRunResult{};
-
-    std::vector<std::uint8_t> file_bytes;
-    if (!ReadExecutable(executable_path, &file_bytes, error))
-    {
-        return false;
-    }
-
-    NativeHelperBackend backend(helper_path);
-    runtime::LoadedPeImage loaded;
-    if (!backend.PrepareImage(file_bytes, image_info, runtime::GuestAddress(), &loaded, error) ||
-        !backend.Start(error))
-    {
-        return false;
-    }
-
-    runtime::ExecutionEvent event;
-    if (!backend.WaitForEvent(&event, error))
-    {
-        return false;
-    }
-
-    result->load_base = loaded.load_base;
-    result->entry_point = loaded.entry_point;
-    result->instruction_pointer = event.instruction_pointer;
-    result->stack_pointer = event.stack_pointer;
-    result->gate_address = event.gate_address;
-    result->status_code = event.status_code;
-
-    switch (event.kind)
-    {
-    case runtime::ExecutionEventKind::kImportGate:
-    {
-        result->boundary = OriginalRunBoundary::kImportGate;
-        const runtime::ImportGate* gate = FindImport(loaded, event.gate_address);
-        if (gate == nullptr)
-        {
-            backend.RequestStop();
-            *error = "helper reported an unknown import gate address";
-            return false;
-        }
-        result->module = gate->module;
-        result->name = gate->name;
-        result->by_ordinal = gate->by_ordinal;
-        result->ordinal = gate->ordinal;
-        std::array<std::uint8_t, 8> stack_words{};
-        if (!backend.ReadMemory(event.stack_pointer, stack_words, error))
-        {
-            backend.RequestStop();
-            if (error->empty())
-            {
-                *error = "cannot read first Linux import stack words";
-            }
-            return false;
-        }
-        result->import_stack_observed = true;
-        result->import_return_address = ReadLe32(stack_words.data());
-        result->import_first_argument = ReadLe32(stack_words.data() + sizeof(std::uint32_t));
-        if (result->import_first_argument != 0)
-        {
-            std::array<std::uint8_t, protocol::kMaximumImportStringSize> argument_bytes{};
-            if (!backend.ReadMemory(runtime::GuestAddress(result->import_first_argument),
-                                    argument_bytes,
-                                    error))
-            {
-                backend.RequestStop();
-                if (error->empty())
-                {
-                    *error = "cannot read first Linux import argument text";
-                }
-                return false;
-            }
-            const auto terminator = std::find(argument_bytes.begin(), argument_bytes.end(), 0);
-            if (terminator == argument_bytes.end())
-            {
-                backend.RequestStop();
-                *error = "first Linux import argument has no bounded terminator";
-                return false;
-            }
-            result->import_first_argument_text_observed = true;
-            result->import_first_argument_text.assign(argument_bytes.begin(), terminator);
-        }
-        backend.RequestStop();
-        break;
-    }
-    case runtime::ExecutionEventKind::kProcessExit:
-        result->boundary = OriginalRunBoundary::kProcessExit;
-        break;
-    case runtime::ExecutionEventKind::kFault:
-        result->boundary = OriginalRunBoundary::kFault;
-        backend.RequestStop();
-        break;
-    case runtime::ExecutionEventKind::kThreadExit:
-    case runtime::ExecutionEventKind::kStopped:
-        result->boundary = OriginalRunBoundary::kStopped;
-        backend.RequestStop();
-        break;
-    }
-
     error->clear();
     return true;
 }

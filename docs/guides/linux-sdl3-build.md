@@ -27,18 +27,16 @@ cmake --build --preset linux-x64-debug
 ctest --preset linux-x64-debug --output-on-failure
 ```
 
-Linux x86 product host는 multilib compiler와 32비트 SDL/X11/Wayland/OpenGL 개발 패키지가 필요하다. WSL Ubuntu에서 x64 패키지만 설치된 경우 동일한 `:i386` 개발 패키지를 추가하고 `g++-multilib libc6-dev-i386`도 준비한다. 현재 preset은 i386 `libxss`와 `libxtst`가 없는 WSL에서도 빌드할 수 있도록 SDL XScreenSaver·XTest 통합을 끈다. 해당 기능이 필요하면 `libxss-dev:i386 libxtst-dev:i386`을 설치하고 `-DSDL_X11_XSCRNSAVER=ON -DSDL_X11_XTEST=ON`으로 별도 구성한다. 제품 host와 PE32 helper는 별도 build tree를 사용한다.
+Linux x86 product host는 multilib compiler와 32비트 SDL/X11/Wayland/OpenGL 개발 패키지가 필요하다. WSL Ubuntu에서 x64 패키지만 설치된 경우 동일한 `:i386` 개발 패키지를 추가하고 `g++-multilib libc6-dev-i386`도 준비한다. 현재 preset은 i386 `libxss`와 `libxtst`가 없는 WSL에서도 빌드할 수 있도록 SDL XScreenSaver·XTest 통합을 끈다. 해당 기능이 필요하면 `libxss-dev:i386 libxtst-dev:i386`을 설치하고 `-DSDL_X11_XSCRNSAVER=ON -DSDL_X11_XTEST=ON`으로 별도 구성한다.
 
 ```bash
 cmake --preset linux-x86-debug -DRE2DJ_WARNINGS_AS_ERRORS=ON
 cmake --build --preset linux-x86-debug
 ctest --preset linux-x86-debug --output-on-failure
-cmake --preset linux-x86-helper -DRE2DJ_WARNINGS_AS_ERRORS=ON
-cmake --build --preset linux-x86-helper
-file build/linux-x86-debug/bin/re2dj build/linux-x86-helper/bin/re2dj_linux_native_ipc_helper
+file build/linux-x86-debug/bin/re2dj build/linux-x64-debug/bin/re2dj
 ```
 
-`file` 결과에서 x86 product와 helper는 ELF 32-bit Intel 80386, x64 product는 ELF 64-bit x86-64여야 한다. SDL3/OpenGL host probe는 x86 product와 x64 product 각각 같은 i386 helper를 실행한다.
+`file` 결과에서 x86 product는 ELF 32-bit Intel 80386, x64 product는 ELF 64-bit x86-64여야 한다. 두 product 모두 원본 PE32를 같은 프로세스 안에서 실행한다(작업 379에서 별도 i386 helper를 제거했다).
 
 WSL에서 Windows filesystem 아래 build가 느리면 source는 그대로 두고 binary directory만 Linux filesystem의 임시 디렉터리로 지정할 수 있다. 이 경로는 일회성 build 산출물이며 저장소에 넣지 않는다.
 

@@ -179,10 +179,37 @@ void CheckDescriptorRejections(re2dj::test::Context& context)
         re2dj::hle::ImportDispatcher::kMaximumArgumentCount + 1U;
     expect_rejected(std::move(excessive_arguments));
 
+    GuestModuleDescriptor exported_absent = MakeKernel32Descriptor();
+    exported_absent.absent_exports.push_back("GetVersion");
+    expect_rejected(std::move(exported_absent));
+
+    GuestModuleDescriptor empty_absent = MakeKernel32Descriptor();
+    empty_absent.absent_exports.push_back("");
+    expect_rejected(std::move(empty_absent));
+
     GuestModuleDescriptor invalid_convention = MakeKernel32Descriptor();
     invalid_convention.exports.front().calling_convention =
         static_cast<CallingConvention>(0xffU);
     expect_rejected(std::move(invalid_convention));
+}
+
+// Names declared absent answer NULL like Windows; exported and unknown names
+// are not absent.
+void CheckAbsentNames(re2dj::test::Context& context)
+{
+    GuestModuleDescriptor descriptor = MakeKernel32Descriptor();
+    descriptor.absent_exports = {"IsTNT"};
+    GuestModuleRegistry registry;
+    std::string error;
+    RE2DJ_CHECK(context, registry.Register(std::move(descriptor), MakeMapping(), &error));
+    RE2DJ_CHECK(context, registry.IsAbsentExport(GuestAddress(0x70000000U), "IsTNT"));
+    RE2DJ_CHECK(context, !registry.IsAbsentExport(GuestAddress(0x70000000U), "GetVersion"));
+    RE2DJ_CHECK(context, !registry.IsAbsentExport(GuestAddress(0x70000000U), "Borland32"));
+    RE2DJ_CHECK(context, !registry.IsAbsentExport(GuestAddress(0x71000000U), "IsTNT"));
+
+    RE2DJ_CHECK(context, re2dj::hle::modules::IsAbsentGuestModule("wfapi.dll"));
+    RE2DJ_CHECK(context, re2dj::hle::modules::IsAbsentGuestModule("WFAPI"));
+    RE2DJ_CHECK(context, !re2dj::hle::modules::IsAbsentGuestModule("wtsapi32.dll"));
 }
 
 void CheckMappingAndRegistryRejections(re2dj::test::Context& context)
@@ -258,6 +285,7 @@ void CheckMappingAndRegistryRejections(re2dj::test::Context& context)
 
 void RunGuestModuleRegistryTests(re2dj::test::Context& context)
 {
+    CheckAbsentNames(context);
     CheckLookup(context);
     CheckDescriptorRejections(context);
     CheckMappingAndRegistryRejections(context);

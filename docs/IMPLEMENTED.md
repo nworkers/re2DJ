@@ -284,8 +284,8 @@
 ## Native execution / Native 실행
 
 - Windows x86 native host made the primary Windows build target; x64 expansion deferred
-- Windows native helper protocol and `ExecutionBackend` adapter
-- Linux i386 helper gate prototype and PE32 mapping adapter
+- Windows native helper protocol and `ExecutionBackend` adapter (removed in Task 379)
+- Linux i386 helper gate prototype and PE32 mapping adapter (the helper removed in Task 379; PE32 mapping continues in the in-process runner)
 - Web x86 engine survey and v86 separability spike; custom interpreter deferred
 
 ## Windows original process / 원본 프로세스

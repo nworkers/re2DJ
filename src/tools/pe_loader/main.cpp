@@ -24,14 +24,14 @@ constexpr int kExitLoadError = 3;
 void PrintUsage()
 {
     std::printf(
-        "re2dj_pe_loader %s - map a PE32 image without executing it\n"
+        "%s - map a PE32 image without executing it\n"
         "\n"
         "Usage:\n"
         "  re2dj_pe_loader <file> [load-base]\n"
         "  re2dj_pe_loader --hdd <directory> <guest-relative-path> [load-base]\n"
         "\n"
         "The optional load base accepts decimal or 0x-prefixed hexadecimal.\n",
-        std::string(re2dj::VersionString()).c_str());
+        re2dj::VersionBanner("re2dj_pe_loader", re2dj::VersionString()).c_str());
 }
 
 bool ReadFile(const std::filesystem::path& path,

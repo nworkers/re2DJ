@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "directinput7_com_facade.h"
+#include "runtime_log.h"
 
 namespace re2dj::platform::windows
 {
@@ -146,11 +147,11 @@ HRESULT STDMETHODCALLTYPE DeviceAcquire(IDirectInputDeviceA* self)
     obj->acquired = true;
     if (obj->kind == DeviceKind::Keyboard)
     {
-        OutputDebugStringA("re2dj:hle:IDirectInputDevice::Acquire:Keyboard\n");
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInputDevice::Acquire:Keyboard\n");
     }
     else
     {
-        OutputDebugStringA("re2dj:hle:IDirectInputDevice::Acquire:Mouse\n");
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInputDevice::Acquire:Mouse\n");
     }
     return DI_OK;
 }
@@ -175,7 +176,7 @@ HRESULT STDMETHODCALLTYPE DeviceGetDeviceState(IDirectInputDeviceA* self,
     static std::atomic<bool> s_first_keyboard_poll{false};
     if (obj->kind == DeviceKind::Keyboard && !s_first_keyboard_poll.exchange(true))
     {
-        OutputDebugStringA("re2dj:hle:IDirectInputDevice::GetDeviceState:Keyboard:first_poll\n");
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInputDevice::GetDeviceState:Keyboard:first_poll\n");
     }
     if (obj->kind == DeviceKind::Keyboard)
     {
@@ -267,7 +268,7 @@ HRESULT STDMETHODCALLTYPE DeviceSetDataFormat(IDirectInputDeviceA* self, LPCDIDA
 {
     (void)self;
     (void)lpdf;
-    OutputDebugStringA("re2dj:hle:IDirectInputDevice::SetDataFormat\n");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInputDevice::SetDataFormat\n");
     return DI_OK;
 }
 
@@ -288,7 +289,7 @@ HRESULT STDMETHODCALLTYPE DeviceSetCooperativeLevel(IDirectInputDeviceA* self,
     char msg[128] = {};
     std::snprintf(msg, sizeof(msg), "re2dj:hle:IDirectInputDevice::SetCooperativeLevel:hwnd=%p:flags=0x%08lx\n",
                   static_cast<void*>(hwnd), dwFlags);
-    OutputDebugStringA(msg);
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, msg);
     return DI_OK;
 }
 
@@ -417,12 +418,12 @@ HRESULT STDMETHODCALLTYPE DiCreateDevice(IDirectInputA* self,
     if (IsEqualGuid(rguid, kGuidSysMouse))
     {
         kind = DeviceKind::Mouse;
-        OutputDebugStringA("re2dj:hle:IDirectInput::CreateDevice:SysMouse\n");
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInput::CreateDevice:SysMouse\n");
     }
     else if (IsEqualGuid(rguid, kGuidSysKeyboard))
     {
         kind = DeviceKind::Keyboard;
-        OutputDebugStringA("re2dj:hle:IDirectInput::CreateDevice:SysKeyboard\n");
+        re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInput::CreateDevice:SysKeyboard\n");
     }
     *lplpDirectInputDevice = CreateHleDirectInputDevice(kind);
     return DI_OK;
@@ -492,7 +493,7 @@ Re2djHleDirectInputCreateA(HINSTANCE hinst,
     {
         return E_POINTER;
     }
-    OutputDebugStringA("re2dj:hle:DirectInputCreateA\n");
+    re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:DirectInputCreateA\n");
     auto* obj = new re2dj::platform::windows::HleDirectInputObject();
     re2dj::platform::windows::InitDirectInputVtbl(&obj->vtbl);
     obj->iface.lpVtbl = &obj->vtbl;

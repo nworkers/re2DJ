@@ -336,3 +336,146 @@ Win32 x86 SEH 핸들러 규약 `ExceptionHandler(pRecord, pFrame, pContext, pDis
 **미확정.** Linux에서 이 경계를 넘으려면 Hardlock 장치 HLE가 필요하다. 이는 Windows 작업 127의 Function `0x0e` 변환과 같은 과제로 보이며, 두 장치 열기와 이후 `DeviceIoControl` 경계를 공용 HLE로 옮기는 방식은 아직 설계하지 않았다.
 
 *Inferred: with both `\.\NTICE` and `\.\FEnteDev` opens returning `INVALID_HANDLE_VALUE`, the protection stub concludes no Hardlock driver exists and exits through Error 1009; the `DDRAW.DLL` lookup looks independent of that decision. Unresolved: getting past this boundary on Linux needs a Hardlock device HLE, which appears to be the same problem as the Windows Task 127 Function `0x0e` transform; moving the two device opens and the following `DeviceIoControl` boundary into shared HLE has not been designed.*
+
+## 확인됨 — Linux에서 `\.\FEnteDev` 열기와 Hardlock initialize (작업 361) / Confirmed — `\.\FEnteDev` open and Hardlock initialize on Linux (Task 361)
+
+2026-09-24, 작업 361에서 공용 `GuestDeviceSet`과 `kernel32`의 `CreateFileA`(장치)·`DeviceIoControl`·`CloseHandle`·last error를 Linux facade에 연결했다. 사용자 `cfg/hardlock.ini`의 재료를 적용하고(값은 기록하지 않음) 실제 4th CHD(읽기 전용)를 실행했다. 결과는 x86과 x64가 같다. stack 위치에 따른 포인터만 다르다.
+
+| # | 호출 / Call | 결과 / Result |
+| --- | --- | --- |
+| 0006, 0010 | `CreateFileA("\.\NTICE")` | `INVALID_HANDLE_VALUE`, last error 123 |
+| 0014 | `CreateFileA("\.\FEnteDev")` | handle `0x00001004` |
+| 0015 | `GetProcAddress(kernel32, "CloseHandle")` | `0x6f002072` |
+| 0016 | `GetProcAddress(kernel32, "DeviceIoControl")` | `0x6f00205f` |
+| 0017 | `DeviceIoControl(0x1004, 0x9c402468, 0, 0, 0, 0, &returned, 0)` | `TRUE`, 0 byte (initialize) |
+| 0018 | `CloseHandle(0x1004)` | `TRUE` |
+| 0019 | `GetProcAddress(user32, "GetActiveWindow")` | `0x6eff2000` |
+| 0020 | `GetProcAddress(user32, "CreateCursor")` | 0 → 미해석 lookup으로 정지 / unresolved → stop |
+
+* **확인됨.** 보호 코드는 `CloseHandle`과 `DeviceIoControl`을 동적으로 해석한다. Hardlock 장치는 한 번 열어 initialize 한 번을 보내고, 바로 닫는다.
+  ***Confirmed.** The protection resolves `CloseHandle` and `DeviceIoControl` dynamically, opens the Hardlock device once, sends one initialize, and closes it.*
+* **확인됨.** 이번 실행에서는 initialize 뒤, 다음 경계(`CreateCursor` 해석) 전까지 `wtsapi32` 조회가 없었다. Windows 분석에서는 initialize 뒤에 WTS 세션 조회와 handshake `0x450`이 이어진다([Hardlock runtime 분석](ez2dj4th-hardlock-runtime.md)).
+  ***Confirmed.** This run made no `wtsapi32` query between the initialize and the next boundary (the `CreateCursor` lookup), while the Windows analysis follows the initialize with a WTS session query and handshake `0x450`.*
+
+**추정.** `CreateCursor`는 user32의 커서 생성 함수다. 해석 대상 목록이 Windows와 같다면, WTS 조회와 handshake는 이 해석 뒤에 오는 것으로 보인다.
+
+**미확정.** Windows에서 initialize와 WTS 조회 사이에 같은 `CreateCursor` 해석이 있는지는 Windows 기록(Hardlock 요청만 남음)으로 확인할 수 없다. `CreateCursor`를 제공한 뒤의 경계로 확인한다.
+
+*Inferred: `CreateCursor` is user32's cursor-creation function; if the resolution order matches Windows, the WTS query and handshake come after it. Unresolved: whether Windows performs the same `CreateCursor` resolution between the initialize and the WTS query cannot be seen in the Windows record, which keeps only Hardlock requests; the boundary after providing `CreateCursor` will tell.*
+
+## 확인됨 — Hardlock API 시작 환경과 handshake (작업 363) / Confirmed — Hardlock API startup environment and handshakes (Task 363)
+
+2026-09-24, 작업 363에서 `GuestProcess`, 없는 이름 선언, `kernel32`·`user32` export, `advapi32`·`wtsapi32` facade를 더했다. 그 뒤 실제 4th CHD(읽기 전용)를 실행했다. x64와 x86은 같은 59개 호출을 같은 순서로 부르고, stack·heap 주소만 다르다. 사용자 `cfg/hardlock.ini`를 적용했고 값은 기록하지 않았다.
+
+*On 2026-09-24 Task 363 added `GuestProcess`, declared absent names, `kernel32`/`user32` exports, and the `advapi32` and `wtsapi32` facades, then ran the real 4th CHD (read-only). x64 and x86 make the same 59 calls in the same order, differing only in stack and heap addresses; the user's `cfg/hardlock.ini` was applied and no values were recorded.*
+
+| # | 호출 / Call | 결과 / Result |
+| --- | --- | --- |
+| 0020–0024 | `GetProcAddress`: `CreateCursor`, `DestroyCursor`, `SetCursor`, `GetCurrentProcess`, `GetTickCount` | 주소, 호출 없음 / addresses, not called |
+| 0025 | `GetCurrentProcessId()` | `0x00000F00` |
+| 0026 | `GetEnvironmentVariableA("HL_SEARCH", …, 88)` | 0, last error 203 |
+| 0027–0028 | `SetErrorMode(0x8000)` 두 번 / twice | 0, 그다음 / then `0x8000` |
+| 0030–0033 | `LoadLibraryA("advapi32.dll")`, `RegOpenKeyA`·`RegQueryValueExA`·`RegCloseKey` 해석 / resolved | 호출 없음 / not called |
+| 0036–0037 | `GetVersionExA`(156 byte) | TRUE, 6.2.9200 NT |
+| 0038–0042 | `LoadLibraryA("wtsapi32.dll")`, `WTSQuerySessionInformationA(0, -1, 4, …)`, `WTSFreeMemory` | TRUE, 세션 / session 0, 해제 / freed |
+| 0043 | `LoadLibraryA("wfapi.dll")` | NULL (없는 module / absent) |
+| 0044 | `SetErrorMode(0)` | `0x8000` |
+| 0046–0049 | `LoadLibraryA("kernel32.dll")`, `GetProcAddress("IsTNT")`, `GetProcAddress("Borland32")`, `FreeLibrary` | base, NULL, NULL(없는 이름 / absent), TRUE |
+| 0050 | `CreateFileA("\.\FEnteDev")` | handle `0x00001008` |
+| 0053, 0055 | `DeviceIoControl(0x9c402450, 6 byte in-place)` | handshake 두 번 / two handshakes |
+| 0056 | `DeviceIoControl(0x9c40244c, 256 byte in-place)` | descriptor |
+| 0058–0059 | `GetProcAddress`: `GetCurrentProcessId`, `OpenProcess` | 주소, NULL → 정지 / address, NULL → stop |
+
+```text
+hardlock requests: total=4 initialize=1 handshake=2 descriptor=1 transform=0 other=0 rejected=0 last=descriptor/completed
+continuation    : stopped at unresolved lookup GetProcAddress(6f000000, OpenProcess), return 0x00ae2718
+```
+
+* **확인됨.** 작업 361이 "다음 경계" 앞에 두었던 WTS 조회가 여기서 나타났다. 게스트는 `wtsapi32.dll`을 `LoadLibraryA`로 올리고, `WTSSessionId`(4)를 현재 세션에 묻는다. 세션 0을 받고 buffer를 `WTSFreeMemory`로 돌려준 뒤 handshake로 진행한다. Windows의 진행 조건(세션 0)과 같다.
+  ***Confirmed.** The WTS query Task 361 expected past its boundary appears here: the guest loads `wtsapi32.dll` with `LoadLibraryA`, asks the current session for `WTSSessionId` (4), receives session 0, returns the buffer through `WTSFreeMemory`, and proceeds to the handshakes, matching the Windows advance condition (session 0).*
+* **확인됨.** `HL_SEARCH`, advapi32 레지스트리 함수, `wfapi.dll`, `IsTNT`·`Borland32`는 Hardlock API가 검색 설정, Citrix, DOS extender를 확인하는 단계로 보인다(목적은 **추정**). 레지스트리 함수는 해석만 되고 호출되지 않았다.
+  ***Confirmed.** `HL_SEARCH`, the advapi32 registry functions, `wfapi.dll`, and `IsTNT`/`Borland32` appear to be the Hardlock API checking its search settings, Citrix, and DOS extenders (purpose **inferred**); the registry functions are resolved but not called.*
+* **확인됨(작업 363 설계의 실험).** `OpenProcess` 뒤에는 `VirtualProtect`, `ReadProcessMemory`, `WriteProcessMemory`, `VirtualAlloc`, `VirtualFree`를 해석한다. 이것이 없으면 `"Error 1003 : Internal Error."` 뒤 `ExitProcess(3)`로 끝난다. 자기 image를 고치는 단계로 보인다(**추정**).
+  ***Confirmed (Task 363 design experiment).** After `OpenProcess` the guest resolves `VirtualProtect`, `ReadProcessMemory`, `WriteProcessMemory`, `VirtualAlloc`, and `VirtualFree`; without them it ends with `"Error 1003 : Internal Error."` and `ExitProcess(3)`. This looks like the stage that modifies its own image (**inferred**).*
+
+## 확인됨 — image 복호화 루프 완료 (작업 364) / Confirmed — image decryption loop completes (Task 364)
+
+2026-09-25, 작업 364에서 자기 process 메모리 API를 더한 뒤 실제 4th CHD(읽기 전용)를 실행했다. 두 폭 모두 1,390번 호출하고, 주소를 정규화하면 호출 기록이 같다.
+
+*On 2026-09-25, after Task 364 added the own-process memory APIs, the real 4th CHD (read-only) made 1,390 calls on both widths, with identical records after address normalization.*
+
+| # | 호출 / Call | 결과 / Result |
+| --- | --- | --- |
+| 0061 | `OpenProcess(0x38, FALSE, 0x0F00)` | handle `0x100c` |
+| 0067 | `VirtualAlloc(NULL, 0x8000, MEM_COMMIT, PAGE_READWRITE)` | arena 안 64 KiB 경계 / on a 64 KiB boundary in the arena |
+| 0068–1379 | page마다 `VirtualProtect(page, …, PAGE_READWRITE)` → 수정 → 원래 값으로 복원. 사이사이 descriptor `0x44c`, `LocalAlloc(0, 0x108)`, transform `0x458`, `LocalFree` / per page: `VirtualProtect(…, PAGE_READWRITE)` → modify → restore, with descriptor, `LocalAlloc`, transform, and `LocalFree` in between | `.text`는 `0x20`, `.rdata`는 `0x02`, 쓰기 섹션은 `0x08`로 복원 / `.text` restored to `0x20`, `.rdata` to `0x02`, writable sections to `0x08` |
+| 1380 | `VirtualFree(block, 0x8000, MEM_DECOMMIT)` | TRUE |
+| 1384 | `OpenProcess(0x38, FALSE, 0x0F00)` (두 번째 층 / second layer) | handle `0x1010` |
+| 1385–1390 | `GetProcAddress`: `VirtualProtect`, `VirtualAlloc`, `VirtualFree`, `ReadProcessMemory`, `WriteProcessMemory`, `GetCurrentThreadId` | 마지막이 NULL → 정지 / the last is NULL → stop |
+
+```text
+hardlock requests: total=76 initialize=1 handshake=2 descriptor=37 transform=36 other=0 rejected=0 last=transform/completed
+continuation    : stopped at unresolved lookup GetProcAddress(6f000000, GetCurrentThreadId), return 0x00ae9440
+```
+
+* **확인됨.** Hardlock 요청 수는 Windows 기록(initialize 1, handshake 2, descriptor 37, Function `0x0e` transform 36)과 같다. 공용 Hardlock HLE와 사용자 재료로 Linux에서도 image 복호화 루프가 끝까지 돈다.
+  ***Confirmed.** The Hardlock request counts equal the Windows record, so with the shared Hardlock HLE and the user's material the image decryption loop also runs to the end on Linux.*
+* **확인됨.** 보호 코드는 `.text`부터 `.reloc` 끝까지 page마다 쓰기를 열고, 받은 이전 값으로 되돌린다. `.protect` 섹션은 건드리지 않는다. 각 섹션을 두 번씩 지난다.
+  ***Confirmed.** The protection opens every page from `.text` to the end of `.reloc` for writing and restores the previous value it received, never touching `.protect`, passing each section twice.*
+* **미확정.** 복호화 결과가 Windows와 byte 단위로 같은지는 아직 비교하지 않았다. transform 수가 같다는 것까지만 확인했다.
+  ***Unresolved.** Whether the decrypted bytes match Windows byte for byte is not yet compared; only the transform count is confirmed.*
+
+## 확인됨 — envelope 종료와 원본 CRT 진입 (작업 367) / Confirmed — envelope end and entry into the original CRT (Task 367)
+
+2026-09-25, 작업 367 뒤 실제 4th CHD(읽기 전용)를 두 폭에서 실행했다. 1,579번 호출하고, 주소를 정규화하면 두 폭의 기록이 같다.
+
+*On 2026-09-25, after Task 367, the real 4th CHD (read-only) made 1,579 calls on both widths, identical after address normalization.*
+
+| # | 호출 / Call | 결과 / Result |
+| --- | --- | --- |
+| 1390–1397 | `GetProcAddress`: `GetCurrentThreadId`, `Sleep`, `GetTickCount`, `ExitProcess`, `SetTimer`, `KillTimer`, `GetModuleHandleA`, `LoadLibraryA` | 주소 / addresses |
+| 1398–1399 | `VirtualAlloc(NULL, 0x284, MEM_COMMIT, RW)`, `VirtualAlloc(NULL, 0x508, MEM_COMMIT, RWX)` | 64 KiB 경계 / 64 KiB boundaries |
+| 1400–1570 | `.idata` descriptor마다 `GetModuleHandleA` + `GetProcAddress`(ordinal 포함) / per `.idata` descriptor, including ordinals | 10개 DLL 모두 주소 / all ten DLLs resolve |
+| 1571–1572 | `GetVersion` | `0x23f00206` |
+| 1573–1576 | `VirtualProtect(0x6f00204c, 5, RW)` → `PAGE_EXECUTE_READ` 복원, 두 번 / restored, twice | `0x6f00204c` = facade `ExitProcess` thunk |
+| 1577 | `SetTimer(NULL, 0, 0x8000, 0x00aeaddb)` | timer ID 1 |
+| 1578 | `GetVersion` (호출 위치 / from `0x004c4424`, `.text`) | 원본 CRT / original CRT |
+| 1579 | `HeapCreate(HEAP_NO_SERIALIZE, 0x1000, 0)` | 해석 전용 → 정지 / resolve-only → stop |
+
+* **확인됨.** envelope는 원본 `.idata`의 descriptor 표를 따라 import를 다시 만든다. 이미 처리한 kernel32·user32 descriptor의 이름 표는 dump 시점에 0으로 지워져 있었다.
+  ***Confirmed.** The envelope rebuilds imports by following the original `.idata` descriptor table; at dump time the name tables of the processed kernel32 and user32 descriptors were already zeroed.*
+* **확인됨.** envelope는 facade의 `ExitProcess` thunk 첫 5 byte 범위의 보호를 바꾸고 되돌린다. thunk의 첫 5 byte는 `push imm32`(gate 번호)라서 다른 곳으로 옮겨도 그대로 동작한다. 그 사이에 hook을 쓴 것으로 **추정**한다. 실제로 쓴 byte는 확인하지 않았다.
+  ***Confirmed.** The envelope changes and restores the protection over the first five bytes of the facade's `ExitProcess` thunk, which are a relocatable `push imm32` (the gate number); writing a hook in between is **inferred**, as the written bytes were not examined.*
+* **확인됨.** `0x004c4424`는 `.text`(`0x401000`–`0x4dc022`) 안에 있다. `GetVersion` 다음 `HeapCreate`로 이어지는 흐름은 MSVC CRT 시작 순서다. 따라서 여기부터 원본 프로그램이다.
+  ***Confirmed.** `0x004c4424` lies in `.text` (`0x401000`–`0x4dc022`), and `GetVersion` followed by `HeapCreate` is the MSVC CRT start-up order, so the original program runs from here.*
+
+## 확인됨 — 원본 CRT 시작 완료 (작업 368) / Confirmed — original CRT start-up completes (Task 368)
+
+2026-09-25, 작업 368 뒤 실제 4th CHD(읽기 전용)는 두 폭에서 1,623번 호출하고, 주소를 정규화하면 기록이 같다. `#1578 GetVersion`부터 `#1622 SetUnhandledExceptionFilter`까지가 MSVC CRT 시작이다. 순서는 [작업 368 설계](../design/20260925-368-original-crt-startup.md)에 있다. 이어 게임 코드 `0x00406fe3`에서 `CreateEventA(NULL, FALSE, FALSE, NULL)`을 부른다.
+
+*On 2026-09-25, after Task 368, the real 4th CHD (read-only) makes 1,623 calls on both widths, identical after address normalization. `#1578 GetVersion` through `#1622 SetUnhandledExceptionFilter` is the MSVC CRT start-up, in the order the [Task 368 design](../design/20260925-368-original-crt-startup.md) lists; game code at `0x00406fe3` then calls `CreateEventA(NULL, FALSE, FALSE, NULL)`.*
+
+* **확인됨.** CRT는 코드 페이지 949를 쓴다. `GetACP` 결과로 `GetCPInfo`, `MultiByteToWideChar`, `GetStringTypeW`, `LCMapStringW`(locale `0x412`, 한국어)를 부른다.
+  ***Confirmed.** The CRT works in code page 949, calling `GetCPInfo`, `MultiByteToWideChar`, `GetStringTypeW`, and `LCMapStringW` (locale `0x412`, Korean) with `GetACP`'s result.*
+* **확인됨.** CRT는 `GetProcAddress`로 `IsProcessorFeaturePresent`를 찾는다. 그 호출 위치(`0x00aebbc4`)는 `.protect` 안이다. envelope가 원본의 `GetProcAddress` import도 자기 코드로 거치게 한 것으로 **추정**한다.
+  ***Confirmed.** The CRT looks up `IsProcessorFeaturePresent` through `GetProcAddress`, from a site (`0x00aebbc4`) inside `.protect`; the envelope appears to route the original's `GetProcAddress` import through its own code (**inferred**).*
+
+## 확인됨 — 게임의 Hardlock 로그인과 WinMain 진입 (작업 369) / Confirmed — the game's Hardlock login and WinMain entry (Task 369)
+
+2026-09-25, 작업 369 뒤 실제 4th CHD(읽기 전용)는 두 폭에서 1,700번 호출하고, 주소를 정규화하면 기록이 같다.
+
+*On 2026-09-25, after Task 369, the real 4th CHD (read-only) makes 1,700 calls on both widths, identical after address normalization.*
+
+| # | 호출 / Call | 비고 / Note |
+| --- | --- | --- |
+| 1623–1652 | `CreateEventA`, `VirtualAlloc`(8 MiB, 256 KiB, 1 MiB), `HeapSize` 반복 / repeated | C++ 정적 초기화 / static initialization |
+| 1653–1684 | `GetCurrentProcessId` … `CreateFileA("\.\FEnteDev")`, handshake 2, descriptor 1 | 게임 `.text`(`0x004b…`)의 Hardlock API / the Hardlock API in the game's `.text` |
+| 1685–1690 | `GetLocalTime`, `GetSystemTime`, `GetTimeZoneInformation`, `WideCharToMultiByte` × 2 | CRT 시간대 / CRT time zone |
+| 1696 | `CreateEventA(…, TRUE, …)` | |
+| 1698–1699 | `GetStartupInfoA`, `GetModuleHandleA(NULL)` → `0x00400000` | WinMain 인자 준비 / WinMain arguments |
+| 1700 | `timeBeginPeriod(1)` (`0x00406cdc`) | WinMain의 첫 호출 → 정지 / WinMain's first call → stop |
+
+* **확인됨.** 게임 코드에도 Hardlock API가 link되어 있다. envelope와 같은 순서로 다시 로그인하고, handshake 2회와 descriptor 1회를 더 보낸다(합계 handshake 4, descriptor 38).
+  ***Confirmed.** The game code links the Hardlock API as well and logs in again in the envelope's order, adding two handshakes and one descriptor (four handshakes and 38 descriptors in all).*
+* **미확정.** Windows 기록의 합계(작업 364 비교: descriptor 37)는 게임 로그인 전에 끝난 실행이다. 게임 로그인까지 포함한 Windows 합계와는 아직 비교하지 않았다.
+  ***Unresolved.** The Windows record's totals (compared in Task 364: 37 descriptors) come from a run that ended before the game's login; totals including that login are not yet compared on Windows.*

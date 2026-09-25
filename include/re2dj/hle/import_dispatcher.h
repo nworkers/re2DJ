@@ -13,6 +13,35 @@
 namespace re2dj::hle
 {
 
+class GuestDeviceSet;
+class GuestFiles;
+class GuestProcess;
+class HostPresentation;
+
+// One reading of the host clock as the guest sees it.
+struct GuestClockReading
+{
+    // FILETIME: 100-nanosecond intervals since 1601-01-01 UTC.
+    std::uint64_t utc_file_time = 0;
+    // Local time minus UTC, in minutes (+540 for Korea).
+    std::int32_t local_offset_minutes = 0;
+    // GetTickCount: milliseconds of a monotonic clock, wrapping at 2^32.
+    std::uint32_t tick_ms = 0;
+};
+
+// A guest stdcall function the host calls before the current import returns,
+// as Windows calls a window procedure from CreateWindowEx.
+struct GuestCall
+{
+    std::uint32_t function = 0;
+    std::vector<std::uint32_t> arguments;
+    // Bytes placed in guest memory for the call, such as a CREATESTRUCT. The
+    // argument at data_argument becomes their address, and the guest's changes
+    // are copied back into data.
+    std::vector<std::uint8_t> data;
+    int data_argument = -1;
+};
+
 class ImportCallServices
 {
 public:
@@ -26,6 +55,67 @@ public:
                                                   std::string_view name) const = 0;
     virtual runtime::GuestAddress FindGuestExport(runtime::GuestAddress module,
                                                   std::uint16_t ordinal) const = 0;
+
+    // The services below are optional: a host that does not provide one keeps
+    // these defaults, and a handler that needs it fails the call.
+
+    // True when handle is the base of a module the guest can see.
+    virtual bool IsGuestModule(runtime::GuestAddress handle) const
+    {
+        static_cast<void>(handle);
+        return false;
+    }
+    // The file name of the module whose base is handle, such as "kernel32.dll".
+    virtual std::string GuestModuleName(runtime::GuestAddress handle) const
+    {
+        static_cast<void>(handle);
+        return {};
+    }
+    // Copies guest bytes, such as a DeviceIoControl buffer, in or out.
+    virtual bool ReadGuestBytes(runtime::GuestAddress address,
+                                std::span<std::uint8_t> bytes,
+                                std::string* error) const
+    {
+        static_cast<void>(address);
+        static_cast<void>(bytes);
+        if (error != nullptr) *error = "guest memory reads are not provided";
+        return false;
+    }
+    virtual bool WriteGuestBytes(runtime::GuestAddress address,
+                                 std::span<const std::uint8_t> bytes,
+                                 std::string* error) const
+    {
+        static_cast<void>(address);
+        static_cast<void>(bytes);
+        if (error != nullptr) *error = "guest memory writes are not provided";
+        return false;
+    }
+    // The devices the guest may open in this run, or null for none.
+    virtual GuestDeviceSet* Devices() const { return nullptr; }
+    // The files the guest may open in this run, or null for none.
+    virtual GuestFiles* Files() const { return nullptr; }
+    // The guest's process state (ID, error mode, heap), or null for none.
+    virtual GuestProcess* Process() const { return nullptr; }
+    // The host clock; false when the host provides none.
+    virtual bool ReadClock(GuestClockReading* reading) const
+    {
+        static_cast<void>(reading);
+        return false;
+    }
+    // The calling thread's Win32 last-error value.
+    virtual void SetLastError(std::uint32_t value) const { static_cast<void>(value); }
+    virtual std::uint32_t LastError() const { return 0; }
+    // The host's presentation, or null for a host that shows nothing.
+    virtual HostPresentation* Presentation() const { return nullptr; }
+    // Runs a guest function to completion and gives its eax. The guest may
+    // call imports meanwhile, which dispatch as nested calls.
+    virtual bool CallGuest(GuestCall* call, std::uint32_t* result, std::string* error) const
+    {
+        static_cast<void>(call);
+        static_cast<void>(result);
+        if (error != nullptr) *error = "guest calls are not provided";
+        return false;
+    }
 };
 
 enum class CallingConvention : std::uint8_t

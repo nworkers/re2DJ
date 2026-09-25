@@ -101,7 +101,7 @@ BuiltInTargetProfile MakeChdCompatibilityProfile(std::string_view id,
     entry.profile.run_defaults.lptdi.device_mock_path_prefix =
         "\\\\.\\FEnteDev";
     entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
-    entry.profile.run_defaults.hle_wts_active_console = true;
+    entry.profile.run_defaults.hle_wts_console_session = true;
     entry.profile.run_defaults.run_detached = true;
     entry.profile.run_defaults.default_hdd_image_relative_path =
         std::string(image_path);
@@ -295,8 +295,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
             entry.profile.run_defaults.run_detached = true;
-            // hle_wts_active_console stays off: runs with and without the
-            // active-console report produced an identical IOCTL sequence, so
+            // hle_wts_console_session stays off: runs with and without the
+            // console-session report produced an identical IOCTL sequence, so
             // there is no evidence to turn it on for this build.
             entry.profile.working_directory_relative_path = {};
             // This CHD boots Explorer and starts the game from a StartUp
@@ -369,9 +369,9 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.hle_dynamic_vfs = true;
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
             // Same boundary as 4th: the protection initialization reads the
-            // session's connect state, and the cabinet ran this executable as
+            // current session ID (WTSSessionId), and the cabinet ran this executable as
             // the console's shell.
-            entry.profile.run_defaults.hle_wts_active_console = true;
+            entry.profile.run_defaults.hle_wts_console_session = true;
             entry.profile.run_defaults.run_detached = true;
             entry.profile.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
             // This dump carries no System.ini, so the drive letter and guest
@@ -415,9 +415,9 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
             // The protection stops after its first device request unless the
-            // session reports as an active console, and the cabinet ran this
+            // session reports the console session ID 0, and the cabinet ran this
             // executable as that console's shell.
-            entry.profile.run_defaults.hle_wts_active_console = true;
+            entry.profile.run_defaults.hle_wts_console_session = true;
             // Without this the launcher treats the first VFS file open as the
             // handoff and terminates the original, which is diagnostic rather
             // than product behavior.
@@ -528,8 +528,8 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
             // The same envelope's WTSQuerySessionInformationA path is present
             // in this build's strings. Whether this build stops without the
-            // active-console report has not been observed here.
-            entry.profile.run_defaults.hle_wts_active_console = true;
+            // console-session report has not been observed here.
+            entry.profile.run_defaults.hle_wts_console_session = true;
             // This board is word-wide over ports 0x300 to 0x30c, which is
             // confirmed rather than inherited: past the Hardlock protection the
             // guest faults on an untrapped `out dx, ax` whose bytes are 66 ef,
@@ -779,6 +779,23 @@ std::string_view ExecutableFormatHintName(ExecutableFormatHint format_hint)
     default:
         return "win32-pe32";
     }
+}
+
+std::string GuestRootPath(const TargetProfile& profile)
+{
+    if (profile.guest_drive_letter == '\0' || profile.guest_directory.empty())
+    {
+        return "D:\\ez2dj";
+    }
+    return std::string(1, profile.guest_drive_letter) + ":" + profile.guest_directory;
+}
+
+std::string GuestExecutablePath(const TargetProfile& profile)
+{
+    const std::string& relative = profile.executable_relative_path;
+    const std::size_t slash = relative.find_last_of("/\\");
+    return GuestRootPath(profile) + "\\" +
+           (slash == std::string::npos ? relative : relative.substr(slash + 1));
 }
 
 }  // namespace re2dj::target

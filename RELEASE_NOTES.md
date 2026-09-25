@@ -1,5 +1,79 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.53 (2026-09-26)
+
+### 한국어
+
+Linux에서 실제 4th가 보호 envelope을 지나 원본 CRT와 WinMain으로 들어가고, 게임 창을 만든 뒤 DirectDraw 초기화까지 진행합니다. 두 폭 모두 API 호출 1,824번 뒤 `IDirectDraw7::CreateSurface`에서 멈추고, 호스트 화면에는 게임 창이 뜹니다. Windows와 Linux가 함께 쓰는 DirectX 공용 core도 이 릴리즈에서 시작합니다.
+
+#### 1. Hardlock과 보호 envelope (작업 360~364, 367)
+- **Hardlock HLE 공용화**: 설정 조립, `DeviceIoControl` 완료 규칙, 장치 경로 판정을 공용 core로 옮겼습니다. Windows 실제 4th의 Hardlock 기록은 변경 전후가 같습니다. WTS class 4는 `WTSSessionId`로 바로잡았습니다.
+- **게스트 장치와 process 환경**: Linux `kernel32` facade가 `\\.\FEnteDev`를 열고 `DeviceIoControl`을 처리합니다. `GuestProcess`는 게스트의 ID, error mode, heap, image·`VirtualAlloc` 영역의 page 보호 기록을 갖습니다. `advapi32`, `wtsapi32` facade도 추가했습니다.
+- **envelope 두 번째 층**: 원본 import 표 재구성, `ExitProcess` hook, `Read/WriteProcessMemory`, thread timer를 처리해 원본 진입점까지 갑니다. 복호화 루프의 descriptor·transform 수가 Windows와 같습니다.
+
+#### 2. 원본 CRT에서 WinMain까지 (작업 368~371)
+- **MSVC CRT 시작**: heap, 시작 정보, 명령줄·환경, code page 949(실측), module 경로를 제공합니다. stop stub은 게스트 SEH에서 제외했습니다.
+- **정적 초기화**: 이름 없는 event, host 시계와 시간 export, `GetTimeZoneInformation`을 구현했습니다. 게임 자신의 Hardlock 로그인도 통과합니다.
+- **게스트 파일과 winmm**: CHD와 overlay(copy-on-write)로 게스트 파일을 제공하고(`EZ2DJ.ini` 등), `timeBeginPeriod`/`timeGetTime`을 구현했습니다.
+- **API 호출 기록**: facade 호출마다 게스트에서 읽은 입력, 게스트에 쓴 출력, last error, 반환값을 `logs/re2dj-<시각>.api.log`에 남깁니다. Hardlock buffer는 길이만 남깁니다.
+
+#### 3. 창과 DirectDraw (작업 372~374, 377, 380)
+- **게스트 호출**: HLE handler가 window procedure 같은 게스트 함수를 끝까지 실행할 수 있습니다. x86은 직접 부르고, x64는 중첩 compat-mode 전환을 씁니다. 게스트가 그 사이에 부르는 API는 중첩 호출로 처리되며, API log에 들여써서 남습니다.
+- **창 생성**: `RegisterClassA`, `CreateWindowExA`, `DefWindowProcA`, `UpdateWindow`와 `gdi32!GetStockObject`를 구현했습니다. 창 생성 메시지 순서와 인자는 Windows 11에서 측정한 값을 따릅니다.
+- **DirectDraw 진입**: facade COM 객체(vtable은 `"<인터페이스>::<메서드>"` export)를 도입했습니다. `DirectDrawEnumerateExA`(모니터 하나), `DirectDrawCreateEx`, `IDirectDraw7`, `IDirect3D7`의 열거와 caps, `SetCooperativeLevel`, `SetDisplayMode`가 동작합니다.
+- **DirectX 공용 core (`re2dj_directx`)**: 32비트 게스트 ABI 구조체, caps, 장치·형식·표시 모드 열거, 협조 수준·표시 모드 규칙을 Windows COM facade와 Linux gate facade가 함께 씁니다. Windows는 SDK와의 구조·상수 일치를 `static_assert`로 검사하며, 실제 4th의 DirectX 기록은 변경 전후가 같습니다.
+- **Linux 호스트 창**: 게임이 `SetCooperativeLevel`을 부를 때 SDL3/OpenGL 창(640×480)이 뜹니다. 아직 그리는 것이 없어 검은 화면입니다. `--hold-window`를 주면 실행이 멈춘 뒤에도 창이 남습니다.
+
+#### 4. 제품 표시와 로깅 (작업 365·366, 375·376)
+- **버전 머리말**: 창 제목, OSD, `--version`, `--help`, 실행 로그, 진단 도구가 모두 `re2DJ v0.0.53 (Win/x86 Debug)`처럼 OS·아키텍처·빌드 형식을 함께 보여 줍니다. 창 제목은 두 플랫폼이 같은 함수로 만듭니다.
+- **spdlog**: CLI 실행 출력과 Windows injected runtime 로그를 spdlog로 옮겼습니다.
+
+#### 5. 구조 정리 (작업 378·379)
+- **native helper IPC 제거**: Linux i386 helper와 `--linux-helper`, Windows native helper(선택 빌드), helper protocol, 관련 preset과 script를 지웠습니다. Linux는 두 폭 모두 in-process로만 실행합니다.
+- **플랫폼 경계**: Linux 코드와 target이 `src/platform/windows`의 파일을 참조하지 않도록 정리했습니다. 공용 probe fixture는 `src/platform/native_probe_fixture`로 옮겼습니다.
+
+#### 6. 기타
+- **수정**: Windows `re2dj_windows_vfs_runtime_probe`의 crash를 고쳤습니다(작업 362). v0.0.52의 알려진 문제입니다.
+- **확인 필요**: WSLg에서 Linux 창의 닫기 버튼으로 `--hold-window`가 풀리는지는 사용자 확인 항목입니다.
+
+---
+
+### English
+
+On Linux the real 4th now passes its protection envelope into the original CRT and WinMain, creates its game window, and proceeds through DirectDraw initialization, stopping at `IDirectDraw7::CreateSurface` after 1,824 API calls on both widths with the game window on the host screen. This release also starts the DirectX core shared by Windows and Linux.
+
+#### 1. Hardlock and the protection envelope (tasks 360–364, 367)
+- **Shared Hardlock HLE**: Configuration assembly, `DeviceIoControl` completion rules, and device-path decisions moved into the shared core; the real 4th's Hardlock record on Windows is unchanged. WTS class 4 is corrected to `WTSSessionId`.
+- **Guest devices and process environment**: The Linux `kernel32` facade opens `\\.\FEnteDev` and serves `DeviceIoControl`. `GuestProcess` keeps the guest's IDs, error mode, heaps, and page protections for image and `VirtualAlloc` regions; `advapi32` and `wtsapi32` facades joined.
+- **The envelope's second layer**: Import-table reconstruction, the `ExitProcess` hook, `Read/WriteProcessMemory`, and thread timers carry the guest to the original entry point, with descriptor and transform counts matching Windows.
+
+#### 2. From the original CRT to WinMain (tasks 368–371)
+- **MSVC CRT start-up**: Heaps, start-up info, command line and environment, code page 949 (measured), and module paths; the stop stub is excluded from guest SEH.
+- **Static initialization**: Unnamed events, a host clock with the time exports, and `GetTimeZoneInformation`; the game's own Hardlock login passes too.
+- **Guest files and winmm**: Guest files come from the CHD with a copy-on-write overlay (`EZ2DJ.ini` and others), with `timeBeginPeriod`/`timeGetTime`.
+- **API call log**: Every facade call records the inputs read from the guest, the outputs written back, the last error, and the return value in `logs/re2dj-<time>.api.log`; Hardlock buffers keep only their lengths.
+
+#### 3. Windows and DirectDraw (tasks 372–374, 377, 380)
+- **Guest calls**: HLE handlers can run a guest function such as a window procedure to completion — directly on x86, through a nested compatibility-mode transition on x64. APIs the guest calls meanwhile dispatch as nested calls, indented in the API log.
+- **Window creation**: `RegisterClassA`, `CreateWindowExA`, `DefWindowProcA`, `UpdateWindow`, and `gdi32!GetStockObject`, with the creation messages and arguments measured on Windows 11.
+- **DirectDraw entry**: Facade COM objects (vtables filled from `"<interface>::<method>"` exports); `DirectDrawEnumerateExA` (one monitor), `DirectDrawCreateEx`, `IDirectDraw7`, and `IDirect3D7`'s enumerations and caps, `SetCooperativeLevel`, and `SetDisplayMode` work.
+- **Shared DirectX core (`re2dj_directx`)**: The 32-bit guest ABI structures, caps, device/format/display-mode enumerations, and cooperative-level and display-mode rules are shared by the Windows COM facade and the Linux gate facade. Windows checks the structures and constants against the SDK with `static_assert`, and the real 4th's DirectX record on Windows is unchanged.
+- **Linux host window**: An SDL3/OpenGL window (640×480) opens when the game calls `SetCooperativeLevel`; it is black until drawing arrives. `--hold-window` keeps it open after the run stops.
+
+#### 4. Product naming and logging (tasks 365–366, 375–376)
+- **Version banner**: The window title, OSD, `--version`, `--help`, run log, and diagnostic tools all show the OS, architecture, and build type, as in `re2DJ v0.0.53 (Win/x86 Debug)`; both platforms build the window title with one function.
+- **spdlog**: CLI run output and the Windows injected runtime's logs moved to spdlog.
+
+#### 5. Structure (tasks 378–379)
+- **Native helper IPC removed**: The Linux i386 helper and `--linux-helper`, the Windows native helper (optional build), the helper protocol, and their presets and scripts are gone; Linux runs in-process only, on both widths.
+- **Platform boundary**: Linux code and targets no longer reference files under `src/platform/windows`; the shared probe fixture moved to `src/platform/native_probe_fixture`.
+
+#### 6. Other
+- **Fix**: The Windows `re2dj_windows_vfs_runtime_probe` crash is fixed (task 362), the known issue of v0.0.52.
+- **To confirm**: Whether the Linux window's close button releases `--hold-window` under WSLg is left for the user to confirm.
+
+---
+
 ## v0.0.52 (2026-09-24)
 
 ### 한국어

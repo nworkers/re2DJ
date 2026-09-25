@@ -11,7 +11,9 @@
 
 #include "direct3d7_com_facade.h"
 #include "directdraw_legacy_interop.h"
+#include "directx_abi_windows.h"
 #include "graphics_trace_log.h"
+#include "re2dj/directx/direct3d_description.h"
 
 // IDirect3D7 and IDirect3DDevice7 reorder their predecessors rather than
 // extending them, so unlike the DirectDraw interfaces they cannot be adopted
@@ -109,112 +111,6 @@ ULONG WINAPI D3d7Release(IDirect3D7* self)
     return static_cast<ULONG>(count);
 }
 
-// Fills the primitive caps a DirectX 7 title inspects before it accepts a
-// device. A guest that walks these fields rejects a device whose caps are left
-// zero, so every capability the legacy OpenGL backend can honour is reported.
-void FillPrimitiveCaps(D3DPRIMCAPS* caps)
-{
-    std::memset(caps, 0, sizeof(*caps));
-    caps->dwSize = sizeof(*caps);
-    caps->dwMiscCaps = D3DPMISCCAPS_CULLNONE | D3DPMISCCAPS_CULLCW |
-                       D3DPMISCCAPS_CULLCCW | D3DPMISCCAPS_MASKZ;
-    caps->dwRasterCaps = D3DPRASTERCAPS_DITHER | D3DPRASTERCAPS_SUBPIXEL |
-                         D3DPRASTERCAPS_ZTEST | D3DPRASTERCAPS_FOGVERTEX |
-                         D3DPRASTERCAPS_FOGTABLE | D3DPRASTERCAPS_ZBIAS |
-                         D3DPRASTERCAPS_WBUFFER | D3DPRASTERCAPS_WFOG |
-                         D3DPRASTERCAPS_ZFOG;
-    caps->dwZCmpCaps = D3DPCMPCAPS_NEVER | D3DPCMPCAPS_LESS | D3DPCMPCAPS_EQUAL |
-                       D3DPCMPCAPS_LESSEQUAL | D3DPCMPCAPS_GREATER |
-                       D3DPCMPCAPS_NOTEQUAL | D3DPCMPCAPS_GREATEREQUAL |
-                       D3DPCMPCAPS_ALWAYS;
-    caps->dwSrcBlendCaps = D3DPBLENDCAPS_ZERO | D3DPBLENDCAPS_ONE |
-                           D3DPBLENDCAPS_SRCCOLOR | D3DPBLENDCAPS_INVSRCCOLOR |
-                           D3DPBLENDCAPS_SRCALPHA | D3DPBLENDCAPS_INVSRCALPHA |
-                           D3DPBLENDCAPS_DESTALPHA | D3DPBLENDCAPS_INVDESTALPHA |
-                           D3DPBLENDCAPS_DESTCOLOR | D3DPBLENDCAPS_INVDESTCOLOR |
-                           D3DPBLENDCAPS_SRCALPHASAT;
-    caps->dwDestBlendCaps = caps->dwSrcBlendCaps;
-    caps->dwAlphaCmpCaps = caps->dwZCmpCaps;
-    caps->dwShadeCaps = D3DPSHADECAPS_COLORGOURAUDRGB |
-                        D3DPSHADECAPS_SPECULARGOURAUDRGB |
-                        D3DPSHADECAPS_ALPHAGOURAUDBLEND |
-                        D3DPSHADECAPS_FOGGOURAUD;
-    caps->dwTextureCaps = D3DPTEXTURECAPS_PERSPECTIVE | D3DPTEXTURECAPS_ALPHA |
-                          D3DPTEXTURECAPS_TRANSPARENCY |
-                          D3DPTEXTURECAPS_ALPHAPALETTE;
-    caps->dwTextureFilterCaps =
-        D3DPTFILTERCAPS_NEAREST | D3DPTFILTERCAPS_LINEAR |
-        D3DPTFILTERCAPS_MIPNEAREST | D3DPTFILTERCAPS_MIPLINEAR |
-        D3DPTFILTERCAPS_LINEARMIPNEAREST | D3DPTFILTERCAPS_LINEARMIPLINEAR |
-        D3DPTFILTERCAPS_MAGFPOINT | D3DPTFILTERCAPS_MAGFLINEAR |
-        D3DPTFILTERCAPS_MINFPOINT | D3DPTFILTERCAPS_MINFLINEAR |
-        D3DPTFILTERCAPS_MIPFPOINT | D3DPTFILTERCAPS_MIPFLINEAR;
-    caps->dwTextureBlendCaps = D3DPTBLENDCAPS_DECAL | D3DPTBLENDCAPS_MODULATE |
-                               D3DPTBLENDCAPS_DECALALPHA |
-                               D3DPTBLENDCAPS_MODULATEALPHA |
-                               D3DPTBLENDCAPS_COPY | D3DPTBLENDCAPS_ADD;
-    caps->dwTextureAddressCaps =
-        D3DPTADDRESSCAPS_WRAP | D3DPTADDRESSCAPS_MIRROR |
-        D3DPTADDRESSCAPS_CLAMP | D3DPTADDRESSCAPS_BORDER |
-        D3DPTADDRESSCAPS_INDEPENDENTUV;
-}
-
-void FillDeviceDescription(D3DDEVICEDESC7* desc, const GUID& device_guid, bool hardware_tnl)
-{
-    std::memset(desc, 0, sizeof(*desc));
-    desc->dwDevCaps = D3DDEVCAPS_FLOATTLVERTEX | D3DDEVCAPS_EXECUTESYSTEMMEMORY |
-                      D3DDEVCAPS_TLVERTEXSYSTEMMEMORY |
-                      D3DDEVCAPS_TEXTURESYSTEMMEMORY |
-                      D3DDEVCAPS_TEXTUREVIDEOMEMORY |
-                      D3DDEVCAPS_DRAWPRIMTLVERTEX |
-                      D3DDEVCAPS_CANRENDERAFTERFLIP |
-                      D3DDEVCAPS_DRAWPRIMITIVES2 | D3DDEVCAPS_DRAWPRIMITIVES2EX |
-                      D3DDEVCAPS_HWRASTERIZATION;
-    if (hardware_tnl)
-    {
-        desc->dwDevCaps |= D3DDEVCAPS_HWTRANSFORMANDLIGHT;
-    }
-    FillPrimitiveCaps(&desc->dpcLineCaps);
-    FillPrimitiveCaps(&desc->dpcTriCaps);
-    desc->dwDeviceRenderBitDepth = DDBD_16 | DDBD_24 | DDBD_32;
-    desc->dwDeviceZBufferBitDepth = DDBD_16 | DDBD_24 | DDBD_32;
-    desc->dwMinTextureWidth = 1;
-    desc->dwMinTextureHeight = 1;
-    desc->dwMaxTextureWidth = 2048;
-    desc->dwMaxTextureHeight = 2048;
-    desc->dwMaxTextureRepeat = 2048;
-    desc->dwMaxTextureAspectRatio = 2048;
-    desc->dwMaxAnisotropy = 1;
-    desc->dvGuardBandLeft = -32768.0f;
-    desc->dvGuardBandTop = -32768.0f;
-    desc->dvGuardBandRight = 32768.0f;
-    desc->dvGuardBandBottom = 32768.0f;
-    desc->dvExtentsAdjust = 0.0f;
-    desc->dwStencilCaps = 0;
-    // The low bits of dwFVFCaps report how many texture coordinate sets the
-    // device accepts in a flexible vertex format.
-    desc->dwFVFCaps = 8;
-    desc->dwTextureOpCaps =
-        D3DTEXOPCAPS_DISABLE | D3DTEXOPCAPS_SELECTARG1 | D3DTEXOPCAPS_SELECTARG2 |
-        D3DTEXOPCAPS_MODULATE | D3DTEXOPCAPS_MODULATE2X | D3DTEXOPCAPS_MODULATE4X |
-        D3DTEXOPCAPS_ADD | D3DTEXOPCAPS_ADDSIGNED | D3DTEXOPCAPS_ADDSIGNED2X |
-        D3DTEXOPCAPS_SUBTRACT | D3DTEXOPCAPS_ADDSMOOTH |
-        D3DTEXOPCAPS_BLENDDIFFUSEALPHA | D3DTEXOPCAPS_BLENDTEXTUREALPHA |
-        D3DTEXOPCAPS_BLENDFACTORALPHA | D3DTEXOPCAPS_BLENDTEXTUREALPHAPM |
-        D3DTEXOPCAPS_BLENDCURRENTALPHA;
-    desc->wMaxTextureBlendStages = 8;
-    desc->wMaxSimultaneousTextures = 8;
-    desc->dwMaxActiveLights = 8;
-    desc->dvMaxVertexW = 1.0e10f;
-    desc->deviceGUID = device_guid;
-    desc->wMaxUserClipPlanes = 6;
-    desc->wMaxVertexBlendMatrices = 1;
-    desc->dwVertexProcessingCaps =
-        D3DVTXPCAPS_TEXGEN | D3DVTXPCAPS_MATERIALSOURCE7 | D3DVTXPCAPS_VERTEXFOG |
-        D3DVTXPCAPS_DIRECTIONALLIGHTS | D3DVTXPCAPS_POSITIONALLIGHTS |
-        D3DVTXPCAPS_LOCALVIEWER;
-}
-
 HRESULT WINAPI D3d7EnumDevices(IDirect3D7* self, LPD3DENUMDEVICESCALLBACK7 callback, void* arg)
 {
     (void)self;
@@ -223,40 +119,15 @@ HRESULT WINAPI D3d7EnumDevices(IDirect3D7* self, LPD3DENUMDEVICESCALLBACK7 callb
     {
         return DDERR_INVALIDPARAMS;
     }
-    // DirectX 7 enumerates the software rasterizer first and the most capable
-    // hardware device last, and titles commonly pick by walking that order.
-    // The names match the retail DirectX 7 strings because guests are known to
-    // select a device by comparing them.
-    struct EnumeratedDevice
-    {
-        const char* description;
-        const char* name;
-        const GUID* device_guid;
-        bool hardware_tnl;
-    };
-    const EnumeratedDevice devices[] = {
-        {"Microsoft Direct3D RGB Software Emulation",
-         "RGB Emulation",
-         &IID_IDirect3DRGBDevice,
-         false},
-        {"Microsoft Direct3D Hardware acceleration through Direct3D HAL",
-         "Direct3D HAL",
-         &IID_IDirect3DHALDevice,
-         false},
-        {"Microsoft Direct3D Hardware Transform and Lighting acceleration capable device",
-         "Direct3D T&L HAL",
-         &IID_IDirect3DTnLHalDevice,
-         true},
-    };
-
-    for (const EnumeratedDevice& device : devices)
+    for (const re2dj::directx::Direct3DDevice& device : re2dj::directx::Direct3D7Devices())
     {
         D3DDEVICEDESC7 desc = {};
-        FillDeviceDescription(&desc, *device.device_guid, device.hardware_tnl);
+        CopyFromCore(&desc, re2dj::directx::DeviceDescription(device.guid, device.hardware_transform_and_light));
         char description[128] = {};
         char name[64] = {};
-        std::snprintf(description, sizeof(description), "%s", device.description);
-        std::snprintf(name, sizeof(name), "%s", device.name);
+        std::snprintf(description, sizeof(description), "%.*s", static_cast<int>(device.description.size()),
+                      device.description.data());
+        std::snprintf(name, sizeof(name), "%.*s", static_cast<int>(device.name.size()), device.name.data());
         const HRESULT callback_result = callback(description, name, &desc, arg);
         WriteGraphicsTraceFormat(
             "re2dj:hle:IDirect3D7::EnumDevices:device name=%s guid={%08lx-%04x-%04x} "
@@ -354,12 +225,8 @@ HRESULT WINAPI D3d7EnumZBufferFormats(IDirect3D7* self,
     {
         return DDERR_INVALIDPARAMS;
     }
-    // Provide 16-bit D16 format
     DDPIXELFORMAT ddpf = {};
-    ddpf.dwSize = sizeof(ddpf);
-    ddpf.dwFlags = DDPF_ZBUFFER;
-    ddpf.dwZBufferBitDepth = 16;
-    ddpf.dwZBitMask = 0x0000ffff;
+    CopyFromCore(&ddpf, re2dj::directx::Depth16Format());
     callback(&ddpf, arg);
     return D3D_OK;
 }
@@ -432,7 +299,7 @@ HRESULT WINAPI Dev7GetCaps(IDirect3DDevice7*, D3DDEVICEDESC7* desc)
     {
         return DDERR_INVALIDPARAMS;
     }
-    FillDeviceDescription(desc, IID_IDirect3DHALDevice, false);
+    CopyFromCore(desc, re2dj::directx::CreatedDeviceDescription());
     return D3D_OK;
 }
 
@@ -444,14 +311,8 @@ HRESULT WINAPI Dev7EnumTextureFormats(IDirect3DDevice7*,
     {
         return DDERR_INVALIDPARAMS;
     }
-    // The shared surface backing stores one layout, so one format is offered.
     DDPIXELFORMAT format = {};
-    format.dwSize = sizeof(format);
-    format.dwFlags = DDPF_RGB;
-    format.dwRGBBitCount = 16;
-    format.dwRBitMask = 0xf800;
-    format.dwGBitMask = 0x07e0;
-    format.dwBBitMask = 0x001f;
+    CopyFromCore(&format, re2dj::directx::Rgb565Format());
     callback(&format, arg);
     return D3D_OK;
 }

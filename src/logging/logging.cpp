@@ -23,6 +23,16 @@ constexpr char kLogPattern[] = "[%X.%e] [%8l] [%n] %v";
 
 std::mutex g_logger_mutex;
 std::shared_ptr<spdlog::logger> g_logger;
+std::shared_ptr<spdlog::logger> g_api_logger;
+
+// The API log sits next to the main log: "re2dj-<time>.log" becomes
+// "re2dj-<time>.api.log".
+std::filesystem::path ApiLogPath(const std::filesystem::path& main_path)
+{
+    std::filesystem::path path = main_path;
+    path.replace_extension(".api.log");
+    return path;
+}
 
 std::filesystem::path MakeDefaultLogPath()
 {
@@ -89,12 +99,24 @@ bool Initialize(const LoggerOptions& options,
         logger->set_level(spdlog::level::trace);
         logger->flush_on(spdlog::level::trace);
 
+        auto api_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+            ApiLogPath(file_path).string(), true);
+        auto api_logger = std::make_shared<spdlog::logger>(options.name + "-api", api_sink);
+        api_logger->set_pattern("[%X.%e] %v");
+        api_logger->set_level(spdlog::level::trace);
+        api_logger->flush_on(spdlog::level::warn);
+
         std::lock_guard<std::mutex> lock(g_logger_mutex);
         if (g_logger != nullptr)
         {
             g_logger->flush();
         }
+        if (g_api_logger != nullptr)
+        {
+            g_api_logger->flush();
+        }
         g_logger = std::move(logger);
+        g_api_logger = std::move(api_logger);
     }
     catch (const std::exception& exception)
     {
@@ -117,6 +139,12 @@ std::shared_ptr<spdlog::logger> GetLogger()
     return g_logger;
 }
 
+std::shared_ptr<spdlog::logger> GetApiLogger()
+{
+    std::lock_guard<std::mutex> lock(g_logger_mutex);
+    return g_api_logger;
+}
+
 void Fatal(std::string_view classification, std::string_view message)
 {
     const std::shared_ptr<spdlog::logger> logger = GetLogger();
@@ -131,6 +159,11 @@ void Shutdown()
     {
         g_logger->flush();
         g_logger.reset();
+    }
+    if (g_api_logger != nullptr)
+    {
+        g_api_logger->flush();
+        g_api_logger.reset();
     }
 }
 

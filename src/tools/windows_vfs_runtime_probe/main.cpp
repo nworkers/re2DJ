@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/version.h"
+
 extern "C" __declspec(dllimport) char g_re2dj_vfs_hdd_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_guest_root[MAX_PATH];
 extern "C" __declspec(dllimport) char g_re2dj_vfs_overlay_root[MAX_PATH];
@@ -71,6 +73,7 @@ extern "C" __declspec(dllimport) HRESULT WINAPI Re2djHleDirectSoundCreate(
     GUID* device_guid, LPDIRECTSOUND* direct_sound, IUnknown* outer);
 extern "C" __declspec(dllimport) volatile float g_re2dj_audio_master_gain;
 extern "C" __declspec(dllimport) char g_re2dj_audio_trace_path[MAX_PATH];
+extern "C" __declspec(dllimport) void Re2djCloseRuntimeLogs();
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_audio_image_base;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_demo_volume;
 extern "C" __declspec(dllimport) volatile DWORD g_re2dj_fullscreen;
@@ -896,8 +899,9 @@ int main()
             GetWindowTextA(presentation_window, window_title, sizeof(window_title));
         const bool window_title_valid =
             window_title_length != 0 &&
-            std::strncmp(window_title, "re2DJ v", std::strlen("re2DJ v")) == 0 &&
-            std::strstr(window_title, RE2DJ_VERSION) != nullptr &&
+            std::strncmp(window_title,
+                         re2dj::VersionBanner("re2DJ", RE2DJ_VERSION).c_str(),
+                         re2dj::VersionBanner("re2DJ", RE2DJ_VERSION).size()) == 0 &&
             std::strstr(window_title, " - Build ") != nullptr &&
             std::strstr(window_title, " - SDL3 OpenGL - FPS : 0.0") != nullptr;
         if (!window_title_valid)
@@ -1581,6 +1585,9 @@ int main()
     const std::string absolute_copied_text(
         (std::istreambuf_iterator<char>(absolute_copied)),
         std::istreambuf_iterator<char>());
+    // Release both files now; open streams would block the final cleanup.
+    absolute_original.close();
+    absolute_copied.close();
     passed = passed &&
              Check(absolute_original_text == "absolute",
                    "absolute HDD-root write modified the original") &&
@@ -1941,7 +1948,9 @@ int main()
     }
 
     DSBUFFERDESC streaming_desc = sound_desc;
-    streaming_desc.dwFlags = DSBCAPS_STATIC | DSBCAPS_LOCHARDWARE |
+    // Static buffers are never streaming rings (Task 303 classification),
+    // so this ring uses the 2nd-5th flags without DSBCAPS_STATIC.
+    streaming_desc.dwFlags = DSBCAPS_LOCHARDWARE |
                              DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN |
                              DSBCAPS_STICKYFOCUS | DSBCAPS_GETCURRENTPOSITION2;
     streaming_desc.dwBufferBytes = 32;
@@ -2063,11 +2072,19 @@ int main()
                        audio_trace_text.find("track-playing-after=0") != std::string::npos,
                    "audio trace omitted streaming stop transition") &&
              Check(audio_trace_text.find("lock-offset=24 first=8 second=8") != std::string::npos &&
-                       audio_trace_text.find("dirty-offset=24 dirty-bytes=16") != std::string::npos &&
+                       audio_trace_text.find("shadow-offset=0 shadow-bytes=32") != std::string::npos &&
                        audio_trace_text.find("backend-refresh=1") != std::string::npos,
                    "audio trace omitted streaming wrap refresh");
     audio_trace_stream.close();
 
-    std::filesystem::remove_all(root);
+    // The mixer thread keeps tracing after the checks and would recreate
+    // audio.log under root, and the runtime records its exit to vfs.log when
+    // it unloads, so stop both traces and close the open record files before
+    // cleanup, and keep a cleanup race from aborting the probe.
+    g_re2dj_audio_trace_path[0] = '\0';
+    g_re2dj_vfs_trace_path[0] = '\0';
+    Re2djCloseRuntimeLogs();
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(root, cleanup_error);
     return passed ? 0 : 1;
 }

@@ -102,8 +102,14 @@ struct NativeGuestSehDispatch
     Win32Context32 context;
 };
 
-// Recognizes a trap as a guest INT3 at or above image_base whose TEB holds a
-// registered SEH frame inside the guest stack, and prepares the handler call.
+// Marks [address, address + size) as host code whose INT3 bytes belong to the
+// host, such as a diagnostic stop stub, so a guest SEH frame never receives
+// them; size 0 clears the mark. One range is kept.
+void SetNativeHostTrapRange(std::uint32_t address, std::uint32_t size);
+
+// Recognizes a trap as a guest INT3 at or above image_base, outside the host
+// trap range, whose TEB holds a registered SEH frame inside the guest stack,
+// and prepares the handler call.
 // Returns false for any other trap, leaving it to be reported as a fault.
 bool PrepareNativeGuestBreakpointDispatch(const NativeTrapRegisters& registers,
                                           std::uint32_t teb,

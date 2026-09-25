@@ -23,11 +23,11 @@ constexpr int kExitHddError = 2;
 void PrintUsage()
 {
     std::printf(
-        "re2dj_hdd_probe %s - inspect an extracted EZ2DJ HDD directory\n"
+        "%s - inspect an extracted EZ2DJ HDD directory\n"
         "\n"
         "Usage:\n"
         "  re2dj_hdd_probe <directory> [--depth <n>]\n",
-        std::string(re2dj::VersionString()).c_str());
+        re2dj::VersionBanner("re2dj_hdd_probe", re2dj::VersionString()).c_str());
 }
 
 }  // namespace

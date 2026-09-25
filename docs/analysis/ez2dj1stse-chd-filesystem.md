@@ -177,7 +177,7 @@ launcher의 HLE 준비는 모두 이 표에서 IAT 슬롯을 찾으므로, 각 �
 | `hle_dynamic_vfs` | 미설정 → `true` | 장치 API가 `GetProcAddress` 경유 |
 | `hardlock_cfg_material_default` | 미설정 → `true` | 로컬 Hardlock 자료 소비 경로 |
 | `hle_command_line`, `hle_directsound` | 유지 | import 존재 |
-| `hle_wts_active_console` | 미설정 유지 | 있으나 없으나 IOCTL 진행이 동일 |
+| `hle_wts_console_session` (이전 `hle_wts_active_console`) | 미설정 유지 | 있으나 없으나 IOCTL 진행이 동일 |
 
 `legacy_io_ports`와 helper RVA `0x00038987`/`0x000389ab`는 `io_port_runtime` 준비까지는 성공했지만, 실행이 privileged instruction에 도달하지 않아 이 빌드에서 맞는지는 **여전히 미확정**입니다.
 

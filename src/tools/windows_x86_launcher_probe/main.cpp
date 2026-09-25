@@ -1,5 +1,7 @@
 #define NOMINMAX
 #include <windows.h>
+#include <spdlog/logger.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 #include <algorithm>
 #include <array>
@@ -15,6 +17,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -24,6 +27,8 @@
 #include "re2dj/config/hardlock_secret_config.h"
 #include "re2dj/graphics/present_sync.h"
 #include "re2dj/hle/hardlock/device.h"
+#include "re2dj/logging/logging.h"
+#include "re2dj/hle/hardlock/device_material.h"
 #include "re2dj/hle/hardlock/handshake_response.h"
 #include "re2dj/hle/hardlock/api_descriptor.h"
 #include "re2dj/hle/hardlock/transform_responses.h"
@@ -49,6 +54,8 @@
 namespace
 {
 
+// The launcher's JSONL run record, written through spdlog: one JSON object
+// per line with no prefix, so the file stays machine-readable.
 class DiagnosticLog
 {
 public:
@@ -69,21 +76,28 @@ public:
             *error = "cannot create diagnostic log directory";
             return false;
         }
-        stream_.open(path_, std::ios::out | std::ios::trunc);
-        if (!stream_)
+        try
+        {
+            auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path_.string(), true);
+            logger_ = std::make_shared<spdlog::logger>("launcher-diagnostic", sink);
+            logger_->set_pattern("%v");
+            logger_->set_level(spdlog::level::trace);
+            logger_->flush_on(spdlog::level::trace);
+        }
+        catch (const std::exception&)
         {
             *error = "cannot open diagnostic log";
             return false;
         }
+        re2dj::logging::GetLogger()->info("launcher diagnostic log: {}", path_.generic_string());
         return true;
     }
 
     void Write(const char* line)
     {
-        if (stream_)
+        if (logger_ != nullptr)
         {
-            stream_ << line << '\n';
-            stream_.flush();
+            logger_->info("{}", line);
         }
     }
 
@@ -94,7 +108,7 @@ public:
 
 private:
     std::filesystem::path path_;
-    std::ofstream stream_;
+    std::shared_ptr<spdlog::logger> logger_;
 };
 
 DiagnosticLog* g_diagnostic_log = nullptr;
@@ -113,21 +127,56 @@ void RecordDiagnostic(const char* format, ...)
     }
     if (g_trace)
     {
-        std::fprintf(stderr, "%s\n", line);
+        re2dj::logging::GetLogger()->debug("{}", line);
     }
+}
+
+// Formats one launcher line without its trailing newline.
+std::string FormatLauncherLine(const char* format, va_list arguments)
+{
+    char line[2048] = {};
+    std::vsnprintf(line, sizeof(line), format, arguments);
+    std::size_t length = std::strlen(line);
+    while (length != 0 && (line[length - 1] == '\n' || line[length - 1] == '\r'))
+    {
+        --length;
+    }
+    return std::string(line, length);
+}
+
+void LogLauncherInfo(const char* format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    const std::string line = FormatLauncherLine(format, arguments);
+    va_end(arguments);
+    re2dj::logging::GetLogger()->info("{}", line);
+}
+
+// Launcher errors go to the re2dj logger as the JSON text they always were.
+void LogLauncherError(const char* format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    const std::string line = FormatLauncherLine(format, arguments);
+    va_end(arguments);
+    re2dj::logging::GetLogger()->error("{}", line);
 }
 
 void PrintDiagnosticError(const std::string& error)
 {
     RecordDiagnostic("{\"event\":\"outcome\",\"status\":\"error\",\"message\":\"%s\"}",
                      error.c_str());
-    std::fprintf(stderr, "{\"error\":\"%s\"", error.c_str());
     if (g_diagnostic_log != nullptr)
     {
-        std::fprintf(stderr, ",\"diagnostic_log\":\"%s\"",
-                     g_diagnostic_log->path().generic_string().c_str());
+        LogLauncherError("{\"error\":\"%s\",\"diagnostic_log\":\"%s\"}",
+                         error.c_str(),
+                         g_diagnostic_log->path().generic_string().c_str());
     }
-    std::fprintf(stderr, "}\n");
+    else
+    {
+        LogLauncherError("{\"error\":\"%s\"}", error.c_str());
+    }
 }
 
 void PrintUsage()
@@ -8914,13 +8963,13 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         {
             if (index + 1 >= argc)
             {
-                std::fprintf(stderr, "error: --present-sync requires a value\n");
+                LogLauncherError("error: --present-sync requires a value");
                 return 2;
             }
             re2dj::graphics::PresentSync parsed = re2dj::graphics::PresentSync::kVerticalSync;
             if (!re2dj::graphics::ParsePresentSyncName(argv[++index], &parsed))
             {
-                std::fprintf(stderr,
+                LogLauncherError(
                              "error: --present-sync must be vsync, immediate or adaptive\n");
                 return 2;
             }
@@ -9032,7 +9081,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 std::strtoul(value.c_str() + start, &end, base);
             if (end == nullptr || *end != '\0' || parsed > 0xffff)
             {
-                std::fprintf(stderr, "{\"error\":\"invalid --hardlock-reject-function\"}\n");
+                LogLauncherError("{\"error\":\"invalid --hardlock-reject-function\"}\n");
                 return 1;
             }
             hardlock_reject_function_enabled = true;
@@ -9343,7 +9392,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     }
     if (!chd_path.empty() && !std::filesystem::is_regular_file(chd_path))
     {
-        std::fprintf(stderr, "{\"error\":\"CHD path does not exist\"}\n");
+        LogLauncherError("{\"error\":\"CHD path does not exist\"}\n");
         return 1;
     }
     if (!chd_path.empty())
@@ -9356,7 +9405,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             std::filesystem::absolute(chd_path, chd_absolute_error);
         if (chd_absolute_error)
         {
-            std::fprintf(stderr, "{\"error\":\"CHD path cannot be made absolute\"}\n");
+            LogLauncherError("{\"error\":\"CHD path cannot be made absolute\"}\n");
             return 1;
         }
         chd_path = absolute_chd_path;
@@ -9364,7 +9413,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     if (!target_executable_path.empty() &&
         std::filesystem::path(target_executable_path).is_absolute())
     {
-        std::fprintf(stderr, "{\"error\":\"target executable path must be relative\"}\n");
+        LogLauncherError("{\"error\":\"target executable path must be relative\"}\n");
         return 1;
     }
     if (!hardlock_descriptor_dump_path.empty())
@@ -9374,7 +9423,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             std::filesystem::absolute(hardlock_descriptor_dump_path, descriptor_path_error);
         if (descriptor_path_error)
         {
-            std::fprintf(stderr,
+            LogLauncherError(
                          "{\"error\":\"Hardlock descriptor output path cannot be made absolute\"}\n");
             return 1;
         }
@@ -9411,7 +9460,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     }
     if (null_context_object_source_trace && slot_writer_trace)
     {
-        std::fprintf(stderr,
+        LogLauncherError(
                      "{\"error\":\"null-context object source trace conflicts with slot-writer trace\"}\n");
         return 1;
     }
@@ -9421,8 +9470,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
          null_context_field_access_trace || null_context_object_state_trace ||
          null_context_object_reference_scan || null_context_entry_trace))
     {
-        std::fprintf(
-            stderr,
+        LogLauncherError(
             "{\"error\":\"null-context field reference execution trace conflicts with another hardware trace\"}\n");
         return 1;
     }
@@ -9434,8 +9482,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
          null_context_field_reference_execution_trace ||
          (null_context_object_state_trace && null_context_object_reference_scan)))
     {
-        std::fprintf(
-            stderr,
+        LogLauncherError(
             "{\"error\":\"null-context object state trace conflicts with another hardware trace\"}\n");
         return 1;
     }
@@ -9503,69 +9550,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     re2dj::hle::hardlock::HardlockHandshakeResponse hardlock_450_response = {};
     std::uint16_t hardlock_44c_tail_word = 0;
     re2dj::hle::hardlock::HardlockTransformResponseMap hardlock_transform_map;
-    // Deferred until the target is known, because a profile default may fill
-    // these in from cfg after the command line has been read.
-    const auto parse_hardlock_material = [&]() -> bool {
-        if (!device_mock_hardlock_44c_tail_hex.empty() &&
-            !re2dj::hle::hardlock::ParseHardlockApiTailWordHex(
-                device_mock_hardlock_44c_tail_hex,
-                &hardlock_44c_tail_word,
-                &error))
-        {
-            std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
-            return false;
-        }
-        if (!device_mock_hardlock_450_response_hex.empty() &&
-            !re2dj::hle::hardlock::ParseHardlockHandshakeResponse(
-                device_mock_hardlock_450_response_hex,
-                &hardlock_450_response,
-                &error))
-        {
-            std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
-            return false;
-        }
-        if (!hardlock_transform_map_path.empty())
-        {
-            std::ifstream map_stream(hardlock_transform_map_path, std::ios::binary);
-            if (!map_stream)
-            {
-                std::fprintf(stderr,
-                             "{\"error\":\"cannot open Hardlock transform map\"}\n");
-                return false;
-            }
-            const std::string map_text((std::istreambuf_iterator<char>(map_stream)),
-                                       std::istreambuf_iterator<char>());
-            if (!re2dj::hle::hardlock::ParseHardlockTransformResponseMap(
-                    map_text, &hardlock_transform_map, &error))
-            {
-                std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
-                return false;
-            }
-            // The runtime holds fixed-size arrays; a larger map would be
-            // written past them or ignored there as a whole.
-            if (hardlock_transform_map.blocks.size() >
-                    re2dj::hle::hardlock::kHardlockTransformBlockRowCapacity ||
-                hardlock_transform_map.payloads.size() >
-                    re2dj::hle::hardlock::kHardlockPayloadRecordCapacity)
-            {
-                std::fprintf(stderr,
-                             "{\"error\":\"Hardlock transform map exceeds runtime capacity\","
-                             "\"blocks\":%zu,\"block_capacity\":%zu,"
-                             "\"payloads\":%zu,\"payload_capacity\":%zu}\n",
-                             hardlock_transform_map.blocks.size(),
-                             re2dj::hle::hardlock::kHardlockTransformBlockRowCapacity,
-                             hardlock_transform_map.payloads.size(),
-                             re2dj::hle::hardlock::kHardlockPayloadRecordCapacity);
-                return false;
-            }
-        }
-        return true;
-    };
     if (!device_mock_lptdi_target_state_hex.empty() &&
         !re2dj::device::ParseLptdiTargetState(
             device_mock_lptdi_target_state_hex, &device_target_state, &error))
     {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        LogLauncherError("{\"error\":\"%s\"}", error.c_str());
         return 1;
     }
     re2dj::device::LptdiResponseProfile device_response_profile;
@@ -9575,17 +9564,17 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             &device_response_profile,
             &error))
     {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        LogLauncherError("{\"error\":\"%s\"}", error.c_str());
         return 1;
     }
     if (inject_runtime && runtime_path.empty() && !FindBundledRuntime(&runtime_path, &error))
     {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        LogLauncherError("{\"error\":\"%s\"}", error.c_str());
         return 1;
     }
     if (inject_runtime && !std::filesystem::is_regular_file(runtime_path))
     {
-        std::fprintf(stderr, "{\"error\":\"injected runtime does not exist\"}\\n");
+        LogLauncherError("{\"error\":\"injected runtime does not exist\"}");
         return 1;
     }
     if (!io_config_path.empty())
@@ -9594,7 +9583,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         io_config_path = std::filesystem::absolute(io_config_path, path_error);
         if (path_error || !std::filesystem::is_regular_file(io_config_path))
         {
-            std::fprintf(stderr, "{\"error\":\"I/O configuration does not exist\"}\n");
+            LogLauncherError("{\"error\":\"I/O configuration does not exist\"}\n");
             return 1;
         }
     }
@@ -9602,7 +9591,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     re2dj::hdd::HddRoot root;
     if (!re2dj::hdd::HddRoot::Open(hdd_path, &root, &error))
     {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        LogLauncherError("{\"error\":\"%s\"}", error.c_str());
         return 2;
     }
     const re2dj::hdd::HddScanResult scan = re2dj::hdd::ScanHdd(root);
@@ -9616,7 +9605,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             re2dj::target::FindBuiltInTargetProfileById(target_id);
         if (built_in == nullptr)
         {
-            std::fprintf(stderr, "{\"error\":\"explicit executable requires a built-in target profile\"}\n");
+            LogLauncherError("{\"error\":\"explicit executable requires a built-in target profile\"}\n");
             return 2;
         }
         explicit_target = built_in->profile;
@@ -9638,25 +9627,25 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         !re2dj::exe::IsGuestExecutable(info) ||
         info.image_base > (std::numeric_limits<std::uint32_t>::max)())
     {
-        std::fprintf(stderr, "{\"error\":\"cannot resolve valid target\"}\\n");
+        LogLauncherError("{\"error\":\"cannot resolve valid target\"}");
         return 2;
     }
     if (follow_child_process && target->id != "ez2dj6th")
     {
-        std::fprintf(stderr,
-                     "{\"error\":\"child follow is currently configured for ez2dj6th only\"}\\n");
+        LogLauncherError(
+                     "{\"error\":\"child follow is currently configured for ez2dj6th only\"}");
         return 2;
     }
     if (follow_child_process && !IsExecutableNamed(executable, "EZ2DJ.EXE"))
     {
-        std::fprintf(stderr,
-                     "{\"error\":\"child follow requires the EZ2DJ.EXE bootstrap\"}\\n");
+        LogLauncherError(
+                     "{\"error\":\"child follow requires the EZ2DJ.EXE bootstrap\"}");
         return 2;
     }
     if (follow_child_process && run_detached)
     {
-        std::fprintf(stderr,
-                     "{\"error\":\"child follow cannot be combined with detached execution\"}\\n");
+        LogLauncherError(
+                     "{\"error\":\"child follow cannot be combined with detached execution\"}");
         return 2;
     }
     const bool child_hle_vfs = follow_child_process && hle_vfs;
@@ -9673,82 +9662,81 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     const bool child_hle_directsound = follow_child_process && hle_directsound;
     if (d3d_init_trace && target->id != "ez2dj1stse")
     {
-        std::fprintf(stderr, "{\"error\":\"Direct3D initialization trace requires ez2dj1stse target\"}\\n");
+        LogLauncherError("{\"error\":\"Direct3D initialization trace requires ez2dj1stse target\"}");
         return 2;
     }
     if (ksnd_load_trace && target->id != "ez2dj1stse")
     {
-        std::fprintf(stderr, "{\"error\":\"KSND load trace requires ez2dj1stse target\"}\\n");
+        LogLauncherError("{\"error\":\"KSND load trace requires ez2dj1stse target\"}");
         return 2;
     }
     if (slot_writer_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr, "{\"error\":\"slot-writer trace requires ez2dj4th target\"}\n");
+        LogLauncherError("{\"error\":\"slot-writer trace requires ez2dj4th target\"}\n");
         return 2;
     }
     if (null_context_object_source_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr, "{\"error\":\"null-context object source trace requires ez2dj4th target\"}\n");
+        LogLauncherError("{\"error\":\"null-context object source trace requires ez2dj4th target\"}\n");
         return 2;
     }
     if (null_context_field_writer_early_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr, "{\"error\":\"early null-context field writer trace requires ez2dj4th target\"}\n");
+        LogLauncherError("{\"error\":\"early null-context field writer trace requires ez2dj4th target\"}\n");
         return 2;
     }
     if (null_context_field_writer_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr, "{\"error\":\"null-context field writer trace requires ez2dj4th target\"}\n");
+        LogLauncherError("{\"error\":\"null-context field writer trace requires ez2dj4th target\"}\n");
         return 2;
     }
     if (null_context_field_access_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr, "{\"error\":\"null-context field access trace requires ez2dj4th target\"}\n");
+        LogLauncherError("{\"error\":\"null-context field access trace requires ez2dj4th target\"}\n");
         return 2;
     }
     if (null_context_entry_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr,
+        LogLauncherError(
                      "{\"error\":\"null-context entry trace supports ez2dj4th only\"}\n");
         return 1;
     }
     if (null_context_object_reference_scan && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr,
+        LogLauncherError(
                      "{\"error\":\"null-context object reference scan supports ez2dj4th only\"}\n");
         return 1;
     }
     if (null_context_object_state_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr,
+        LogLauncherError(
                      "{\"error\":\"null-context object state trace supports ez2dj4th only\"}\n");
         return 1;
     }
     if (null_context_field_reference_execution_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(
-            stderr,
+        LogLauncherError(
             "{\"error\":\"null-context field reference execution trace requires ez2dj4th target\"}\n");
         return 2;
     }
     if (null_context_allocation_trace && target->id != "ez2dj4th")
     {
-        std::fprintf(stderr, "{\"error\":\"null-context allocation trace requires ez2dj4th target\"}\n");
+        LogLauncherError("{\"error\":\"null-context allocation trace requires ez2dj4th target\"}\n");
         return 2;
     }
     if (hle_d3d3 && !target->run_defaults.hle_d3d3)
     {
-        std::fprintf(stderr, "{\"error\":\"Direct3D3 HLE is not configured for this target\"}\\n");
+        LogLauncherError("{\"error\":\"Direct3D3 HLE is not configured for this target\"}");
         return 2;
     }
     if (hle_directsound && !target->run_defaults.hle_directsound)
     {
-        std::fprintf(stderr, "{\"error\":\"DirectSound HLE is not configured for this target\"}\\n");
+        LogLauncherError("{\"error\":\"DirectSound HLE is not configured for this target\"}");
         return 2;
     }
     if (hle_io_ports && !target->run_defaults.lptdi.legacy_io_ports)
     {
-        std::fprintf(stderr, "{\"error\":\"legacy I/O port HLE is not configured for this target\"}\\n");
+        LogLauncherError("{\"error\":\"legacy I/O port HLE is not configured for this target\"}");
         return 2;
     }
     const LegacyIoTrapPolicy io_policy = {
@@ -9759,89 +9747,66 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
             re2dj::target::LegacyIoWidth::kWord};
     if (device_mock_lptdi && !target->run_defaults.lptdi.device_mock_enabled)
     {
-        std::fprintf(stderr, "{\"error\":\"LPTDI device mock is not configured for this target\"}\\n");
+        LogLauncherError("{\"error\":\"LPTDI device mock is not configured for this target\"}");
         return 2;
     }
     bool hardlock_cfg_replay = false;
     bool hardlock_cfg_tail = false;
     bool hardlock_cfg_map = false;
-    // Profile default: take Hardlock material from the conventional cfg paths
-    // when the user has put it there. Nothing in this repository produces those
-    // values, an explicit option outranks the file, and absence is not an error
-    // because the run is still a valid observation without them.
-    if (target->run_defaults.lptdi.hardlock_cfg_material_default)
+    // Hardlock material: explicit options first, then the profile's cfg paths
+    // when the profile allows them. Nothing in this repository produces those
+    // values, and their absence is not an error because the run is still a
+    // valid observation without them.
+    bool hardlock_450_enabled = false;
+    bool hardlock_44c_tail_enabled = false;
     {
-        re2dj::config::HardlockSecretMaterial cfg_material;
-        bool cfg_section_found = false;
-        if (!re2dj::config::LoadHardlockProfileMaterial(
-                re2dj::config::DefaultHardlockSecretConfigPath(),
-                target->id,
-                &cfg_material,
-                &cfg_section_found,
-                &error))
+        re2dj::hle::hardlock::HardlockMaterialSources sources;
+        sources.profile_id = target->id;
+        sources.use_profile_cfg = target->run_defaults.lptdi.hardlock_cfg_material_default;
+        sources.config_path = re2dj::config::DefaultHardlockSecretConfigPath();
+        sources.default_map_path = re2dj::config::DefaultHardlockTransformMapPath(target->id);
+        sources.handshake_response_hex = device_mock_hardlock_450_response_hex;
+        sources.descriptor_tail_hex = device_mock_hardlock_44c_tail_hex;
+        sources.transform_map_path = hardlock_transform_map_path;
+        sources.device_requested = hardlock_device;
+        re2dj::hle::hardlock::HardlockDeviceMaterial material;
+        if (!re2dj::hle::hardlock::ResolveHardlockDeviceMaterial(sources, &material, &error))
         {
-            std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+            LogLauncherError("{\"error\":\"%s\"}\n", error.c_str());
             return 2;
         }
-        if (hardlock_transform_map_path.empty())
+        hardlock_device = material.device_enabled;
+        hardlock_seeds = material.seeds;
+        hardlock_cfg_replay = material.cfg_handshake;
+        hardlock_cfg_tail = material.cfg_tail;
+        hardlock_cfg_map = material.cfg_map;
+        hardlock_450_enabled = material.handshake_response.has_value();
+        if (hardlock_450_enabled)
         {
-            const std::filesystem::path default_map =
-                re2dj::config::DefaultHardlockTransformMapPath(target->id);
-            std::error_code map_code;
-            if (!default_map.empty() && std::filesystem::exists(default_map, map_code) &&
-                !map_code)
-            {
-                hardlock_transform_map_path = default_map.string();
-                // The map is only consumed by the stub, so selecting one here
-                // has to enable the same boundary the explicit option does.
-                hardlock_device = true;
-                hardlock_cfg_map = true;
-            }
+            hardlock_450_response = *material.handshake_response;
         }
-        const bool cfg_has_seeds = !cfg_material.module_address_hex.empty() &&
-                                   !cfg_material.seed1_hex.empty() &&
-                                   !cfg_material.seed2_hex.empty() &&
-                                   !cfg_material.seed3_hex.empty();
-        if (cfg_has_seeds)
+        hardlock_44c_tail_enabled = material.descriptor_tail_word.has_value();
+        if (hardlock_44c_tail_enabled)
         {
-            re2dj::hle::hardlock::HardlockSeeds parsed_seeds{};
-            auto parse_hex_u16 = [](const std::string& str, std::uint16_t* out) -> bool {
-                if (out == nullptr || str.empty()) return false;
-                try {
-                    *out = static_cast<std::uint16_t>(std::stoul(str, nullptr, 0) & 0xffff);
-                    return true;
-                } catch (...) {
-                    return false;
-                }
-            };
-            if (parse_hex_u16(cfg_material.module_address_hex, &parsed_seeds.module_address) &&
-                parse_hex_u16(cfg_material.seed1_hex, &parsed_seeds.seed1) &&
-                parse_hex_u16(cfg_material.seed2_hex, &parsed_seeds.seed2) &&
-                parse_hex_u16(cfg_material.seed3_hex, &parsed_seeds.seed3))
-            {
-                hardlock_seeds = parsed_seeds;
-                hardlock_device = true;
-            }
+            hardlock_44c_tail_word = *material.descriptor_tail_word;
         }
-        // The device replay values are applied alongside a map or when seeds are present.
-        if (cfg_section_found && (!hardlock_transform_map_path.empty() || cfg_has_seeds))
-        {
-            if (device_mock_hardlock_450_response_hex.empty() &&
-                !cfg_material.handshake_response_hex.empty())
-            {
-                device_mock_hardlock_450_response_hex = cfg_material.handshake_response_hex;
-                hardlock_cfg_replay = true;
-            }
-            if (device_mock_hardlock_44c_tail_hex.empty() &&
-                !cfg_material.descriptor_tail_hex.empty())
-            {
-                device_mock_hardlock_44c_tail_hex = cfg_material.descriptor_tail_hex;
-                hardlock_cfg_tail = true;
-            }
-        }
+        hardlock_transform_map = std::move(material.transform_map);
     }
-    if (!parse_hardlock_material())
+    // The runtime holds fixed-size arrays; a larger map would be written past
+    // them or ignored there as a whole.
+    if (hardlock_transform_map.blocks.size() >
+            re2dj::hle::hardlock::kHardlockTransformBlockRowCapacity ||
+        hardlock_transform_map.payloads.size() >
+            re2dj::hle::hardlock::kHardlockPayloadRecordCapacity)
     {
+        LogLauncherError(
+                     "{\"error\":\"Hardlock transform map exceeds runtime capacity\","
+                     "\"blocks\":%zu,\"block_capacity\":%zu,"
+                     "\"payloads\":%zu,\"payload_capacity\":%zu}\n",
+                     hardlock_transform_map.blocks.size(),
+                     re2dj::hle::hardlock::kHardlockTransformBlockRowCapacity,
+                     hardlock_transform_map.payloads.size(),
+                     re2dj::hle::hardlock::kHardlockPayloadRecordCapacity);
         return 2;
     }
     const std::string profile_device_mock_path_prefix =
@@ -9852,34 +9817,30 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     // so it comes from the profile; the dumps this runtime was first written
     // against used D:\ez2dj, which stays the default for profiles that record
     // no guest path. Both the main process and a bootstrap child receive it.
-    const std::string profile_guest_root =
-        target->guest_drive_letter == '\0' || target->guest_directory.empty()
-            ? std::string("D:\\ez2dj")
-            : (std::string(1, target->guest_drive_letter) + ":" +
-               target->guest_directory);
+    const std::string profile_guest_root = re2dj::target::GuestRootPath(*target);
     if (device_mock_lptdi && profile_device_mock_path_prefix.empty())
     {
-        std::fprintf(stderr, "{\"error\":\"LPTDI device mock has no path prefix\"}\\n");
+        LogLauncherError("{\"error\":\"LPTDI device mock has no path prefix\"}");
         return 2;
     }
     std::filesystem::path vfs_source_root = root.root();
     if ((hle_vfs || child_hle_vfs) && !target->working_directory_relative_path.empty() &&
         !root.ResolveDirectory(target->working_directory_relative_path, &vfs_source_root))
     {
-        std::fprintf(stderr,
-                     "{\"error\":\"cannot resolve target working directory for VFS mount\"}\\n");
+        LogLauncherError(
+                     "{\"error\":\"cannot resolve target working directory for VFS mount\"}");
         return 2;
     }
     std::vector<std::uint8_t> file;
     if (!ReadFile(executable, &file, &error))
     {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\\n", error.c_str());
+        LogLauncherError("{\"error\":\"%s\"}", error.c_str());
         return 2;
     }
     DiagnosticLog diagnostic_log;
     if (!diagnostic_log.Open(target->id, &error))
     {
-        std::fprintf(stderr, "{\"error\":\"%s\"}\n", error.c_str());
+        LogLauncherError("{\"error\":\"%s\"}\n", error.c_str());
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
@@ -10086,6 +10047,27 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                                                                 runtime_path,
                                                                                 &runtime_base,
                                                                                 &error));
+    // The runtime channel's record sits next to the JSONL log. Like the OSD
+    // values below it is not needed to run the guest, so a failure is
+    // recorded and the run goes on.
+    if (inject_runtime && runtime_loaded && runtime_base != 0)
+    {
+        std::filesystem::path runtime_log_path = diagnostic_log.path();
+        runtime_log_path.replace_extension(".runtime.log");
+        std::string runtime_log_error;
+        std::uint32_t runtime_log_path_rva = 0;
+        const bool runtime_log_written =
+            re2dj::platform::windows::FindPe32ExportRva(
+                runtime_path, "g_re2dj_runtime_log_path", &runtime_log_path_rva, &runtime_log_error) &&
+            WriteRemoteAnsi(child.hProcess,
+                            runtime_base + runtime_log_path_rva,
+                            runtime_log_path.string(),
+                            &runtime_log_error);
+        RecordDiagnostic("{\"event\":\"runtime_log\",\"written\":%s,\"path\":\"%s\",\"error\":\"%s\"}",
+                         runtime_log_written ? "true" : "false",
+                         runtime_log_path.generic_string().c_str(),
+                         runtime_log_error.c_str());
+    }
     // What the on-screen display offers this run. None of it is needed to run
     // the guest, so a failure here is recorded and the run goes on.
     if (inject_runtime && runtime_loaded && runtime_base != 0)
@@ -10811,7 +10793,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                  device_mock_lptdi_target_state_hex.c_str());
             }
         }
-        if (vfs_prepared && !device_mock_hardlock_450_response_hex.empty())
+        if (vfs_prepared && hardlock_450_enabled)
         {
             std::uint32_t response_rva = 0;
             std::uint32_t enabled_rva = 0;
@@ -10840,7 +10822,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                     "{\"event\":\"hardlock_450_response_replay\",\"size\":6}");
             }
         }
-        if (vfs_prepared && !device_mock_hardlock_44c_tail_hex.empty())
+        if (vfs_prepared && hardlock_44c_tail_enabled)
         {
             std::uint32_t tail_rva = 0;
             std::uint32_t enabled_rva = 0;
@@ -11942,6 +11924,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.vfs_trace_path.replace_extension(".child.vfs.log");
         child_follow_options.graphics_trace_path = diagnostic_log.path();
         child_follow_options.graphics_trace_path.replace_extension(".child.ddraw.log");
+        child_follow_options.runtime_log_path = diagnostic_log.path();
+        child_follow_options.runtime_log_path.replace_extension(".child.runtime.log");
         child_follow_options.guest_root = profile_guest_root;
         child_follow_options.profile_id = target->id;
         child_follow_options.device_path_prefix = profile_device_mock_path_prefix;
@@ -11965,11 +11949,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.io_in_byte_rva = static_cast<std::uint32_t>(io_policy.in_byte_rva);
         child_follow_options.io_out_byte_rva = static_cast<std::uint32_t>(io_policy.out_byte_rva);
         child_follow_options.io_word_width = io_policy.word_width;
-        child_follow_options.hardlock_handshake_enabled =
-            !device_mock_hardlock_450_response_hex.empty();
+        child_follow_options.hardlock_handshake_enabled = hardlock_450_enabled;
         child_follow_options.hardlock_handshake = hardlock_450_response;
-        child_follow_options.hardlock_tail_enabled =
-            !device_mock_hardlock_44c_tail_hex.empty();
+        child_follow_options.hardlock_tail_enabled = hardlock_44c_tail_enabled;
         child_follow_options.hardlock_tail = hardlock_44c_tail_word;
         child_follow_options.hardlock_seeds = hardlock_seeds;
         child_follow_options.hardlock_transform_map = hardlock_transform_map;
@@ -12221,7 +12203,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     }
     RecordDiagnostic("{\"event\":\"outcome\",\"status\":\"success\",\"target\":\"%s\"}",
                      target->id.c_str());
-    std::printf("{\"target\":\"%s\",\"image_base\":\"0x%08x\",\"main_module_base\":\"0x%08x\",\"entry\":\"0x%08x\",\"iat_slots\":%u,\"iat_modules\":%u,\"runtime_base\":\"0x%08x\",\"handoff\":%s,\"breakpoint\":\"%s\",\"diagnostic_log\":\"%s\"}\\n",
+    LogLauncherInfo("{\"target\":\"%s\",\"image_base\":\"0x%08x\",\"main_module_base\":\"0x%08x\",\"entry\":\"0x%08x\",\"iat_slots\":%u,\"iat_modules\":%u,\"runtime_base\":\"0x%08x\",\"handoff\":%s,\"breakpoint\":\"%s\",\"diagnostic_log\":\"%s\"}",
                 target->id.c_str(),
                 expected_base,
                 static_cast<unsigned>(main_image_base),

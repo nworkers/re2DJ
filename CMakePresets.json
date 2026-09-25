@@ -22,22 +22,6 @@
       }
     },
     {
-      "name": "windows-x86-native-probe",
-      "displayName": "Windows x86 Native Helper Probe (MSVC)",
-      "generator": "Visual Studio 18 2026",
-      "architecture": "Win32",
-      "binaryDir": "${sourceDir}/build/windows-x86-native-probe",
-      "cacheVariables": {
-        "RE2DJ_BUILD_TESTS": "OFF",
-        "RE2DJ_BUILD_NATIVE_HELPER_PROBE": "ON"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      }
-    },
-    {
       "name": "linux-x64-debug",
       "displayName": "Linux x86-64 Debug",
       "generator": "Ninja",
@@ -89,25 +73,6 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
-    },
-    {
-      "name": "linux-x86-helper",
-      "displayName": "Linux i386 Native Helper",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/linux-x86-helper",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_FLAGS": "-m32",
-        "CMAKE_CXX_FLAGS": "-m32",
-        "CMAKE_EXE_LINKER_FLAGS": "-m32",
-        "RE2DJ_BUILD_TESTS": "OFF",
-        "RE2DJ_BUILD_LINUX_NATIVE_HELPER": "ON"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Linux"
-      }
     }
   ],
   "buildPresets": [
@@ -115,12 +80,6 @@
       "name": "windows-x86-debug",
       "configurePreset": "windows-x86-debug",
       "configuration": "Debug"
-    },
-    {
-      "name": "windows-x86-native-probe",
-      "configurePreset": "windows-x86-native-probe",
-      "configuration": "Debug",
-      "targets": ["re2dj_native_helper_probe", "re2dj_native_ipc_helper", "re2dj_windows_injected_runtime"]
     },
     {
       "name": "linux-x64-debug",
@@ -137,25 +96,12 @@
     {
       "name": "linux-x86-release",
       "configurePreset": "linux-x86-release"
-    },
-    {
-      "name": "linux-x86-helper",
-      "configurePreset": "linux-x86-helper",
-      "targets": ["re2dj_linux_native_ipc_helper"]
     }
   ],
   "testPresets": [
     {
       "name": "windows-x86-debug",
       "configurePreset": "windows-x86-debug",
-      "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "windows-x86-native-probe",
-      "configurePreset": "windows-x86-native-probe",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true

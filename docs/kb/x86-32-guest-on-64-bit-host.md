@@ -12,41 +12,40 @@ rePIU는 32비트 Win32 프로세스 안에서 게스트 코드를 **호스트 C
 
 | 호스트 | 게스트와 같은 실행 모드인가 | 결론 |
 | --- | --- | --- |
-| 64-bit Windows | 별도 x86 process는 가능 | WOW64/native helper 경로 검증됨 |
-| Linux x86-64 | 같은 프로세스의 compatibility mode 가능, 별도 i386 process도 가능 | compatibility-mode 전환 합성 probe 검증됨(작업 353). i386 helper는 진단 fallback |
+| 64-bit Windows | 별도 x86 process는 가능 | 원본 PE32를 WOW64 x86 process로 실행하고 runtime을 주입함 |
+| Linux x86-64 | 같은 프로세스의 compatibility mode 가능, 별도 i386 process도 가능 | 제품이 compatibility mode로 실행함(작업 353–357). i386 helper는 작업 379에서 제거 |
 
-64비트 프로세스 안에서 32비트 코드를 실행하려면 운영체제가 32비트 code selector를 사용자 공간에 제공해야 한다. Linux x86-64는 `__USER32_CS`(`0x23`)를 제공하므로 far transition으로 같은 프로세스 안에서 실행할 수 있다([Linux x86-64 compatibility mode](linux-x86-64-compatibility-mode.md)). 2026-09-24 결정에 따라 Linux x64 제품 경로는 이 방식을 쓰고, i386 helper IPC는 진단 fallback으로만 남긴다([작업 353 설계](../design/20260924-353-linux-x64-compat-mode-adapter.md)). Windows는 WOW64 32비트 프로세스를 쓴다.
+64비트 프로세스 안에서 32비트 코드를 실행하려면 운영체제가 32비트 code selector를 사용자 공간에 제공해야 한다. Linux x86-64는 `__USER32_CS`(`0x23`)를 제공하므로 far transition으로 같은 프로세스 안에서 실행할 수 있다([Linux x86-64 compatibility mode](linux-x86-64-compatibility-mode.md)). 2026-09-24 결정에 따라 Linux x64 제품 경로는 이 방식을 쓴다([작업 353 설계](../design/20260924-353-linux-x64-compat-mode-adapter.md)). 진단 fallback으로 남겼던 i386 helper IPC는 작업 379에서 제거했다. Windows는 원본을 WOW64 32비트 프로세스로 실행한다.
 
-*Running 32-bit code inside a 64-bit process requires the operating system to expose a 32-bit code selector to user space. Linux x86-64 exposes `__USER32_CS` (`0x23`), so the code can run in the same process through far transitions ([Linux x86-64 compatibility mode](linux-x86-64-compatibility-mode.md)). Per the 2026-09-24 decision, the Linux x64 product path uses this approach and keeps the i386 helper IPC only as a diagnostic fallback ([Task 353 design](../design/20260924-353-linux-x64-compat-mode-adapter.md)). Windows uses a WOW64 32-bit process.*
+*Running 32-bit code inside a 64-bit process requires the operating system to expose a 32-bit code selector to user space. Linux x86-64 exposes `__USER32_CS` (`0x23`), so the code can run in the same process through far transitions ([Linux x86-64 compatibility mode](linux-x86-64-compatibility-mode.md)). Per the 2026-09-24 decision, the Linux x64 product path uses this approach ([Task 353 design](../design/20260924-353-linux-x64-compat-mode-adapter.md)); the i386 helper IPC kept as a diagnostic fallback was removed in Task 379. Windows runs the original as a WOW64 32-bit process.*
 
 ```mermaid
 flowchart LR
-    W["64-bit Windows"] --> H["Win32 x86 helper/process"]
-    L["Linux x86-64"] --> I["Linux i386 helper"]
-    H --> B["ExecutionBackend"]
-    I --> B
-    B --> G["Win32 import HLE"]
+    W["64-bit Windows"] --> H["original x86 process<br/>with injected runtime"]
+    L["Linux x86-64"] --> I["same process<br/>compatibility mode"]
+    H --> G["Win32 import HLE"]
+    I --> G
 ```
 
 ## 2. 후보와 선택 / Options and selection
 
 ### A. 32비트 호스트 프로세스 / 32-bit host process
 
-Windows x64의 WOW64와 Linux x86-64의 32비트 실행 환경을 이용하는 별도 helper 프로세스다. 두 host 모두 실제 x86 gate 호출과 32/64비트 IPC가 검증되었다. 이 경로가 원본 x86 코드의 직접 실행을 보존하면서 host 서비스만 교체하는 현재 우선 경로다.
+Windows x64의 WOW64와 Linux x86-64의 32비트 실행 환경을 이용하는 별도 helper 프로세스다. 두 host 모두 실제 x86 gate 호출과 32/64비트 IPC가 검증되었으나, Linux는 같은 프로세스 실행(C 절의 compatibility mode)으로 옮겼고 helper는 작업 379에서 제거했다.
 
-*This uses a separate helper process under WOW64 on Windows x64 or a 32-bit execution environment on Linux x86-64. Both hosts have verified real x86 gate calls and 32/64-bit IPC. It is the current first path because it preserves direct execution of original x86 code while replacing only host services.*
+*This uses a separate helper process under WOW64 on Windows x64 or a 32-bit execution environment on Linux x86-64. Both hosts verified real x86 gate calls and 32/64-bit IPC, but Linux moved to same-process execution (compatibility mode) and Task 379 removed the helpers.*
 
 ### B. 인터프리터와 동적 이진 변환 / Interpreter and DBT
 
-명령어를 해석하거나 기본 블록을 host code로 번역하는 방식은 별도 CPU 실행 계층을 만든다. 구현·검증 범위가 크고 현재 desktop native helper 목표를 충족하는 데 필요하지 않으므로 현재 제품 범위에서 제외한다.
+명령어를 해석하거나 기본 블록을 host code로 번역하는 방식은 별도 CPU 실행 계층을 만든다. 구현·검증 범위가 크고 원본 x86 코드의 직접 실행 목표를 충족하는 데 필요하지 않으므로 현재 제품 범위에서 제외한다.
 
-*Instruction interpretation and dynamic binary translation would create a separate CPU execution layer. Their implementation and validation scope is large and they are not required for the current desktop native-helper target, so they are outside the product scope.*
+*Instruction interpretation and dynamic binary translation would create a separate CPU execution layer. Their implementation and validation scope is large and they are not required for the goal of executing the original x86 code directly, so they are outside the product scope.*
 
 ## 3. 결론 / Conclusion
 
-**`ExecutionBackend` 경계를 고정한다. Windows는 WOW64 native helper를, Linux x64는 같은 프로세스의 compatibility mode를 쓴다.** 원본 x86 코드는 모든 host의 실행 주체로 유지하며, 공용 HLE는 import thunk 경계 뒤에 둔다.
+**원본 x86 코드를 직접 실행한다. Windows는 원본을 WOW64 x86 process로 실행하고 runtime을 주입하며, Linux x64는 같은 프로세스의 compatibility mode를 쓴다.** 원본 x86 코드는 모든 host의 실행 주체로 유지하며, 공용 HLE는 import thunk 경계 뒤에 둔다.
 
-***Fix the `ExecutionBackend` boundary: Windows uses the WOW64 native helper and Linux x64 uses same-process compatibility mode.*** Original x86 code remains the executing subject on every host, while shared HLE stays behind the import-thunk boundary.
+***Execute the original x86 code directly: Windows runs the original as a WOW64 x86 process with an injected runtime, and Linux x64 uses same-process compatibility mode.*** Original x86 code remains the executing subject on every host, while shared HLE stays behind the import-thunk boundary.
 
 ## 4. 게스트 주소 규칙 / Guest address rule
 

@@ -13,11 +13,18 @@ int main()
     RunImmediateScanTests(context);
     RunExecutionBackendTests(context);
     RunLoggingTests(context);
+    RunVersionTests(context);
     RunImportDispatcherTests(context);
     RunGuestModuleRegistryTests(context);
     RunGuestPeFacadeTests(context);
     RunKernel32ModuleTests(context);
     RunUser32ModuleTests(context);
+    RunDdrawModuleTests(context);
+    RunDirectXDisplayTests(context);
+    RunGuestProcessTests(context);
+    RunKernel32CrtTests(context);
+    RunApiCallRecordTests(context);
+    RunGuestFilesTests(context);
     RunImportEventLoopTests(context);
     RunGuestPathTests(context);
     RunPeImageTests(context);
@@ -35,6 +42,7 @@ int main()
     RunHardlockTransformResponsesTests(context);
     RunHardlockEngineTests(context);
     RunHardlockMaterialConfigTests(context);
+    RunHardlockDeviceMaterialTests(context);
     RunEz2DjIoBoardTests(context);
     RunEz2DancerIoBoardTests(context);
     RunLegacyIoPortBusTests(context);

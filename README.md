@@ -48,9 +48,9 @@ flowchart LR
     HLE --> PLAT["Platform backend<br/>windows / linux"]
 ```
 
-x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86·x86-64 제품 CLI의 `re2dj --run`이 별도 helper 없이 같은 프로세스 안에서 원본 PE32를 실행합니다. x86-64는 CPU compatibility mode를 씁니다. 실행은 `kernel32`·`user32` facade와 게스트 SEH를 거쳐, 첫 미처리 import·미해석 lookup·fault·종료에서 멈춥니다. Linux는 아직 필요한 Win32 API를 모두 제공하지 않으므로 게임 창까지 진행되지는 않습니다. 별도 i386 helper 경로는 `--linux-helper <path>`로 고르는 진단 fallback입니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86·x86-64 제품 CLI의 `re2dj --run`이 별도 helper 없이 같은 프로세스 안에서 원본 PE32를 실행합니다. x86-64는 CPU compatibility mode를 씁니다. 실행은 `kernel32`·`user32` facade와 게스트 SEH를 거쳐, 첫 미처리 import·미해석 lookup·fault·종료에서 멈춥니다. Linux는 아직 필요한 Win32 API를 모두 제공하지 않으므로 게임 창까지 진행되지는 않습니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, `re2dj --run` in the x86 and x86-64 product CLIs executes the original PE32 in the same process without a separate helper (x86-64 uses CPU compatibility mode), through the `kernel32`/`user32` facades and guest SEH, stopping at the first unhandled import, unresolved lookup, fault, or exit; it does not reach a game window yet because Linux does not provide every required Win32 API. The separate i386 helper path is a diagnostic fallback selected with `--linux-helper <path>`. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, `re2dj --run` in the x86 and x86-64 product CLIs executes the original PE32 in the same process without a separate helper (x86-64 uses CPU compatibility mode), through the `kernel32`/`user32` facades and guest SEH, stopping at the first unhandled import, unresolved lookup, fault, or exit; it does not reach a game window yet because Linux does not provide every required Win32 API. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -90,17 +90,10 @@ cmake --preset linux-x64-debug
 cmake --build --preset linux-x64-debug
 ctest --preset linux-x64-debug
 
-# Linux x86 product host and separate i386 guest helper
+# Linux x86
 cmake --preset linux-x86-debug
 cmake --build --preset linux-x86-debug
 ctest --preset linux-x86-debug
-cmake --preset linux-x86-helper
-cmake --build --preset linux-x86-helper
-
-# Windows x86 native-helper feasibility probe under WOW64
-cmake --preset windows-x86-native-probe -DRE2DJ_WARNINGS_AS_ERRORS=ON
-cmake --build --preset windows-x86-native-probe
-ctest --preset windows-x86-native-probe
 
 ```
 
@@ -227,7 +220,7 @@ re2dj --hdd <directory> [options]
   --list-targets      후보 타깃 프로파일을 나열하고 종료.
   --resolve <path>    게스트 경로 하나를 해석하고 종료.
   --run               게스트 실행. positional 프로파일은 자동으로 --run을 선택.
-  --linux-helper      Linux 진단 fallback. 기본 in-process 실행 대신 이 i386 helper로 실행.
+  --hold-window       Linux: 실행이 멈춘 뒤에도 게임 창을 닫을 때까지 유지.
   --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 0).
   --demo-volume       Windows title/demo 프로필(0..3, 기본값 3=0 dB).
   --audio-volume-trace
