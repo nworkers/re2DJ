@@ -95,8 +95,21 @@ std::uint32_t GuestComObjects::Release(GuestProcess& process, std::uint32_t addr
     if (count == 0)
     {
         const std::uint32_t parent = object->parent;
+        const std::shared_ptr<GuestComState> state = object->state;
+        const std::vector<std::uint32_t> held = state != nullptr ? state->HeldReferences() : std::vector<std::uint32_t>{};
         objects_.erase(address);
         process.Free(address);
+        if (state != nullptr)
+        {
+            state->ReleaseResources(process);
+        }
+        for (const std::uint32_t reference : held)
+        {
+            if (reference != 0)
+            {
+                Release(process, reference);
+            }
+        }
         if (parent != 0)
         {
             Release(process, parent);

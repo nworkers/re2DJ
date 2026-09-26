@@ -18,6 +18,7 @@
 #include "re2dj/hle/modules/resolve_only_modules.h"
 #include "re2dj/hle/modules/user32_module.h"
 #include "re2dj/hle/modules/ddraw_module.h"
+#include "re2dj/hle/modules/dsound_module.h"
 #include "re2dj/hle/modules/gdi32_module.h"
 #include "re2dj/hle/modules/winmm_module.h"
 #include "re2dj/hle/modules/wtsapi32_module.h"
@@ -85,7 +86,8 @@ bool NativeKernel32Diagnostic::Setup(NativePeSession* session, void* context, st
         hle::modules::MakeWtsapi32ModuleDescriptor(),
         hle::modules::MakeWinmmModuleDescriptor(),
         hle::modules::MakeGdi32ModuleDescriptor(),
-        hle::modules::MakeDdrawModuleDescriptor()};
+        hle::modules::MakeDdrawModuleDescriptor(),
+        hle::modules::MakeDsoundModuleDescriptor()};
     for (hle::modules::GuestModuleDescriptor& descriptor :
          hle::modules::MakeResolveOnlyModuleDescriptors())
     {

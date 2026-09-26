@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "re2dj/hle/import_dispatcher.h"
 
@@ -23,6 +24,12 @@ using GuestGuid = std::array<std::uint8_t, 16>;
 struct GuestComState
 {
     virtual ~GuestComState() = default;
+    // Other facade objects this object holds a reference to, such as a
+    // primary surface's back buffer, released after it goes.
+    virtual std::vector<std::uint32_t> HeldReferences() const { return {}; }
+    // Returns what the object owns in the guest process, such as a surface's
+    // pixel memory, when it goes.
+    virtual void ReleaseResources(GuestProcess& process) { static_cast<void>(process); }
 };
 
 // A COM object the facade implements. Its guest block holds only the vtable
@@ -67,7 +74,8 @@ public:
     GuestComObject* Find(std::uint32_t address);
 
     // IUnknown::AddRef and Release: the new count. Release frees the block
-    // and forgets the object at zero, then releases its parent.
+    // and the state's resources at zero and forgets the object, then releases
+    // the references the state held and last the parent.
     std::uint32_t AddRef(std::uint32_t address);
     std::uint32_t Release(GuestProcess& process, std::uint32_t address);
 

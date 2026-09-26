@@ -20,7 +20,10 @@ int main()
     RunKernel32ModuleTests(context);
     RunUser32ModuleTests(context);
     RunDdrawModuleTests(context);
+    RunDsoundModuleTests(context);
     RunDirectXDisplayTests(context);
+    RunDirectXSurfaceTests(context);
+    RunDirectXDeviceTests(context);
     RunGuestProcessTests(context);
     RunKernel32CrtTests(context);
     RunApiCallRecordTests(context);
@@ -55,6 +58,7 @@ int main()
     RunLegacyVertexBufferTests(context);
     RunLegacyAudioBufferTests(context);
     RunDirectSoundBufferPolicyTests(context);
+    RunDirectSoundDeviceTests(context);
     RunMameChdTests(context);
     RunFat32ChdTests(context);
     RunChdHunkCacheTests(context);

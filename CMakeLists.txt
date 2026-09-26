@@ -266,8 +266,10 @@ target_link_libraries(re2dj_chd_storage
 # the Windows COM facade and the Linux gate facade alike.
 add_library(re2dj_directx STATIC
     src/directx/direct3d_description.cpp
+    src/directx/direct3d_device.cpp
     src/directx/directdraw_description.cpp
     src/directx/directdraw_display.cpp
+    src/directx/directdraw_surface.cpp
 )
 target_include_directories(re2dj_directx PUBLIC include)
 target_link_libraries(re2dj_directx PRIVATE re2dj_warnings)
@@ -320,6 +322,7 @@ target_link_libraries(re2dj_osd
 add_library(re2dj_core STATIC
     src/analysis/code_region_score.cpp
     src/audio/directsound_buffer_policy.cpp
+    src/audio/directsound_device.cpp
     src/audio/legacy_audio_buffer.cpp
     src/config/hardlock_secret_config.cpp
     src/hle/hardlock/handshake_response.cpp
@@ -349,8 +352,11 @@ add_library(re2dj_core STATIC
     src/hle/modules/guest_pe_facade.cpp
     src/hle/modules/kernel32_module.cpp
     src/hle/modules/resolve_only_modules.cpp
+    src/hle/modules/ddraw_device7.cpp
     src/hle/modules/ddraw_direct3d7.cpp
     src/hle/modules/ddraw_module.cpp
+    src/hle/modules/ddraw_surface7.cpp
+    src/hle/modules/dsound_module.cpp
     src/hle/modules/facade_com.cpp
     src/hle/modules/gdi32_module.cpp
     src/hle/modules/user32_module.cpp
@@ -466,6 +472,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     if(RE2DJ_ENABLE_SDL3_AUDIO)
         target_sources(re2dj_windows_injected_runtime PRIVATE
             src/audio/directsound_buffer_policy.cpp
+            src/audio/directsound_device.cpp
             src/audio/legacy_audio_buffer.cpp
             src/audio/sdl3_mixer_audio_backend.cpp
             src/platform/windows/directsound_com_facade.cpp
@@ -476,6 +483,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         if(RE2DJ_BUILD_TESTS)
             add_executable(re2dj_audio_stream_progress_test
                 tests/audio/stream_progress_test.cpp
+                src/audio/directsound_device.cpp
                 src/audio/legacy_audio_buffer.cpp
                 src/audio/sdl3_mixer_audio_backend.cpp
             )
@@ -629,7 +637,10 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/kernel32_module_test.cpp
         tests/unit/user32_module_test.cpp
         tests/unit/ddraw_module_test.cpp
+        tests/unit/dsound_module_test.cpp
         tests/unit/directx_display_test.cpp
+        tests/unit/directx_device_test.cpp
+        tests/unit/directx_surface_test.cpp
         tests/unit/version_test.cpp
         tests/unit/guest_process_test.cpp
         tests/unit/kernel32_crt_test.cpp
@@ -662,6 +673,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/legacy_transform_test.cpp
         tests/unit/legacy_vertex_buffer_test.cpp
         tests/unit/directsound_buffer_policy_test.cpp
+        tests/unit/directsound_device_test.cpp
         tests/unit/legacy_audio_buffer_test.cpp
         tests/unit/mame_chd_test.cpp
         tests/unit/fat32_chd_test.cpp

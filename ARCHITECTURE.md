@@ -247,6 +247,18 @@ Task 251은 독자적인 클린룸 C++20 `HardlockEngine`(`re2dj::hle::hardlock:
 
 *Task 377, phase 2, moves the cooperative level and display mode: `directdraw_display.h`'s `DirectDrawDisplay` holds a DirectDraw object's window and mode, changed only by the `SetCooperativeLevel`/`SetDisplayMode` rules, with the host's own window work passed in as a callback — the Win32 window-mode policy on Windows, and for now only a check that the guest window exists on Linux. Linux facade COM objects keep per-module state in `GuestComObject::state`.*
 
+작업 381은 3단계로, 표면을 옮겼습니다. `directdraw_surface.h`의 `PlanCreateSurface`가 `CreateSurface` 요청으로 표면의 종류·크기·caps를 정하거나 거절합니다. attach 규칙과 표면 설명도 core에 있습니다. 표면 메모리는 host가 정합니다. Windows는 GDI DIB를 쓰고, Linux는 guest `VirtualAlloc` 메모리를 씁니다. Linux의 guest COM 상태는 다른 facade 객체의 참조와 guest 자원을 가질 수 있습니다. 객체가 사라지면 자원을 돌려주고 참조를 놓습니다.
+
+*Task 381, phase 3, moves surfaces: `directdraw_surface.h`'s `PlanCreateSurface` turns a `CreateSurface` request into a surface's kind, size, and caps, or refuses it, and the attachment rules and surface descriptions live in the core too. Surface memory is the host's: GDI DIBs on Windows, guest `VirtualAlloc` memory on Linux. On Linux, guest COM state can hold references to other facade objects and guest resources; when the object goes, it returns the resources and drops the references.*
+
+작업 382는 4단계로, 장치를 옮겼습니다. `direct3d_device.h`의 `DeviceState`는 render state, texture stage state, transform, viewport, 장면 여부를 guest의 index 그대로 담습니다. `CreateDevice` 규칙, 초기 상태, 상태 메서드 규칙도 core에 있습니다. Windows의 DirectX 6/7 장치와 Linux의 `IDirect3DDevice7`이 같은 상태를 씁니다. 그리기가 이 상태로 무엇을 하는지는 host마다 다르며, 5단계에서 다룹니다.
+
+*Task 382, phase 4, moves the device: `direct3d_device.h`'s `DeviceState` holds the render states, texture stage states, transforms, viewport, and whether a scene is open, indexed by the guest's own numbers, with the `CreateDevice` rules, the initial state, and the state methods' rules beside it. Windows' DirectX 6/7 device and Linux's `IDirect3DDevice7` keep the same state; what drawing makes of it is each host's, in phase 5.*
+
+작업 383부터 DirectSound도 같은 방식을 따릅니다. `re2dj/audio/directsound_abi.h`와 `directsound_device.h`는 32비트 guest의 DirectSound 구조체를 담습니다. 버퍼 생성, caps, 복제, lock 분할 규칙도 이 두 헤더에 있습니다. Windows facade는 이 규칙을 쓰고, 재생에는 SDL3_mixer를 씁니다. Linux의 `dsound.dll` module은 sample을 guest 메모리에 둡니다. 그래서 guest의 lock이 그 메모리를 바로 씁니다. Linux 소리 출력은 이후 단계에서 다룹니다.
+
+*From Task 383 DirectSound follows the same pattern. `re2dj/audio/directsound_abi.h` and `directsound_device.h` hold the 32-bit guest's DirectSound structures, together with the rules for buffer creation, caps, duplication, and how a lock divides a buffer. The Windows facade uses these rules and plays through SDL3_mixer. Linux's `dsound.dll` module keeps samples in guest memory, so the guest's locks write that memory directly. Linux sound output comes in a later phase.*
+
 작업 380부터 Linux 실행은 호스트 창을 띄웁니다. HLE는 OS 중립 `HostPresentation` 서비스를 통해 게스트 창을 보여 달라고 요청합니다. ddraw `SetCooperativeLevel`의 호스트 정책이 이 요청을 합니다. Linux의 `LinuxHostPresentation`은 공용 SDL3/OpenGL backend로 640×480 창을 만듭니다. 창 제목은 모든 host가 쓰는 `WindowTitle`입니다. 아직 그리는 것이 없어 검은 화면이고, `--hold-window`를 주면 실행이 멈춘 뒤에도 창이 남습니다.
 
 *From Task 380 a Linux run opens a host window: the HLE asks the platform-neutral `HostPresentation` service to show the guest window from ddraw `SetCooperativeLevel`'s host policy, and Linux's `LinuxHostPresentation` makes a 640×480 window with the shared SDL3/OpenGL backend, titled by the `WindowTitle` every host uses. It stays black until drawing arrives, and with `--hold-window` it remains after the run stops.*

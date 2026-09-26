@@ -10,6 +10,7 @@
 #include "memory_services.h"
 #include "re2dj/hle/guest_user.h"
 #include "re2dj/hle/modules/gdi32_module.h"
+#include "re2dj/hle/win32_errors.h"
 #include "test_support.h"
 
 namespace
@@ -34,8 +35,8 @@ void CheckDescriptor(re2dj::test::Context& context)
     {
         RE2DJ_CHECK_EQ(context, descriptor.aliases[0], std::string("user32"));
     }
-    // Eleven implemented exports from GetActiveWindow to SetRect, then 26
-    // resolve-only exports.
+    // Thirteen implemented exports from GetActiveWindow to GetWindowLongA,
+    // then 24 resolve-only exports.
     RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{37});
     if (descriptor.exports.size() != 37)
     {
@@ -138,7 +139,7 @@ void CheckResolveOnlyCursors(re2dj::test::Context& context)
         {{"CreateCursor", 7}, {"DestroyCursor", 1}, {"SetCursor", 1}}};
     for (std::size_t index = 0; index < cursors.size(); ++index)
     {
-        const auto& export_descriptor = descriptor.exports[11 + index];
+        const auto& export_descriptor = descriptor.exports[13 + index];
         RE2DJ_CHECK_EQ(context, export_descriptor.name, cursors[index].first);
         RE2DJ_CHECK_EQ(context, export_descriptor.argument_count, cursors[index].second);
         re2dj::runtime::ImportGate gate;
@@ -330,6 +331,22 @@ void CheckCreateWindow(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, user.active_window(), window);
     RE2DJ_CHECK_EQ(context, user.focus_window(), window);
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetActiveWindow", {}).eax, window);
+    // The guest's one thread is the foreground thread.
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetForegroundWindow", {}).eax, window);
+
+    // GetWindowLongA reads the window's fields and leaves the last error
+    // alone; an unknown index or window is 0 with the error Windows 11 sets.
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetWindowLongA", {window, 0xFFFFFFF0U}).eax,
+                   0x94000000U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetWindowLongA", {window, 0xFFFFFFFAU}).eax,
+                   created == nullptr ? 0U : created->instance);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetWindowLongA", {window, 0xFFFFFFF9U}).eax,
+                   0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidIndex);
+    CallModuleExport(context, services, descriptor, "GetWindowLongA", {window + 4, 0xFFFFFFFAU});
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidWindowHandle);
 
     // UpdateWindow sends WM_PAINT for the update region once; DefWindowProcA
     // validates it, so the second call sends nothing.

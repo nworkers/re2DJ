@@ -41,6 +41,13 @@ bool GetActiveWindow(const ImportCall& call, ImportReturn* result, std::string* 
     return true;
 }
 
+// The foreground window. The guest is the host's foreground application and
+// has one thread, so its foreground window is that thread's active window.
+bool GetForegroundWindow(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return GetActiveWindow(call, result, error);
+}
+
 // MessageBoxA(hWnd, lpText, lpCaption, uType). No platform service shows the
 // box yet, so the result is the default button's ID, as if the user accepted
 // it; see MessageBoxDefaultButton.
@@ -621,6 +628,77 @@ bool DefWindowProcA(const ImportCall& call, ImportReturn* result, std::string* e
 // UpdateWindow(hWnd): sends WM_PAINT when the window has an update region,
 // as Windows 11 does once after creation; with none it sends nothing. Both
 // return TRUE without touching the last error.
+// GetWindowLong indices (winuser.h).
+constexpr std::int32_t kGwlWndProc = -4;
+constexpr std::int32_t kGwlHInstance = -6;
+constexpr std::int32_t kGwlHwndParent = -8;
+constexpr std::int32_t kGwlId = -12;
+constexpr std::int32_t kGwlStyle = -16;
+constexpr std::int32_t kGwlExStyle = -20;
+constexpr std::int32_t kGwlUserData = -21;
+
+// GetWindowLongA(hWnd, nIndex), as measured on Windows 11 for an ANSI
+// window: the negative GWL_ indices name the window's own fields, a
+// non-negative one a DWORD of its cbWndExtra bytes. Success leaves the last
+// error alone; an unknown index is 0 with ERROR_INVALID_INDEX, an unknown
+// window 0 with ERROR_INVALID_WINDOW_HANDLE.
+bool GetWindowLongA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 2)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null"
+                                             : "user32 GetWindowLongA argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "user32 GetWindowLongA needs the guest process");
+    }
+    const GuestWindow* window = process->user().LookupWindow(call.arguments[0]);
+    if (window == nullptr)
+    {
+        call.services->SetLastError(kWin32ErrorInvalidWindowHandle);
+        return Succeed(error);
+    }
+    const auto index = static_cast<std::int32_t>(call.arguments[1]);
+    switch (index)
+    {
+    case kGwlWndProc:
+        result->eax = window->window_procedure;
+        return Succeed(error);
+    case kGwlHInstance:
+        result->eax = window->instance;
+        return Succeed(error);
+    case kGwlHwndParent:
+        result->eax = window->parent;
+        return Succeed(error);
+    case kGwlId:
+        result->eax = window->menu;
+        return Succeed(error);
+    case kGwlStyle:
+        result->eax = window->style;
+        return Succeed(error);
+    case kGwlExStyle:
+        result->eax = window->ex_style;
+        return Succeed(error);
+    case kGwlUserData:
+        result->eax = window->user_data;
+        return Succeed(error);
+    default:
+        break;
+    }
+    if (index < 0 || static_cast<std::size_t>(index) + 4 > window->extra.size())
+    {
+        call.services->SetLastError(kWin32ErrorInvalidIndex);
+        return Succeed(error);
+    }
+    const auto* bytes = window->extra.data() + index;
+    result->eax = static_cast<std::uint32_t>(bytes[0]) | (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                  (static_cast<std::uint32_t>(bytes[2]) << 16) | (static_cast<std::uint32_t>(bytes[3]) << 24);
+    return Succeed(error);
+}
+
 bool UpdateWindow(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     if (result == nullptr || call.arguments.size() != 1)
@@ -714,9 +792,9 @@ constexpr ResolveOnlyExport kUser32ResolveOnly[] = {
     {"DispatchMessageA", 1}, {"TranslateMessage", 1}, {"PeekMessageA", 5}, {"DrawTextA", 5},
     {"ClientToScreen", 2}, {"FillRect", 3}, {"DrawMenuBar", 1}, {"GetClientRect", 2}, {"RedrawWindow", 4},
     {"ReleaseDC", 2}, {"GetAsyncKeyState", 1},
-    {"wsprintfA", 0, 0, CallingConvention::kCdecl}, {"GetWindowLongA", 2},
+    {"wsprintfA", 0, 0, CallingConvention::kCdecl},
     {"GetDesktopWindow", 0}, {"ScreenToClient", 2}, {"GetCursorPos", 1},
-    {"ChangeDisplaySettingsExA", 5}, {"EnumDisplaySettingsA", 3}, {"GetForegroundWindow", 0},
+    {"ChangeDisplaySettingsExA", 5}, {"EnumDisplaySettingsA", 3},
 };
 
 GuestExportDescriptor MakeExport(std::string name,
@@ -760,6 +838,7 @@ GuestModuleDescriptor MakeUser32ModuleDescriptor()
     descriptor.name = "user32.dll";
     descriptor.aliases = {"user32"};
     descriptor.exports.push_back(MakeExport("GetActiveWindow", 0, &GetActiveWindow));
+    descriptor.exports.push_back(MakeExport("GetForegroundWindow", 0, &GetForegroundWindow));
     descriptor.exports.push_back(MakeExport("MessageBoxA", 4, &MessageBoxA));
     descriptor.exports.push_back(MakeExport("SetTimer", 4, &SetTimer));
     descriptor.exports.push_back(MakeExport("LoadIconA", 2, &LoadIconA));
@@ -770,6 +849,7 @@ GuestModuleDescriptor MakeUser32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("UpdateWindow", 1, &UpdateWindow));
     descriptor.exports.push_back(MakeExport("ShowCursor", 1, &ShowCursor));
     descriptor.exports.push_back(MakeExport("SetRect", 5, &SetRect));
+    descriptor.exports.push_back(MakeExport("GetWindowLongA", 2, &GetWindowLongA));
     AddResolveOnlyExports(&descriptor, kUser32ResolveOnly);
     return descriptor;
 }

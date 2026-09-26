@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -14,6 +15,7 @@
 #include "re2dj/directx/abi.h"
 #include "re2dj/directx/directdraw_description.h"
 #include "re2dj/directx/directdraw_display.h"
+#include "re2dj/directx/directdraw_surface.h"
 #include "re2dj/hle/guest_com.h"
 #include "re2dj/hle/guest_process.h"
 #include "re2dj/hle/guest_user.h"
@@ -170,6 +172,50 @@ bool DirectDraw7QueryInterface(const ImportCall& call, ImportReturn* result, std
     if (!com::WriteWord(call, call.arguments[2], object, error))
     {
         process->com().Release(*process, object);
+        return false;
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
+// IDirectDraw7::CreateSurface(this, lpDDSurfaceDesc2, lplpDDSurface,
+// pUnkOuter) under the shared core's plan: the surfaces it serves, or the
+// result it refuses with.
+bool DirectDraw7CreateSurface(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 4, kDirectDrawObject, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    if (call.arguments[1] == 0 || call.arguments[2] == 0 || call.arguments[3] != 0)
+    {
+        return Succeed(result, dx::kDdErrInvalidParams, error);
+    }
+    dx::DdSurfaceDesc2 request;
+    std::array<std::uint8_t, sizeof(dx::DdSurfaceDesc2)> bytes{};
+    std::string read_error;
+    if (!call.services->ReadGuestBytes(runtime::GuestAddress(call.arguments[1]), bytes, &read_error))
+    {
+        return Fail(error, CallName(call) + " cannot read DDSURFACEDESC2: " + read_error);
+    }
+    std::memcpy(&request, bytes.data(), sizeof(request));
+    if (!com::WriteWord(call, call.arguments[2], 0, error))
+    {
+        return false;
+    }
+    const dx::SurfacePlan plan = dx::PlanCreateSurface(request, StateOf(*process, call.arguments[0]).display);
+    if (plan.result != dx::kDdOk)
+    {
+        return Succeed(result, plan.result, error);
+    }
+    const std::uint32_t surface = ddraw::CreateSurfaces(call, *process, call.arguments[0], plan, error);
+    if (surface == 0)
+    {
+        return false;
+    }
+    if (!com::WriteWord(call, call.arguments[2], surface, error))
+    {
+        process->com().Release(*process, surface);
         return false;
     }
     return Succeed(result, dx::kDdOk, error);
@@ -340,7 +386,7 @@ constexpr com::Method kDirectDraw7Methods[] = {
     {"Compact", 1, &UnimplementedExport},
     {"CreateClipper", 4, &UnimplementedExport},
     {"CreatePalette", 5, &UnimplementedExport},
-    {"CreateSurface", 4, &UnimplementedExport},
+    {"CreateSurface", 4, &DirectDraw7CreateSurface},
     {"DuplicateSurface", 3, &UnimplementedExport},
     {"EnumDisplayModes", 5, &DirectDraw7EnumDisplayModes},
     {"EnumSurfaces", 5, &UnimplementedExport},
@@ -434,6 +480,8 @@ GuestModuleDescriptor MakeDdrawModuleDescriptor()
     // Interface methods, reached only through the vtables they fill.
     com::AddMethods(&descriptor, ddraw::kDirectDraw7, kDirectDraw7Methods);
     com::AddMethods(&descriptor, ddraw::kDirect3D7, ddraw::Direct3D7Methods());
+    com::AddMethods(&descriptor, ddraw::kDirectDrawSurface7, ddraw::DirectDrawSurface7Methods());
+    com::AddMethods(&descriptor, ddraw::kDirect3DDevice7, ddraw::Direct3DDevice7Methods());
     return descriptor;
 }
 

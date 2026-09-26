@@ -28,7 +28,9 @@ inline constexpr std::uint32_t kWin32ErrorEnvironmentVariableNotFound = 203;
 inline constexpr std::uint32_t kWin32ErrorPartialCopy = 299;
 inline constexpr std::uint32_t kWin32ErrorInvalidAddress = 487;
 inline constexpr std::uint32_t kWin32ErrorNoAccess = 998;
+inline constexpr std::uint32_t kWin32ErrorInvalidWindowHandle = 1400;
 inline constexpr std::uint32_t kWin32ErrorClassAlreadyExists = 1410;
+inline constexpr std::uint32_t kWin32ErrorInvalidIndex = 1413;
 inline constexpr std::uint32_t kWin32ErrorResourceTypeNotFound = 1813;
 inline constexpr std::uint32_t kWin32ErrorResourceNameNotFound = 1814;
 

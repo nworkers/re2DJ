@@ -1,7 +1,10 @@
 #include "re2dj/audio/legacy_audio_buffer.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
+
+#include "re2dj/audio/directsound_device.h"
 
 namespace re2dj::audio
 {
@@ -24,12 +27,13 @@ std::span<const std::byte> LegacyAudioBuffer::samples() const { return *samples_
 std::size_t LegacyAudioBuffer::byte_count() const { return samples_->size(); }
 bool LegacyAudioBuffer::Lock(std::size_t offset, std::size_t byte_count, bool entire_buffer, LegacyAudioLock* lock)
 {
-    if (lock == nullptr || samples_->empty()) return false;
-    if (entire_buffer) { offset = 0; byte_count = samples_->size(); }
-    if (offset >= samples_->size() || byte_count > samples_->size()) return false;
-    const std::size_t first_size = std::min(byte_count, samples_->size() - offset);
-    lock->first = std::span<std::byte>(*samples_).subspan(offset, first_size);
-    lock->second = std::span<std::byte>(*samples_).first(byte_count - first_size);
+    constexpr std::size_t kGuestLimit = std::numeric_limits<std::uint32_t>::max();
+    if (lock == nullptr || samples_->size() > kGuestLimit || (!entire_buffer && (offset > kGuestLimit || byte_count > kGuestLimit))) return false;
+    LockRegions regions;
+    if (!PlanLock(static_cast<std::uint32_t>(samples_->size()), static_cast<std::uint32_t>(offset),
+                  static_cast<std::uint32_t>(byte_count), entire_buffer ? kDsbLockEntireBuffer : 0U, &regions)) return false;
+    lock->first = std::span<std::byte>(*samples_).subspan(regions.first_offset, regions.first_bytes);
+    lock->second = std::span<std::byte>(*samples_).first(regions.second_bytes);
     return true;
 }
 bool LegacyAudioBuffer::ValidateUnlock(const LegacyAudioLock& lock) const

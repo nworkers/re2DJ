@@ -8,6 +8,7 @@
 #include "ddraw_interfaces.h"
 #include "re2dj/directx/abi.h"
 #include "re2dj/directx/direct3d_description.h"
+#include "re2dj/directx/direct3d_device.h"
 #include "re2dj/hle/guest_com.h"
 #include "re2dj/hle/guest_process.h"
 
@@ -100,6 +101,60 @@ bool EnumDevices(const ImportCall& call, ImportReturn* result, std::string* erro
     return Succeed(result, dx::kDdOk, error);
 }
 
+// IDirect3D7::CreateDevice(this, rclsid, lpDDS, lplpD3DDevice): a device of
+// one of the enumerated classes rendering into a DDSCAPS_3DDEVICE surface,
+// under the shared core's rules. The device belongs to the DirectDraw object
+// this Direct3D object came from.
+bool CreateDevice(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 4, kDirect3DObject, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    const std::uint32_t render_target = call.arguments[2];
+    const std::uint32_t out = call.arguments[3];
+    if (out == 0)
+    {
+        return Succeed(result, dx::kDdErrInvalidParams, error);
+    }
+    if (!com::WriteWord(call, out, 0, error))
+    {
+        return false;
+    }
+    if (render_target == 0)
+    {
+        return Succeed(result, dx::kDdErrInvalidParams, error);
+    }
+    dx::Guid device_class{};
+    if (!com::ReadGuid(call, call.arguments[1], &device_class, error))
+    {
+        return false;
+    }
+    const dx::SurfaceShape* target = SurfaceShapeOf(*process, render_target);
+    if (!dx::IsEnumeratedDevice(device_class) || target == nullptr)
+    {
+        return Succeed(result, dx::kDdErrInvalidObject, error);
+    }
+    const std::uint32_t checked = dx::CheckCreateDevice(device_class, target->caps);
+    if (checked != dx::kDdOk)
+    {
+        return Succeed(result, checked, error);
+    }
+    const std::uint32_t direct_draw = process->com().Find(call.arguments[0])->parent;
+    const std::uint32_t device = CreateDirect3DDevice7(call, *process, direct_draw, render_target, error);
+    if (device == 0)
+    {
+        return false;
+    }
+    if (!com::WriteWord(call, out, device, error))
+    {
+        process->com().Release(*process, device);
+        return false;
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
 // IDirect3D7::EnumZBufferFormats(this, riidDevice, callback, lpContext): the
 // one 16-bit depth format, whatever the device.
 bool EnumZBufferFormats(const ImportCall& call, ImportReturn* result, std::string* error)
@@ -129,7 +184,7 @@ constexpr com::Method kMethods[] = {
     {"AddRef", 1, &com::AddRef},
     {"Release", 1, &com::Release},
     {"EnumDevices", 3, &EnumDevices},
-    {"CreateDevice", 4, &UnimplementedExport},
+    {"CreateDevice", 4, &CreateDevice},
     {"CreateVertexBuffer", 4, &UnimplementedExport},
     {"EnumZBufferFormats", 4, &EnumZBufferFormats},
     {"EvictManagedTextures", 1, &EvictManagedTextures},

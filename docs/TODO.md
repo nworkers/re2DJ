@@ -244,8 +244,13 @@
     - [x] [작업 379 — native helper IPC 제거](work-logs/20260926-379-remove-native-helper-ipc.md). Linux i386 helper·`--linux-helper`와 Windows native helper(선택 빌드)를 protocol·preset·script와 함께 제거
     - [x] [작업 380 — Linux 호스트 창](work-logs/20260926-380-linux-host-window.md). `HostPresentation`과 Linux SDL3/OpenGL 창(`SetCooperativeLevel` 때, 검은 화면), 공용 `WindowTitle`, `--hold-window`
     - [ ] Linux 창 닫기로 `--hold-window`가 풀리는지 사용자 확인(WSLg는 외부 `WM_CLOSE`를 무시해 자동 확인 불가)
-    - [ ] 다음 — DirectX core 3단계: 표면(`CreateSurface`, backing, attach, lock, Linux GDI DC)
-    - [ ] DirectX core 4–5단계: 장치 상태와 그리기 명령, Linux 표시(SDL3/OpenGL)와 Linux 창 정책(guest 창 style)
+    - [x] [작업 381 — DirectX core 3단계: 표면](work-logs/20260926-381-directx-surfaces.md). `PlanCreateSurface`·attach·표면 설명을 Windows·Linux가 함께 씀(Windows 실제 4th 기록 전후 같음), Linux `IDirectDrawSurface7`(픽셀은 guest 메모리). 실제 4th가 두 폭에서 `CreateSurface`를 지나 `IDirect3D7::CreateDevice`에서 정지
+    - [x] [작업 382 — DirectX core 4단계: 장치](work-logs/20260926-382-directx-device.md). `DeviceState`(초기 상태, 상태·장면·viewport 규칙)와 `CheckCreateDevice`를 Windows·Linux가 함께 씀(Windows 실제 4th 기록 전후 같음), Linux `IDirect3DDevice7`. 실제 4th가 두 폭에서 장치 설정과 글꼴 파일 읽기를 지나 `user32!GetForegroundWindow`에서 정지
+    - [x] [작업 383 — DirectSound 진입과 창 조회](work-logs/20260926-383-directsound-entry.md). DirectSound core(버퍼 생성·caps·복제·lock)를 Windows·Linux가 함께 씀(Windows 실제 4th 그래픽·오디오 기록 전후 같음), Linux `dsound.dll`(sample은 guest 메모리, 출력 없음), `GetForegroundWindow`, `GetWindowLongA`(측정). 실제 4th가 두 폭에서 `dinput.dll!DirectInputCreateA`에서 정지
+    - [ ] 다음 — DirectInput(`DirectInputCreateA`) 공용 core와 Linux module
+    - [ ] DirectSound 재생·제어(`Play`, 위치, 볼륨 등)와 Linux 소리 출력
+    - [ ] 남은 표면 메서드(`Lock`, `GetDC`와 Linux GDI DC, `Blt`, `Flip`), 게임이 도달하는 대로
+    - [ ] DirectX core 5단계: 그리기 명령, Linux 표시(SDL3/OpenGL)와 Linux 창 정책(guest 창 style)
     - [ ] DirectX 6 facade(`IDirect3D3`)의 열거·caps도 공용 core로
     - [ ] 그다음 message loop와 DirectInput·DirectSound
     - [ ] message queue(`PeekMessageA`/`DispatchMessageA`), window timer, `ShowCursor`/`SetCursor`

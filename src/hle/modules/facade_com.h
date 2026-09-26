@@ -60,6 +60,20 @@ bool WriteStruct(const ImportCall& call, std::uint32_t address, const T& value, 
 }
 
 bool ReadGuid(const ImportCall& call, std::uint32_t address, re2dj::directx::Guid* guid, std::string* error);
+bool ReadBytes(const ImportCall& call, std::uint32_t address, std::span<std::uint8_t> bytes, std::string* error);
+
+template <typename T>
+bool ReadStruct(const ImportCall& call, std::uint32_t address, T* value, std::string* error)
+{
+    static_assert(std::is_trivially_copyable_v<T>);
+    std::array<std::uint8_t, sizeof(T)> bytes{};
+    if (!ReadBytes(call, address, bytes, error))
+    {
+        return false;
+    }
+    std::memcpy(value, bytes.data(), sizeof(T));
+    return true;
+}
 
 // Places bytes in a process-heap block for the length of a callback, as a
 // DLL's own static strings or stack structures would be; 0 on failure.

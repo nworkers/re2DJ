@@ -30,12 +30,12 @@ class MemoryServices final : public hle::ImportCallServices
 {
 public:
     static constexpr std::uint32_t kBase = 0x00010000U;
-    static constexpr std::uint32_t kSize = 0x40000U;
+    static constexpr std::uint32_t kSize = 0x400000U;
     static constexpr std::uint32_t kHeapBase = kBase + 0x800U;
     static constexpr std::uint32_t kHeapSize = 0x800U;
     // The VirtualAlloc arena, starting on a 64 KiB boundary.
     static constexpr std::uint32_t kArenaBase = kBase + 0x10000U;
-    static constexpr std::uint32_t kArenaSize = 0x30000U;
+    static constexpr std::uint32_t kArenaSize = kSize - 0x10000U;
     // Where CallGuest places a call's data, one kGuestCallDataSize slot per
     // nesting level.
     static constexpr std::uint32_t kGuestCallData = kBase + 0x100U;

@@ -3,13 +3,17 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <intrin.h>
 #include <new>
 
 #include "../../audio/sdl3_mixer_audio_backend.h"
+#include "re2dj/audio/directsound_abi.h"
 #include "re2dj/audio/directsound_buffer_policy.h"
+#include "re2dj/audio/directsound_device.h"
 #include "re2dj/audio/legacy_audio_buffer.h"
 #include "audio_volume_trace.h"
 #include "timer_resolution_probe.h"
@@ -18,6 +22,40 @@ extern "C" __declspec(dllexport) volatile float g_re2dj_audio_master_gain = 1.0f
 
 namespace
 {
+namespace core = re2dj::audio;
+
+// The shared core's DirectSound ABI against the SDK.
+static_assert(sizeof(WAVEFORMATEX) == sizeof(core::WaveFormatEx));
+static_assert(offsetof(WAVEFORMATEX, nBlockAlign) == offsetof(core::WaveFormatEx, block_align));
+static_assert(offsetof(WAVEFORMATEX, cbSize) == offsetof(core::WaveFormatEx, extra_size));
+// DIRECTSOUND_VERSION 0x0300: DSBUFFERDESC is DSBUFFERDESC1, the core's first
+// 20 bytes.
+static_assert(sizeof(DSBUFFERDESC) == core::kDsBufferDesc1Size);
+static_assert(offsetof(DSBUFFERDESC, lpwfxFormat) == offsetof(core::DsBufferDesc, format));
+static_assert(sizeof(DSCAPS) == sizeof(core::DsCaps));
+static_assert(sizeof(DSBCAPS) == sizeof(core::DsbCaps));
+static_assert(static_cast<std::uint32_t>(DSERR_INVALIDPARAM) == core::kDsErrInvalidParam);
+static_assert(static_cast<std::uint32_t>(DSERR_NOAGGREGATION) == core::kDsErrNoAggregation);
+static_assert(static_cast<std::uint32_t>(DSERR_OUTOFMEMORY) == core::kDsErrOutOfMemory);
+static_assert(static_cast<std::uint32_t>(DSERR_GENERIC) == core::kDsErrGeneric);
+static_assert(static_cast<std::uint32_t>(DSERR_INVALIDCALL) == core::kDsErrInvalidCall);
+static_assert(static_cast<std::uint32_t>(DSERR_BADFORMAT) == core::kDsErrBadFormat);
+static_assert(static_cast<std::uint32_t>(DSERR_NODRIVER) == core::kDsErrNoDriver);
+static_assert(static_cast<std::uint32_t>(DSERR_ALREADYINITIALIZED) == core::kDsErrAlreadyInitialized);
+static_assert(WAVE_FORMAT_PCM == core::kWaveFormatPcm);
+static_assert(DSBCAPS_PRIMARYBUFFER == core::kDsbcapsPrimaryBuffer);
+static_assert(DSCAPS_PRIMARYSTEREO == core::kDscapsPrimaryStereo);
+static_assert(DSCAPS_PRIMARY16BIT == core::kDscaps16Bit);
+static_assert(DSSPEAKER_STEREO == core::kDsSpeakerStereo);
+static_assert(DSBLOCK_ENTIREBUFFER == core::kDsbLockEntireBuffer);
+
+template <typename Sdk, typename Core>
+void CopyFromCore(Sdk* destination, const Core& source)
+{
+    static_assert(sizeof(Sdk) == sizeof(Core));
+    std::memcpy(destination, &source, sizeof(source));
+}
+
 using re2dj::audio::LegacyAudioBuffer;
 using re2dj::audio::LegacyAudioFormat;
 using re2dj::audio::LegacyAudioLock;
@@ -146,7 +184,7 @@ public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override { if (!object) return E_POINTER; *object = nullptr; if (iid == IID_IUnknown || iid == IID_IDirectSoundBuffer) { *object = this; AddRef(); return S_OK; } return E_NOINTERFACE; }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
     ULONG STDMETHODCALLTYPE Release() override { const ULONG value = --refs_; if (!value) delete this; return value; }
-    HRESULT STDMETHODCALLTYPE GetCaps(DSBCAPS* caps) override { if (!caps || caps->dwSize < sizeof(DSBCAPS)) return DSERR_INVALIDPARAM; std::memset(caps, 0, sizeof(*caps)); caps->dwSize = sizeof(DSBCAPS); caps->dwFlags = flags_; caps->dwBufferBytes = static_cast<DWORD>(buffer_.byte_count()); return DS_OK; }
+    HRESULT STDMETHODCALLTYPE GetCaps(DSBCAPS* caps) override { if (!caps || caps->dwSize < sizeof(DSBCAPS)) return DSERR_INVALIDPARAM; CopyFromCore(caps, core::BufferCaps(flags_, static_cast<std::uint32_t>(buffer_.byte_count()))); return DS_OK; }
     HRESULT STDMETHODCALLTYPE GetCurrentPosition(DWORD* play, DWORD* write) override { if (play) *play = Sdl3MixerAudioBackend::Instance().PositionBytes(voice_, buffer_); if (write) *write = play ? *play : buffer_.current_position(); if (is_streaming() && state_query_traces_ < 32) { Re2djAudioTrace("directsound:get-position buffer=%p play=%lu write=%lu volume=%ld track-gain=%.9f", this, static_cast<unsigned long>(play ? *play : 0), static_cast<unsigned long>(write ? *write : 0), static_cast<long>(buffer_.volume()), static_cast<double>(Sdl3MixerAudioBackend::Instance().TrackGain(voice_))); ++state_query_traces_; } return DS_OK; }
     HRESULT STDMETHODCALLTYPE GetFormat(WAVEFORMATEX* format, DWORD size, DWORD* written) override { if (written) *written = sizeof(WAVEFORMATEX); if (!format) return size == 0 ? DS_OK : DSERR_INVALIDPARAM; if (size < sizeof(WAVEFORMATEX)) return DSERR_INVALIDPARAM; *format = wave_; return DS_OK; }
     HRESULT STDMETHODCALLTYPE GetVolume(LONG* value) override { if (!value) return DSERR_INVALIDPARAM; *value = buffer_.volume(); if (is_streaming() && state_query_traces_ < 32) { Re2djAudioTrace("directsound:get-volume buffer=%p value=%ld track-gain=%.9f", this, static_cast<long>(*value), static_cast<double>(Sdl3MixerAudioBackend::Instance().TrackGain(voice_))); ++state_query_traces_; } return DS_OK; }
@@ -272,27 +310,30 @@ public:
         if (!output) return DSERR_INVALIDPARAM;
         *output = nullptr;
         if (outer) return DSERR_NOAGGREGATION;
-        if (!desc || desc->dwSize < sizeof(DSBUFFERDESC1)) return DSERR_INVALIDPARAM;
+        if (!desc) return DSERR_INVALIDPARAM;
+        // The core decides the buffer: the primary's fixed shape, or the
+        // guest's PCM format and size.
+        core::DsBufferDesc description;
+        std::memcpy(&description, desc, sizeof(DSBUFFERDESC));
+        core::WaveFormatEx format;
+        const bool has_format = desc->dwSize >= core::kDsBufferDesc1Size && desc->lpwfxFormat != nullptr;
+        if (has_format) std::memcpy(&format, desc->lpwfxFormat, sizeof(format));
+        const core::SoundBufferPlan plan = core::PlanSoundBuffer(description, has_format ? &format : nullptr);
+        if (plan.result == core::kDsErrInvalidParam) return DSERR_INVALIDPARAM;
+        TraceBuffer(plan.primary ? "create-primary" : "create-secondary", plan.flags, plan.bytes);
+        if (plan.result != core::kDsOk) return static_cast<HRESULT>(plan.result);
         DSBUFFERDESC normalized = *desc;
-        WAVEFORMATEX primary_format = {WAVE_FORMAT_PCM, 2, 48000, 192000, 4, 16, 0};
-        const bool primary = (desc->dwFlags & DSBCAPS_PRIMARYBUFFER) != 0;
-        if (primary)
-        {
-            normalized.dwBufferBytes = 4096;
-            normalized.lpwfxFormat = &primary_format;
-        }
-        TraceBuffer(primary ? "create-primary" : "create-secondary",
-                    normalized.dwFlags, normalized.dwBufferBytes);
-        if (!normalized.lpwfxFormat || normalized.lpwfxFormat->wFormatTag != WAVE_FORMAT_PCM ||
-            normalized.dwBufferBytes == 0 || normalized.dwBufferBytes > 64u * 1024u * 1024u)
-            return DSERR_BADFORMAT;
-        auto* buffer = new (std::nothrow) DirectSoundBufferFacade(normalized, *normalized.lpwfxFormat);
+        WAVEFORMATEX wave;
+        CopyFromCore(&wave, plan.format);
+        normalized.dwBufferBytes = plan.bytes;
+        normalized.lpwfxFormat = &wave;
+        auto* buffer = new (std::nothrow) DirectSoundBufferFacade(normalized, wave);
         if (!buffer) return DSERR_OUTOFMEMORY;
         if (!buffer->ready()) { buffer->Release(); return DSERR_NODRIVER; }
         *output = buffer;
         return DS_OK;
     }
-    HRESULT STDMETHODCALLTYPE GetCaps(DSCAPS* caps) override { if (!caps || caps->dwSize < sizeof(DSCAPS)) return DSERR_INVALIDPARAM; std::memset(caps, 0, sizeof(*caps)); caps->dwSize = sizeof(DSCAPS); caps->dwFlags = DSCAPS_PRIMARYSTEREO | DSCAPS_PRIMARY16BIT; return DS_OK; }
+    HRESULT STDMETHODCALLTYPE GetCaps(DSCAPS* caps) override { if (!caps || caps->dwSize < sizeof(DSCAPS)) return DSERR_INVALIDPARAM; CopyFromCore(caps, core::DeviceCaps()); return DS_OK; }
     HRESULT STDMETHODCALLTYPE DuplicateSoundBuffer(LPDIRECTSOUNDBUFFER original, LPDIRECTSOUNDBUFFER* output) override
     {
         if (!output) return DSERR_INVALIDPARAM;
@@ -300,7 +341,7 @@ public:
         if (!original) return DSERR_INVALIDPARAM;
         auto* source = dynamic_cast<DirectSoundBufferFacade*>(original);
         if (!source) return DSERR_INVALIDPARAM;
-        if (source->is_primary()) return DSERR_INVALIDCALL;
+        if (core::CheckDuplicate(source->is_primary()) != core::kDsOk) return DSERR_INVALIDCALL;
         auto* duplicate = new (std::nothrow) DirectSoundBufferFacade(*source);
         if (!duplicate) return DSERR_OUTOFMEMORY;
         if (!duplicate->ready()) { duplicate->Release(); return DSERR_NODRIVER; }
@@ -316,7 +357,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetCooperativeLevel(HWND, DWORD) override { return DS_OK; }
     HRESULT STDMETHODCALLTYPE Compact() override { return DS_OK; }
-    HRESULT STDMETHODCALLTYPE GetSpeakerConfig(DWORD* config) override { if (!config) return DSERR_INVALIDPARAM; *config = DSSPEAKER_STEREO; return DS_OK; }
+    HRESULT STDMETHODCALLTYPE GetSpeakerConfig(DWORD* config) override { if (!config) return DSERR_INVALIDPARAM; *config = core::kDsSpeakerStereo; return DS_OK; }
     HRESULT STDMETHODCALLTYPE SetSpeakerConfig(DWORD) override { return DS_OK; }
     HRESULT STDMETHODCALLTYPE Initialize(const GUID*) override { return DSERR_ALREADYINITIALIZED; }
 private: std::atomic<ULONG> refs_{1};

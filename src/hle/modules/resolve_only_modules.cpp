@@ -20,10 +20,7 @@ GuestModuleDescriptor MakeModule(const char* name,
     return descriptor;
 }
 
-// Argument counts follow the Win32 signatures (dsound.h, dinput.h, vfw.h,
-// winsock2.h).
-// 4th imports DirectSoundCreate by ordinal 1.
-constexpr ResolveOnlyExport kDsound[] = {{"DirectSoundCreate", 3, 1}};
+// Argument counts follow the Win32 signatures (dinput.h, vfw.h, winsock2.h).
 constexpr ResolveOnlyExport kDinput[] = {{"DirectInputCreateA", 4}};
 constexpr ResolveOnlyExport kAvifil32[] = {
     {"AVIStreamInfoA", 3}, {"AVIStreamOpenFromFileA", 6}, {"AVIStreamGetFrameOpen", 2},
@@ -59,7 +56,6 @@ void AddResolveOnlyExports(GuestModuleDescriptor* descriptor,
 std::vector<GuestModuleDescriptor> MakeResolveOnlyModuleDescriptors()
 {
     std::vector<GuestModuleDescriptor> descriptors;
-    descriptors.push_back(MakeModule("dsound.dll", "dsound", kDsound));
     descriptors.push_back(MakeModule("dinput.dll", "dinput", kDinput));
     descriptors.push_back(MakeModule("avifil32.dll", "avifil32", kAvifil32));
     descriptors.push_back(MakeModule("ws2_32.dll", "ws2_32", kWs2_32));

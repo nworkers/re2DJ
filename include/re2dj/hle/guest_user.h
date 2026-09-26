@@ -50,6 +50,8 @@ struct GuestWindow
     std::string title;
     // cbWndExtra bytes, zeroed at creation.
     std::vector<std::uint8_t> extra;
+    // GWLP_USERDATA, 0 until the guest sets it.
+    std::uint32_t user_data = 0;
     // The window's device context, which WM_ERASEBKGND hands over.
     std::uint32_t device_context = 0;
     // True while the window has an update region: from being shown until a

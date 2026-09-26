@@ -22,6 +22,15 @@ inline constexpr std::uint32_t kEPointer = 0x80004003U;
 // DDERR_GENERIC is E_FAIL.
 inline constexpr std::uint32_t kDdErrGeneric = 0x80004005U;
 inline constexpr std::uint32_t kDdErrUnsupportedMode = 0x8876024EU;
+// DDERR_UNSUPPORTED is E_NOTIMPL and DDERR_OUTOFMEMORY is E_OUTOFMEMORY.
+inline constexpr std::uint32_t kDdErrUnsupported = 0x80004001U;
+inline constexpr std::uint32_t kDdErrOutOfMemory = 0x8007000EU;
+inline constexpr std::uint32_t kDdErrCannotAttachSurface = 0x8876000AU;
+inline constexpr std::uint32_t kDdErrInvalidObject = 0x88760082U;
+inline constexpr std::uint32_t kDdErrInvalidPixelFormat = 0x88760091U;
+inline constexpr std::uint32_t kDdErrNotFound = 0x887600FFU;
+inline constexpr std::uint32_t kD3dErrSceneInScene = 0x887602F8U;
+inline constexpr std::uint32_t kD3dErrSceneNotInScene = 0x887602F9U;
 
 // Enumeration callback answers (ddraw.h, d3d.h): 0 stops, 1 continues.
 inline constexpr std::uint32_t kEnumCancel = 0;
@@ -170,6 +179,43 @@ struct DdDeviceIdentifier2
 };
 static_assert(sizeof(DdDeviceIdentifier2) == 1072);
 
+// D3DMATRIX: sixteen floats, row by row (_11, _12, ... _44).
+struct D3dMatrix
+{
+    std::array<float, 16> values{};
+};
+static_assert(sizeof(D3dMatrix) == 64);
+
+// D3DVIEWPORT7.
+struct D3dViewport7
+{
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    float min_z = 0.0f;
+    float max_z = 1.0f;
+};
+static_assert(sizeof(D3dViewport7) == 24);
+
+// D3DCOLORVALUE and D3DMATERIAL7.
+struct D3dColorValue
+{
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+    float a = 0.0f;
+};
+struct D3dMaterial7
+{
+    D3dColorValue diffuse;
+    D3dColorValue ambient;
+    D3dColorValue specular;
+    D3dColorValue emissive;
+    float power = 0.0f;
+};
+static_assert(sizeof(D3dMaterial7) == 68);
+
 // ddraw.h flags this facade reports.
 inline constexpr std::uint32_t kDdCaps3d = 0x00000001U;
 inline constexpr std::uint32_t kDdCapsBlt = 0x00000040U;
@@ -179,12 +225,19 @@ inline constexpr std::uint32_t kDdCaps2WideSurfaces = 0x00001000U;
 inline constexpr std::uint32_t kDdCaps2NoPageLockRequired = 0x00000800U;
 inline constexpr std::uint32_t kDdCaps2CanRenderWindowed = 0x00080000U;
 inline constexpr std::uint32_t kDdsCapsBackBuffer = 0x00000004U;
+inline constexpr std::uint32_t kDdsCapsComplex = 0x00000008U;
+inline constexpr std::uint32_t kDdsCapsFlip = 0x00000010U;
+inline constexpr std::uint32_t kDdsCapsOffscreenPlain = 0x00000040U;
+inline constexpr std::uint32_t kDdsCapsTexture = 0x00001000U;
+inline constexpr std::uint32_t kDdsCapsZBuffer = 0x00020000U;
 inline constexpr std::uint32_t kDdsCapsPrimarySurface = 0x00000200U;
 inline constexpr std::uint32_t kDdsCaps3dDevice = 0x00002000U;
 inline constexpr std::uint32_t kDdsCapsVideoMemory = 0x00004000U;
+inline constexpr std::uint32_t kDdsdCaps = 0x00000001U;
 inline constexpr std::uint32_t kDdsdHeight = 0x00000002U;
 inline constexpr std::uint32_t kDdsdWidth = 0x00000004U;
 inline constexpr std::uint32_t kDdsdPitch = 0x00000008U;
+inline constexpr std::uint32_t kDdsdBackBufferCount = 0x00000020U;
 inline constexpr std::uint32_t kDdsdPixelFormat = 0x00001000U;
 inline constexpr std::uint32_t kDdsdRefreshRate = 0x00040000U;
 inline constexpr std::uint32_t kDdpfAlphaPixels = 0x00000001U;
@@ -273,13 +326,43 @@ inline constexpr std::uint32_t kD3dVtxPCapsDirectionalLights = 0x00000008U;
 inline constexpr std::uint32_t kD3dVtxPCapsPositionalLights = 0x00000010U;
 inline constexpr std::uint32_t kD3dVtxPCapsLocalViewer = 0x00000020U;
 
+// Device state indices (d3dtypes.h): D3DRENDERSTATETYPE,
+// D3DTEXTURESTAGESTATETYPE, and D3DTRANSFORMSTATETYPE members, and the
+// values a new device starts with.
+inline constexpr std::uint32_t kD3dRenderStateSrcBlend = 19;
+inline constexpr std::uint32_t kD3dRenderStateDestBlend = 20;
+inline constexpr std::uint32_t kD3dRenderStateCullMode = 22;
+inline constexpr std::uint32_t kD3dTssColorOp = 1;
+inline constexpr std::uint32_t kD3dTssColorArg1 = 2;
+inline constexpr std::uint32_t kD3dTssColorArg2 = 3;
+inline constexpr std::uint32_t kD3dTssAddressU = 13;
+inline constexpr std::uint32_t kD3dTssAddressV = 14;
+inline constexpr std::uint32_t kD3dTssMagFilter = 16;
+inline constexpr std::uint32_t kD3dTssMinFilter = 17;
+inline constexpr std::uint32_t kD3dTransformWorld = 1;
+inline constexpr std::uint32_t kD3dTransformView = 2;
+inline constexpr std::uint32_t kD3dTransformProjection = 3;
+inline constexpr std::uint32_t kD3dCullCcw = 3;
+inline constexpr std::uint32_t kD3dBlendZero = 1;
+inline constexpr std::uint32_t kD3dBlendOne = 2;
+inline constexpr std::uint32_t kD3dTopModulate = 4;
+inline constexpr std::uint32_t kD3dTaDiffuse = 0;
+inline constexpr std::uint32_t kD3dTaTexture = 2;
+inline constexpr std::uint32_t kD3dTfgPoint = 1;
+inline constexpr std::uint32_t kD3dTfnPoint = 1;
+inline constexpr std::uint32_t kD3dTAddressWrap = 1;
+
 // Interface and device identifiers (ddraw.h, d3d.h).
 inline constexpr Guid kIidUnknown = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                                      0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46};
 inline constexpr Guid kIidDirectDraw7 = {0xC0, 0x5E, 0xE6, 0x15, 0x9C, 0x3B, 0xD2, 0x11,
                                          0xB9, 0x2F, 0x00, 0x60, 0x97, 0x97, 0xEA, 0x5B};
+inline constexpr Guid kIidDirectDrawSurface7 = {0x80, 0x5A, 0x67, 0x06, 0x9B, 0x3B, 0xD2, 0x11,
+                                                0xB9, 0x2F, 0x00, 0x60, 0x97, 0x97, 0xEA, 0x5B};
 inline constexpr Guid kIidDirect3D7 = {0x77, 0x9E, 0x04, 0xF5, 0x61, 0x48, 0xD2, 0x11,
                                        0xA4, 0x07, 0x00, 0xA0, 0xC9, 0x06, 0x29, 0xA8};
+inline constexpr Guid kIidDirect3DDevice7 = {0x79, 0x9E, 0x04, 0xF5, 0x61, 0x48, 0xD2, 0x11,
+                                             0xA4, 0x07, 0x00, 0xA0, 0xC9, 0x06, 0x29, 0xA8};
 inline constexpr Guid kIidDirect3DRgbDevice = {0x60, 0x5C, 0x66, 0xA4, 0x73, 0x26, 0xCF, 0x11,
                                                0xA3, 0x1A, 0x00, 0xAA, 0x00, 0xB9, 0x33, 0x56};
 inline constexpr Guid kIidDirect3DHalDevice = {0xE0, 0x3D, 0xE6, 0x84, 0xAA, 0x46, 0xCF, 0x11,

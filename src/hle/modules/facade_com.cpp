@@ -76,6 +76,16 @@ bool ReadGuid(const ImportCall& call, std::uint32_t address, re2dj::directx::Gui
     return true;
 }
 
+bool ReadBytes(const ImportCall& call, std::uint32_t address, std::span<std::uint8_t> bytes, std::string* error)
+{
+    std::string read_error;
+    if (!call.services->ReadGuestBytes(runtime::GuestAddress(address), bytes, &read_error))
+    {
+        return Fail(error, CallName(call) + " cannot read guest memory: " + read_error);
+    }
+    return true;
+}
+
 std::uint32_t PlaceTemporary(const ImportCall& call, GuestProcess& process, std::span<const std::uint8_t> bytes)
 {
     const std::uint32_t block = process.Allocate(static_cast<std::uint32_t>(bytes.size()));

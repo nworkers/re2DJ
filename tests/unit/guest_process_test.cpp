@@ -143,12 +143,12 @@ void CheckVirtualAllocShapes(re2dj::test::Context& context)
 }
 
 // The DLLs the original import table names with no export implemented yet;
-// DirectSoundCreate and ws2_32 are found by ordinal.
+// ws2_32 is found by ordinal.
 void CheckResolveOnlyModules(re2dj::test::Context& context)
 {
     namespace modules = re2dj::hle::modules;
     const auto descriptors = modules::MakeResolveOnlyModuleDescriptors();
-    RE2DJ_CHECK_EQ(context, descriptors.size(), std::size_t{4});
+    RE2DJ_CHECK_EQ(context, descriptors.size(), std::size_t{3});
     std::size_t exports = 0;
     for (const auto& descriptor : descriptors)
     {
@@ -160,13 +160,12 @@ void CheckResolveOnlyModules(re2dj::test::Context& context)
             ++exports;
         }
     }
-    RE2DJ_CHECK_EQ(context, exports, std::size_t{16});
-    if (descriptors.size() == 4)
+    RE2DJ_CHECK_EQ(context, exports, std::size_t{15});
+    if (descriptors.size() == 3)
     {
-        RE2DJ_CHECK_EQ(context, descriptors[0].name, std::string("dsound.dll"));
-        RE2DJ_CHECK(context, descriptors[0].exports[0].ordinal == std::uint16_t{1});
-        RE2DJ_CHECK_EQ(context, descriptors[3].name, std::string("ws2_32.dll"));
-        RE2DJ_CHECK(context, descriptors[3].exports.back().ordinal == std::uint16_t{116});
+        RE2DJ_CHECK_EQ(context, descriptors[0].name, std::string("dinput.dll"));
+        RE2DJ_CHECK_EQ(context, descriptors[2].name, std::string("ws2_32.dll"));
+        RE2DJ_CHECK(context, descriptors[2].exports.back().ordinal == std::uint16_t{116});
     }
 }
 

@@ -1,5 +1,47 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.54 (2026-09-26)
+
+### 한국어
+
+Linux에서 실제 4th가 DirectDraw 표면을 만들고 Direct3D 장치를 설정한 뒤, 글꼴 파일을 읽고 DirectSound를 초기화합니다. 두 폭 모두 API 호출 1,872번 뒤 `dinput.dll!DirectInputCreateA`에서 멈춥니다. 화면은 아직 검은색입니다. 그리기와 화면 표시는 이후 단계에서 다룹니다. DirectX core에 표면과 장치를 옮겼고, DirectSound에도 Windows와 Linux가 함께 쓰는 core를 만들었습니다.
+
+#### 1. DirectX core 3·4단계 (작업 381·382)
+- **표면**: `CreateSurface` 규칙(flip 주 표면과 back buffer, depth, RGB565 texture, offscreen), pitch, 표면 설명, attach를 core로 옮겼습니다. Linux `IDirectDrawSurface7`은 픽셀을 게스트 메모리에 둡니다. 게스트 COM 객체는 이제 다른 facade 객체의 참조와 게스트 자원을 갖고, 사라질 때 함께 돌려줍니다.
+- **장치**: `IDirect3D7::CreateDevice` 규칙과 장치 상태를 core로 옮겼습니다. 장치 상태는 초기값, render·texture stage state, transform, 장면, viewport입니다. Linux `IDirect3DDevice7`은 게임의 장치 설정 호출을 모두 처리합니다. 그 순서와 값은 Windows 기록과 같습니다.
+- **SDK 검사**: Windows `static_assert`가 core 상수 네 개를 바로잡았습니다. 대상은 `DDCAPS2_NOPAGELOCKREQUIRED`, `DDERR_CANNOTATTACHSURFACE`, `D3DERR_SCENE_IN_SCENE`, `D3DERR_SCENE_NOT_IN_SCENE`입니다.
+
+#### 2. DirectSound와 창 조회 (작업 383)
+- **DirectSound core**: `re2dj::audio`에 게스트 ABI와 버퍼 생성·caps·복제·lock 분할 규칙을 두었습니다. Windows facade와 `LegacyAudioBuffer`가 이 core를 씁니다.
+- **Linux `dsound.dll`**: `DirectSoundCreate`, `IDirectSound` 전체, `IDirectSoundBuffer`의 생성·caps·형식·lock·unlock을 구현했습니다. sample은 게스트 메모리에 두고, 복제본은 원본과 sample을 공유합니다. Linux의 소리 출력은 아직 없습니다.
+- **user32**: `GetForegroundWindow`를 구현했습니다. `GetWindowLongA`는 Windows 11에서 측정한 last error 규칙을 따릅니다.
+
+#### 3. 검증
+- Windows 실제 4th의 그래픽 기록과 오디오 생성·복제 기록은 각 작업의 변경 전후가 같습니다.
+- Linux x86과 x64의 실행 기록은 주소만 맞추면 같습니다.
+
+---
+
+### English
+
+On Linux the real 4th now creates its DirectDraw surfaces, sets up its Direct3D device, reads its font files, and initializes DirectSound, stopping at `dinput.dll!DirectInputCreateA` after 1,872 API calls on both widths. The screen is still black; drawing and presentation come in a later phase. Surfaces and the device moved into the DirectX core, and DirectSound gets a core of its own shared by Windows and Linux.
+
+#### 1. DirectX core phases 3 and 4 (tasks 381–382)
+- **Surfaces**: The `CreateSurface` rules (a flipping primary with its back buffer, depth, RGB565 textures, offscreen), the pitch, surface descriptions, and attachments moved into the core. Linux's `IDirectDrawSurface7` keeps its pixels in guest memory. Guest COM objects can now hold references to other facade objects and guest resources, and return them when they go.
+- **Device**: The `IDirect3D7::CreateDevice` rules and the device state moved into the core. The device state covers the initial values, render and texture stage states, transforms, scenes, and the viewport. Linux's `IDirect3DDevice7` handles all of the game's device setup calls, in the same order and with the same values as the Windows record.
+- **SDK checks**: Windows `static_assert`s corrected four core constants: `DDCAPS2_NOPAGELOCKREQUIRED`, `DDERR_CANNOTATTACHSURFACE`, `D3DERR_SCENE_IN_SCENE`, and `D3DERR_SCENE_NOT_IN_SCENE`.
+
+#### 2. DirectSound and window queries (task 383)
+- **DirectSound core**: `re2dj::audio` holds the guest ABI and the rules for buffer creation, caps, duplication, and how a lock divides a buffer. The Windows facade and `LegacyAudioBuffer` use this core.
+- **Linux `dsound.dll`**: `DirectSoundCreate`, all of `IDirectSound`, and `IDirectSoundBuffer`'s creation, caps, format, lock, and unlock. Samples live in guest memory, and duplicates share their source's samples. Linux has no sound output yet.
+- **user32**: `GetForegroundWindow` is implemented, and `GetWindowLongA` follows the last-error rules measured on Windows 11.
+
+#### 3. Validation
+- On Windows, the real 4th's graphics record and audio creation and duplication records match the pre-change build for each task.
+- Linux x86 and x64 produce the same run record once addresses are normalized.
+
+---
+
 ## v0.0.53 (2026-09-26)
 
 ### 한국어

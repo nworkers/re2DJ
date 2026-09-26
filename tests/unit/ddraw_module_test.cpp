@@ -1,6 +1,7 @@
 #include "re2dj/hle/modules/ddraw_module.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -103,8 +104,9 @@ void CheckCreate(re2dj::test::Context& context)
             ++method_count;
         }
     }
-    // IDirectDraw7's 30 methods and IDirect3D7's 8.
-    RE2DJ_CHECK_EQ(context, method_count, std::size_t{38});
+    // IDirectDraw7's 30 methods, IDirect3D7's 8, IDirectDrawSurface7's 49, and
+    // IDirect3DDevice7's 49.
+    RE2DJ_CHECK_EQ(context, method_count, std::size_t{136});
 
     constexpr std::uint32_t kIid = MemoryServices::kBase + 0x40;
     constexpr std::uint32_t kOut = MemoryServices::kBase + 0x60;
@@ -411,10 +413,254 @@ void CheckHostWindow(re2dj::test::Context& context)
     RE2DJ_CHECK(context, error.find("no display") != std::string::npos);
 }
 
+// CreateSurface makes the 4th's flipping primary with its back buffer, a
+// depth surface that attaches, and textures; surfaces describe themselves
+// through the shared core and give their memory back when released.
+void CheckSurfaces(re2dj::test::Context& context)
+{
+    namespace dx = re2dj::directx;
+    const auto descriptor = modules::MakeDdrawModuleDescriptor();
+    MemoryServices services;
+    const std::uint32_t direct_draw = CreateDirectDraw(context, services, descriptor);
+    const std::size_t blocks_before = services.Process()->live_blocks();
+
+    constexpr std::uint32_t kDesc = MemoryServices::kBase + 0x100;
+    constexpr std::uint32_t kOut = MemoryServices::kBase + 0x40;
+    const auto put_desc = [&](const dx::DdSurfaceDesc2& desc) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(&desc);
+        for (std::uint32_t index = 0; index < sizeof(desc); ++index)
+        {
+            services.Byte(kDesc + index) = bytes[index];
+        }
+    };
+    dx::DdSurfaceDesc2 primary;
+    primary.size = sizeof(primary);
+    primary.flags = dx::kDdsdCaps | dx::kDdsdBackBufferCount;
+    primary.caps.caps = 0x00002218U;
+    primary.back_buffer_count = 1;
+    put_desc(primary);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDraw7::CreateSurface",
+                                             {direct_draw, kDesc, kOut, 0}).eax,
+                   dx::kDdOk);
+    const std::uint32_t front = services.U32(kOut);
+    RE2DJ_CHECK(context, front != 0);
+
+    // The back buffer is attached from the start.
+    constexpr std::uint32_t kCaps = MemoryServices::kBase + 0x60;
+    services.PutU32(kCaps, dx::kDdsCapsBackBuffer);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::GetAttachedSurface",
+                                             {front, kCaps, kOut}).eax,
+                   dx::kDdOk);
+    const std::uint32_t back = services.U32(kOut);
+    RE2DJ_CHECK(context, back != 0 && back != front);
+    services.PutU32(kCaps, dx::kDdsCapsZBuffer);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::GetAttachedSurface",
+                                             {back, kCaps, kOut}).eax,
+                   dx::kDdErrNotFound);
+
+    // GetSurfaceDesc reports the back buffer's shape and pitch.
+    constexpr std::uint32_t kReport = MemoryServices::kArenaBase + 0x28000;
+    services.PutU32(kReport, sizeof(dx::DdSurfaceDesc2));
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::GetSurfaceDesc",
+                                             {back, kReport}).eax,
+                   dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kReport + 12), 640U);
+    RE2DJ_CHECK_EQ(context, services.U32(kReport + 16), 1280U);
+    RE2DJ_CHECK_EQ(context, services.U32(kReport + 104), dx::kDdsCapsBackBuffer | dx::kDdsCaps3dDevice);
+    services.PutU32(kReport, 100);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::GetSurfaceDesc",
+                                             {back, kReport}).eax,
+                   dx::kDdErrInvalidParams);
+
+    // A depth surface attaches to the back buffer; a texture does not.
+    dx::DdSurfaceDesc2 depth;
+    depth.size = sizeof(depth);
+    depth.flags = 0x00001007U;
+    depth.caps.caps = 0x00024000U;
+    depth.width = 640;
+    depth.height = 480;
+    depth.pixel_format = dx::Depth16Format();
+    put_desc(depth);
+    CallModuleExport(context, services, descriptor, "IDirectDraw7::CreateSurface", {direct_draw, kDesc, kOut, 0});
+    const std::uint32_t z = services.U32(kOut);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::AddAttachedSurface",
+                                             {back, z}).eax,
+                   dx::kDdOk);
+    services.PutU32(kCaps, dx::kDdsCapsZBuffer);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::GetAttachedSurface",
+                                             {back, kCaps, kOut}).eax,
+                   dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), z);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::AddAttachedSurface",
+                                             {back, front}).eax,
+                   dx::kDdErrCannotAttachSurface);
+
+    dx::DdSurfaceDesc2 texture;
+    texture.size = sizeof(texture);
+    texture.flags = 0x00001007U;
+    texture.caps.caps = 0x10005000U;
+    texture.width = 16;
+    texture.height = 16;
+    texture.pixel_format = dx::Rgb565Format();
+    texture.pixel_format.bit_count = 32;
+    put_desc(texture);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDraw7::CreateSurface",
+                                             {direct_draw, kDesc, kOut, 0}).eax,
+                   dx::kDdErrInvalidPixelFormat);
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), 0U);
+
+    // Releasing every reference frees the surfaces and their pixel memory:
+    // the back buffer (GetAttachedSurface's), the depth surface (the
+    // guest's and the lookup's), then the primary, which lets go of both.
+    CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::Release", {back});
+    CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::Release", {z});
+    CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::Release", {z});
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "IDirectDrawSurface7::Release", {front}).eax,
+                   0U);
+    RE2DJ_CHECK(context, services.Process()->com().Find(back) == nullptr);
+    RE2DJ_CHECK(context, services.Process()->com().Find(z) == nullptr);
+    // Only IDirectDrawSurface7's vtable stays, like a DLL's static table.
+    RE2DJ_CHECK_EQ(context, services.Process()->live_blocks(), blocks_before + 1);
+    RE2DJ_CHECK_EQ(context, services.Process()->com().Find(direct_draw)->reference_count, 1U);
+}
+
+// CreateDevice renders into a 3D surface of an enumerated class, starts in
+// the shared core's state, answers state calls by the core's rules, and holds
+// its render target until it is released.
+void CheckDevice(re2dj::test::Context& context)
+{
+    namespace dx = re2dj::directx;
+    const auto descriptor = modules::MakeDdrawModuleDescriptor();
+    MemoryServices services;
+    const std::uint32_t direct_draw = CreateDirectDraw(context, services, descriptor);
+    constexpr std::uint32_t kGuid = MemoryServices::kBase + 0x40;
+    constexpr std::uint32_t kOut = MemoryServices::kBase + 0x70;
+    constexpr std::uint32_t kData = MemoryServices::kBase + 0x100;
+    const auto put_guid = [&](const dx::Guid& guid) {
+        for (std::uint32_t index = 0; index < 16; ++index)
+        {
+            services.Byte(kGuid + index) = guid[index];
+        }
+    };
+    const auto call = [&](const char* name, std::initializer_list<std::uint32_t> arguments) {
+        return CallModuleExport(context, services, descriptor, name, arguments).eax;
+    };
+
+    dx::DdSurfaceDesc2 request;
+    request.size = sizeof(request);
+    request.flags = dx::kDdsdCaps | dx::kDdsdBackBufferCount;
+    request.caps.caps = 0x00002218U;
+    request.back_buffer_count = 1;
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(&request);
+    for (std::uint32_t index = 0; index < sizeof(request); ++index)
+    {
+        services.Byte(kData + index) = bytes[index];
+    }
+    RE2DJ_CHECK_EQ(context, call("IDirectDraw7::CreateSurface", {direct_draw, kData, kOut, 0}), dx::kDdOk);
+    const std::uint32_t front = services.U32(kOut);
+    services.PutU32(kData, dx::kDdsCapsBackBuffer);
+    call("IDirectDrawSurface7::GetAttachedSurface", {front, kData, kOut});
+    const std::uint32_t back = services.U32(kOut);
+    put_guid(dx::kIidDirect3D7);
+    call("IDirectDraw7::QueryInterface", {direct_draw, kGuid, kOut});
+    const std::uint32_t direct3d = services.U32(kOut);
+
+    // Refusals: no out pointer, no target, a class the enumeration does not
+    // report, and a target that is not a surface.
+    put_guid(dx::kIidDirect3DHalDevice);
+    RE2DJ_CHECK_EQ(context, call("IDirect3D7::CreateDevice", {direct3d, kGuid, back, 0}), dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, call("IDirect3D7::CreateDevice", {direct3d, kGuid, 0, kOut}), dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, call("IDirect3D7::CreateDevice", {direct3d, kGuid, direct3d, kOut}),
+                   dx::kDdErrInvalidObject);
+    put_guid(dx::kIidDirectDraw7);
+    RE2DJ_CHECK_EQ(context, call("IDirect3D7::CreateDevice", {direct3d, kGuid, back, kOut}), dx::kDdErrInvalidObject);
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), 0U);
+
+    const std::uint32_t back_references = services.Process()->com().Find(back)->reference_count;
+    put_guid(dx::kIidDirect3DHalDevice);
+    RE2DJ_CHECK_EQ(context, call("IDirect3D7::CreateDevice", {direct3d, kGuid, back, kOut}), dx::kDdOk);
+    const std::uint32_t device = services.U32(kOut);
+    RE2DJ_CHECK(context, device != 0);
+    RE2DJ_CHECK_EQ(context, services.Process()->com().Find(back)->reference_count, back_references + 1);
+
+    // The core's initial state, and its rules.
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetRenderState", {device, dx::kD3dRenderStateCullMode, kOut}),
+                   dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), dx::kD3dCullCcw);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetRenderState", {device, 137, 1}), dx::kDdOk);
+    call("IDirect3DDevice7::GetRenderState", {device, 137, kOut});
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), 1U);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetRenderState", {device, 256, 1}), dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetRenderState", {device, 137, 0}), dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetTextureStageState", {device, 0, dx::kD3dTssColorOp, 2}),
+                   dx::kDdOk);
+    call("IDirect3DDevice7::GetTextureStageState", {device, 0, dx::kD3dTssColorOp, kOut});
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), 2U);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetTextureStageState", {device, 8, 1, 2}),
+                   dx::kDdErrInvalidParams);
+
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::BeginScene", {device}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::BeginScene", {device}), dx::kD3dErrSceneInScene);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::EndScene", {device}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::EndScene", {device}), dx::kD3dErrSceneNotInScene);
+
+    // The viewport: none until set, and never an empty one.
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetViewport", {device, kData}), dx::kDdErrNotFound);
+    dx::D3dViewport7 viewport;
+    const auto put_viewport = [&] {
+        const auto* view_bytes = reinterpret_cast<const std::uint8_t*>(&viewport);
+        for (std::uint32_t index = 0; index < sizeof(viewport); ++index)
+        {
+            services.Byte(kData + index) = view_bytes[index];
+        }
+    };
+    put_viewport();
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetViewport", {device, kData}), dx::kDdErrInvalidParams);
+    viewport.width = 640;
+    viewport.height = 480;
+    put_viewport();
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetViewport", {device, kData}), dx::kDdOk);
+    services.PutU32(kData + 8, 0);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetViewport", {device, kData}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kData + 8), 640U);
+
+    // Transforms start as identity and keep what is set.
+    constexpr std::uint32_t kMatrix = MemoryServices::kBase + 0x200;
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetTransform", {device, dx::kD3dTransformWorld, kMatrix}),
+                   dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kMatrix), 0x3F800000U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMatrix + 4), 0U);
+    services.PutU32(kMatrix + 4, 0x40000000U);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetTransform", {device, dx::kD3dTransformView, kMatrix}),
+                   dx::kDdOk);
+    services.PutU32(kMatrix + 4, 0);
+    call("IDirect3DDevice7::GetTransform", {device, dx::kD3dTransformView, kMatrix});
+    RE2DJ_CHECK_EQ(context, services.U32(kMatrix + 4), 0x40000000U);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetTransform", {device, 32, kMatrix}), dx::kDdErrInvalidParams);
+
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetMaterial", {device, kMatrix}), dx::kDdOk);
+
+    // The render target: the same one again changes nothing, and it must be
+    // a surface.
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetRenderTarget", {device, back, 0}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.Process()->com().Find(back)->reference_count, back_references + 1);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetRenderTarget", {device, direct3d, 0}),
+                   dx::kDdErrInvalidObject);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetRenderTarget", {device, kOut}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), back);
+    call("IDirectDrawSurface7::Release", {back});
+
+    // Releasing the device lets go of its render target.
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::Release", {device}), 0U);
+    RE2DJ_CHECK_EQ(context, services.Process()->com().Find(back)->reference_count, back_references);
+}
+
 }  // namespace
 
 void RunDdrawModuleTests(re2dj::test::Context& context)
 {
+    CheckDevice(context);
+    CheckSurfaces(context);
     CheckHostWindow(context);
     CheckCooperativeLevelAndMode(context);
     CheckEnumerate(context);
