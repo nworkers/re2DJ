@@ -1,4 +1,5 @@
 #include "re2dj/input/ez2dj_keyboard_map.h"
+#include "re2dj/input/ez2dancer_keyboard_map.h"
 
 #include <array>
 #include <cstdint>
@@ -81,6 +82,23 @@ void CheckDefaults(re2dj::test::Context& context)
     }
 }
 
+// The EZ2Dancer bindings, shared by both hosts, match its example
+// configuration too.
+void CheckEz2DancerDefaults(re2dj::test::Context& context)
+{
+    const std::map<std::string, std::string> example =
+        ReadIni(std::string(RE2DJ_TEST_SOURCE_DIR) + "/config/ez2dancer-io.example.ini");
+    RE2DJ_CHECK(context, !example.empty());
+    RE2DJ_CHECK_EQ(context, input::Ez2DancerButtonBindings().size(),
+                   static_cast<std::size_t>(input::Ez2DancerButton::kCount));
+    for (const input::Ez2DancerButtonBinding& binding : input::Ez2DancerButtonBindings())
+    {
+        RE2DJ_CHECK(context, input::ParseKeyName(binding.default_key) > 0);
+        const auto found = example.find("buttons." + std::string(binding.name));
+        RE2DJ_CHECK(context, found != example.end() && found->second == binding.default_key);
+    }
+}
+
 // The turntable moves by the step toward the held key at most every 8 ms,
 // holds still with both or neither, and wraps.
 void CheckTurntables(re2dj::test::Context& context)
@@ -117,5 +135,6 @@ void RunEz2DjKeyboardMapTests(re2dj::test::Context& context)
 {
     CheckKeyNames(context);
     CheckDefaults(context);
+    CheckEz2DancerDefaults(context);
     CheckTurntables(context);
 }

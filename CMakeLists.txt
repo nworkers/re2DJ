@@ -399,6 +399,7 @@ add_library(re2dj_core STATIC
     src/input/legacy_io_trap.cpp
     src/input/virtual_keys.cpp
     src/input/ez2dj_keyboard_map.cpp
+    src/input/ez2dancer_keyboard_map.cpp
     src/exe/code_scan.cpp
     src/exe/immediate_scan.cpp
     src/exe/pe_image.cpp
@@ -500,6 +501,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/input/legacy_io_trap.cpp
         src/input/virtual_keys.cpp
         src/input/ez2dj_keyboard_map.cpp
+        src/input/ez2dancer_keyboard_map.cpp
         src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
         src/platform/windows/direct3d7_com_facade.cpp

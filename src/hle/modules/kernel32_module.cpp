@@ -292,6 +292,13 @@ bool CloseHandle(const ImportCall& call, ImportReturn* result, std::string* erro
         }
         return false;
     }
+    // GetCurrentProcess's pseudo-handle closes successfully, as measured on
+    // Windows 11 (task 428).
+    if (call.arguments[0] == GuestProcess::kCurrentProcessHandle)
+    {
+        result->eax = 1;
+        return true;
+    }
     if (call.services == nullptr)
     {
         return true;
@@ -2947,6 +2954,39 @@ bool SetUnhandledExceptionFilter(const ImportCall& call, ImportReturn* result, s
     return true;
 }
 
+// UnhandledExceptionFilter(ExceptionInfo): the CRT's last resort for an
+// exception no guest handler took. On Windows with no debugger and no filter
+// of the guest's own, the process then ends with Windows Error Reporting; a
+// guest filter would be called first, which is not modelled. The call stops
+// with the exception's code, address, and parameters, read from the
+// EXCEPTION_POINTERS, so the run reports what went wrong.
+bool UnhandledExceptionFilter(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 UnhandledExceptionFilter argument shape is invalid", error))
+    {
+        return false;
+    }
+    std::uint32_t pointers[2] = {};
+    std::uint32_t record[5] = {};
+    if (!ReadGuestWords(call, call.arguments[0], pointers, error) || !ReadGuestWords(call, pointers[0], record, error))
+    {
+        return false;
+    }
+    std::uint32_t parameters[2] = {};
+    const std::uint32_t count = std::min<std::uint32_t>(record[4], 2);
+    if (count != 0 && !ReadGuestWords(call, pointers[0] + 20, std::span<std::uint32_t>(parameters, count), error))
+    {
+        return false;
+    }
+    char text[160];
+    std::snprintf(text, sizeof(text),
+                  "kernel32 UnhandledExceptionFilter: the guest left exception %08X at %08X unhandled "
+                  "(flags %08X, parameters %08X %08X)",
+                  record[0], record[3], record[1], parameters[0], parameters[1]);
+    if (error != nullptr) *error = text;
+    return false;
+}
+
 // CreateEventA(lpEventAttributes, bManualReset, bInitialState, lpName) for
 // unnamed events; a name would have to be shared across processes, which is
 // not modelled.
@@ -3234,6 +3274,45 @@ bool GetTimeZoneInformation(const ImportCall& call, ImportReturn* result, std::s
 
 // ReadFile(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead,
 // lpOverlapped) on a guest file, synchronously; overlapped reads stop.
+// Whether a handle names nothing the guest could transfer through: no open
+// file or device, event, thread or process handle. INVALID_HANDLE_VALUE counts
+// as nothing although it is also GetCurrentProcess's pseudo-handle, because
+// the file and serial functions treat it that way.
+bool NamesNoGuestObject(const ImportCall& call, std::uint32_t handle)
+{
+    GuestFiles* files = call.services->Files();
+    GuestDeviceSet* devices = call.services->Devices();
+    GuestProcess* process = call.services->Process();
+    const bool is_object = (files != nullptr && files->IsOpen(handle)) ||
+                           (devices != nullptr && devices->IsOpen(handle)) ||
+                           (process != nullptr && handle != GuestProcess::kCurrentProcessHandle &&
+                            (process->IsProcessHandle(handle) || process->FindEvent(handle) != nullptr ||
+                             process->FindThreadHandle(handle) != nullptr));
+    return !is_object;
+}
+
+// ReadFile or WriteFile with an OVERLAPPED on a handle that names nothing:
+// FALSE with ERROR_INVALID_HANDLE, zero bytes through the count, and the
+// OVERLAPPED's Internal set to STATUS_PENDING, as measured on Windows 11 for
+// INVALID_HANDLE_VALUE and a stale handle (task 428).
+bool FailOverlappedTransfer(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kStatusPending = 0x00000103U;
+    std::array<std::uint8_t, 4> value = {};
+    if (call.arguments[3] != 0 && !PutGuestBytes(call, call.arguments[3], value, error))
+    {
+        return false;
+    }
+    StoreDword(value, 0, kStatusPending);
+    if (!PutGuestBytes(call, call.arguments[4], value, error))
+    {
+        return false;
+    }
+    result->eax = 0;
+    call.services->SetLastError(kWin32ErrorInvalidHandle);
+    return true;
+}
+
 bool ReadFile(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     if (!CheckArgumentCount(call, result, 5, "kernel32 ReadFile argument shape is invalid", error) ||
@@ -3243,7 +3322,11 @@ bool ReadFile(const ImportCall& call, ImportReturn* result, std::string* error)
     }
     if (call.arguments[4] != 0)
     {
-        if (error != nullptr) *error = "kernel32 ReadFile with OVERLAPPED is not modelled";
+        if (NamesNoGuestObject(call, call.arguments[0]))
+        {
+            return FailOverlappedTransfer(call, result, error);
+        }
+        if (error != nullptr) *error = "kernel32 ReadFile with OVERLAPPED on an open handle is not modelled";
         return false;
     }
     GuestFiles* files = call.services->Files();
@@ -3279,7 +3362,11 @@ bool WriteFile(const ImportCall& call, ImportReturn* result, std::string* error)
     }
     if (call.arguments[4] != 0)
     {
-        if (error != nullptr) *error = "kernel32 WriteFile with OVERLAPPED is not modelled";
+        if (NamesNoGuestObject(call, call.arguments[0]))
+        {
+            return FailOverlappedTransfer(call, result, error);
+        }
+        if (error != nullptr) *error = "kernel32 WriteFile with OVERLAPPED on an open handle is not modelled";
         return false;
     }
     if (call.arguments[2] > kKernel32MaximumIoBufferSize * 16U)
@@ -3308,6 +3395,101 @@ bool WriteFile(const ImportCall& call, ImportReturn* result, std::string* error)
     }
     result->eax = outcome == kWin32ErrorSuccess ? 1U : 0U;
     call.services->SetLastError(outcome);
+    return true;
+}
+
+// The serial port functions. No COM port opens: CreateFileA("COM1") fails with
+// ERROR_FILE_NOT_FOUND, as on a Windows 11 machine without one. So a guest
+// reaches these only with a handle that names nothing, as EZ2Dancer 2nd MOVE
+// does when it goes on using its failed COM1 handle. As measured on Windows 11,
+// each then returns FALSE with ERROR_INVALID_HANDLE and leaves its outputs
+// alone (task 428).
+bool FailSerialCall(const ImportCall& call,
+                    ImportReturn* result,
+                    std::size_t count,
+                    const char* name,
+                    std::string* error)
+{
+    if (!ReturnZero(call, result, error) || call.arguments.size() != count || call.services == nullptr)
+    {
+        if (error != nullptr && error->empty()) *error = std::string("kernel32 ") + name + " argument shape is invalid";
+        return false;
+    }
+    if (!NamesNoGuestObject(call, call.arguments[0]))
+    {
+        if (error != nullptr) *error = std::string("kernel32 ") + name + " on an open handle is not modelled";
+        return false;
+    }
+    call.services->SetLastError(kWin32ErrorInvalidHandle);
+    return true;
+}
+
+bool SetCommState(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 2, "SetCommState", error);
+}
+
+bool GetCommState(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 2, "GetCommState", error);
+}
+
+bool SetCommTimeouts(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 2, "SetCommTimeouts", error);
+}
+
+bool PurgeComm(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 2, "PurgeComm", error);
+}
+
+bool SetupComm(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 3, "SetupComm", error);
+}
+
+bool SetCommMask(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 2, "SetCommMask", error);
+}
+
+bool ClearCommError(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 3, "ClearCommError", error);
+}
+
+bool WaitCommEvent(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return FailSerialCall(call, result, 3, "WaitCommEvent", error);
+}
+
+// GetOverlappedResult(hFile, lpOverlapped, lpNumberOfBytesTransferred, bWait)
+// for an operation still pending, asked without waiting: FALSE with
+// ERROR_IO_INCOMPLETE and the count left alone, whatever the handle, as
+// measured on Windows 11 (task 428). A failed ReadFile or WriteFile leaves
+// its OVERLAPPED that way. Waiting, or a finished operation, is not modelled,
+// since no transfer here completes asynchronously.
+bool GetOverlappedResult(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kStatusPending = 0x00000103U;
+    constexpr std::uint32_t kErrorIoIncomplete = 996U;
+    if (!CheckArgumentCount(call, result, 4, "kernel32 GetOverlappedResult argument shape is invalid", error) ||
+        call.services == nullptr)
+    {
+        return false;
+    }
+    std::uint32_t internal[1] = {};
+    if (!ReadGuestWords(call, call.arguments[1], internal, error))
+    {
+        return false;
+    }
+    if (internal[0] != kStatusPending || call.arguments[3] != 0)
+    {
+        if (error != nullptr) *error = "kernel32 GetOverlappedResult on a finished or awaited operation is not modelled";
+        return false;
+    }
+    call.services->SetLastError(kErrorIoIncomplete);
     return true;
 }
 
@@ -3406,7 +3588,7 @@ constexpr ResolveOnlyExport kKernel32ResolveOnly[] = {
    
     {"TerminateProcess", 2},
    
-    {"UnhandledExceptionFilter", 1}, {"IsBadCodePtr", 1}, {"GetStringTypeA", 5},
+    {"IsBadCodePtr", 1}, {"GetStringTypeA", 5},
     {"lstrcmpA", 2}, {"lstrlenA", 1}, {"SetEnvironmentVariableA", 2},
     {"CompareStringW", 6}, {"CompareStringA", 6}, {"FlushFileBuffers", 1},
     {"SetStdHandle", 2},
@@ -3493,6 +3675,7 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
         MakeExport("IsProcessorFeaturePresent", 1, &IsProcessorFeaturePresent));
     descriptor.exports.push_back(
         MakeExport("SetUnhandledExceptionFilter", 1, &SetUnhandledExceptionFilter));
+    descriptor.exports.push_back(MakeExport("UnhandledExceptionFilter", 1, &UnhandledExceptionFilter));
     descriptor.exports.push_back(MakeExport("CreateEventA", 4, &CreateEventA));
     descriptor.exports.push_back(MakeExport("SetEvent", 1, &SetEvent));
     descriptor.exports.push_back(MakeExport("ResetEvent", 1, &ResetEvent));
@@ -3505,6 +3688,16 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
         MakeExport("GetTimeZoneInformation", 1, &GetTimeZoneInformation));
     descriptor.exports.push_back(MakeExport("ReadFile", 5, &ReadFile));
     descriptor.exports.push_back(MakeExport("WriteFile", 5, &WriteFile));
+    // EZ2Dancer 2nd MOVE's serial port functions (tasks 427 and 428).
+    descriptor.exports.push_back(MakeExport("SetCommState", 2, &SetCommState));
+    descriptor.exports.push_back(MakeExport("GetCommState", 2, &GetCommState));
+    descriptor.exports.push_back(MakeExport("SetCommTimeouts", 2, &SetCommTimeouts));
+    descriptor.exports.push_back(MakeExport("PurgeComm", 2, &PurgeComm));
+    descriptor.exports.push_back(MakeExport("SetupComm", 3, &SetupComm));
+    descriptor.exports.push_back(MakeExport("SetCommMask", 2, &SetCommMask));
+    descriptor.exports.push_back(MakeExport("ClearCommError", 3, &ClearCommError));
+    descriptor.exports.push_back(MakeExport("GetOverlappedResult", 4, &GetOverlappedResult));
+    descriptor.exports.push_back(MakeExport("WaitCommEvent", 3, &WaitCommEvent));
     descriptor.exports.push_back(MakeExport("SetFilePointer", 4, &SetFilePointer));
     descriptor.exports.push_back(MakeExport("GetFileSize", 2, &GetFileSize));
     descriptor.exports.push_back(MakeExport("GetCurrentDirectoryA", 2, &GetCurrentDirectoryA));

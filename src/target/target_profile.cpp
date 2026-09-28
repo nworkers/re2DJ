@@ -542,8 +542,10 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // prefix. The runtime matches the faulting address, so this is the
             // prefix rather than the helper's entry point.
             entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x0000b565;
-            // The input helper's address is not known yet: output was reached
-            // first and execution stopped there. Zero leaves that direction to
+            // Input has two helpers rather than one, both `in ax, dx` loops
+            // over the four words of the port table at 0x44d410: RVA
+            // 0x0000b169 as the board starts and 0x0000b4cb as it is polled
+            // (task 427). One RVA cannot name both, so zero leaves reads to
             // opcode matching, which the pinned width makes unambiguous.
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0;
             // Autoplay flag of this build. Unlike the EZ2DJ builds the demo never
@@ -570,14 +572,12 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "and its cabinet I/O is the only word-wide board here, over "
                 "ports 0x300 to 0x30c. Its descriptor reports module_address "
                 "0x4c5e, and with local Hardlock material it passes the "
-                "protection and runs original .text: it writes an eight-step "
-                "lamp sequence to port 0x30a through the confirmed helper at "
-                "RVA 0x0000b565, reads its own EZ2Dancer.ini, and then returns "
-                "0 from WinMain and exits through the CRT before opening any "
-                "asset. Its last Hardlock request is a seven-block Function "
-                "0x0011 API_CODE transform that no response row answers; "
-                "whether the game gates on that answer is unresolved. It never "
-                "reads an input port, so the input helper RVA stays unknown.";
+                "protection and runs original .text. Its board writes go "
+                "through the helper at RVA 0x0000b565, and its reads through "
+                "two helpers at RVA 0x0000b169 and 0x0000b4cb, which is why "
+                "reads are matched by opcode. A coin raises the credit count, "
+                "and the game then writes it to COM1 with overlapped WriteFile "
+                "on the handle its failed open left; it plays on both hosts.";
             entry.fingerprint.executable_name = "EZ2Dancer.exe";
             entry.fingerprint.entry_point_rva = 0x00401240;
             entry.fingerprint.size_of_image = 0x0043b000;

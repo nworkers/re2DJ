@@ -316,6 +316,91 @@ void CheckKernel32FileExports(re2dj::test::Context& context)
     RE2DJ_CHECK(context, !handled);
 }
 
+// A COM port that does not open and the serial and overlapped calls a guest
+// then makes on its handle, as measured on Windows 11 (task 428): EZ2Dancer
+// 2nd MOVE goes on writing to its failed COM1 handle.
+void CheckSerialOnFailedPort(re2dj::test::Context& context)
+{
+    Fixture fixture;
+    re2dj::test::MemoryServices services;
+    services.SetFiles(&fixture.files);
+    const auto descriptor = hle::modules::MakeKernel32ModuleDescriptor();
+    const auto call = [&](std::string_view name, std::initializer_list<std::uint32_t> arguments)
+    {
+        return re2dj::test::CallModuleExport(context, services, descriptor, name, arguments);
+    };
+    constexpr std::uint32_t kName = re2dj::test::MemoryServices::kBase + 0x10;
+    constexpr std::uint32_t kCount = re2dj::test::MemoryServices::kBase + 0x80;
+    constexpr std::uint32_t kOutput = re2dj::test::MemoryServices::kBase + 0x84;
+    constexpr std::uint32_t kOverlapped = re2dj::test::MemoryServices::kBase + 0x100;
+    constexpr std::uint32_t kBuffer = re2dj::test::MemoryServices::kBase + 0x140;
+    constexpr std::uint32_t kInvalid = 0xFFFFFFFFU;
+
+    services.Put(kName, "COM1");
+    RE2DJ_CHECK_EQ(context, call("CreateFileA", {kName, 0xC0000000U, 0, 0, 3, 0x40000080U, 0}).eax, kInvalid);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorFileNotFound);
+
+    // Overlapped transfers fail with zero bytes and a pending OVERLAPPED, for
+    // INVALID_HANDLE_VALUE and a handle that names nothing alike.
+    for (const std::uint32_t handle : {kInvalid, 0x1234U})
+    {
+        for (const char* name : {"WriteFile", "ReadFile"})
+        {
+            services.PutU32(kCount, 0xAAAAAAAAU);
+            services.PutU32(kOverlapped, 0);
+            services.SetLastError(0);
+            RE2DJ_CHECK_EQ(context, call(name, {handle, kBuffer, 4, kCount, kOverlapped}).eax, 0U);
+            RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidHandle);
+            RE2DJ_CHECK_EQ(context, services.U32(kCount), 0U);
+            RE2DJ_CHECK_EQ(context, services.U32(kOverlapped), 0x103U);
+        }
+        // Each serial function fails the same way and leaves its outputs alone.
+        const auto serial = [&](std::string_view name, std::initializer_list<std::uint32_t> arguments)
+        {
+            services.PutU32(kOutput, 0xAAAAAAAAU);
+            services.SetLastError(0);
+            RE2DJ_CHECK_EQ(context, call(name, arguments).eax, 0U);
+            RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidHandle);
+            RE2DJ_CHECK_EQ(context, services.U32(kOutput), 0xAAAAAAAAU);
+        };
+        serial("SetCommState", {handle, kBuffer});
+        serial("GetCommState", {handle, kBuffer});
+        serial("SetCommTimeouts", {handle, kBuffer});
+        serial("PurgeComm", {handle, 0xF});
+        serial("SetupComm", {handle, 0x1000, 0x1000});
+        serial("SetCommMask", {handle, 0});
+        serial("ClearCommError", {handle, kOutput, kBuffer});
+        serial("WaitCommEvent", {handle, kOutput, kOverlapped});
+        // The pending OVERLAPPED reads back as incomplete without waiting.
+        services.PutU32(kOverlapped, 0x103U);
+        services.PutU32(kCount, 0xAAAAAAAAU);
+        RE2DJ_CHECK_EQ(context, call("GetOverlappedResult", {handle, kOverlapped, kCount, 0}).eax, 0U);
+        RE2DJ_CHECK_EQ(context, services.LastError(), 996U);
+        RE2DJ_CHECK_EQ(context, services.U32(kCount), 0xAAAAAAAAU);
+    }
+    // GetCurrentProcess's pseudo-handle closes successfully; a stale one does not.
+    services.SetLastError(0);
+    RE2DJ_CHECK_EQ(context, call("CloseHandle", {kInvalid}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 0U);
+    RE2DJ_CHECK_EQ(context, call("CloseHandle", {0x1234U}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidHandle);
+
+    // On an open file, overlapped transfers and serial calls stay unmodelled,
+    // as does waiting on a pending OVERLAPPED.
+    services.Put(kName, "D:\\ez2dj\\DATA\\SONG.EZ");
+    const std::uint32_t file = call("CreateFileA", {kName, 0x80000000U, 0, 0, 3, 0x80, 0}).eax;
+    const auto stops = [&](std::string_view name, std::initializer_list<std::uint32_t> arguments)
+    {
+        bool handled = true;
+        re2dj::test::CallModuleExport(context, services, descriptor, name, arguments, &handled);
+        RE2DJ_CHECK(context, !handled);
+    };
+    stops("ReadFile", {file, kBuffer, 4, kCount, kOverlapped});
+    stops("ClearCommError", {file, kOutput, kBuffer});
+    stops("GetOverlappedResult", {kInvalid, kOverlapped, kCount, 1});
+    call("CloseHandle", {file});
+}
+
 // The current directory starts at the guest root, moves as Windows 11 moves
 // it, and is what relative paths resolve against; the kernel32 exports follow
 // the measured buffer and error rules.
@@ -980,6 +1065,7 @@ void RunGuestFilesTests(re2dj::test::Context& context)
     CheckPathsAndReads(context);
     CheckCopyOnWrite(context);
     CheckKernel32FileExports(context);
+    CheckSerialOnFailedPort(context);
     CheckCurrentDirectory(context);
     CheckFind(context);
     CheckFileAttributes(context);

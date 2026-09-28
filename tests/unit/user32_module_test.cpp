@@ -588,6 +588,65 @@ void CheckCreateWindow(re2dj::test::Context& context)
     RE2DJ_CHECK(context, !handled);
 }
 
+// EZ2Dancer 2nd MOVE's WS_POPUP | WS_VISIBLE | WS_BORDER window gets the same
+// messages as 4th's, with the client area one pixel in on each side, as
+// measured on Windows 11 (design 427).
+void CheckCreateBorderedWindow(re2dj::test::Context& context)
+{
+    using re2dj::test::CallModuleExport;
+    using re2dj::test::MemoryServices;
+    const auto descriptor = re2dj::hle::modules::MakeUser32ModuleDescriptor();
+    MemoryServices services;
+    services.Process()->SetMainImage(0x00400000U, "D:\\ez2dancer\\EZ2Dancer.exe");
+    constexpr std::uint32_t kName = MemoryServices::kBase + 0x40;
+    constexpr std::uint32_t kClass = MemoryServices::kBase + 0x60;
+    services.Put(kName, "EZ2Dancer");
+    const std::uint32_t words[10] = {0x23, 0x00406BAAU, 0, 0, 0, 0, 0, 0x00900011U, 0, kName};
+    for (std::uint32_t index = 0; index < 10; ++index)
+    {
+        services.PutU32(kClass + index * 4, words[index]);
+    }
+    CallModuleExport(context, services, descriptor, "RegisterClassA", {kClass});
+    services.guest_function = [&](const std::vector<std::uint32_t>& arguments) {
+        return CallModuleExport(context, services, descriptor, "DefWindowProcA",
+                                {arguments[0], arguments[1], arguments[2], arguments[3]})
+            .eax;
+    };
+    const std::uint32_t window = CallModuleExport(context, services, descriptor, "CreateWindowExA",
+                                                  {0x40000, kName, kName, 0x90800000U, 0, 0, 640, 480, 0, 0,
+                                                   0x00400000U, 0})
+                                     .eax;
+    RE2DJ_CHECK(context, window != 0);
+    const std::vector<std::uint32_t> expected = {0x81, 0x83, 0x01, 0x05, 0x03, 0x18, 0x46, 0x46,
+                                                 0x1C, 0x86, 0x06, 0x07, 0x85, 0x14, 0x47};
+    std::vector<std::uint32_t> messages;
+    for (const auto& call : services.guest_calls)
+    {
+        messages.push_back(call[1]);
+    }
+    RE2DJ_CHECK(context, messages == expected);
+    if (services.guest_calls.size() == expected.size())
+    {
+        RE2DJ_CHECK_EQ(context, services.guest_calls[3][3], 0x01DE027EU);
+        RE2DJ_CHECK_EQ(context, services.guest_calls[4][3], 0x00010001U);
+    }
+    const re2dj::hle::GuestWindow* created = services.Process()->user().LookupWindow(window);
+    RE2DJ_CHECK(context, created != nullptr);
+    if (created != nullptr)
+    {
+        RE2DJ_CHECK_EQ(context, created->style, 0x94800000U);
+        RE2DJ_CHECK_EQ(context, created->client_left, 1);
+        RE2DJ_CHECK_EQ(context, created->client_top, 1);
+        RE2DJ_CHECK_EQ(context, created->client_right, 639);
+        RE2DJ_CHECK_EQ(context, created->client_bottom, 479);
+    }
+    // WS_DLGFRAME, and so a caption, is still outside the model.
+    bool handled = true;
+    CallModuleExport(context, services, descriptor, "CreateWindowExA",
+                     {0x40000, kName, kName, 0x90400000U, 0, 0, 640, 480, 0, 0, 0x00400000U, 0}, &handled);
+    RE2DJ_CHECK(context, !handled);
+}
+
 // GetStockObject gives the handles Windows 11 gives a 32-bit process, and
 // NULL for the unused index 9 and indices past DC_PEN.
 void CheckStockObjects(re2dj::test::Context& context)
@@ -771,6 +830,7 @@ void RunUser32ModuleTests(re2dj::test::Context& context)
     CheckSystemImages(context);
     CheckRegisterClass(context);
     CheckCreateWindow(context);
+    CheckCreateBorderedWindow(context);
     CheckShowWindow(context);
     CheckEnumDisplaySettings(context);
     CheckStockObjects(context);

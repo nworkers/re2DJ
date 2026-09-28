@@ -6,6 +6,8 @@
 
 #include <time.h>
 
+#include "re2dj/input/ez2dancer_io_port_bus.h"
+#include "re2dj/input/ez2dancer_keyboard_map.h"
 #include "re2dj/input/ez2dj_keyboard_map.h"
 #include "re2dj/input/legacy_io_port_bus.h"
 #include "re2dj/input/virtual_keys.h"
@@ -19,13 +21,17 @@ namespace
 // set before the guest starts and read only from its signal handler, which
 // runs on the guest thread holding the guest lock.
 input::LegacyIoTrapPolicy g_policy;
+// The byte-wide EZ2DJ board, or the word-wide EZ2Dancer board when the
+// profile's width is a word.
 input::LegacyIoPortBus g_bus;
+input::Ez2DancerIoPortBus g_dancer_bus;
 NativeLegacyIoActivity g_activity;
 // The host's keys and the built-in key map, resolved to virtual keys before
 // the guest starts so the signal handler only looks them up.
 const hle::HostInputState* g_input = nullptr;
 std::array<int, static_cast<std::size_t>(input::Ez2DjButton::kCount)> g_button_keys = {};
 std::array<int, 4> g_turntable_keys = {};
+std::array<int, static_cast<std::size_t>(input::Ez2DancerButton::kCount)> g_dancer_keys = {};
 input::Ez2DjTurntables g_turntables;
 
 bool Held(int virtual_key)
@@ -38,6 +44,14 @@ void PollHostInput()
 {
     if (g_input == nullptr)
     {
+        return;
+    }
+    if (g_policy.word_width)
+    {
+        for (std::size_t index = 0; index < g_dancer_keys.size(); ++index)
+        {
+            g_dancer_bus.SetButton(static_cast<input::Ez2DancerButton>(index), Held(g_dancer_keys[index]));
+        }
         return;
     }
     for (std::size_t index = 0; index < g_button_keys.size(); ++index)
@@ -68,14 +82,14 @@ void SetNativeLegacyIo(const input::LegacyIoTrapPolicy& policy, const hle::HostI
     {
         g_turntable_keys[index] = input::ParseKeyName(input::Ez2DjTurntableBindings()[index].default_key);
     }
+    for (const input::Ez2DancerButtonBinding& binding : input::Ez2DancerButtonBindings())
+    {
+        g_dancer_keys[static_cast<std::size_t>(binding.button)] = input::ParseKeyName(binding.default_key);
+    }
     g_turntables = input::Ez2DjTurntables();
     g_policy = policy;
-    // Only the byte-wide EZ2DJ board is modelled here.
-    if (g_policy.word_width)
-    {
-        g_policy.enabled = false;
-    }
     g_bus = input::LegacyIoPortBus();
+    g_dancer_bus = input::Ez2DancerIoPortBus();
     g_activity = {};
 }
 
@@ -101,12 +115,23 @@ bool HandleNativeLegacyIoTrap(NativeTrapRegisters* registers)
         return false;
     }
     const auto port = static_cast<std::uint16_t>(registers->edx);
-    std::uint8_t value = static_cast<std::uint8_t>(registers->eax);
     if (access->read)
     {
         PollHostInput();
     }
-    const bool answered = access->read ? g_bus.ReadByte(port, &value) : g_bus.WriteByte(port, value);
+    std::uint16_t value = 0;
+    bool answered = false;
+    if (access->word)
+    {
+        value = static_cast<std::uint16_t>(registers->eax);
+        answered = access->read ? g_dancer_bus.ReadWord(port, &value) : g_dancer_bus.WriteWord(port, value);
+    }
+    else
+    {
+        std::uint8_t byte = static_cast<std::uint8_t>(registers->eax);
+        answered = access->read ? g_bus.ReadByte(port, &byte) : g_bus.WriteByte(port, byte);
+        value = byte;
+    }
     if (g_activity.reads + g_activity.writes + g_activity.unanswered == 0)
     {
         g_activity.first_port = port;

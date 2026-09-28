@@ -451,8 +451,8 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context, !profile.run_defaults.hle_windows_directory);
             RE2DJ_CHECK(context, !profile.run_defaults.demo_volume.has_value());
             // The EZ2Dancer board is word-wide, and its output helper is
-            // confirmed from the guest's own privileged fault. The input
-            // helper has not been reached yet, so it stays zero.
+            // confirmed from the guest's own privileged fault. Its reads come
+            // from two helpers (task 427), so they go by opcode.
             RE2DJ_CHECK(context, profile.run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context, profile.run_defaults.lptdi.legacy_io_ports_default);
             RE2DJ_CHECK(context, profile.run_defaults.lptdi.legacy_io_width ==

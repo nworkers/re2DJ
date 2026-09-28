@@ -283,10 +283,13 @@ constexpr std::uint32_t kWmNcActivate = 0x0086;
 constexpr std::uint32_t kWsPopup = 0x80000000U;
 constexpr std::uint32_t kWsVisible = 0x10000000U;
 constexpr std::uint32_t kWsClipSiblings = 0x04000000U;
+// A thin border, one pixel (SM_CXBORDER) on each side, as EZ2Dancer 2nd MOVE
+// gives its WS_POPUP window.
+constexpr std::uint32_t kWsBorder = 0x00800000U;
 // Styles whose geometry or ownership the model does not have: WS_CHILD,
-// WS_MINIMIZE, WS_MAXIMIZE, WS_CAPTION (WS_BORDER | WS_DLGFRAME), and
+// WS_MINIMIZE, WS_MAXIMIZE, WS_DLGFRAME (and so WS_CAPTION), and
 // WS_THICKFRAME.
-constexpr std::uint32_t kWsUnmodelled = 0x40000000U | 0x20000000U | 0x01000000U | 0x00C00000U | 0x00040000U;
+constexpr std::uint32_t kWsUnmodelled = 0x40000000U | 0x20000000U | 0x01000000U | 0x00400000U | 0x00040000U;
 constexpr std::uint32_t kWsExAppWindow = 0x00040000U;
 constexpr std::uint32_t kCwUseDefault = 0x80000000U;
 constexpr std::uint32_t kWaInactive = 0;
@@ -551,7 +554,9 @@ bool ChangeDisplaySettingsExA(const ImportCall& call, ImportReturn* result, std:
 
 // CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, x, y,
 // nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam) for a top-level
-// WS_POPUP window without a menu, the shape 4th creates. The messages and
+// WS_POPUP window without a menu, the shape 4th creates, with or without
+// WS_BORDER (EZ2Dancer 2nd MOVE): the border changes only the client area
+// DefWindowProc's WM_NCCALCSIZE gives, and so WM_SIZE and WM_MOVE. The messages and
 // their arguments follow what Windows 11 sends such a window (WOW64):
 // WM_NCCREATE, WM_NCCALCSIZE, WM_CREATE, WM_SIZE, WM_MOVE, and for
 // WS_VISIBLE the show and activation sequence (ShowHiddenWindow). Messages Windows adds from
@@ -751,6 +756,31 @@ bool DefWindowProcA(const ImportCall& call, ImportReturn* result, std::string* e
         }
         return Succeed(error);
     }
+    case kWmNcCalcSize:
+    {
+        // WM_NCCALCSIZE(FALSE, RECT*): the client area is the window
+        // rectangle, one pixel in on each side with WS_BORDER, as measured.
+        if (call.arguments[2] != 0 || (window->style & kWsBorder) == 0)
+        {
+            return Succeed(error);
+        }
+        std::array<std::uint8_t, 16> rect{};
+        std::string memory_error;
+        if (!call.services->ReadGuestBytes(runtime::GuestAddress(call.arguments[3]), rect, &memory_error))
+        {
+            return Fail(error, "user32 DefWindowProcA cannot read the WM_NCCALCSIZE rectangle: " + memory_error);
+        }
+        std::vector<std::uint8_t> inset;
+        PutU32(&inset, ReadU32(&rect[0]) + 1);
+        PutU32(&inset, ReadU32(&rect[4]) + 1);
+        PutU32(&inset, ReadU32(&rect[8]) - 1);
+        PutU32(&inset, ReadU32(&rect[12]) - 1);
+        if (!call.services->WriteGuestBytes(runtime::GuestAddress(call.arguments[3]), inset, &memory_error))
+        {
+            return Fail(error, "user32 DefWindowProcA cannot write the WM_NCCALCSIZE rectangle: " + memory_error);
+        }
+        return Succeed(error);
+    }
     case kWmCreate:
     case kWmMove:
     case kWmSize:
@@ -759,7 +789,6 @@ bool DefWindowProcA(const ImportCall& call, ImportReturn* result, std::string* e
     case kWmShowWindow:
     case kWmActivateApp:
     case kWmWindowPosChanging:
-    case kWmNcCalcSize:
     case kWmNcPaint:
         return Succeed(error);
     default:

@@ -1,5 +1,61 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.56 (2026-09-29)
+
+### 한국어
+
+EZ2Dancer 2nd MOVE(ez2d2m)가 Linux x86·x64에서 실행됩니다. 타이틀 화면을 거쳐, 코인을 넣으면 곡 선택과 플레이까지 진행합니다. EZ2Dancer 보드의 키 배치는 Windows와 Linux가 함께 쓰는 공용 core로 옮겼습니다. 새 동작은 Windows 11에서 측정한 값을 따릅니다.
+
+#### 1. Linux ez2d2m 실행 (작업 427)
+- **창**: `CreateWindowExA`가 `WS_BORDER`를 받습니다. `DefWindowProcA`의 `WM_NCCALCSIZE`는 측정대로 테두리 창의 사각형을 사방 1픽셀씩 줄입니다.
+- **예외 보고**: `UnhandledExceptionFilter`가 처리되지 않은 게스트 예외의 코드·주소·인자를 실행 결과에 남기고 멈춥니다.
+- **EZ2Dancer 보드**: Linux IO trap이 word 폭 보드에 답합니다. 전에는 word 폭 보드가 설정되면 trap이 꺼졌습니다. 키 배치 표는 공용 `ez2dancer_keyboard_map`으로 옮겨 Windows 입력 코드도 같이 씁니다. 게임은 입력 helper 두 곳(`0xb169`, `0xb4cb`)에서 보드를 읽기 때문에, 읽기는 opcode로 판정합니다.
+
+#### 2. 열리지 않은 COM1 (작업 428)
+- ez2d2m은 `COM1`을 열지 못해도 그 무효 핸들로 계속 씁니다. 코인을 넣을 때마다 overlapped `WriteFile`을 부르므로, Linux에서는 코인을 넣는 순간 멈췄습니다.
+- 무효 핸들에 대한 다음 호출은 Windows 11 측정대로 실패합니다.
+  - overlapped `ReadFile`·`WriteFile`
+  - 시리얼 함수 8개(`SetCommState`, `GetCommState`, `SetCommTimeouts`, `PurgeComm`, `SetupComm`, `SetCommMask`, `ClearCommError`, `WaitCommEvent`)
+  - `GetOverlappedResult`
+- `CloseHandle(INVALID_HANDLE_VALUE)`는 성공합니다.
+
+#### 3. Windows에 영향을 주는 변경
+- EZ2Dancer 키 배치를 공용 표에서 읽습니다. 기본 키는 바뀌지 않았습니다.
+- 작업 427은 코인이 오르지 않는다고 기록했지만, 키가 전달되지 않아 생긴 오판이었습니다. 코인은 두 host 모두에서 크레딧을 올립니다.
+
+#### 4. 검증
+- Windows x86 CTest 6개와 Linux x64·x86 CTest 4개가 통과합니다. 단위 검사는 5529 / 5526 checks입니다.
+- Linux ez2d2m은 두 폭에서 코인을 넣은 뒤에도 시간 제한까지 멈추지 않았습니다. x64는 곡 선택 화면까지 진행했습니다.
+
+---
+
+### English
+
+EZ2Dancer 2nd MOVE (ez2d2m) runs on Linux x86 and x64. It passes its title screen and, with a coin in, goes on to music select and play. The EZ2Dancer board's key bindings moved into a shared core used by both Windows and Linux. New behaviour follows values measured on Windows 11.
+
+#### 1. Running ez2d2m on Linux (task 427)
+- **Window**: `CreateWindowExA` takes `WS_BORDER`. As measured, `DefWindowProcA`'s `WM_NCCALCSIZE` insets a bordered window's rectangle by one pixel on each side.
+- **Exception report**: `UnhandledExceptionFilter` records the code, address, and parameters of an unhandled guest exception in the run result and stops.
+- **EZ2Dancer board**: The Linux IO trap answers the word-wide board; before, the trap turned itself off for a word-wide board. The key-binding table moved into the shared `ez2dancer_keyboard_map`, which the Windows input code uses too. The game reads the board through two input helpers (`0xb169` and `0xb4cb`), so reads are recognised by opcode.
+
+#### 2. The COM1 port that does not open (task 428)
+- ez2d2m keeps writing through its `COM1` handle even when the port failed to open. It calls overlapped `WriteFile` for every coin, so on Linux it stopped the moment a coin went in.
+- These calls on an invalid handle now fail as measured on Windows 11:
+  - overlapped `ReadFile` and `WriteFile`;
+  - the eight serial functions (`SetCommState`, `GetCommState`, `SetCommTimeouts`, `PurgeComm`, `SetupComm`, `SetCommMask`, `ClearCommError`, `WaitCommEvent`);
+  - `GetOverlappedResult`.
+- `CloseHandle(INVALID_HANDLE_VALUE)` succeeds.
+
+#### 3. Changes that reach Windows
+- EZ2Dancer key bindings are read from the shared table; the default keys are unchanged.
+- Task 427 recorded that a coin did not raise the credit count. That was a misreading, because the key had not reached the game; a coin raises the count on both hosts.
+
+#### 4. Validation
+- All 6 Windows x86 CTest tests and all 4 Linux x64/x86 CTest tests pass (5529 / 5526 unit checks).
+- Linux ez2d2m ran on both widths without stopping until the timeout, even after coins went in; x64 got as far as music select.
+
+---
+
 ## v0.0.55 (2026-09-29)
 
 ### 한국어

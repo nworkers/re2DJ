@@ -2,42 +2,12 @@
 
 #include "keyboard_input_common.h"
 
+#include <string>
+
+#include "re2dj/input/ez2dancer_keyboard_map.h"
+
 namespace re2dj::platform::windows
 {
-namespace
-{
-
-struct ButtonBinding
-{
-    const char* name;
-    re2dj::input::Ez2DancerButton button;
-    // The key this binding carries with no configuration file, written the way
-    // an INI would write it so both go through the same interpretation. These
-    // match config/ez2dancer-io.example.ini, which a unit test enforces.
-    const char* default_key;
-};
-
-constexpr ButtonBinding kButtonBindings[] = {
-    {"p1_left", re2dj::input::Ez2DancerButton::kPlayer1Left, "Q"},
-    {"p1_center", re2dj::input::Ez2DancerButton::kPlayer1Centre, "S"},
-    {"p1_right", re2dj::input::Ez2DancerButton::kPlayer1Right, "R"},
-    {"p2_left", re2dj::input::Ez2DancerButton::kPlayer2Left, "NUMPAD1"},
-    {"p2_center", re2dj::input::Ez2DancerButton::kPlayer2Centre, "NUMPAD2"},
-    {"p2_right", re2dj::input::Ez2DancerButton::kPlayer2Right, "NUMPAD3"},
-    {"p1_sensor_top_left", re2dj::input::Ez2DancerButton::kPlayer1SensorTopLeft, "W"},
-    {"p1_sensor_top_right", re2dj::input::Ez2DancerButton::kPlayer1SensorTopRight, "E"},
-    {"p1_sensor_bottom_left", re2dj::input::Ez2DancerButton::kPlayer1SensorBottomLeft, "A"},
-    {"p1_sensor_bottom_right", re2dj::input::Ez2DancerButton::kPlayer1SensorBottomRight, "D"},
-    {"p2_sensor_top_left", re2dj::input::Ez2DancerButton::kPlayer2SensorTopLeft, "U"},
-    {"p2_sensor_top_right", re2dj::input::Ez2DancerButton::kPlayer2SensorTopRight, "I"},
-    {"p2_sensor_bottom_left", re2dj::input::Ez2DancerButton::kPlayer2SensorBottomLeft, "J"},
-    {"p2_sensor_bottom_right", re2dj::input::Ez2DancerButton::kPlayer2SensorBottomRight, "K"},
-    {"coin", re2dj::input::Ez2DancerButton::kCoin, "F5"},
-    {"test", re2dj::input::Ez2DancerButton::kTest, "F1"},
-    {"service", re2dj::input::Ez2DancerButton::kService, "F2"},
-};
-
-}  // namespace
 
 bool Ez2DancerKeyboardInput::Initialize(const char* path, std::string* error)
 {
@@ -46,17 +16,20 @@ bool Ez2DancerKeyboardInput::Initialize(const char* path, std::string* error)
         return false;
     }
     const bool has_file = path != nullptr && path[0] != '\0';
-    for (const ButtonBinding& binding : kButtonBindings)
+    // The bindings and their defaults are shared with the Linux host.
+    for (const re2dj::input::Ez2DancerButtonBinding& binding : re2dj::input::Ez2DancerButtonBindings())
     {
+        const std::string default_key(binding.default_key);
+        const std::string name(binding.name);
         int key = 0;
-        if (!ParseKeyboardKeyName(binding.default_key, &key))
+        if (!ParseKeyboardKeyName(default_key.c_str(), &key))
         {
-            *error = std::string("built-in default is not a key name: ") + binding.default_key;
+            *error = "built-in default is not a key name: " + default_key;
             return false;
         }
         bool present = false;
         if (has_file &&
-            !ReadKeyboardKeyBinding(path, "buttons", binding.name, &key, &present, error))
+            !ReadKeyboardKeyBinding(path, "buttons", name.c_str(), &key, &present, error))
         {
             return false;
         }

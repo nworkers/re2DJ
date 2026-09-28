@@ -41,10 +41,10 @@ void CheckDescriptor(re2dj::test::Context& context)
     {
         RE2DJ_CHECK_EQ(context, descriptor.aliases[0], std::string("kernel32"));
     }
-    // 93 implemented exports, then 29 the guest only resolves; the first 24
+    // 103 implemented exports, then 28 the guest only resolves; the first 24
     // are checked here and the rest in kernel32_crt_test.cpp.
-    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{122});
-    if (descriptor.exports.size() != 122)
+    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{131});
+    if (descriptor.exports.size() != 131)
     {
         return;
     }
@@ -59,7 +59,7 @@ void CheckDescriptor(re2dj::test::Context& context)
     const std::array<std::uint32_t, 24> argument_counts = {1, 2, 0, 7, 1, 8, 1, 0, 1,
                                                            0, 0, 3, 1, 1, 1, 1,
                                                            3, 4, 3, 4, 2, 1, 5, 5};
-    for (std::size_t index = 93; index < descriptor.exports.size(); ++index)
+    for (std::size_t index = 103; index < descriptor.exports.size(); ++index)
     {
         RE2DJ_CHECK(context,
                     descriptor.exports[index].handler == &re2dj::hle::modules::UnimplementedExport);

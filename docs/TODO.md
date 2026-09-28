@@ -296,7 +296,9 @@
     - [ ] 게스트 스레드의 남은 것: `TerminateThread`(1st의 스레드 종료 시간 초과 경로), `CREATE_SUSPENDED`/`ResumeThread`, `ExitThread`, `GetExitCodeThread`, 스레드별 메시지 큐. import 없이 도는 게스트 코드는 다른 스레드를 막음(설계 417)
     - [ ] Linux `DrawTextA`의 한글(CP949 2바이트)과 가변 폭: `System` 글꼴은 가변 폭("iW" 18px)이라 Unifont 고정 8px와 글자 배치가 다름. 한글이 필요해지면 Unifont 한글 글리프(16×16)를 더 가져옴
     - [x] [작업 399 — FindFirstFileA와 곡·스타일 목록](work-logs/20260927-399-find-files.md). 측정, 제품 VFS 목록 규칙을 core로(Windows VFS·그래픽 60초 기록 전후 같음), Linux `GuestFiles` 검색과 kernel32 세 export, `--api-log-calls`. 코인·시작 뒤 스타일 검색(10개)을 지나 게임 화면 준비 중 `CreateVertexBuffer`에서 정지
-    - [ ] Linux `--io-config`(공용 INI 읽기), EZ2Dancer word 보드, 키·마우스 창 메시지와 마우스 이동량
+    - [x] [작업 427 — Linux ez2d2m](work-logs/20260929-427-ez2d2m-linux.md). 시리얼 함수 resolve-only, `WS_BORDER` 창(측정), 진단용 `UnhandledExceptionFilter`, Linux EZ2Dancer word 보드(공용 키 배치 `ez2dancer_keyboard_map`), 입력 helper 두 곳(`0xb169`·`0xb4cb`)은 opcode 매칭. 두 폭 모두 타이틀 화면까지 돌고 창을 닫을 때까지 실행
+    - [x] [작업 428 — ez2d2m 시리얼 무효 핸들](work-logs/20260929-428-ez2d2m-serial.md). 실패한 COM1 핸들에 대한 overlapped `ReadFile`·`WriteFile`, 시리얼 함수 8개, `GetOverlappedResult`, `CloseHandle(-1)`(측정). 코인이 크레딧을 올린 뒤 멈추던 문제를 고침. 작업 427의 "코인이 오르지 않음"은 키 전달 실패로 인한 오판이었고, 추정 코인 매핑(`0x304` bit 0)은 두 host 모두 동작함
+    - [ ] Linux `--io-config`(공용 INI 읽기), 키·마우스 창 메시지와 마우스 이동량
     - [x] [작업 398 — Linux 소리 출력](work-logs/20260927-398-linux-sound-output.md). `hle::HostAudio`, Linux `dsound.dll` 버퍼의 voice·host 사본(Windows facade 호출 순서), Linux SDL 오디오·SDL3_mixer와 `LinuxHostAudio`, `--audio-gain-db`. 두 폭이 재생 장치를 열고 커서가 장치를 따름(Windows 그래픽·오디오 기록 전후 같음, 스트리밍 lock 횟수만 시간 의존)
     - [ ] 남은 표면 메서드(`Lock`, `GetDC`와 Linux GDI DC, `Blt`, `Flip`), 게임이 도달하는 대로
     - [ ] DirectX 6 facade(`IDirect3D3`)의 텍스처 형식 열거(`FillRgb565Format`)도 공용 core `Rgb565Format`으로. `FindDevice`·Z 형식·`GetCaps`·viewport 변환은 작업 415·416에서 완료
