@@ -63,6 +63,53 @@ struct EnumeratedDisplay
     std::uint32_t monitor = 0;
 };
 
+// Calls the guest's enumeration callback for each device: (lpGUID,
+// lpDriverDescription, lpDriverName, lpContext) and, for the Ex form,
+// hMonitor; a FALSE answer ends the enumeration.
+bool EnumerateDisplays(const ImportCall& call,
+                       GuestProcess& process,
+                       const std::vector<EnumeratedDisplay>& devices,
+                       std::uint32_t callback,
+                       std::uint32_t context,
+                       bool with_monitor,
+                       std::string* error)
+{
+    for (const EnumeratedDisplay& device : devices)
+    {
+        std::vector<std::uint8_t> bytes(kDisplay1DeviceGuid.begin(), kDisplay1DeviceGuid.end());
+        const auto description_offset = static_cast<std::uint32_t>(bytes.size());
+        com::AppendText(&bytes, device.description);
+        const auto name_offset = static_cast<std::uint32_t>(bytes.size());
+        com::AppendText(&bytes, device.name);
+        const std::uint32_t block = com::PlaceTemporary(call, process, bytes);
+        if (block == 0)
+        {
+            return Fail(error, "ddraw " + call.gate.name + " cannot place the device strings");
+        }
+        GuestCall guest_call;
+        guest_call.function = callback;
+        guest_call.arguments = {device.has_guid ? block : 0U, block + description_offset, block + name_offset,
+                                context};
+        if (with_monitor)
+        {
+            guest_call.arguments.push_back(device.monitor);
+        }
+        std::uint32_t keep_going = 0;
+        std::string call_error;
+        const bool called = call.services->CallGuest(&guest_call, &keep_going, &call_error);
+        process.Free(block);
+        if (!called)
+        {
+            return Fail(error, "ddraw " + call.gate.name + " cannot call the callback: " + call_error);
+        }
+        if (keep_going == 0)
+        {
+            break;
+        }
+    }
+    return true;
+}
+
 // DirectDrawEnumerateExA(lpCallback, lpContext, dwFlags) for a system with
 // one monitor, as Windows 11 enumerates it: the primary display driver (no
 // GUID, no monitor), then with DDENUM_ATTACHEDSECONDARYDEVICES the monitor's
@@ -95,36 +142,34 @@ bool DirectDrawEnumerateExA(const ImportCall& call, ImportReturn* result, std::s
     {
         devices.push_back({true, kDisplay1Description, kDisplay1Name, process->user().PrimaryMonitor()});
     }
-    for (const EnumeratedDisplay& device : devices)
+    return EnumerateDisplays(call, *process, devices, callback, context, true, error) &&
+           Succeed(result, kDdOk, error);
+}
+
+// DirectDrawEnumerateA(lpCallback, lpContext), as measured on Windows 11 with
+// one monitor: the primary display driver only (no GUID, the same
+// description and name as the Ex form), then DD_OK whatever the callback
+// answers; a null callback is DDERR_INVALIDPARAMS.
+bool DirectDrawEnumerateA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 2)
     {
-        std::vector<std::uint8_t> bytes(kDisplay1DeviceGuid.begin(), kDisplay1DeviceGuid.end());
-        const auto description_offset = static_cast<std::uint32_t>(bytes.size());
-        com::AppendText(&bytes, device.description);
-        const auto name_offset = static_cast<std::uint32_t>(bytes.size());
-        com::AppendText(&bytes, device.name);
-        const std::uint32_t block = com::PlaceTemporary(call, *process, bytes);
-        if (block == 0)
-        {
-            return Fail(error, "ddraw DirectDrawEnumerateExA cannot place the device strings");
-        }
-        GuestCall guest_call;
-        guest_call.function = callback;
-        guest_call.arguments = {device.has_guid ? block : 0U, block + description_offset, block + name_offset,
-                                context, device.monitor};
-        std::uint32_t keep_going = 0;
-        std::string call_error;
-        const bool called = call.services->CallGuest(&guest_call, &keep_going, &call_error);
-        process->Free(block);
-        if (!called)
-        {
-            return Fail(error, "ddraw DirectDrawEnumerateExA cannot call the callback: " + call_error);
-        }
-        if (keep_going == 0)
-        {
-            break;
-        }
+        return Fail(error, result == nullptr ? "ddraw result is null"
+                                             : "ddraw DirectDrawEnumerateA argument shape is invalid");
     }
-    return Succeed(result, kDdOk, error);
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "ddraw DirectDrawEnumerateA needs the guest process");
+    }
+    if (call.arguments[0] == 0)
+    {
+        return Succeed(result, kDdErrInvalidParams, error);
+    }
+    const std::vector<EnumeratedDisplay> devices = {{false, kPrimaryDescription, kPrimaryName, 0}};
+    return EnumerateDisplays(call, *process, devices, call.arguments[0], call.arguments[1], false, error) &&
+           Succeed(result, kDdOk, error);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +227,14 @@ bool DirectDraw7QueryInterface(const ImportCall& call, ImportReturn* result, std
 // result it refuses with.
 bool DirectDraw7CreateSurface(const ImportCall& call, ImportReturn* result, std::string* error)
 {
-    GuestProcess* process = MethodProcess(call, result, 4, kDirectDrawObject, error);
+    return ddraw::CreateSurfaceOf(call, result, kDirectDrawObject, error);
+}
+
+}  // namespace
+
+bool ddraw::CreateSurfaceOf(const ImportCall& call, ImportReturn* result, std::uint32_t kind, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 4, kind, error);
     if (process == nullptr)
     {
         return false;
@@ -204,11 +256,18 @@ bool DirectDraw7CreateSurface(const ImportCall& call, ImportReturn* result, std:
         return false;
     }
     const dx::SurfacePlan plan = dx::PlanCreateSurface(request, StateOf(*process, call.arguments[0]).display);
+    // A flipping primary says how the guest presents, even when the request
+    // is refused, as the Windows facade records it.
+    if (plan.retains_frames && call.services->Presentation() != nullptr)
+    {
+        call.services->Presentation()->SetRetainBetweenFrames(true);
+    }
     if (plan.result != dx::kDdOk)
     {
         return Succeed(result, plan.result, error);
     }
-    const std::uint32_t surface = ddraw::CreateSurfaces(call, *process, call.arguments[0], plan, error);
+    const std::uint32_t surface =
+        ddraw::CreateSurfaces(call, *process, call.arguments[0], plan, kind == ddraw::kDirectDraw4Object, error);
     if (surface == 0)
     {
         return false;
@@ -220,6 +279,9 @@ bool DirectDraw7CreateSurface(const ImportCall& call, ImportReturn* result, std:
     }
     return Succeed(result, dx::kDdOk, error);
 }
+
+namespace
+{
 
 // IDirectDraw7::GetCaps(this, lpDDDriverCaps, lpDDHELCaps): the shared core's
 // caps into each structure given.
@@ -269,6 +331,70 @@ bool DirectDraw7EnumDisplayModes(const ImportCall& call, ImportReturn* result, s
     return Succeed(result, dx::kDdOk, error);
 }
 
+// IDirectDraw7::EnumSurfaces(this, dwFlags, lpDDSD2, lpContext, lpCallback):
+// the core's plan. The existing surfaces are listed from a snapshot taken
+// first, so a callback that releases one does not disturb the walk; one it
+// has already released is skipped. Each is AddRef'd for the callback, which
+// owns that reference, with its description placed for the length of the
+// call.
+bool DirectDraw7EnumSurfaces(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 5, kDirectDrawObject, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    const std::uint32_t callback = call.arguments[4];
+    switch (dx::PlanEnumSurfaces(call.arguments[1], call.arguments[2] != 0, callback != 0))
+    {
+    case dx::EnumSurfacesPlan::kInvalid:
+        return Succeed(result, dx::kDdErrInvalidParams, error);
+    case dx::EnumSurfacesPlan::kUnmodelled:
+        return Fail(error, CallName(call) + " matching search (flags " + std::to_string(call.arguments[1]) +
+                               ") is not modelled");
+    case dx::EnumSurfacesPlan::kExisting:
+        break;
+    }
+    for (const std::uint32_t surface : ddraw::ExistingSurfaces(*process, call.arguments[0]))
+    {
+        dx::DdSurfaceDesc2 description;
+        if (!ddraw::DescribeSurface(*process, surface, &description))
+        {
+            continue;
+        }
+        process->com().AddRef(surface);
+        GuestCall guest_call;
+        guest_call.function = callback;
+        guest_call.arguments = {surface, 0, call.arguments[3]};
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(&description);
+        guest_call.data.assign(bytes, bytes + sizeof(description));
+        guest_call.data_argument = 1;
+        std::uint32_t answer = 0;
+        std::string call_error;
+        if (!call.services->CallGuest(&guest_call, &answer, &call_error))
+        {
+            return Fail(error, CallName(call) + " cannot call the callback: " + call_error);
+        }
+        if (answer == dx::kEnumCancel)
+        {
+            break;
+        }
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
+// IDirectDraw7::RestoreAllSurfaces(this): no surface of the facade is ever
+// lost, and with nothing lost Windows 11 answers DD_OK and leaves the last
+// error alone.
+bool DirectDraw7RestoreAllSurfaces(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (MethodProcess(call, result, 1, kDirectDrawObject, error) == nullptr)
+    {
+        return false;
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
 // IDirectDraw7::GetDisplayMode(this, lpDDSurfaceDesc2): the mode the object
 // set, 640x480x16 until it sets one.
 bool DirectDraw7GetDisplayMode(const ImportCall& call, ImportReturn* result, std::string* error)
@@ -294,7 +420,21 @@ bool DirectDraw7GetDisplayMode(const ImportCall& call, ImportReturn* result, std
 // than tell the guest DDERR_GENERIC for a failure of the host's own.
 bool DirectDraw7SetCooperativeLevel(const ImportCall& call, ImportReturn* result, std::string* error)
 {
-    GuestProcess* process = MethodProcess(call, result, 3, kDirectDrawObject, error);
+    return ddraw::SetCooperativeLevelOf(call, result, kDirectDrawObject, error);
+}
+
+// IDirectDraw7::SetDisplayMode(this, width, height, bpp, refresh, flags)
+// under the shared core's rules.
+bool DirectDraw7SetDisplayMode(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return ddraw::SetDisplayModeOf(call, result, kDirectDrawObject, error);
+}
+
+}  // namespace
+
+bool ddraw::SetCooperativeLevelOf(const ImportCall& call, ImportReturn* result, std::uint32_t kind, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 3, kind, error);
     if (process == nullptr)
     {
         return false;
@@ -319,11 +459,9 @@ bool DirectDraw7SetCooperativeLevel(const ImportCall& call, ImportReturn* result
     return Succeed(result, hr, error);
 }
 
-// IDirectDraw7::SetDisplayMode(this, width, height, bpp, refresh, flags)
-// under the shared core's rules.
-bool DirectDraw7SetDisplayMode(const ImportCall& call, ImportReturn* result, std::string* error)
+bool ddraw::SetDisplayModeOf(const ImportCall& call, ImportReturn* result, std::uint32_t kind, std::string* error)
 {
-    GuestProcess* process = MethodProcess(call, result, 6, kDirectDrawObject, error);
+    GuestProcess* process = MethodProcess(call, result, 6, kind, error);
     if (process == nullptr)
     {
         return false;
@@ -331,6 +469,9 @@ bool DirectDraw7SetDisplayMode(const ImportCall& call, ImportReturn* result, std
     const dx::DisplayMode mode = {call.arguments[1], call.arguments[2], call.arguments[3]};
     return Succeed(result, dx::SetDisplayMode(&StateOf(*process, call.arguments[0]).display, mode), error);
 }
+
+namespace
+{
 
 bool DirectDraw7GetMonitorFrequency(const ImportCall& call, ImportReturn* result, std::string* error)
 {
@@ -389,7 +530,7 @@ constexpr com::Method kDirectDraw7Methods[] = {
     {"CreateSurface", 4, &DirectDraw7CreateSurface},
     {"DuplicateSurface", 3, &UnimplementedExport},
     {"EnumDisplayModes", 5, &DirectDraw7EnumDisplayModes},
-    {"EnumSurfaces", 5, &UnimplementedExport},
+    {"EnumSurfaces", 5, &DirectDraw7EnumSurfaces},
     {"FlipToGDISurface", 1, &UnimplementedExport},
     {"GetCaps", 3, &DirectDraw7GetCaps},
     {"GetDisplayMode", 2, &DirectDraw7GetDisplayMode},
@@ -405,7 +546,7 @@ constexpr com::Method kDirectDraw7Methods[] = {
     {"WaitForVerticalBlank", 3, &UnimplementedExport},
     {"GetAvailableVidMem", 4, &DirectDraw7GetAvailableVidMem},
     {"GetSurfaceFromDC", 3, &UnimplementedExport},
-    {"RestoreAllSurfaces", 1, &UnimplementedExport},
+    {"RestoreAllSurfaces", 1, &DirectDraw7RestoreAllSurfaces},
     {"TestCooperativeLevel", 1, &UnimplementedExport},
     {"GetDeviceIdentifier", 3, &DirectDraw7GetDeviceIdentifier},
     {"StartModeTest", 4, &UnimplementedExport},
@@ -468,6 +609,54 @@ bool DirectDrawCreateEx(const ImportCall& call, ImportReturn* result, std::strin
     return Succeed(result, kDdOk, error);
 }
 
+// DirectDrawCreate(lpGUID, lplpDD, pUnkOuter) for the primary display: the
+// DirectX 6 DirectDraw object EZ2DJ 1st asks IDirectDraw4 and IDirect3D3 of,
+// as the Windows product's DX6 facade gives it (one object for IDirectDraw
+// and IDirectDraw4). A null lplpDD is DDERR_INVALIDPARAMS and aggregation
+// CLASS_E_NOAGGREGATION, as the facade answers; a device GUID stops.
+bool DirectDrawCreate(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kClassENoAggregation = 0x80040110U;
+    if (result == nullptr || call.arguments.size() != 3)
+    {
+        return Fail(error, result == nullptr ? "ddraw result is null"
+                                             : "ddraw DirectDrawCreate argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "ddraw DirectDrawCreate needs the guest process");
+    }
+    if (call.arguments[0] != 0)
+    {
+        return Fail(error, "ddraw DirectDrawCreate has no model of a device GUID");
+    }
+    if (call.arguments[1] == 0)
+    {
+        return Succeed(result, kDdErrInvalidParams, error);
+    }
+    if (!com::WriteWord(call, call.arguments[1], 0, error))
+    {
+        return false;
+    }
+    if (call.arguments[2] != 0)
+    {
+        return Succeed(result, kClassENoAggregation, error);
+    }
+    const std::uint32_t direct_draw = ddraw::CreateDirectDraw4(call, *process, error);
+    if (direct_draw == 0)
+    {
+        return false;
+    }
+    if (!com::WriteWord(call, call.arguments[1], direct_draw, error))
+    {
+        process->com().Release(*process, direct_draw);
+        return false;
+    }
+    return Succeed(result, kDdOk, error);
+}
+
 }  // namespace
 
 GuestModuleDescriptor MakeDdrawModuleDescriptor()
@@ -477,11 +666,21 @@ GuestModuleDescriptor MakeDdrawModuleDescriptor()
     descriptor.aliases = {"ddraw"};
     descriptor.exports.push_back(com::MakeExport("DirectDrawEnumerateExA", 3, &DirectDrawEnumerateExA));
     descriptor.exports.push_back(com::MakeExport("DirectDrawCreateEx", 4, &DirectDrawCreateEx));
+    descriptor.exports.push_back(com::MakeExport("DirectDrawEnumerateA", 2, &DirectDrawEnumerateA));
+    descriptor.exports.push_back(com::MakeExport("DirectDrawCreate", 3, &DirectDrawCreate));
     // Interface methods, reached only through the vtables they fill.
     com::AddMethods(&descriptor, ddraw::kDirectDraw7, kDirectDraw7Methods);
     com::AddMethods(&descriptor, ddraw::kDirect3D7, ddraw::Direct3D7Methods());
     com::AddMethods(&descriptor, ddraw::kDirectDrawSurface7, ddraw::DirectDrawSurface7Methods());
     com::AddMethods(&descriptor, ddraw::kDirect3DDevice7, ddraw::Direct3DDevice7Methods());
+    com::AddMethods(&descriptor, ddraw::kDirect3DVertexBuffer7, ddraw::Direct3DVertexBuffer7Methods());
+    com::AddMethods(&descriptor, ddraw::kDirect3DVertexBuffer, ddraw::Direct3DVertexBufferMethods());
+    com::AddMethods(&descriptor, ddraw::kDirectDraw4, ddraw::DirectDraw4Methods());
+    com::AddMethods(&descriptor, ddraw::kDirect3D3, ddraw::Direct3D3Methods());
+    com::AddMethods(&descriptor, ddraw::kDirectDrawSurface4, ddraw::DirectDrawSurface4Methods());
+    com::AddMethods(&descriptor, ddraw::kDirect3DDevice3, ddraw::Direct3DDevice3Methods());
+    com::AddMethods(&descriptor, ddraw::kDirect3DViewport3, ddraw::Direct3DViewport3Methods());
+    com::AddMethods(&descriptor, ddraw::kDirect3DTexture2, ddraw::Direct3DTexture2Methods());
     return descriptor;
 }
 

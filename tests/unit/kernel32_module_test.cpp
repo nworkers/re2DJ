@@ -41,10 +41,10 @@ void CheckDescriptor(re2dj::test::Context& context)
     {
         RE2DJ_CHECK_EQ(context, descriptor.aliases[0], std::string("kernel32"));
     }
-    // 65 implemented exports, then 32 the guest only resolves; the first 24
+    // 93 implemented exports, then 29 the guest only resolves; the first 24
     // are checked here and the rest in kernel32_crt_test.cpp.
-    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{97});
-    if (descriptor.exports.size() != 97)
+    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{122});
+    if (descriptor.exports.size() != 122)
     {
         return;
     }
@@ -59,7 +59,7 @@ void CheckDescriptor(re2dj::test::Context& context)
     const std::array<std::uint32_t, 24> argument_counts = {1, 2, 0, 7, 1, 8, 1, 0, 1,
                                                            0, 0, 3, 1, 1, 1, 1,
                                                            3, 4, 3, 4, 2, 1, 5, 5};
-    for (std::size_t index = 65; index < descriptor.exports.size(); ++index)
+    for (std::size_t index = 93; index < descriptor.exports.size(); ++index)
     {
         RE2DJ_CHECK(context,
                     descriptor.exports[index].handler == &re2dj::hle::modules::UnimplementedExport);
@@ -303,12 +303,12 @@ void CheckProcessExports(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, CallExport(context, services, "GetVersionExA", {kInfo}).eax, 0U);
     RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInsufficientBuffer);
 
-    // Sleep is only resolved so far: a call fails naming the export.
+    // TerminateThread is only resolved so far: a call fails naming the export.
     bool handled = true;
     std::string error;
-    CallExport(context, services, "Sleep", {1}, &handled, &error);
+    CallExport(context, services, "TerminateThread", {0, 0}, &handled, &error);
     RE2DJ_CHECK(context, !handled);
-    RE2DJ_CHECK(context, error.find("kernel32.dll!Sleep") != std::string::npos);
+    RE2DJ_CHECK(context, error.find("kernel32.dll!TerminateThread") != std::string::npos);
 }
 
 void CheckMemoryExports(re2dj::test::Context& context)

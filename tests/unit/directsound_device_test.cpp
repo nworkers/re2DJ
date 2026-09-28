@@ -71,6 +71,32 @@ void CheckCaps(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, ds::CheckDuplicate(false), ds::kDsOk);
 }
 
+// Control ranges, and silent playback: a looping buffer wraps, a one-shot
+// buffer finishes at its end.
+void CheckControls(re2dj::test::Context& context)
+{
+    RE2DJ_CHECK_EQ(context, ds::WrapPosition(1050, 1000), 50U);
+    RE2DJ_CHECK_EQ(context, ds::WrapPosition(5, 0), 0U);
+    RE2DJ_CHECK_EQ(context, ds::ClampVolume(100), 0);
+    RE2DJ_CHECK_EQ(context, ds::ClampVolume(-20000), -10000);
+    RE2DJ_CHECK_EQ(context, ds::ClampPan(20000), 10000);
+    const ds::WaveFormatEx format = {ds::kWaveFormatPcm, 2, 22050, 88200, 4, 16, 0};
+    RE2DJ_CHECK_EQ(context, ds::ResolveFrequency(0, format), 22050U);
+    RE2DJ_CHECK_EQ(context, ds::ResolveFrequency(11025, format), 11025U);
+    RE2DJ_CHECK_EQ(context, ds::BufferStatus(true, true), ds::kDsbStatusPlaying | ds::kDsbStatusLooping);
+    RE2DJ_CHECK_EQ(context, ds::BufferStatus(false, true), 0U);
+
+    // 22050 frames of 4 bytes a second: 100 ms moves 8820 bytes.
+    ds::SilentPlayback looped = ds::AdvanceSilentPlayback(1000, 8000, 22050, 4, true, 100);
+    RE2DJ_CHECK_EQ(context, looped.position, (1000U + 8820U) % 8000U);
+    RE2DJ_CHECK(context, !looped.finished);
+    ds::SilentPlayback once = ds::AdvanceSilentPlayback(1000, 8000, 22050, 4, false, 50);
+    RE2DJ_CHECK_EQ(context, once.position, 1000U + 4410U);
+    once = ds::AdvanceSilentPlayback(1000, 8000, 22050, 4, false, 100);
+    RE2DJ_CHECK(context, once.finished);
+    RE2DJ_CHECK_EQ(context, once.position, 0U);
+}
+
 }  // namespace
 
 void RunDirectSoundDeviceTests(re2dj::test::Context& context)
@@ -78,4 +104,5 @@ void RunDirectSoundDeviceTests(re2dj::test::Context& context)
     CheckPlans(context);
     CheckLocks(context);
     CheckCaps(context);
+    CheckControls(context);
 }

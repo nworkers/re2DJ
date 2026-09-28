@@ -3,14 +3,18 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <initializer_list>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "memory_services.h"
 #include "re2dj/hle/guest_user.h"
 #include "re2dj/hle/modules/gdi32_module.h"
 #include "re2dj/hle/win32_errors.h"
+#include "re2dj/hle/wsprintf.h"
 #include "test_support.h"
 
 namespace
@@ -35,10 +39,10 @@ void CheckDescriptor(re2dj::test::Context& context)
     {
         RE2DJ_CHECK_EQ(context, descriptor.aliases[0], std::string("user32"));
     }
-    // Thirteen implemented exports from GetActiveWindow to GetWindowLongA,
-    // then 24 resolve-only exports.
-    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{37});
-    if (descriptor.exports.size() != 37)
+    // Nineteen implemented exports from GetActiveWindow to DispatchMessageA,
+    // then 18 resolve-only exports.
+    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{40});
+    if (descriptor.exports.size() != 40)
     {
         return;
     }
@@ -139,8 +143,14 @@ void CheckResolveOnlyCursors(re2dj::test::Context& context)
         {{"CreateCursor", 7}, {"DestroyCursor", 1}, {"SetCursor", 1}}};
     for (std::size_t index = 0; index < cursors.size(); ++index)
     {
-        const auto& export_descriptor = descriptor.exports[13 + index];
-        RE2DJ_CHECK_EQ(context, export_descriptor.name, cursors[index].first);
+        const auto found = std::find_if(descriptor.exports.begin(), descriptor.exports.end(),
+                                        [&](const auto& entry) { return entry.name == cursors[index].first; });
+        RE2DJ_CHECK(context, found != descriptor.exports.end());
+        if (found == descriptor.exports.end())
+        {
+            continue;
+        }
+        const auto& export_descriptor = *found;
         RE2DJ_CHECK_EQ(context, export_descriptor.argument_count, cursors[index].second);
         re2dj::runtime::ImportGate gate;
         gate.module = descriptor.name;
@@ -166,6 +176,9 @@ void CheckThreadTimer(re2dj::test::Context& context)
     using re2dj::test::MemoryServices;
     const auto descriptor = re2dj::hle::modules::MakeUser32ModuleDescriptor();
     MemoryServices services;
+    re2dj::hle::GuestClockReading clock;
+    clock.tick_ms = 1000;
+    services.SetClock(clock);
     const std::uint32_t first = re2dj::test::CallModuleExport(
         context, services, descriptor, "SetTimer", {0, 0, 0x8000, 0x00aeaddbU}).eax;
     RE2DJ_CHECK(context, first != 0);
@@ -189,6 +202,49 @@ void CheckThreadTimer(re2dj::test::Context& context)
     re2dj::test::CallModuleExport(
         context, services, descriptor, "SetTimer", {0x10000, 1, 50, 0}, &handled, &error);
     RE2DJ_CHECK(context, !handled);
+
+    // The message loop, as measured: nothing is due at first and the MSG is
+    // left alone; a due timer's WM_TIMER leaves the queue and restarts its
+    // interval; PM_NOREMOVE shows it without taking it; DispatchMessageA
+    // calls a live timer's procedure with the tick, and nothing else.
+    const auto call = [&](const char* name, std::initializer_list<std::uint32_t> arguments) {
+        return re2dj::test::CallModuleExport(context, services, descriptor, name, arguments).eax;
+    };
+    constexpr std::uint32_t kMsg = MemoryServices::kBase + 0x200;
+    services.PutU32(kMsg + 4, 0xAAAAAAAAU);
+    clock.tick_ms = 1005;
+    services.SetClock(clock);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 1}), 0U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 4), 0xAAAAAAAAU);
+    clock.tick_ms = 1010;
+    services.SetClock(clock);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 1}), 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 4), 0x0113U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 8), second);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 16), 1010U);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 1}), 0U);
+    clock.tick_ms = 1050;
+    services.SetClock(clock);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 0}), 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 8), first);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 0}), 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 8), first);
+    RE2DJ_CHECK_EQ(context, call("TranslateMessage", {kMsg}), 0U);
+
+    services.guest_function = [](const std::vector<std::uint32_t>&) { return 7U; };
+    services.guest_calls.clear();
+    clock.tick_ms = 1060;
+    services.SetClock(clock);
+    RE2DJ_CHECK_EQ(context, call("DispatchMessageA", {kMsg}), 7U);
+    RE2DJ_CHECK_EQ(context, services.guest_calls.size(), std::size_t{1});
+    if (services.guest_calls.size() == 1)
+    {
+        const std::vector<std::uint32_t> expected = {0, 0x0113U, first, 1060U};
+        RE2DJ_CHECK(context, services.guest_calls[0] == expected);
+    }
+    services.PutU32(kMsg + 12, 0x12345678U);
+    RE2DJ_CHECK_EQ(context, call("DispatchMessageA", {kMsg}), 0U);
+    RE2DJ_CHECK_EQ(context, services.guest_calls.size(), std::size_t{1});
 }
 
 // LoadIconA and LoadCursorA serve the system set by ID with one shared
@@ -254,6 +310,109 @@ void CheckRegisterClass(re2dj::test::Context& context)
         RE2DJ_CHECK_EQ(context, window_class->window_extra, 8U);
         RE2DJ_CHECK_EQ(context, window_class->background, 0x00900011U);
     }
+}
+
+// ShowWindow(SW_SHOW) of a window created hidden, as 1st shows its window:
+// the messages a WS_VISIBLE creation sends, 0, and the last error 0, as
+// measured on Windows 11; an unknown window is ERROR_INVALID_WINDOW_HANDLE,
+// and another show command stops.
+void CheckShowWindow(re2dj::test::Context& context)
+{
+    using re2dj::test::CallModuleExport;
+    using re2dj::test::MemoryServices;
+    const auto descriptor = re2dj::hle::modules::MakeUser32ModuleDescriptor();
+    MemoryServices services;
+    services.Process()->SetMainImage(0x00400000U, "D:\\ez2dj\\Ez2DJ.exe");
+    constexpr std::uint32_t kName = MemoryServices::kBase + 0x40;
+    constexpr std::uint32_t kClass = MemoryServices::kBase + 0x60;
+    services.Put(kName, "EZ2DJ");
+    const std::uint32_t words[10] = {0x23, 0x00406BAAU, 0, 0, 0, 0, 0, 0x00900011U, 0, kName};
+    for (std::uint32_t index = 0; index < 10; ++index)
+    {
+        services.PutU32(kClass + index * 4, words[index]);
+    }
+    CallModuleExport(context, services, descriptor, "RegisterClassA", {kClass});
+    services.guest_function = [&](const std::vector<std::uint32_t>& arguments) {
+        return CallModuleExport(context, services, descriptor, "DefWindowProcA",
+                                {arguments[0], arguments[1], arguments[2], arguments[3]})
+            .eax;
+    };
+    const std::uint32_t hidden = CallModuleExport(context, services, descriptor, "CreateWindowExA",
+                                                  {0x40000, kName, kName, 0x80000000U, 0, 0, 640, 480, 0, 0,
+                                                   0x00400000U, 0})
+                                     .eax;
+    RE2DJ_CHECK(context, hidden != 0);
+    services.guest_calls.clear();
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ShowWindow", {hidden, 5}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 0U);
+    const std::vector<std::uint32_t> expected = {0x18, 0x46, 0x46, 0x1C, 0x86, 0x06, 0x07, 0x85, 0x14, 0x47};
+    std::vector<std::uint32_t> messages;
+    for (const auto& call : services.guest_calls)
+    {
+        messages.push_back(call[1]);
+    }
+    RE2DJ_CHECK(context, messages == expected);
+    RE2DJ_CHECK_EQ(context, services.Process()->user().active_window(), hidden);
+    RE2DJ_CHECK_EQ(context, services.Process()->user().focus_window(), hidden);
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ShowWindow", {hidden + 4, 5}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidWindowHandle);
+    bool handled = true;
+    CallModuleExport(context, services, descriptor, "ShowWindow", {hidden, 1}, &handled);
+    RE2DJ_CHECK(context, !handled);
+}
+
+// EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS) writes the host desktop's
+// mode into the DEVMODEA bytes Windows 11 writes, leaving the rest alone.
+void CheckEnumDisplaySettings(re2dj::test::Context& context)
+{
+    using re2dj::test::CallModuleExport;
+    using re2dj::test::MemoryServices;
+    const auto descriptor = re2dj::hle::modules::MakeUser32ModuleDescriptor();
+    MemoryServices services;
+    re2dj::test::InputPresentation host;
+    constexpr std::uint32_t kDevMode = MemoryServices::kBase + 0x100;
+    for (std::uint32_t offset = 0; offset < 156; ++offset)
+    {
+        services.Byte(kDevMode + offset) = 0xCC;
+    }
+    bool handled = true;
+    CallModuleExport(context, services, descriptor, "EnumDisplaySettingsA", {0, 0xFFFFFFFFU, kDevMode}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    host.desktop = {3840, 2160, 32, 60};
+    services.presentation = &host;
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context,
+                   CallModuleExport(context, services, descriptor, "EnumDisplaySettingsA", {0, 0xFFFFFFFFU, kDevMode}).eax,
+                   1U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode), 0x00444443U);
+    RE2DJ_CHECK_EQ(context, services.Byte(kDevMode + 4), std::uint8_t{0xCC});
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 32), 0x04010401U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 36), 124U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 40), 0x207C00A0U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 44), 0U);
+    RE2DJ_CHECK_EQ(context, services.Byte(kDevMode + 70), std::uint8_t{0});
+    RE2DJ_CHECK_EQ(context, services.Byte(kDevMode + 71), std::uint8_t{0xCC});
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 104), 32U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 108), 3840U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 112), 2160U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 120), 60U);
+    RE2DJ_CHECK_EQ(context, services.Byte(kDevMode + 124), std::uint8_t{0xCC});
+    // Enumeration by index is not modelled.
+    handled = true;
+    CallModuleExport(context, services, descriptor, "EnumDisplaySettingsA", {0, 0, kDevMode}, &handled);
+    RE2DJ_CHECK(context, !handled);
+
+    // ChangeDisplaySettingsExA is absorbed as on the Windows product: success,
+    // the last error 0, the desktop unchanged.
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context,
+                   CallModuleExport(context, services, descriptor, "ChangeDisplaySettingsExA", {0, kDevMode, 0, 1, 0}).eax,
+                   0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 0U);
+    RE2DJ_CHECK_EQ(context, services.U32(kDevMode + 108), 3840U);
 }
 
 // CreateWindowExA sends 4th's WS_POPUP | WS_VISIBLE window the messages
@@ -348,6 +507,53 @@ void CheckCreateWindow(re2dj::test::Context& context)
     CallModuleExport(context, services, descriptor, "GetWindowLongA", {window + 4, 0xFFFFFFFAU});
     RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidWindowHandle);
 
+    // The cursor stays at the screen origin; ScreenToClient takes off the
+    // window's client origin; a null point is ERROR_NOACCESS.
+    constexpr std::uint32_t kPoint = MemoryServices::kBase + 0x280;
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetCursorPos", {kPoint}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kPoint), 0U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ScreenToClient", {window, kPoint}).eax, 1U);
+    if (created != nullptr)
+    {
+        RE2DJ_CHECK_EQ(context, services.U32(kPoint),
+                       static_cast<std::uint32_t>(-(created->x + created->client_left)));
+    }
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetCursorPos", {0}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorNoAccess);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ScreenToClient", {window + 4, kPoint}).eax,
+                   0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidWindowHandle);
+
+    // GetAsyncKeyState: every key up, the last error untouched inside 0..255
+    // and ERROR_INVALID_PARAMETER outside it.
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetAsyncKeyState", {9}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
+    CallModuleExport(context, services, descriptor, "GetAsyncKeyState", {0x10009U});
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidParameter);
+
+    // With a host, a held key reads 0x8000 and the pointer over the guest
+    // window is its client position on the screen.
+    re2dj::test::InputPresentation host;
+    services.presentation = &host;
+    host.input.virtual_keys.set(9);
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetAsyncKeyState", {9}).eax, 0x8000U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetAsyncKeyState", {10}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetAsyncKeyState", {0x10009U}).eax, 0U);
+    host.input.cursor_window = window;
+    host.input.cursor_x = 100;
+    host.input.cursor_y = 50;
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetCursorPos", {kPoint}).eax, 1U);
+    if (created != nullptr)
+    {
+        RE2DJ_CHECK_EQ(context, services.U32(kPoint), static_cast<std::uint32_t>(created->x + created->client_left + 100));
+        RE2DJ_CHECK_EQ(context, services.U32(kPoint + 4), static_cast<std::uint32_t>(created->y + created->client_top + 50));
+    }
+    services.presentation = nullptr;
+
     // UpdateWindow sends WM_PAINT for the update region once; DefWindowProcA
     // validates it, so the second call sends nothing.
     services.guest_calls.clear();
@@ -358,6 +564,11 @@ void CheckCreateWindow(re2dj::test::Context& context)
     {
         RE2DJ_CHECK_EQ(context, services.guest_calls[0][1], 0x0FU);
     }
+
+    // Showing an already visible window again sends nothing and gives 24.
+    services.guest_calls.clear();
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ShowWindow", {window, 5}).eax, 24U);
+    RE2DJ_CHECK(context, services.guest_calls.empty());
 
     // Shapes outside the model stop instead of guessing: a caption, a child,
     // and an unregistered class.
@@ -388,7 +599,7 @@ void CheckStockObjects(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetStockObject", {0}).eax, 0x00900010U);
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetStockObject", {9}).eax, 0U);
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetStockObject", {20}).eax, 0U);
-    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{12});
+    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{17});
 }
 
 // ShowCursor counts from 0 as Windows 11 does with a mouse installed.
@@ -427,6 +638,128 @@ void CheckSetRect(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, services.LastError(), 0x1234U);
 }
 
+// Formats with the shared wsprintfA core from words and strings (address 1
+// is "abc", 2 "ab", 3 "xyz", 4 "narrow").
+std::string Wsprintf(std::string_view format, std::initializer_list<std::uint32_t> words, bool* formatted = nullptr)
+{
+    const std::vector<std::uint32_t> values(words);
+    std::size_t next = 0;
+    const re2dj::hle::WsprintfWordReader next_word = [&](std::uint32_t* word) {
+        if (next >= values.size())
+        {
+            return false;
+        }
+        *word = values[next++];
+        return true;
+    };
+    const re2dj::hle::WsprintfStringReader read_string = [](std::uint32_t address, std::string* text) {
+        static const std::array<const char*, 5> texts = {"", "abc", "ab", "xyz", "narrow"};
+        if (address >= texts.size())
+        {
+            return false;
+        }
+        *text = texts[address];
+        return true;
+    };
+    std::string output;
+    std::string error;
+    const bool ok = re2dj::hle::FormatWsprintf(format, next_word, read_string, &output, &error);
+    if (formatted != nullptr)
+    {
+        *formatted = ok;
+    }
+    return ok ? output : "<" + error + ">";
+}
+
+// The shared wsprintfA core against the Windows 11 measurements (design 419).
+void CheckWsprintfFormat(re2dj::test::Context& context)
+{
+    const auto check = [&](std::string_view format, std::initializer_list<std::uint32_t> words,
+                           std::string_view expected) {
+        RE2DJ_CHECK_EQ(context, Wsprintf(format, words), std::string(expected));
+    };
+    check("%d|%d|%d", {7, 0xFFFFFFF9U, 0}, "7|-7|0");
+    check("%02d|%02d|%02d|%02d", {5, 123, 0xFFFFFFFBU, 0}, "05|123|-5|00");
+    check("%6d|%6d|%-6d|%06d", {42, 0xFFFFFFD6U, 42, 0xFFFFFFD6U}, "    42|   -42|42    |-00042");
+    check("%s|%s|[%s]", {1, 0, 0}, "abc||[]");
+    check("%5s|%-5s|%.2s", {2, 2, 1}, "   ab|ab   |ab");
+    check("%u|%x|%X|%#x|%#X", {0xFFFFFFFFU, 255, 255, 255, 255}, "4294967295|ff|FF|0xff|0XFF");
+    check("%c%c|%5c|%-3c|%03c|", {'A', 'b', 'x', 'y', 'q'}, "Ab|    x|y  |00q|");
+    check("100%%|%-3%|%3%|", {}, "100%|%|%|");
+    check("%ld|%lu|%lx|%hd|%hi", {0xFFFFFFFDU, 3, 0xab, 0x12345, 0x18000}, "-3|3|ab|9029|-32768");
+    check("%hu|%hx", {0x12345, 0x12345}, "74565|12345");
+    check("%.3d|%5.3d|%.3d|%6.3d|%-6.3d|%06.3d|", {7, 7, 0xFFFFFFF9U, 0xFFFFFFF9U, 0xFFFFFFF9U, 7},
+          "007|  007|-007|  -007|-007  |   007|");
+    check("[%.0d]|%.d|[%.s]", {0, 7, 2}, "[0]|7|[]");
+    // Not a flag, not a type: the character itself, taking no argument.
+    check("%+d|% d|a%qb|%q%d|%*d%d|%5q", {5, 5}, "+d| d|aqb|q5|*d5|q");
+    check("%0#x|%#05x|%-#6x|%#-6x|%-06x|%#6x|%#x|%#.3x", {255, 255, 255, 255, 255, 0, 5},
+          "#x|0x000ff|0xff    |0xff    |ff    |    0xff|0x0|0x005");
+    check("%-0 3d|%0-3d|%lld|%--5d|%#-#5x|", {7, 255}, " 3d|-3d|ld|7    |0xff   |");
+    check("%p|%10p|%.2p|%#p|%p", {0x1234, 0xab, 0xab, 0xab, 0xabcd},
+          "00001234|  000000AB|AB|0X000000AB|0000ABCD");
+    check("%05s|%-05d|%04.1s|%.10s|%3.1s", {2, 7, 3, 1, 3}, "000ab|7    |000x|abc|  x");
+    check("%u|%x|%05u|%.2x", {0, 0, 12, 1}, "0|0|00012|01");
+    check("%I64d|%d", {5, 0, 9}, "5|9");
+    check("%I64u|%I64x|%I64X|%I64d", {0xFFFFFFFFU, 0xFF, 0xBCDEF12U, 1, 0xBCDEF12U, 1, 0xFFFFFFFEU, 0xFFFFFFFFU},
+          "1099511627775|10bcdef12|10BCDEF12|-2");
+    check("%#d|%#o|%o|%d", {5, 3}, "5|o|o|3");
+    check("%hs|%hc|%lu", {4, 'z', 4}, "narrow|z|4");
+    check("abc%", {}, "abc");
+    check("%.d|%.s|%5", {7, 2}, "7||");
+    // The output stops at 1024 characters.
+    const std::string long_format(1999, 'a');
+    RE2DJ_CHECK_EQ(context, Wsprintf(long_format, {}).size(), std::size_t{1024});
+    // Wide text is not modelled; running out of arguments fails too.
+    bool formatted = true;
+    for (const char* format : {"%ls", "%lc", "%ws", "%S", "%C", "%I64s"})
+    {
+        Wsprintf(format, {1}, &formatted);
+        RE2DJ_CHECK(context, !formatted);
+    }
+    Wsprintf("%d%d", {1}, &formatted);
+    RE2DJ_CHECK(context, !formatted);
+}
+
+// wsprintfA reads its variadic arguments from the guest stack past lpOut and
+// lpFmt, writes the text and terminator, and returns the count.
+void CheckWsprintfA(re2dj::test::Context& context)
+{
+    using re2dj::test::CallModuleExport;
+    using re2dj::test::MemoryServices;
+    const auto descriptor = re2dj::hle::modules::MakeUser32ModuleDescriptor();
+    MemoryServices services;
+    constexpr std::uint32_t kArguments = MemoryServices::kBase + 0x2000;
+    constexpr std::uint32_t kOut = MemoryServices::kBase + 0x2100;
+    constexpr std::uint32_t kFormat = MemoryServices::kBase + 0x2200;
+    constexpr std::uint32_t kName = MemoryServices::kBase + 0x2300;
+    services.Put(kFormat, std::string_view("Songs\\%s\\ez|%02d", 17));
+    services.Put(kName, std::string_view("tr01", 5));
+    services.PutU32(kArguments, kOut);
+    services.PutU32(kArguments + 4, kFormat);
+    services.PutU32(kArguments + 8, kName);
+    services.PutU32(kArguments + 12, 3);
+    services.Byte(kOut + 17) = 0xEE;
+    services.SetLastError(0x1234);
+    bool handled = true;
+    // Without the stack arguments the call cannot be answered.
+    CallModuleExport(context, services, descriptor, "wsprintfA", {kOut, kFormat}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    services.arguments_address = kArguments;
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "wsprintfA", {kOut, kFormat}).eax, 16U);
+    std::string text;
+    for (std::uint32_t at = kOut; services.Byte(at) != 0; ++at)
+    {
+        text.push_back(static_cast<char>(services.Byte(at)));
+    }
+    RE2DJ_CHECK_EQ(context, text, std::string("Songs\\tr01\\ez|03"));
+    RE2DJ_CHECK_EQ(context, services.Byte(kOut + 17), std::uint8_t{0xEE});
+    RE2DJ_CHECK_EQ(context, services.LastError(), 0x1234U);
+    handled = true;
+    CallModuleExport(context, services, descriptor, "wsprintfA", {0, kFormat}, &handled);
+    RE2DJ_CHECK(context, !handled);
+}
+
 }  // namespace
 
 void RunUser32ModuleTests(re2dj::test::Context& context)
@@ -438,7 +771,11 @@ void RunUser32ModuleTests(re2dj::test::Context& context)
     CheckSystemImages(context);
     CheckRegisterClass(context);
     CheckCreateWindow(context);
+    CheckShowWindow(context);
+    CheckEnumDisplaySettings(context);
     CheckStockObjects(context);
     CheckShowCursor(context);
     CheckSetRect(context);
+    CheckWsprintfFormat(context);
+    CheckWsprintfA(context);
 }

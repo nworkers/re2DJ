@@ -1,8 +1,10 @@
 #include "native_compat_mode.h"
 
 #include "../native_guest_seh.h"
+#include "../native_guest_threads.h"
 #include "../native_import_bridge.h"
 #include "../native_instruction_trace.h"
+#include "../native_legacy_io.h"
 #include "../native_process_bootstrap.h"
 
 #include <asm/ldt.h>
@@ -19,6 +21,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 #ifndef HWCAP2_FSGSBASE
 #define HWCAP2_FSGSBASE (1 << 1)
@@ -41,26 +44,32 @@ constexpr std::uint32_t kTrialResult = 0x2301C0DEU;
 constexpr std::size_t kMaximumArguments = 64;
 constexpr std::size_t kLdtProbeEntries = 16;
 
-NativeCompatModeRuntime::Impl* g_active_runtime = nullptr;
+static_assert(offsetof(ucontext_t, uc_mcontext.gregs) + REG_CSGSFS * sizeof(greg_t) == 184,
+              "NativeCompatSignalEntry reads the interrupted CS at this offset");
 
-sigjmp_buf g_guest_jump;
-volatile std::uint64_t g_fault_signal = 0;
-volatile std::uint64_t g_fault_eip = 0;
-volatile std::uint64_t g_fault_esp = 0;
-volatile std::uint64_t g_fault_address = 0;
-volatile std::uint64_t g_fault_signal_code = 0;
-volatile std::uint64_t g_fault_cpu_error_code = 0;
-volatile std::uint64_t g_fault_eax = 0;
-volatile std::uint64_t g_fault_ebx = 0;
-volatile std::uint64_t g_fault_ecx = 0;
-volatile std::uint64_t g_fault_edx = 0;
-volatile std::uint64_t g_fault_esi = 0;
-volatile std::uint64_t g_fault_edi = 0;
-volatile std::uint64_t g_fault_ebp = 0;
-volatile std::uint64_t g_fault_eflags = 0;
+// Each guest thread runs on a host thread of its own with a runtime of its
+// own, so the run state is per thread. Only host code reads it, after the
+// transition has restored the host FS base.
+thread_local NativeCompatModeRuntime::Impl* g_active_runtime = nullptr;
+
+thread_local sigjmp_buf g_guest_jump;
+thread_local volatile std::uint64_t g_fault_signal = 0;
+thread_local volatile std::uint64_t g_fault_eip = 0;
+thread_local volatile std::uint64_t g_fault_esp = 0;
+thread_local volatile std::uint64_t g_fault_address = 0;
+thread_local volatile std::uint64_t g_fault_signal_code = 0;
+thread_local volatile std::uint64_t g_fault_cpu_error_code = 0;
+thread_local volatile std::uint64_t g_fault_eax = 0;
+thread_local volatile std::uint64_t g_fault_ebx = 0;
+thread_local volatile std::uint64_t g_fault_ecx = 0;
+thread_local volatile std::uint64_t g_fault_edx = 0;
+thread_local volatile std::uint64_t g_fault_esi = 0;
+thread_local volatile std::uint64_t g_fault_edi = 0;
+thread_local volatile std::uint64_t g_fault_ebp = 0;
+thread_local volatile std::uint64_t g_fault_eflags = 0;
 // Set by ExitNativeGuestProcess just before it jumps back to Run.
-volatile std::uint32_t g_exit_requested = 0;
-volatile std::uint32_t g_exit_code = 0;
+thread_local volatile std::uint32_t g_exit_requested = 0;
+thread_local volatile std::uint32_t g_exit_code = 0;
 
 std::uint32_t PageSize()
 {
@@ -213,9 +222,12 @@ struct NativeCompatModeRuntime::Impl
     std::uint32_t teb = 0;
     std::uint32_t peb = 0;
     std::uint32_t image_base = 0;
-    std::uint32_t seh_dispatch_count = 0;
-    std::uint32_t last_seh_handler = 0;
-    std::uint32_t last_seh_resumed_eip = 0;
+    NativeGuestExceptionDispatcher exceptions;
+    // The signal of the exception last delivered, reported if it goes unhandled.
+    int delivered_signal = 0;
+    std::uint32_t delivered_signal_code = 0;
+    std::uint32_t delivered_cpu_error = 0;
+    std::uint32_t delivered_fault_address = 0;
     int ldt_entry = -1;
     std::uint16_t fs_selector = 0;
     bool use_fsgsbase = false;
@@ -234,8 +246,22 @@ struct NativeCompatModeRuntime::Impl
     std::uint32_t pending_entry = 0;
     std::uint32_t pending_stack_pointer = 0;
 
+    // This runtime's guest thread. A secondary runtime runs one thread other
+    // than the main one: it shares the process's PEB and signal handlers,
+    // and keeps its part of the shared transition state while another thread
+    // holds the guest lock.
+    NativeGuestThread thread;
+    bool threads_begun = false;
+    bool secondary = false;
+    std::uint64_t saved_host_stack_pointer = 0;
+    std::uint64_t saved_host_fs_base = 0;
+
     ~Impl()
     {
+        if (threads_begun)
+        {
+            EndNativeGuestThreads();
+        }
         for (int index = installed_action_count - 1; index >= 0; --index)
         {
             sigaction(kGuestSignals[static_cast<std::size_t>(index)],
@@ -254,6 +280,7 @@ struct NativeCompatModeRuntime::Impl
             descriptor.seg_not_present = 1;
             syscall(SYS_modify_ldt, 0x11, &descriptor, sizeof(descriptor));
         }
+        ReleaseNativeGuestExceptionDispatcher(&exceptions);
         ReleaseNativeLowMemory(&environment);
         ReleaseNativeLowMemory(&stack);
     }
@@ -273,6 +300,67 @@ struct NativeCompatModeRuntime::Impl
         }
         stack_limit = stack.address + page;
         stack_base = stack_limit + kGuestStackSize;
+        return true;
+    }
+
+    // A secondary thread's TEB, pointing at the main thread's PEB.
+    bool AllocateThreadEnvironment(std::uint32_t process_peb, std::string* error)
+    {
+        if (!MapNativeLowMemory(PageSize(), PROT_READ | PROT_WRITE, &environment, error))
+        {
+            return false;
+        }
+        teb = environment.address;
+        peb = process_peb;
+        WriteGuestU32(teb + 0x00, 0xFFFFFFFFU);
+        WriteGuestU32(teb + 0x04, stack_base);
+        WriteGuestU32(teb + 0x08, stack_limit);
+        WriteGuestU32(teb + 0x18, teb);
+        WriteGuestU32(teb + 0x30, peb);
+        return true;
+    }
+
+    // A runtime for a thread other than the main one, prepared by the lock
+    // holder: its own stack, TEB, FS descriptor, and exception dispatcher.
+    // Its host thread installs the alternate signal stack itself.
+    bool InitializeThread(const Impl& process, std::string* error)
+    {
+        secondary = true;
+        image_base = process.image_base;
+        use_fsgsbase = process.use_fsgsbase;
+        if (!AllocateGuestStack(error) || !AllocateThreadEnvironment(process.peb, error) ||
+            !InstallFsDescriptor(error) || !CreateNativeGuestExceptionDispatcher(&exceptions, error))
+        {
+            return false;
+        }
+        thread.teb = teb;
+        thread.stack_limit = stack_limit;
+        thread.stack_base = stack_base;
+        thread.width_state = this;
+        initialized = true;
+        return true;
+    }
+
+    bool InstallSignalStack(std::string* error)
+    {
+        signal_stack = mmap(nullptr, kSignalStackSize, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (signal_stack == MAP_FAILED)
+        {
+            signal_stack = nullptr;
+            *error = "cannot allocate alternate signal stack";
+            return false;
+        }
+        stack_t alternate = {};
+        alternate.ss_sp = signal_stack;
+        alternate.ss_size = kSignalStackSize;
+        if (sigaltstack(&alternate, &previous_signal_stack) != 0)
+        {
+            munmap(signal_stack, kSignalStackSize);
+            signal_stack = nullptr;
+            *error = "cannot install alternate signal stack";
+            return false;
+        }
         return true;
     }
 
@@ -390,7 +478,7 @@ struct NativeCompatModeRuntime::Impl
         use_fsgsbase = !options.force_arch_prctl && CpuHasFsGsBase();
         if (!EnsureTransitionPages(error) || !AllocateGuestStack(error) ||
             !AllocateEnvironment(image_base, error) || !InstallFsDescriptor(error) ||
-            !InstallSignalHandlers(error))
+            !InstallSignalHandlers(error) || !CreateNativeGuestExceptionDispatcher(&exceptions, error))
         {
             return false;
         }
@@ -418,6 +506,12 @@ struct NativeCompatModeRuntime::Impl
                      "wrong value";
             return false;
         }
+        thread.teb = teb;
+        thread.stack_limit = stack_limit;
+        thread.stack_base = stack_base;
+        thread.width_state = this;
+        BeginNativeGuestThreads(&thread);
+        threads_begun = true;
         error->clear();
         return true;
     }
@@ -502,9 +596,10 @@ struct NativeCompatModeRuntime::Impl
         g_active_runtime = this;
         if (sigsetjmp(g_guest_jump, 1) == 0)
         {
+            // Left set: a run on another guest thread may still be under way,
+            // and the signal entry checks the interrupted CS itself.
             g_native_compat_active_state = state;
             const std::uint64_t value = EnterPending();
-            g_native_compat_active_state = nullptr;
             g_active_runtime = nullptr;
             handler = nullptr;
             handler_context = nullptr;
@@ -513,7 +608,6 @@ struct NativeCompatModeRuntime::Impl
             error->clear();
             return true;
         }
-        g_native_compat_active_state = nullptr;
         g_active_runtime = nullptr;
         handler = nullptr;
         handler_context = nullptr;
@@ -583,17 +677,177 @@ bool NativeCompatModeRuntime::UsesFsGsBase() const { return impl_->use_fsgsbase;
 
 std::uint32_t NativeCompatModeRuntime::SehDispatchCount() const
 {
-    return impl_->seh_dispatch_count;
+    return ExceptionCounters().resumed;
 }
 
 std::uint32_t NativeCompatModeRuntime::LastSehHandler() const
 {
-    return impl_->last_seh_handler;
+    return ExceptionCounters().last_handler;
 }
 
 std::uint32_t NativeCompatModeRuntime::LastSehResumedEip() const
 {
-    return impl_->last_seh_resumed_eip;
+    return ExceptionCounters().last_resumed_eip;
+}
+
+NativeGuestExceptionCounters NativeCompatModeRuntime::ExceptionCounters() const
+{
+    return ReadNativeGuestExceptionCounters(impl_->exceptions);
+}
+
+namespace
+{
+
+struct CompatThreadStart
+{
+    NativeCompatModeRuntime::Impl* runtime = nullptr;
+    NativeGuestThreadStart start;
+    NativeImportGateHandler handler = nullptr;
+    void* handler_context = nullptr;
+};
+
+// The host thread of a secondary guest thread: its alternate signal stack,
+// then the ThreadProc once the guest lock is ours.
+void RunCompatThread(CompatThreadStart* start)
+{
+    NativeCompatModeRuntime::Impl* runtime = start->runtime;
+    std::string error;
+    const bool ready = runtime->InstallSignalStack(&error);
+    BindNativeGuestThread(&runtime->thread);
+    AcquireNativeGuestLock();
+    NativeGuestTermination termination;
+    if (!ready)
+    {
+        termination.fault.status_code = SIGSEGV;
+        termination.fault.instruction_pointer = start->start.start;
+        TerminateNativeGuestProcess(termination);
+        return;
+    }
+    NativeCompatModeCall call;
+    call.entry = start->start.start;
+    call.arguments = {start->start.parameter};
+    call.handler = start->handler;
+    call.handler_context = start->handler_context;
+    NativeCompatModeRunResult result;
+    const bool returned = runtime->Run(call, &result, &termination.fault, &error);
+    if (returned && !result.process_exited)
+    {
+        if (start->start.on_exit != nullptr)
+        {
+            start->start.on_exit(start->start.exit_context, start->start.token, result.eax);
+        }
+        RemoveNativeGuestThreadAndRelease(&runtime->thread);
+        delete runtime;
+        delete start;
+        return;
+    }
+    if (returned)
+    {
+        termination.process_exited = true;
+        termination.exit_code = result.exit_code;
+    }
+    TerminateNativeGuestProcess(termination);
+}
+
+}  // namespace
+
+bool StartNativeGuestThread(const NativeGuestThreadStart& start, std::uint32_t* teb, std::string* error)
+{
+    NativeCompatModeRuntime::Impl* creator = g_active_runtime;
+    if (creator == nullptr || teb == nullptr || start.start == 0)
+    {
+        if (error != nullptr) *error = "no guest process is running on this thread";
+        return false;
+    }
+    auto* runtime = new NativeCompatModeRuntime::Impl;
+    std::string init_error;
+    if (!runtime->InitializeThread(*creator, &init_error))
+    {
+        delete runtime;
+        if (error != nullptr) *error = "cannot prepare a guest thread: " + init_error;
+        return false;
+    }
+    auto* thread_start = new CompatThreadStart;
+    thread_start->runtime = runtime;
+    thread_start->start = start;
+    thread_start->handler = creator->handler;
+    thread_start->handler_context = creator->handler_context;
+    AddNativeGuestThread(&runtime->thread);
+    std::thread(&RunCompatThread, thread_start).detach();
+    *teb = runtime->teb;
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+void SaveNativeGuestTransition(NativeGuestThread* thread)
+{
+    auto* runtime = static_cast<NativeCompatModeRuntime::Impl*>(thread->width_state);
+    const NativeCompatTransitionState* state = TransitionState();
+    if (runtime == nullptr || state == nullptr)
+    {
+        return;
+    }
+    runtime->saved_host_stack_pointer = state->host_stack_pointer;
+    runtime->saved_host_fs_base = state->host_fs_base;
+}
+
+void RestoreNativeGuestTransition(NativeGuestThread* thread)
+{
+    auto* runtime = static_cast<NativeCompatModeRuntime::Impl*>(thread->width_state);
+    NativeCompatTransitionState* state = TransitionState();
+    if (runtime == nullptr || state == nullptr)
+    {
+        return;
+    }
+    state->host_stack_pointer = runtime->saved_host_stack_pointer;
+    state->host_fs_base = runtime->saved_host_fs_base;
+    state->guest_fs_selector = runtime->fs_selector;
+}
+
+void AbandonNativeGuestRun(const NativeGuestTermination& termination)
+{
+    if (g_active_runtime == nullptr)
+    {
+        std::abort();
+    }
+    if (termination.process_exited)
+    {
+        g_exit_code = termination.exit_code;
+        g_exit_requested = 1;
+    }
+    else
+    {
+        const NativeGuestFault& fault = termination.fault;
+        g_fault_signal = fault.status_code;
+        g_fault_eip = fault.instruction_pointer;
+        g_fault_esp = fault.stack_pointer;
+        g_fault_address = fault.fault_address;
+        g_fault_signal_code = fault.signal_code;
+        g_fault_cpu_error_code = fault.cpu_error_code;
+        g_fault_eax = fault.eax;
+        g_fault_ebx = fault.ebx;
+        g_fault_ecx = fault.ecx;
+        g_fault_edx = fault.edx;
+        g_fault_esi = fault.esi;
+        g_fault_edi = fault.edi;
+        g_fault_ebp = fault.ebp;
+        g_fault_eflags = fault.eflags;
+    }
+    siglongjmp(g_guest_jump, 1);
+}
+
+void CurrentNativeImportGateHandler(NativeImportGateHandler* handler, void** context)
+{
+    const NativeCompatModeRuntime::Impl* runtime = g_active_runtime;
+    if (runtime != nullptr)
+    {
+        *handler = runtime->handler;
+        *context = runtime->handler_context;
+        return;
+    }
+    const NativeImportGateConfiguration configured = ConfiguredNativeImportGate();
+    *handler = configured.handler;
+    *context = configured.context;
 }
 
 void ExitNativeGuestProcess(std::uint32_t exit_code)
@@ -654,58 +908,40 @@ void WriteTrapRegisters(const NativeTrapRegisters& trap, ucontext_t* context)
     registers[REG_EFL] = static_cast<greg_t>(trap.eflags);
 }
 
-// Calls the guest SEH handler as a nested transition from the signal
-// handler. The record and CONTEXT go on the guest stack below the
-// interrupted ESP, where the guest can read and edit them.
-bool TryDispatchGuestSeh(NativeCompatModeRuntime::Impl* runtime, NativeTrapRegisters* registers)
+// Delivers a guest fault to the guest's SEH chain through the dispatcher.
+// Host code runs in 64-bit mode, so only compatibility-mode faults get here.
+bool TryDeliverGuestException(NativeCompatModeRuntime::Impl* runtime,
+                              int signal_number,
+                              const siginfo_t* signal_info,
+                              const ucontext_t* context,
+                              NativeTrapRegisters* registers)
 {
-    NativeGuestSehDispatch dispatch;
-    if (!PrepareNativeGuestBreakpointDispatch(*registers,
-                                              runtime->teb,
-                                              runtime->image_base,
-                                              runtime->stack_limit,
-                                              runtime->stack_base,
-                                              &dispatch))
+    if (registers->eip == runtime->exceptions.stop || IsNativeHostTrap(registers->eip) ||
+        IsNativeHostTrap(registers->eip - 1))
     {
         return false;
     }
-    constexpr std::uint32_t kReserve = 0x1000;
-    constexpr std::uint32_t kContextBytes = sizeof(Win32Context32);
-    constexpr std::uint32_t kRecordBytes = sizeof(Win32ExceptionRecord32);
-    if (registers->esp > runtime->stack_base ||
-        registers->esp - runtime->stack_limit < kContextBytes + kRecordBytes + kReserve)
+    NativeGuestTrapCause cause;
+    cause.trap_number = static_cast<std::uint32_t>(context->uc_mcontext.gregs[REG_TRAPNO]);
+    cause.error_code = static_cast<std::uint32_t>(context->uc_mcontext.gregs[REG_ERR]);
+    cause.fault_address = signal_info == nullptr ? 0 : static_cast<std::uint32_t>(
+        reinterpret_cast<std::uintptr_t>(signal_info->si_addr));
+    Win32ExceptionRecord32 record;
+    Win32Context32 guest_context;
+    if (!DescribeNativeGuestException(cause, *registers, &record, &guest_context) ||
+        !DeliverNativeGuestException(&runtime->exceptions,
+                                     runtime->stack_limit,
+                                     runtime->stack_base,
+                                     record,
+                                     guest_context,
+                                     registers))
     {
         return false;
     }
-    const std::uint32_t context_address = (registers->esp - kContextBytes - 16) & ~0xFU;
-    const std::uint32_t record_address = (context_address - kRecordBytes) & ~0xFU;
-    const std::uint32_t call_stack_pointer = record_address - 5 * sizeof(std::uint32_t);
-    std::memcpy(LowPointer(context_address), &dispatch.context, kContextBytes);
-    std::memcpy(LowPointer(record_address), &dispatch.record, kRecordBytes);
-    // handler(record, frame, context, dispatcher_context), returning to exit32.
-    WriteGuestU32(call_stack_pointer, TransitionCodeAddress(native_compat_exit32));
-    WriteGuestU32(call_stack_pointer + 4, record_address);
-    WriteGuestU32(call_stack_pointer + 8, dispatch.frame_address);
-    WriteGuestU32(call_stack_pointer + 12, context_address);
-    WriteGuestU32(call_stack_pointer + 16, 0);
-
-    // The nested entry overwrites the host rsp slot that the interrupted
-    // run's import landings and exit rely on, so keep it across the call.
-    NativeCompatTransitionState* state = TransitionState();
-    const std::uint64_t saved_host_stack_pointer = state->host_stack_pointer;
-    const std::uint64_t disposition =
-        NativeCompatEnterGuest(state, dispatch.frame.handler, call_stack_pointer);
-    state->host_stack_pointer = saved_host_stack_pointer;
-
-    if (static_cast<std::uint32_t>(disposition) != kExceptionContinueExecution)
-    {
-        return false;
-    }
-    std::memcpy(&dispatch.context, LowPointer(context_address), kContextBytes);
-    ApplyNativeGuestSehContext(dispatch.context, registers);
-    ++runtime->seh_dispatch_count;
-    runtime->last_seh_handler = dispatch.frame.handler;
-    runtime->last_seh_resumed_eip = dispatch.context.eip;
+    runtime->delivered_signal = signal_number;
+    runtime->delivered_signal_code = signal_info == nullptr ? 0 : static_cast<std::uint32_t>(signal_info->si_code);
+    runtime->delivered_cpu_error = cause.error_code;
+    runtime->delivered_fault_address = cause.fault_address;
     return true;
 }
 
@@ -796,6 +1032,8 @@ extern "C" std::uint64_t NativeCompatImportDispatch(
         linux_platform::ResumeNativeInstructionTrace(event.instruction_pointer);
         return 0;
     }
+    // Another guest thread waiting for the lock runs first.
+    linux_platform::YieldNativeGuestThread();
     event.guest_stack_base = runtime->stack_base;
     event.guest_stack_limit = runtime->stack_limit;
     const std::uint32_t outer_import_stack_pointer = runtime->import_stack_pointer;
@@ -832,16 +1070,35 @@ extern "C" int NativeCompatSignalHandler(int signal_number,
         raise(signal_number);
         return 0;
     }
-    if (signal_number == SIGTRAP)
+    linux_platform::NativeTrapRegisters trap = linux_platform::ReadTrapRegisters(context, *runtime);
+    if ((signal_number == SIGTRAP && linux_platform::HandleNativeInstructionTraceTrap(&trap)) ||
+        (signal_number == SIGSEGV && linux_platform::HandleNativeLegacyIoTrap(&trap)) ||
+        linux_platform::TryDeliverGuestException(runtime, signal_number, signal_info, context, &trap))
     {
-        linux_platform::NativeTrapRegisters trap =
-            linux_platform::ReadTrapRegisters(context, *runtime);
-        if (linux_platform::HandleNativeInstructionTraceTrap(&trap) ||
-            linux_platform::TryDispatchGuestSeh(runtime, &trap))
-        {
-            linux_platform::WriteTrapRegisters(trap, context);
-            return 1;
-        }
+        linux_platform::WriteTrapRegisters(trap, context);
+        return 1;
+    }
+    linux_platform::Win32ExceptionRecord32 unhandled_record;
+    linux_platform::Win32Context32 unhandled_context;
+    if (linux_platform::ReadNativeGuestUnhandledException(
+            runtime->exceptions, trap, &unhandled_record, &unhandled_context))
+    {
+        // No handler continued: report the fault the exception came from.
+        linux_platform::g_fault_signal = static_cast<std::uint64_t>(runtime->delivered_signal);
+        linux_platform::g_fault_eip = unhandled_record.exception_address;
+        linux_platform::g_fault_esp = unhandled_context.esp;
+        linux_platform::g_fault_address = runtime->delivered_fault_address;
+        linux_platform::g_fault_signal_code = runtime->delivered_signal_code;
+        linux_platform::g_fault_cpu_error_code = runtime->delivered_cpu_error;
+        linux_platform::g_fault_eax = unhandled_context.eax;
+        linux_platform::g_fault_ebx = unhandled_context.ebx;
+        linux_platform::g_fault_ecx = unhandled_context.ecx;
+        linux_platform::g_fault_edx = unhandled_context.edx;
+        linux_platform::g_fault_esi = unhandled_context.esi;
+        linux_platform::g_fault_edi = unhandled_context.edi;
+        linux_platform::g_fault_ebp = unhandled_context.ebp;
+        linux_platform::g_fault_eflags = unhandled_context.eflags;
+        siglongjmp(linux_platform::g_guest_jump, 1);
     }
     const greg_t* registers = context->uc_mcontext.gregs;
     linux_platform::g_fault_signal = static_cast<std::uint64_t>(signal_number);

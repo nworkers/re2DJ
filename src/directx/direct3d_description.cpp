@@ -51,6 +51,54 @@ std::span<const Direct3DDevice> Direct3D7Devices()
     return kDirect3D7Devices;
 }
 
+std::uint32_t FindDevice(const D3dFindDeviceSearch& search, D3dFindDeviceResult* result)
+{
+    if (result == nullptr || search.size != sizeof(D3dFindDeviceSearch) ||
+        result->size != sizeof(D3dFindDeviceResult))
+    {
+        return kDdErrInvalidParams;
+    }
+    if ((search.flags & kD3dFdsHardware) != 0 && search.hardware == 0)
+    {
+        return kDdErrNotFound;
+    }
+    *result = {};
+    result->size = sizeof(D3dFindDeviceResult);
+    result->guid = kIidDirect3DHalDevice;
+    result->hardware = Direct3D3HardwareDescription();
+    return kDdOk;
+}
+
+D3dDeviceDesc6 Direct3D3HardwareDescription()
+{
+    D3dDeviceDesc6 description;
+    description.size = sizeof(D3dDeviceDesc6);
+    description.flags = kD3dDdBClipping | kD3dDdDeviceRenderBitDepth | kD3dDdDeviceZBufferBitDepth;
+    description.clipping = 1;
+    description.render_bit_depth = kDdbd16;
+    description.z_buffer_bit_depth = kDdbd16;
+    return description;
+}
+
+std::uint32_t GetDevice3Caps(D3dDeviceDesc6* hardware, D3dDeviceDesc6* software)
+{
+    if (hardware == nullptr || hardware->size != sizeof(D3dDeviceDesc6))
+    {
+        return kDdErrInvalidParams;
+    }
+    *hardware = Direct3D3HardwareDescription();
+    if (software != nullptr)
+    {
+        if (software->size != sizeof(D3dDeviceDesc6))
+        {
+            return kDdErrInvalidParams;
+        }
+        *software = {};
+        software->size = sizeof(D3dDeviceDesc6);
+    }
+    return kDdOk;
+}
+
 D3dDeviceDesc7 DeviceDescription(const Guid& device_guid, bool hardware_transform_and_light)
 {
     D3dDeviceDesc7 desc;
@@ -98,6 +146,20 @@ D3dDeviceDesc7 DeviceDescription(const Guid& device_guid, bool hardware_transfor
 D3dDeviceDesc7 CreatedDeviceDescription()
 {
     return DeviceDescription(kIidDirect3DHalDevice, false);
+}
+
+std::uint32_t CheckEnumZBufferFormats3(const Guid& device_class)
+{
+    return device_class == kIidDirect3DHalDevice ? kDdOk : kDdErrInvalidParams;
+}
+
+DdPixelFormat Direct3D3DepthFormat()
+{
+    DdPixelFormat format;
+    format.size = sizeof(DdPixelFormat);
+    format.flags = kDdpfZBuffer;
+    format.bit_count = 16;
+    return format;
 }
 
 DdPixelFormat Depth16Format()

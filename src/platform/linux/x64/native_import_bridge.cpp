@@ -47,6 +47,15 @@ std::uintptr_t NativeImportGateCleanupAddress()
     return NativeCompatImportCleanupAddress();
 }
 
+// Host import code runs in 64-bit mode here, so the code selector already
+// tells host faults from guest ones.
+bool NativeHostCodeRunning()
+{
+    return false;
+}
+
+void ResetNativeImportGateNesting() {}
+
 NativeImportGateConfiguration ConfiguredNativeImportGate()
 {
     return {import_gate_handler, import_gate_context};

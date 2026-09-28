@@ -79,4 +79,63 @@ bool PlanLock(std::uint32_t buffer_bytes,
     return true;
 }
 
+std::uint32_t WrapPosition(std::uint32_t position, std::uint32_t buffer_bytes)
+{
+    return buffer_bytes == 0 ? 0 : position % buffer_bytes;
+}
+
+std::int32_t ClampVolume(std::int32_t volume)
+{
+    return std::clamp(volume, kDsbVolumeMin, kDsbVolumeMax);
+}
+
+std::int32_t ClampPan(std::int32_t pan)
+{
+    return std::clamp(pan, kDsbPanLeft, kDsbPanRight);
+}
+
+std::uint32_t ResolveFrequency(std::uint32_t requested, const WaveFormatEx& format)
+{
+    return requested == kDsbFrequencyOriginal ? format.samples_per_second : requested;
+}
+
+std::uint32_t BufferStatus(bool playing, bool looping)
+{
+    if (!playing)
+    {
+        return 0;
+    }
+    return kDsbStatusPlaying | (looping ? kDsbStatusLooping : 0U);
+}
+
+SilentPlayback AdvanceSilentPlayback(std::uint32_t start_position,
+                                     std::uint32_t buffer_bytes,
+                                     std::uint32_t frequency,
+                                     std::uint32_t block_align,
+                                     bool looping,
+                                     std::uint32_t elapsed_ms)
+{
+    SilentPlayback playback;
+    if (buffer_bytes == 0)
+    {
+        playback.finished = true;
+        return playback;
+    }
+    const std::uint64_t moved =
+        static_cast<std::uint64_t>(elapsed_ms) * frequency * block_align / 1000U;
+    const std::uint64_t reached = start_position + moved;
+    if (looping)
+    {
+        playback.position = static_cast<std::uint32_t>(reached % buffer_bytes);
+        return playback;
+    }
+    if (reached >= buffer_bytes)
+    {
+        playback.finished = true;
+        return playback;
+    }
+    playback.position = static_cast<std::uint32_t>(reached);
+    return playback;
+}
+
 }  // namespace re2dj::audio

@@ -13,6 +13,7 @@
 
 #include "re2dj/hle/guest_handles.h"
 #include "re2dj/storage/fat32_chd.h"
+#include "re2dj/storage/guest_find.h"
 #include "re2dj/storage/guest_path.h"
 
 namespace re2dj::hle
@@ -22,12 +23,15 @@ namespace re2dj::hle
 // a host overlay directory, as on the Windows path.
 struct GuestFileConfig
 {
-    // Empty when the run has no CHD, which provides no files.
+    // The CHD the files come from; empty for a directory dump.
     std::filesystem::path chd_image;
+    // A directory dump's host directory, used when there is no CHD. With
+    // neither, the run provides no files.
+    std::filesystem::path hdd_directory;
     // The product's directory inside the image, for example "EZ2DJ".
     std::string chd_root;
     // The guest's own name for that directory, for example "D:\ez2dj"; it is
-    // also the guest's current directory.
+    // also the guest's first current directory.
     std::string guest_root;
     // Host directory writes go to, mirroring the directory under chd_root.
     std::filesystem::path overlay_root;
@@ -47,6 +51,9 @@ public:
                            std::size_t length) const = 0;
     // Copies the whole file to a host path.
     virtual bool Materialize(std::string_view relative_path, const std::filesystem::path& output) const = 0;
+    // A directory's entries in the image's own order, "." and ".." left out;
+    // false when the path is not a directory.
+    virtual bool ListDirectory(std::string_view relative_path, std::vector<storage::Fat32Entry>* entries) const = 0;
 };
 
 // CreateFile dispositions (fileapi.h).
@@ -84,7 +91,47 @@ public:
     bool configured() const { return source_ != nullptr; }
     void SetHandleAllocator(GuestHandleAllocator* allocator) { handles_ = allocator; }
 
+    // Relative paths resolve against the current directory.
     OpenResult Open(std::string_view guest_path, bool read, bool write, std::uint32_t disposition);
+
+    // The guest's current directory as GetCurrentDirectoryA renders it: the
+    // components as the guest wrote them, with no trailing separator.
+    std::string CurrentDirectory() const;
+    // SetCurrentDirectoryA's rules, as Windows 11 applies them: the path
+    // resolves against the current directory ('/' separates too, "." and
+    // ".." apply); ERROR_INVALID_NAME for an empty or malformed path,
+    // ERROR_FILE_NOT_FOUND when the last component is missing,
+    // ERROR_PATH_NOT_FOUND when an earlier one is, and ERROR_DIRECTORY when
+    // it names a file. 0 moves the current directory. A directory outside the
+    // guest root is not served: outside_root is set and nothing changes.
+    std::uint32_t SetCurrentDirectory(std::string_view guest_path, bool* outside_root);
+
+    // GetFileAttributesA: the path resolves like any other, then
+    // storage::DescribeGuestFileAttributes walks it through the overlay and
+    // the image. An empty name is ERROR_PATH_NOT_FOUND and a malformed one
+    // ERROR_INVALID_NAME, as Windows 11 reports them. A path outside the
+    // guest root is not served: outside_root is set.
+    storage::GuestFileAttributes Attributes(std::string_view guest_path, bool* outside_root) const;
+
+    // FindFirstFileA's search: the directory part resolves like any path;
+    // the last part is the pattern (storage/guest_find.h), matched against
+    // the image directory's entries in their order, as the Windows product's
+    // VFS lists them. Errors as Windows 11 reports them: an empty name or a
+    // missing directory is ERROR_PATH_NOT_FOUND, an empty pattern (a name
+    // ending in a separator) ERROR_INVALID_PARAMETER, and no match
+    // ERROR_FILE_NOT_FOUND. A directory outside the guest root is not served.
+    struct FindResult
+    {
+        std::uint32_t handle = 0;
+        std::uint32_t error = 0;
+        bool outside_root = false;
+        storage::GuestFindData first;
+    };
+    FindResult FindFirst(std::string_view guest_pattern);
+    // The next match: 0, ERROR_NO_MORE_FILES at the end, or
+    // ERROR_INVALID_HANDLE for a handle that is not an open search.
+    std::uint32_t FindNext(std::uint32_t handle, storage::GuestFindData* data);
+    bool FindClose(std::uint32_t handle);
     bool IsOpen(std::uint32_t handle) const;
     std::uint32_t Read(std::uint32_t handle, std::uint32_t size, std::vector<std::uint8_t>* bytes);
     std::uint32_t Write(std::uint32_t handle, std::span<const std::uint8_t> bytes);
@@ -109,14 +156,33 @@ private:
     // The path below the guest root, '/'-separated, or false when the path
     // lies outside it.
     bool RelativeToRoot(std::string_view guest_path, std::string* relative) const;
+    // The combined path's components below the root, or false when it lies
+    // outside it; the root itself is allowed when allow_root is set.
+    bool BelowRoot(const storage::GuestPath& combined, bool allow_root, std::vector<std::string>* below) const;
+    // Whether a '/'-separated path below the root is a directory, a file, or
+    // missing, in the overlay or the image.
+    enum class Entry
+    {
+        kMissing,
+        kFile,
+        kDirectory,
+    };
+    Entry Lookup(const std::string& relative) const;
     std::uint32_t OpenHost(const std::filesystem::path& path, bool write, bool truncate, File* file) const;
 
     GuestFileConfig config_;
     std::unique_ptr<GuestFileSource> source_;
     storage::GuestPath root_;
+    storage::GuestPath current_;
     GuestHandleAllocator own_handles_;
     GuestHandleAllocator* handles_ = nullptr;
     std::map<std::uint32_t, File> files_;
+    struct Search
+    {
+        std::vector<storage::Fat32Entry> matches;
+        std::size_t next = 0;
+    };
+    std::map<std::uint32_t, Search> searches_;
 };
 
 }  // namespace re2dj::hle

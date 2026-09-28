@@ -90,6 +90,29 @@ bool GuestProcess::IsProcessHandle(std::uint32_t handle) const
                process_handles_.end();
 }
 
+std::uint32_t GuestProcess::AllocateTls()
+{
+    for (std::uint32_t index = 0; index < kTlsSlots; ++index)
+    {
+        if (!tls_allocated_[index])
+        {
+            tls_allocated_[index] = true;
+            return index;
+        }
+    }
+    return kTlsOutOfIndexes;
+}
+
+bool GuestProcess::FreeTls(std::uint32_t index)
+{
+    if (index >= kTlsSlots || !tls_allocated_[index])
+    {
+        return false;
+    }
+    tls_allocated_[index] = false;
+    return true;
+}
+
 bool GuestProcess::CloseProcessHandle(std::uint32_t handle)
 {
     const auto found = std::find(process_handles_.begin(), process_handles_.end(), handle);
@@ -173,6 +196,60 @@ bool GuestProcess::CloseEvent(std::uint32_t handle)
     return events_.erase(handle) == 1;
 }
 
+std::uint32_t GuestProcess::CreateThread(std::uint32_t start, std::uint32_t parameter, std::uint32_t* thread_id)
+{
+    GuestThread thread;
+    thread.id = next_thread_id_;
+    thread.start = start;
+    thread.parameter = parameter;
+    next_thread_id_ += 4;
+    threads_.emplace(thread.id, thread);
+    const std::uint32_t handle = handles_.Allocate();
+    thread_handles_.emplace(handle, thread.id);
+    if (thread_id != nullptr)
+    {
+        *thread_id = thread.id;
+    }
+    return handle;
+}
+
+GuestThread* GuestProcess::FindThreadHandle(std::uint32_t handle)
+{
+    const auto named = thread_handles_.find(handle);
+    return named == thread_handles_.end() ? nullptr : FindThread(named->second);
+}
+
+GuestThread* GuestProcess::FindThread(std::uint32_t thread_id)
+{
+    const auto thread = threads_.find(thread_id);
+    return thread == threads_.end() ? nullptr : &thread->second;
+}
+
+bool GuestProcess::CloseThreadHandle(std::uint32_t handle)
+{
+    return thread_handles_.erase(handle) == 1;
+}
+
+void GuestProcess::FinishThread(std::uint32_t thread_id, std::uint32_t exit_code)
+{
+    GuestThread* thread = FindThread(thread_id);
+    if (thread != nullptr)
+    {
+        thread->finished = true;
+        thread->exit_code = exit_code;
+    }
+}
+
+std::size_t GuestProcess::running_threads() const
+{
+    std::size_t running = 0;
+    for (const auto& [id, thread] : threads_)
+    {
+        running += thread.finished ? 0 : 1;
+    }
+    return running;
+}
+
 std::uint32_t GuestProcess::ExchangeUnhandledExceptionFilter(std::uint32_t filter)
 {
     const std::uint32_t previous = unhandled_exception_filter_;
@@ -189,7 +266,8 @@ std::uint32_t GuestProcess::ExchangeErrorMode(std::uint32_t mode)
 
 std::uint32_t GuestProcess::SetThreadTimer(std::uint32_t id,
                                            std::uint32_t elapse_ms,
-                                           std::uint32_t procedure)
+                                           std::uint32_t procedure,
+                                           std::uint32_t now_tick)
 {
     // USER_TIMER_MINIMUM and USER_TIMER_MAXIMUM (winuser.h).
     constexpr std::uint32_t kMinimumElapse = 0x0000000AU;
@@ -201,11 +279,36 @@ std::uint32_t GuestProcess::SetThreadTimer(std::uint32_t id,
         {
             timer.elapse_ms = elapse;
             timer.procedure = procedure;
+            timer.base_tick = now_tick;
             return timer.id;
         }
     }
-    timers_.push_back({next_timer_id_++, elapse, procedure});
+    timers_.push_back({next_timer_id_++, elapse, procedure, now_tick});
     return timers_.back().id;
+}
+
+GuestTimer* GuestProcess::DueTimer(std::uint32_t now_tick)
+{
+    for (GuestTimer& timer : timers_)
+    {
+        if (now_tick - timer.base_tick >= timer.elapse_ms)
+        {
+            return &timer;
+        }
+    }
+    return nullptr;
+}
+
+const GuestTimer* GuestProcess::FindTimer(std::uint32_t id, std::uint32_t procedure) const
+{
+    for (const GuestTimer& timer : timers_)
+    {
+        if (timer.id == id && timer.procedure == procedure)
+        {
+            return &timer;
+        }
+    }
+    return nullptr;
 }
 
 std::uint32_t GuestProcess::SectionProtection(std::uint32_t characteristics)

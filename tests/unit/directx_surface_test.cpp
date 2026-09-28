@@ -106,6 +106,63 @@ void CheckDescriptions(re2dj::test::Context& context)
     RE2DJ_CHECK(context, dx::QueryAttachment(caps) == dx::AttachmentQuery::kNone);
 }
 
+// Lock gives the surface's own pixels: the rectangle's size and first
+// pixel, the whole pitch, and the facade's refusals in order.
+void CheckLockPlan(re2dj::test::Context& context)
+{
+    dx::SurfaceShape shape;
+    shape.kind = dx::SurfaceKind::kBackBuffer;
+    shape.width = 640;
+    shape.height = 480;
+    shape.caps = dx::kDdsCapsBackBuffer;
+    dx::SurfaceLockPlan plan = dx::PlanLock(shape, 1280, true, true, false, nullptr);
+    RE2DJ_CHECK_EQ(context, plan.result, dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, plan.offset, 0U);
+    RE2DJ_CHECK_EQ(context, plan.description.width, 640U);
+    RE2DJ_CHECK_EQ(context, plan.description.pitch, 1280U);
+    RE2DJ_CHECK_EQ(context, plan.description.flags & dx::kDdsdLpSurface, dx::kDdsdLpSurface);
+    const dx::SurfaceRect rect = {10, 20, 30, 60};
+    plan = dx::PlanLock(shape, 1280, true, true, false, &rect);
+    RE2DJ_CHECK_EQ(context, plan.result, dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, plan.offset, 20U * 1280U + 10U * 2U);
+    RE2DJ_CHECK_EQ(context, plan.description.width, 20U);
+    RE2DJ_CHECK_EQ(context, plan.description.height, 40U);
+    RE2DJ_CHECK_EQ(context, plan.description.pitch, 1280U);
+    RE2DJ_CHECK_EQ(context, dx::PlanLock(shape, 1280, true, false, false, nullptr).result, dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, dx::PlanLock(shape, 1280, false, true, true, nullptr).result, dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, dx::PlanLock(shape, 1280, false, true, false, nullptr).result, dx::kDdErrInvalidObject);
+    for (const dx::SurfaceRect bad : {dx::SurfaceRect{-1, 0, 10, 10}, dx::SurfaceRect{5, 5, 5, 10},
+                                      dx::SurfaceRect{0, 0, 641, 10}, dx::SurfaceRect{0, 10, 10, 481}})
+    {
+        RE2DJ_CHECK_EQ(context, dx::PlanLock(shape, 1280, true, true, false, &bad).result, dx::kDdErrInvalidRect);
+    }
+}
+
+// EnumSurfaces' flags, as Windows 11 accepts and refuses them.
+void CheckEnumSurfacesPlan(re2dj::test::Context& context)
+{
+    constexpr std::uint32_t kAll = dx::kDdEnumSurfacesAll;
+    constexpr std::uint32_t kMatch = dx::kDdEnumSurfacesMatch;
+    constexpr std::uint32_t kNoMatch = dx::kDdEnumSurfacesNoMatch;
+    constexpr std::uint32_t kExists = dx::kDdEnumSurfacesDoesExist;
+    constexpr std::uint32_t kCreatable = dx::kDdEnumSurfacesCanBeCreated;
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kAll | kExists, false, true) == dx::EnumSurfacesPlan::kExisting);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kAll | kExists, true, true) == dx::EnumSurfacesPlan::kExisting);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kAll | kExists, false, false) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kExists, false, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kAll, false, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(0, false, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kMatch | kExists, false, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kAll | kMatch | kExists, true, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kAll | kCreatable, false, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context,
+                dx::PlanEnumSurfaces(kAll | kExists | kCreatable, false, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kAll | kExists | 0x100U, false, true) == dx::EnumSurfacesPlan::kInvalid);
+    RE2DJ_CHECK(context, dx::PlanEnumSurfaces(kMatch | kExists, true, true) == dx::EnumSurfacesPlan::kUnmodelled);
+    RE2DJ_CHECK(context,
+                dx::PlanEnumSurfaces(kNoMatch | kCreatable, true, true) == dx::EnumSurfacesPlan::kUnmodelled);
+}
+
 }  // namespace
 
 void RunDirectXSurfaceTests(re2dj::test::Context& context)
@@ -113,4 +170,6 @@ void RunDirectXSurfaceTests(re2dj::test::Context& context)
     CheckFourthSurfaces(context);
     CheckRefusals(context);
     CheckDescriptions(context);
+    CheckLockPlan(context);
+    CheckEnumSurfacesPlan(context);
 }

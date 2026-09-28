@@ -72,6 +72,8 @@ public:
                          GuestComObject object,
                          std::string* error);
     GuestComObject* Find(std::uint32_t address);
+    // The addresses of every live object, in address order.
+    std::vector<std::uint32_t> Addresses() const;
 
     // IUnknown::AddRef and Release: the new count. Release frees the block
     // and the state's resources at zero and forgets the object, then releases

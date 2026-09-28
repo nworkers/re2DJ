@@ -56,6 +56,7 @@ extern "C" __declspec(dllimport) HANDLE WINAPI Re2djVfsFindFirstFileA(
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsFindNextFileA(
     HANDLE handle, LPWIN32_FIND_DATAA data);
 extern "C" __declspec(dllimport) BOOL WINAPI Re2djVfsFindClose(HANDLE handle);
+extern "C" __declspec(dllimport) DWORD WINAPI Re2djVfsGetFileAttributesA(LPCSTR name);
 extern "C" __declspec(dllimport) DWORD WINAPI Re2djVfsSetFilePointer(
     HANDLE handle, LONG distance, PLONG distance_high, DWORD method);
 extern "C" __declspec(dllimport) DWORD WINAPI Re2djVfsGetFileSize(HANDLE handle, LPDWORD high);
@@ -522,6 +523,35 @@ int main()
                        "GetFullPathNameA file_part is incorrect") &&
                  Check(std::strstr(full_buf, "System\\Title\\Title.str") != nullptr,
                        "GetFullPathNameA did not include guest current directory") &&
+                 passed;
+
+        // GetFileAttributesA against the guest current directory, with the
+        // errors Windows 11 gives; success leaves the last error alone.
+        const auto attributes = [](const char* name, DWORD* error) {
+            SetLastError(1234);
+            const DWORD value = Re2djVfsGetFileAttributesA(name);
+            *error = GetLastError();
+            return value;
+        };
+        DWORD attribute_error = 0;
+        passed = Check(attributes("TITLE.BMP", &attribute_error) == FILE_ATTRIBUTE_NORMAL &&
+                           attribute_error == 1234,
+                       "GetFileAttributesA of a guest-relative file is wrong") &&
+                 Check(attributes("..\\..\\logs", &attribute_error) == FILE_ATTRIBUTE_DIRECTORY &&
+                           attribute_error == 1234,
+                       "GetFileAttributesA of a guest directory is wrong") &&
+                 Check(attributes("logs", &attribute_error) == INVALID_FILE_ATTRIBUTES &&
+                           attribute_error == ERROR_FILE_NOT_FOUND,
+                       "GetFileAttributesA of a missing file is wrong") &&
+                 Check(attributes("none\\TITLE.BMP", &attribute_error) == INVALID_FILE_ATTRIBUTES &&
+                           attribute_error == ERROR_PATH_NOT_FOUND,
+                       "GetFileAttributesA below a missing directory is wrong") &&
+                 Check(attributes("TITLE.BMP\\", &attribute_error) == INVALID_FILE_ATTRIBUTES &&
+                           attribute_error == ERROR_DIRECTORY,
+                       "GetFileAttributesA of a file with a trailing separator is wrong") &&
+                 Check(attributes("", &attribute_error) == INVALID_FILE_ATTRIBUTES &&
+                           attribute_error == ERROR_PATH_NOT_FOUND,
+                       "GetFileAttributesA of an empty name is wrong") &&
                  passed;
     }
     passed = Check(Re2djVfsSetCurrentDirectoryA("D:\\ez2dj") != FALSE,

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "re2dj/hle/guest_heap.h"
 #include "re2dj/hle/guest_process.h"
@@ -88,6 +89,24 @@ void CheckHeapExports(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, Call(context, services, "HeapSize", {heap, 0, zeroed}).eax, 0xFFFFFFFFU);
     // In-place-only fails when the block cannot grow where it is.
     RE2DJ_CHECK_EQ(context, Call(context, services, "HeapReAlloc", {heap, 0x10, next, 0x40}).eax, 0U);
+
+    // HeapValidate, as measured: the whole heap or a block's start is valid;
+    // inside a block, a freed block, or another heap's block is not; the
+    // flags are not checked and the last error stays.
+    services.SetLastError(1234);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "HeapValidate", {heap, 0, 0}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "HeapValidate", {heap, 0x10000, moved}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "HeapValidate", {heap, 0, moved + 8}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "HeapValidate", {heap, 0, zeroed}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    const std::uint32_t process_block = Call(context, services, "HeapAlloc",
+                                             {services.Process()->process_heap(), 0, 8}).eax;
+    RE2DJ_CHECK_EQ(context, Call(context, services, "HeapValidate", {heap, 0, process_block}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "HeapValidate",
+                                 {services.Process()->process_heap(), 0, process_block}).eax, 1U);
+    bool unknown_handled = true;
+    Call(context, services, "HeapValidate", {0x1234, 0, 0}, &unknown_handled);
+    RE2DJ_CHECK(context, !unknown_handled);
 
     // The process heap is reachable by its base; freeing NULL succeeds.
     const std::uint32_t process_heap = services.Process()->process_heap();
@@ -255,6 +274,122 @@ void CheckEvents(re2dj::test::Context& context)
     RE2DJ_CHECK(context, !handled);
 }
 
+// CreateThread, thread priorities, waits on threads, and a critical section
+// two threads share, as measured on Windows 11 (design 417).
+void CheckThreads(re2dj::test::Context& context)
+{
+    namespace hle = re2dj::hle;
+    constexpr std::uint32_t kWaitObject0 = 0;
+    constexpr std::uint32_t kWaitTimeout = 0x102;
+    constexpr std::uint32_t kIdOut = MemoryServices::kBase + 0x3000;
+    constexpr std::uint32_t kSection = MemoryServices::kBase + 0x3100;
+    constexpr std::uint32_t kFirst = hle::GuestProcess::kThreadId + 4;
+    constexpr std::uint32_t kSecond = hle::GuestProcess::kThreadId + 8;
+    MemoryServices services;
+    services.SetLastError(1234);
+
+    // A handle and the next thread ID; the last error stays.
+    const std::uint32_t first = Call(context, services, "CreateThread", {0, 0, 0x401000, 0x77, 0, kIdOut}).eax;
+    RE2DJ_CHECK_EQ(context, first, hle::GuestHandleAllocator::kFirstHandle);
+    RE2DJ_CHECK_EQ(context, services.U32(kIdOut), kFirst);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    RE2DJ_CHECK_EQ(context, services.started_threads.size(), std::size_t{1});
+    if (services.started_threads.size() == 1)
+    {
+        RE2DJ_CHECK_EQ(context, services.started_threads[0].start, 0x401000U);
+        RE2DJ_CHECK_EQ(context, services.started_threads[0].parameter, 0x77U);
+        RE2DJ_CHECK_EQ(context, services.started_threads[0].thread_id, kFirst);
+    }
+    const std::uint32_t second = Call(context, services, "CreateThread", {0, 0, 0x401000, 5, 0, 0}).eax;
+    RE2DJ_CHECK_EQ(context, second, first + 4);
+    // No ThreadProc, a suspended start, or a host without threads stop.
+    bool handled = true;
+    Call(context, services, "CreateThread", {0, 0, 0, 0, 0, 0}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    handled = true;
+    Call(context, services, "CreateThread", {0, 0, 0x401000, 0, 4, 0}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    services.refuse_threads = true;
+    handled = true;
+    Call(context, services, "CreateThread", {0, 0, 0x401000, 0, 0, 0}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    services.refuse_threads = false;
+
+    // Priorities: THREAD_PRIORITY_* only, on a thread handle or the
+    // pseudo-handle (here the main thread's).
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {first, 1}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "GetThreadPriority", {first}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {first, 15}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {first, 0xFFFFFFF1U}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {first, 3}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidParameter);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {first, 99}).eax, 0U);
+    services.SetLastError(1234);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {0x1234, 1}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidHandle);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "GetThreadPriority", {0x1234}).eax, 0x7FFFFFFFU);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {0xFFFFFFFEU, 2}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "GetThreadPriority", {0xFFFFFFFEU}).eax, 2U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "GetThreadPriority", {first}).eax, 0xFFFFFFF1U);
+
+    // A running thread times out at once; a wait goes on in 1 ms steps until
+    // it finishes, or until the timeout has passed.
+    RE2DJ_CHECK_EQ(context, Call(context, services, "WaitForSingleObject", {first, 0}).eax, kWaitTimeout);
+    services.on_wait = [&]() {
+        if (services.waits.size() == 3)
+        {
+            services.Process()->FinishThread(kFirst, 119);
+        }
+    };
+    RE2DJ_CHECK_EQ(context, Call(context, services, "WaitForSingleObject", {first, 5000}).eax, kWaitObject0);
+    RE2DJ_CHECK(context, services.waits == (std::vector<std::uint32_t>{1, 1, 1}));
+    RE2DJ_CHECK_EQ(context, Call(context, services, "WaitForSingleObject", {first, 0}).eax, kWaitObject0);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "WaitForSingleObject", {second, 2}).eax, kWaitTimeout);
+    RE2DJ_CHECK_EQ(context, services.waits.size(), std::size_t{5});
+    // A finished thread's handle still takes a priority.
+    RE2DJ_CHECK_EQ(context, Call(context, services, "SetThreadPriority", {first, 1}).eax, 1U);
+
+    // A section the second thread owns is waited for until it leaves.
+    Call(context, services, "InitializeCriticalSection", {kSection});
+    services.thread_id = kSecond;
+    RE2DJ_CHECK_EQ(context, Call(context, services, "GetCurrentThreadId", {}).eax, kSecond);
+    Call(context, services, "EnterCriticalSection", {kSection});
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 12), kSecond);
+    services.thread_id = hle::GuestProcess::kThreadId;
+    handled = true;
+    Call(context, services, "LeaveCriticalSection", {kSection}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    services.on_wait = [&]() {
+        services.PutU32(kSection + 4, 0xFFFFFFFFU);
+        services.PutU32(kSection + 8, 0);
+        services.PutU32(kSection + 12, 0);
+    };
+    Call(context, services, "EnterCriticalSection", {kSection});
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 12), hle::GuestProcess::kThreadId);
+    RE2DJ_CHECK_EQ(context, services.waits.size(), std::size_t{6});
+
+    // Closing a handle leaves the thread; a closed handle is invalid.
+    RE2DJ_CHECK_EQ(context, Call(context, services, "CloseHandle", {first}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "CloseHandle", {first}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidHandle);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "WaitForSingleObject", {first, 0}).eax, 0xFFFFFFFFU);
+
+    // With no other thread running nothing can signal: a timeout is waited
+    // out in one wait, and a section another thread still owns stops.
+    services.Process()->FinishThread(kSecond, 0);
+    services.on_wait = nullptr;
+    services.waits.clear();
+    const std::uint32_t event = Call(context, services, "CreateEventA", {0, 1, 0, 0}).eax;
+    RE2DJ_CHECK_EQ(context, Call(context, services, "WaitForSingleObject", {event, 30}).eax, kWaitTimeout);
+    RE2DJ_CHECK(context, services.waits == (std::vector<std::uint32_t>{30}));
+    services.PutU32(kSection + 4, 0xFFFFFFFEU);
+    services.PutU32(kSection + 12, kSecond);
+    handled = true;
+    Call(context, services, "EnterCriticalSection", {kSection}, &handled);
+    RE2DJ_CHECK(context, !handled);
+}
+
 void CheckTimeConversion(re2dj::test::Context& context)
 {
     namespace hle = re2dj::hle;
@@ -342,10 +477,166 @@ void CheckGuestPaths(re2dj::test::Context& context)
                    std::string("C:\\game\\EZ2DJ.EXE"));
 }
 
+// RtlUnwind as measured on Windows 11: the frames above the target are
+// handed to their handlers innermost first with the record flagged
+// EXCEPTION_UNWINDING (STATUS_UNWIND at the return address when none is
+// given), then unlinked; ReturnValue comes back in eax.
+void CheckRtlUnwind(re2dj::test::Context& context)
+{
+    const auto descriptor = re2dj::hle::modules::MakeKernel32ModuleDescriptor();
+    MemoryServices services;
+    constexpr std::uint32_t kTeb = MemoryServices::kBase + 0x2000;
+    constexpr std::uint32_t kFrame1 = MemoryServices::kBase + 0x3000;
+    constexpr std::uint32_t kFrame2 = kFrame1 + 0x40;
+    constexpr std::uint32_t kFrame3 = kFrame1 + 0x80;
+    constexpr std::uint32_t kRecord = MemoryServices::kBase + 0x3100;
+    const auto link = [&]() {
+        services.PutU32(kTeb, kFrame1);
+        services.PutU32(kFrame1, kFrame2);
+        services.PutU32(kFrame1 + 4, 0x00401000);
+        services.PutU32(kFrame2, kFrame3);
+        services.PutU32(kFrame2 + 4, 0x00402000);
+        services.PutU32(kFrame3, 0xFFFFFFFFU);
+        services.PutU32(kFrame3 + 4, 0x00403000);
+    };
+    services.teb = kTeb;
+    services.return_address = 0x00405678;
+    std::vector<std::uint32_t> seen_codes;
+    std::vector<std::uint32_t> seen_flags;
+    std::vector<std::uint32_t> seen_addresses;
+    services.guest_function = [&](const std::vector<std::uint32_t>& arguments) {
+        seen_codes.push_back(services.U32(arguments[0]));
+        seen_flags.push_back(services.U32(arguments[0] + 4));
+        seen_addresses.push_back(services.U32(arguments[0] + 12));
+        return 1U;  // ExceptionContinueSearch
+    };
+
+    link();
+    const auto call = [&](std::initializer_list<std::uint32_t> arguments, bool* handled = nullptr) {
+        return re2dj::test::CallModuleExport(context, services, descriptor, "RtlUnwind", arguments, handled).eax;
+    };
+    RE2DJ_CHECK_EQ(context, call({kFrame3, 0x00409999, 0, 0x1234}), 0x1234U);
+    RE2DJ_CHECK_EQ(context, services.U32(kTeb), kFrame3);
+    RE2DJ_CHECK_EQ(context, services.guest_calls.size(), std::size_t{2});
+    if (services.guest_calls.size() == 2)
+    {
+        RE2DJ_CHECK_EQ(context, services.guest_calls[0][1], kFrame1);
+        RE2DJ_CHECK_EQ(context, services.guest_calls[1][1], kFrame2);
+        RE2DJ_CHECK_EQ(context, seen_codes[0], 0xC0000027U);
+        RE2DJ_CHECK_EQ(context, seen_flags[0], 2U);
+        RE2DJ_CHECK_EQ(context, seen_addresses[1], 0x00405678U);
+    }
+    RE2DJ_CHECK_EQ(context, services.Process()->live_blocks(), std::size_t{0});
+
+    // A record given is flagged in place and handed on.
+    link();
+    services.guest_calls.clear();
+    services.PutU32(kRecord, 0xC0000005U);
+    services.PutU32(kRecord + 4, 0);
+    call({kFrame3, 0, kRecord, 0});
+    RE2DJ_CHECK_EQ(context, services.U32(kRecord + 4), 2U);
+    RE2DJ_CHECK_EQ(context, services.guest_calls.size(), std::size_t{2});
+    if (!services.guest_calls.empty())
+    {
+        RE2DJ_CHECK_EQ(context, services.guest_calls[0][0], kRecord);
+    }
+
+    // Not modelled: an exit unwind, and a target not on the list.
+    link();
+    bool handled = true;
+    call({0, 0, 0, 0}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    link();
+    handled = true;
+    call({kRecord, 0, 0, 0}, &handled);
+    RE2DJ_CHECK(context, !handled);
+}
+
+// Critical sections, TLS, Interlocked, GetCurrentThread, and IsBad*Ptr as
+// measured on Windows 11 (design 406).
+void CheckCrtStartupExports(re2dj::test::Context& context)
+{
+    namespace hle = re2dj::hle;
+    MemoryServices services;
+    constexpr std::uint32_t kTeb = MemoryServices::kBase + 0x2000;
+    constexpr std::uint32_t kSection = MemoryServices::kBase + 0x3000;
+    services.teb = kTeb;
+    services.SetLastError(1234);
+
+    Call(context, services, "InitializeCriticalSection", {kSection});
+    RE2DJ_CHECK_EQ(context, services.U32(kSection), 0xFFFFFFFFU);
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 4), 0xFFFFFFFFU);
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 20), 0x020007D0U);
+    Call(context, services, "EnterCriticalSection", {kSection});
+    Call(context, services, "EnterCriticalSection", {kSection});
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 4), 0xFFFFFFFEU);
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 8), 2U);
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 12), hle::GuestProcess::kThreadId);
+    Call(context, services, "LeaveCriticalSection", {kSection});
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 8), 1U);
+    Call(context, services, "LeaveCriticalSection", {kSection});
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 4), 0xFFFFFFFFU);
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 12), 0U);
+    bool handled = true;
+    Call(context, services, "LeaveCriticalSection", {kSection}, &handled);
+    RE2DJ_CHECK(context, !handled);
+    Call(context, services, "DeleteCriticalSection", {kSection});
+    RE2DJ_CHECK_EQ(context, services.U32(kSection + 20), 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+
+    // TLS: index 1 first, slots in the TEB, freed indices reused.
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsAlloc", {}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsAlloc", {}).eax, 2U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsSetValue", {1, 0x1234}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kTeb + 0xE10 + 4), 0x1234U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsGetValue", {1}).eax, 0x1234U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 0U);
+    services.SetLastError(1234);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsGetValue", {9999}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidParameter);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsFree", {2}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsFree", {2}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "TlsAlloc", {}).eax, 2U);
+    handled = true;
+    Call(context, services, "TlsGetValue", {100}, &handled);
+    RE2DJ_CHECK(context, !handled);
+
+    // Interlocked: the new value.
+    services.PutU32(kSection, 5);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "InterlockedIncrement", {kSection}).eax, 6U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "InterlockedDecrement", {kSection}).eax, 5U);
+    RE2DJ_CHECK_EQ(context, services.U32(kSection), 5U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "GetCurrentThread", {}).eax, 0xFFFFFFFEU);
+
+    // Sleep waits on the host (Sleep(0) not at all); INFINITE stops.
+    Call(context, services, "Sleep", {0});
+    Call(context, services, "Sleep", {3000});
+    RE2DJ_CHECK(context, services.waits == std::vector<std::uint32_t>{3000});
+    handled = true;
+    Call(context, services, "Sleep", {0xFFFFFFFFU}, &handled);
+    RE2DJ_CHECK(context, !handled);
+
+    // IsBad*Ptr: memory the services reach, a zero size, and a read-only page.
+    const std::uint32_t page = Call(context, services, "VirtualAlloc", {0, 0x1000, 0x3000, 0x02}).eax;
+    RE2DJ_CHECK(context, page != 0);
+    services.SetLastError(1234);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "IsBadReadPtr", {kSection, 32}).eax, 0U);
+    RE2DJ_CHECK(context, Call(context, services, "IsBadReadPtr", {0, 32}).eax != 0);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "IsBadReadPtr", {0, 0}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "IsBadWritePtr", {kSection, 32}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "IsBadReadPtr", {page, 16}).eax, 0U);
+    RE2DJ_CHECK(context, Call(context, services, "IsBadWritePtr", {page, 16}).eax != 0);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+}
+
 }  // namespace
 
 void RunKernel32CrtTests(re2dj::test::Context& context)
 {
+    CheckCrtStartupExports(context);
+    CheckRtlUnwind(context);
+    CheckThreads(context);
     CheckGuestHeap(context);
     CheckHeapExports(context);
     CheckStartupExports(context);

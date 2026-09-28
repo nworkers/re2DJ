@@ -7,9 +7,12 @@
 
 #include <sys/mman.h>
 #include <time.h>
+
+#include <cerrno>
 #include <unistd.h>
 
 #include "native_guest_seh.h"
+#include "native_guest_threads.h"
 #include "native_low_memory.h"
 #include "native_pe_session.h"
 #include "re2dj/hle/modules/advapi32_module.h"
@@ -18,6 +21,7 @@
 #include "re2dj/hle/modules/resolve_only_modules.h"
 #include "re2dj/hle/modules/user32_module.h"
 #include "re2dj/hle/modules/ddraw_module.h"
+#include "re2dj/hle/modules/dinput_module.h"
 #include "re2dj/hle/modules/dsound_module.h"
 #include "re2dj/hle/modules/gdi32_module.h"
 #include "re2dj/hle/modules/winmm_module.h"
@@ -87,7 +91,8 @@ bool NativeKernel32Diagnostic::Setup(NativePeSession* session, void* context, st
         hle::modules::MakeWinmmModuleDescriptor(),
         hle::modules::MakeGdi32ModuleDescriptor(),
         hle::modules::MakeDdrawModuleDescriptor(),
-        hle::modules::MakeDsoundModuleDescriptor()};
+        hle::modules::MakeDsoundModuleDescriptor(),
+        hle::modules::MakeDinputModuleDescriptor()};
     for (hle::modules::GuestModuleDescriptor& descriptor :
          hle::modules::MakeResolveOnlyModuleDescriptors())
     {
@@ -176,6 +181,12 @@ bool NativeKernel32Diagnostic::Setup(NativePeSession* session, void* context, st
         }
     }
     state->session_gates_ = session->mutable_gates()->gates();
+    state->teb_ = session->bootstrap().Teb();
+    // The TEB's ClientId, as Windows fills it: the process, then the thread.
+    const std::uint32_t client_id[2] = {hle::GuestProcess::kProcessId, hle::GuestProcess::kThreadId};
+    std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(state->teb_ + 0x20)), client_id,
+                sizeof(client_id));
+    state->thread_ids_[state->teb_] = hle::GuestProcess::kThreadId;
     state->registry_kernel32_base_ = module->base;
     state->registry_get_version_ = get_version->thunk_address;
     state->registry_create_file_ = create_file->thunk_address;
@@ -500,8 +511,10 @@ bool NativeKernel32Diagnostic::GuestRangeReadable(std::uint32_t address, std::si
         return false;
     }
     const auto size32 = static_cast<std::uint32_t>(size);
-    return ImageContains(address, size) || in_stack || process_.BlockContains(address, size32) ||
-           process_.Accessible(address, size32);
+    constexpr std::uint32_t kTebSize = 0x1000;
+    const bool in_teb = teb_ != 0 && address >= teb_ && address - teb_ < kTebSize && size32 <= kTebSize - (address - teb_);
+    return ImageContains(address, size) || in_stack || in_teb || process_.BlockContains(address, size32) ||
+           process_.Accessible(address, size32) || NativeGuestThreadMemoryContains(address, size32);
 }
 
 bool NativeKernel32Diagnostic::IsGuestModule(runtime::GuestAddress handle) const
@@ -524,6 +537,58 @@ bool NativeKernel32Diagnostic::IsAbsentExport(std::uint32_t module_handle,
 hle::GuestProcess* NativeKernel32Diagnostic::Process() const
 {
     return &process_;
+}
+
+bool NativeKernel32Diagnostic::WaitMilliseconds(std::uint32_t milliseconds) const
+{
+    WaitNativeGuestThread(milliseconds);
+    return true;
+}
+
+runtime::GuestAddress NativeKernel32Diagnostic::ThreadEnvironmentBlock() const
+{
+    const NativeGuestThread* thread = CurrentNativeGuestThread();
+    return runtime::GuestAddress(thread != nullptr && thread->teb != 0 ? thread->teb : teb_);
+}
+
+std::uint32_t NativeKernel32Diagnostic::CurrentThreadId() const
+{
+    const auto id = thread_ids_.find(ThreadEnvironmentBlock().value());
+    return id == thread_ids_.end() ? hle::GuestProcess::kThreadId : id->second;
+}
+
+namespace
+{
+
+void FinishGuestThread(void* context, std::uint32_t thread_id, std::uint32_t exit_code)
+{
+    static_cast<hle::GuestProcess*>(context)->FinishThread(thread_id, exit_code);
+}
+
+}  // namespace
+
+bool NativeKernel32Diagnostic::StartGuestThread(std::uint32_t start,
+                                                std::uint32_t parameter,
+                                                std::uint32_t thread_id,
+                                                std::string* error) const
+{
+    NativeGuestThreadStart thread_start;
+    thread_start.start = start;
+    thread_start.parameter = parameter;
+    thread_start.token = thread_id;
+    thread_start.on_exit = &FinishGuestThread;
+    thread_start.exit_context = &process_;
+    std::uint32_t teb = 0;
+    if (!StartNativeGuestThread(thread_start, &teb, error))
+    {
+        return false;
+    }
+    // The new thread runs only once this one gives up the guest lock, so its
+    // TEB is complete before it starts.
+    const std::uint32_t client_id[2] = {hle::GuestProcess::kProcessId, thread_id};
+    std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(teb + 0x20)), client_id, sizeof(client_id));
+    thread_ids_[teb] = thread_id;
+    return true;
 }
 
 bool NativeKernel32Diagnostic::ReadClock(hle::GuestClockReading* reading) const
@@ -587,14 +652,29 @@ hle::GuestDeviceSet* NativeKernel32Diagnostic::Devices() const
     return &devices_;
 }
 
+// Each thread's last error lives where Windows keeps it, at TEB+0x34
+// (LastErrorValue); before a TEB exists, in the diagnostic.
 void NativeKernel32Diagnostic::SetLastError(std::uint32_t value) const
 {
-    last_error_ = value;
+    const std::uint32_t teb = ThreadEnvironmentBlock().value();
+    if (teb == 0)
+    {
+        last_error_ = value;
+        return;
+    }
+    std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(teb + 0x34)), &value, sizeof(value));
 }
 
 std::uint32_t NativeKernel32Diagnostic::LastError() const
 {
-    return last_error_;
+    const std::uint32_t teb = ThreadEnvironmentBlock().value();
+    if (teb == 0)
+    {
+        return last_error_;
+    }
+    std::uint32_t value = 0;
+    std::memcpy(&value, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(teb + 0x34)), sizeof(value));
+    return value;
 }
 
 void NativeKernel32Diagnostic::ConfigureDevices(hle::GuestDeviceConfig config)

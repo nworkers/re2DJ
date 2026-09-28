@@ -16,4 +16,5 @@
 | LZMA decoder (libchdr dependency) | 26.02 | Public domain | [`third_party/libchdr/deps/lzma-26.02/LICENSE`](third_party/libchdr/deps/lzma-26.02/LICENSE) |
 | miniz (libchdr dependency) | 3.1.2 | Public domain / Unlicense terms in source | [`third_party/libchdr/deps/miniz-3.1.2/miniz.h`](third_party/libchdr/deps/miniz-3.1.2/miniz.h) |
 | Zstandard decoder (libchdr dependency) | 1.5.7 | BSD-3-Clause terms selected from the upstream dual-license notice | [`third_party/libchdr/deps/zstd-1.5.7/zstddeclib.c`](third_party/libchdr/deps/zstd-1.5.7/zstddeclib.c) |
+| GNU Unifont (ASCII glyphs) | 15.1.05 | SIL OFL 1.1 terms selected from the upstream OFL-1.1 / GPL-2.0+ dual license; glyph data only | [`third_party/unifont/`](third_party/unifont/README.md) |
 | dr_flac (libchdr dependency) | 0.13.3 | Public domain / MIT-0 terms in source | [`third_party/libchdr/include/dr_libs/dr_flac.h`](third_party/libchdr/include/dr_libs/dr_flac.h) |

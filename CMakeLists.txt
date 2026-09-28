@@ -59,7 +59,13 @@ set(SDL_POWER OFF CACHE BOOL "" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
 set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
 set(SDL_TRAY OFF CACHE BOOL "" FORCE)
-if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4 AND RE2DJ_ENABLE_SDL3_AUDIO)
+# Sound plays through SDL3_mixer on the 32-bit Windows runtime and on Linux.
+if(RE2DJ_ENABLE_SDL3_AUDIO AND ((WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4) OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    set(RE2DJ_SDL3_AUDIO_ACTIVE ON)
+else()
+    set(RE2DJ_SDL3_AUDIO_ACTIVE OFF)
+endif()
+if(RE2DJ_SDL3_AUDIO_ACTIVE)
     set(SDL_AUDIO ON CACHE BOOL "" FORCE)
 else()
     set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
@@ -99,12 +105,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/linux/native_guest_module_image.cpp
         src/platform/linux/native_guest_module_set.cpp
         src/platform/linux/native_guest_seh.cpp
+        src/platform/linux/native_guest_threads.cpp
         src/platform/linux/native_import_thunks.cpp
         src/platform/linux/native_in_process_runner.cpp
         src/platform/linux/native_instruction_trace.cpp
         src/platform/linux/native_kernel32_diagnostic.cpp
+        src/platform/linux/native_legacy_io.cpp
         src/platform/linux/native_pe_image.cpp
         src/platform/linux/host_presentation.cpp
+        src/platform/linux/host_keyboard.cpp
         src/platform/linux/native_pe_session.cpp
         src/platform/linux/original_runner.cpp
     )
@@ -117,6 +126,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_compile_options(re2dj_linux_native_backend PRIVATE -fno-omit-frame-pointer)
         add_executable(re2dj_linux_native_in_process_probe
             src/platform/linux/x86/native_in_process_probe.cpp
+            src/platform/linux/native_thread_probe.cpp
             src/platform/native_probe_fixture.cpp
         )
         target_link_libraries(re2dj_linux_native_in_process_probe
@@ -145,6 +155,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         )
         add_executable(re2dj_linux_native_in_process_probe
             src/platform/linux/x64/native_in_process_probe.cpp
+            src/platform/linux/native_thread_probe.cpp
             src/platform/native_probe_fixture.cpp
         )
         target_link_libraries(re2dj_linux_native_in_process_probe
@@ -251,6 +262,7 @@ add_library(re2dj_chd_storage STATIC
     src/storage/chd_hunk_cache.cpp
     src/storage/fat32_chd.cpp
     src/storage/fat32_directory_name.cpp
+    src/storage/guest_find.cpp
     src/storage/mame_chd.cpp
 )
 target_include_directories(re2dj_chd_storage
@@ -267,12 +279,15 @@ target_link_libraries(re2dj_chd_storage
 add_library(re2dj_directx STATIC
     src/directx/direct3d_description.cpp
     src/directx/direct3d_device.cpp
+    src/directx/direct3d_draw.cpp
+    src/directx/direct3d_vertex_buffer.cpp
     src/directx/directdraw_description.cpp
     src/directx/directdraw_display.cpp
     src/directx/directdraw_surface.cpp
+    src/directx/directinput.cpp
 )
 target_include_directories(re2dj_directx PUBLIC include)
-target_link_libraries(re2dj_directx PRIVATE re2dj_warnings)
+target_link_libraries(re2dj_directx PUBLIC re2dj_legacy_graphics PRIVATE re2dj_warnings)
 
 add_library(re2dj_legacy_graphics STATIC
     src/graphics/legacy_draw_command.cpp
@@ -281,6 +296,7 @@ add_library(re2dj_legacy_graphics STATIC
     src/graphics/legacy_vertex_buffer.cpp
     src/graphics/present_interval_histogram.cpp
     src/graphics/present_sync.cpp
+    src/graphics/present_pacer.cpp
     src/graphics/presentation_filter.cpp
 )
 target_include_directories(re2dj_legacy_graphics PUBLIC include)
@@ -339,9 +355,16 @@ add_library(re2dj_core STATIC
     src/hle/api_call_record.cpp
     src/hle/guest_devices.cpp
     src/hle/guest_files.cpp
+    src/hle/private_profile.cpp
+    src/hle/wsprintf.cpp
     src/hle/guest_heap.cpp
     src/hle/guest_com.cpp
     src/hle/guest_process.cpp
+    src/hle/gdi_raster.cpp
+    src/hle/bitmap_file.cpp
+    src/hle/guest_gdi.cpp
+    src/hle/guest_font.cpp
+    src/hle/guest_mixer.cpp
     src/hle/guest_user.cpp
     src/hle/win32_time.cpp
     src/hle/import_dispatcher.cpp
@@ -354,11 +377,16 @@ add_library(re2dj_core STATIC
     src/hle/modules/resolve_only_modules.cpp
     src/hle/modules/ddraw_device7.cpp
     src/hle/modules/ddraw_direct3d7.cpp
+    src/hle/modules/ddraw_vertex_buffer7.cpp
+    src/hle/modules/ddraw_direct_draw4.cpp
     src/hle/modules/ddraw_module.cpp
     src/hle/modules/ddraw_surface7.cpp
+    src/hle/modules/ddraw_texture2.cpp
+    src/hle/modules/dinput_module.cpp
     src/hle/modules/dsound_module.cpp
     src/hle/modules/facade_com.cpp
     src/hle/modules/gdi32_module.cpp
+    src/hle/modules/gdi_bitmaps.cpp
     src/hle/modules/user32_module.cpp
     src/hle/modules/winmm_module.cpp
     src/hle/modules/wtsapi32_module.cpp
@@ -368,6 +396,9 @@ add_library(re2dj_core STATIC
     src/input/ez2dancer_io_board.cpp
     src/input/ez2dancer_io_port_bus.cpp
     src/input/legacy_io_port_bus.cpp
+    src/input/legacy_io_trap.cpp
+    src/input/virtual_keys.cpp
+    src/input/ez2dj_keyboard_map.cpp
     src/exe/code_scan.cpp
     src/exe/immediate_scan.cpp
     src/exe/pe_image.cpp
@@ -398,32 +429,58 @@ target_link_libraries(re2dj_core
     PRIVATE re2dj_logging re2dj_warnings
 )
 
-if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
-    if(RE2DJ_ENABLE_SDL3_AUDIO)
-        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_INSTALL OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_TESTS OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_EXAMPLES OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_AIFF OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_WAVE OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_VOC OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_AU OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_FLAC OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_GME OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_MOD OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_MP3 OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_MIDI OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_OPUS OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_VORBIS_STB OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_VORBIS_VORBISFILE OFF CACHE BOOL "" FORCE)
-        set(SDLMIXER_WAVPACK OFF CACHE BOOL "" FORCE)
-        FetchContent_Declare(SDL3_mixer
-            GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
-            GIT_TAG 72a81869b45e249e8e67102db4e98dd2441f05a1
-            GIT_SHALLOW TRUE
+if(RE2DJ_SDL3_AUDIO_ACTIVE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_INSTALL OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_TESTS OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_AIFF OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_WAVE OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_VOC OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_AU OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_FLAC OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_GME OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_MOD OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_MP3 OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_MIDI OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_OPUS OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_VORBIS_STB OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_VORBIS_VORBISFILE OFF CACHE BOOL "" FORCE)
+    set(SDLMIXER_WAVPACK OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(SDL3_mixer
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
+        GIT_TAG 72a81869b45e249e8e67102db4e98dd2441f05a1
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(SDL3_mixer)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND RE2DJ_SDL3_AUDIO_ACTIVE)
+    # The guest's DirectSound plays through the backend the Windows facade uses.
+    target_sources(re2dj_linux_native_backend PRIVATE
+        src/audio/sdl3_mixer_audio_backend.cpp
+        src/platform/linux/host_audio.cpp
+    )
+    target_include_directories(re2dj_linux_native_backend PRIVATE src/audio)
+    target_link_libraries(re2dj_linux_native_backend PRIVATE SDL3_mixer::SDL3_mixer-static)
+    target_compile_definitions(re2dj_linux_native_backend PUBLIC RE2DJ_LINUX_HOST_AUDIO=1)
+    if(RE2DJ_BUILD_TESTS)
+        add_executable(re2dj_audio_stream_progress_test
+            tests/audio/stream_progress_test.cpp
+            src/audio/directsound_device.cpp
+            src/audio/legacy_audio_buffer.cpp
+            src/audio/sdl3_mixer_audio_backend.cpp
         )
-        FetchContent_MakeAvailable(SDL3_mixer)
+        target_include_directories(re2dj_audio_stream_progress_test PRIVATE include src/audio)
+        target_link_libraries(re2dj_audio_stream_progress_test PRIVATE
+            SDL3_mixer::SDL3_mixer-static SDL3::SDL3-static)
+        add_test(NAME re2dj_audio_stream_progress_test COMMAND re2dj_audio_stream_progress_test)
+        set_tests_properties(re2dj_audio_stream_progress_test PROPERTIES
+            ENVIRONMENT "SDL_AUDIODRIVER=dummy" TIMEOUT 15)
     endif()
+endif()
+
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
 
     add_library(re2dj_windows_injected_runtime SHARED
         src/hle/hardlock/api_descriptor.cpp
@@ -431,6 +488,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/hle/hardlock/device.cpp
         src/hle/hardlock/device_call.cpp
         src/hle/guest_device_path.cpp
+        src/hle/private_profile.cpp
         src/hle/hardlock/engine.cpp
         src/hle/hardlock/payload_responses.cpp
         src/hle/hardlock/transform_responses.cpp
@@ -439,6 +497,9 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/input/ez2dancer_io_board.cpp
         src/input/ez2dancer_io_port_bus.cpp
         src/input/legacy_io_port_bus.cpp
+        src/input/legacy_io_trap.cpp
+        src/input/virtual_keys.cpp
+        src/input/ez2dj_keyboard_map.cpp
         src/platform/windows/audio_volume_trace.cpp
         src/platform/windows/direct3d3_com_facade.cpp
         src/platform/windows/direct3d7_com_facade.cpp
@@ -637,9 +698,13 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/kernel32_module_test.cpp
         tests/unit/user32_module_test.cpp
         tests/unit/ddraw_module_test.cpp
+        tests/unit/dinput_module_test.cpp
+        tests/unit/winmm_module_test.cpp
+        tests/unit/gdi_raster_test.cpp
         tests/unit/dsound_module_test.cpp
         tests/unit/directx_display_test.cpp
         tests/unit/directx_device_test.cpp
+        tests/unit/directx_input_test.cpp
         tests/unit/directx_surface_test.cpp
         tests/unit/version_test.cpp
         tests/unit/guest_process_test.cpp
@@ -665,8 +730,10 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/hdd_root_test.cpp
         tests/unit/main.cpp
         tests/unit/lptdi_challenge_response_test.cpp
+        tests/unit/bitmap_file_test.cpp
         tests/unit/lptdi_response_profile_test.cpp
         tests/unit/legacy_io_port_bus_test.cpp
+        tests/unit/legacy_io_trap_test.cpp
         tests/unit/legacy_draw_command_test.cpp
         tests/unit/presentation_filter_test.cpp
         tests/unit/legacy_texture_test.cpp
@@ -687,11 +754,16 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/temporary_tree.cpp
         tests/unit/present_interval_histogram_test.cpp
         tests/unit/present_sync_test.cpp
+        tests/unit/window_policy_test.cpp
+        tests/unit/ez2dj_keyboard_map_test.cpp
+        tests/unit/guest_find_test.cpp
         tests/unit/target_profile_test.cpp
         tests/unit/vfs_file_table_test.cpp
     )
     target_include_directories(re2dj_unit_tests PRIVATE tests/unit src/tools/chd_probe)
     target_link_libraries(re2dj_unit_tests PRIVATE re2dj_core re2dj_logging re2dj_warnings)
+    # Where the tests find repository files such as config/ examples.
+    target_compile_definitions(re2dj_unit_tests PRIVATE RE2DJ_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME re2dj_unit_tests COMMAND re2dj_unit_tests)
     if(TARGET re2dj_linux_native_guest_module_probe)
         add_test(NAME re2dj_linux_native_guest_module_probe

@@ -1,5 +1,77 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.55 (2026-09-29)
+
+### 한국어
+
+Linux x86·x64에서 EZ2DJ 4th, 1st SE, 5th가 창을 닫을 때까지 돌아갑니다. 화면, 소리, 키보드·마우스 입력, IO 보드가 모두 연결됐습니다. 1st도 DirectX 6 초기화와 소리 스레드까지 진행합니다. 새로 만든 규칙은 대부분 Windows와 Linux가 함께 쓰는 공용 core에 두었고, Windows 11에서 측정한 값을 따릅니다.
+
+#### 1. Linux 4th를 끝까지 (작업 384~403)
+- **입력**: DirectInput core를 공용으로 옮기고 Linux `dinput.dll`을 추가했습니다. IO 보드 포트 판정도 공용 trap core로 옮겨, Linux 두 폭의 signal handler가 답합니다. SDL의 키·마우스·커서가 `GetAsyncKeyState`, DirectInput, `GetCursorPos`, IO 보드로 들어갑니다.
+- **소리**: winmm mixer 하나를 모델링하고(Windows 11 host 측정), DirectSound 버퍼 제어를 core로 옮겼습니다. Linux는 SDL3_mixer로 소리를 냅니다(`--audio-gain-db`).
+- **화면**: 그리기 규칙(draw 계획, 고정 기능 상태, 변환, fade)을 `direct3d_draw.h` core로 옮겼습니다. Linux 창은 공용 SDL3/OpenGL backend로 그립니다. 기본 2배 크기, Alt+1/2/3, 더블클릭 전체 화면, 제목 FPS, `--fullscreen`/`--windowed`를 지원합니다.
+- **표면과 GDI**: 표면 DC, `StretchDIBits`, `EnumSurfaces`/`RestoreAllSurfaces`, DX7 vertex buffer, `CreateSolidBrush`·`FillRect`·`SetTextColor`·`SetBkMode`·`DrawTextA`(GNU Unifont 8×16 ASCII 글리프, OFL 1.1)를 추가했습니다.
+- **파일과 메시지**: 현재 디렉터리, `GetFileType`, `FindFirstFileA`(제품 VFS 목록 규칙 공유), `GetFileAttributesA`를 추가했습니다. `PeekMessageA`/`DispatchMessageA`와 메시지 큐(WM_PAINT, WM_TIMER)도 구현했습니다.
+- **실행**: 호출 한도 없이 창을 닫을 때까지 실행합니다. 호출 한도는 `--call-limit`로만 겁니다.
+
+#### 2. Linux 1st (작업 404~419)
+- **게스트 예외**: 게스트 예외를 게스트의 SEH 체인으로 넘기고 `RtlUnwind`를 구현했습니다. Linux x86에서 게스트가 `%gs`를 바꿔 생기던 coredump도 고쳤습니다.
+- **kernel32·user32**: CRT 시작 함수(critical section, TLS, Interlocked, `IsBadReadPtr`), `ShowWindow`, `EnumDisplaySettingsA`, `Sleep`, `HeapValidate`를 추가했습니다. `GetPrivateProfileIntA`/`StringA`/`SectionNamesA`는 공용 INI core로 처리합니다. `wsprintfA`는 가변 인자를 읽어 측정한 서식 규칙으로 처리합니다.
+- **DirectX 6**: `DirectDrawEnumerateA`, `DirectDrawCreate`, `IDirectDraw4`, `IDirect3D3`, `IDirectDrawSurface4`, `IDirect3DDevice3`, `IDirect3DViewport3`를 추가했습니다. `FindDevice`, Z 형식, `GetCaps`, `D3DVIEWPORT2` 변환은 Windows DX6 facade와 공용 core를 함께 씁니다.
+- **게스트 스레드**: `CreateThread`로 만든 게스트 스레드가 host 스레드에서 돕니다. 게스트 코드와 HLE는 게스트 잠금 하나로 한 번에 한 스레드만 실행하고, 잠금은 import 안에서만 넘어갑니다. x64에서는 transition 상태를 스레드끼리 넘깁니다. 메인이 아닌 스레드의 fault나 `ExitProcess`는 프로세스를 끝냅니다. `SetThreadPriority`, 스레드 핸들 대기, 스레드별 ID·last error도 들어갔습니다.
+
+#### 3. Linux 1st SE와 5th (작업 420~426)
+- **1st SE**: CHD로 실행합니다. BMP 파일 읽기(`LoadImageA`와 GDI 비트맵), DX6 texture(`IDirect3DTexture2`), `Blt`/`BltFast`, DX6 vertex buffer를 추가했습니다.
+- **소프트웨어 페이싱**: vsync를 요청해도 swap이 막지 않는 host(WSLg)에서는 공용 backend가 화면 주기에 맞춰 present를 기다립니다. 1st SE가 112 FPS 대신 60 FPS로 돕니다. vsync가 실제로 막는 Windows에서는 켜지지 않습니다.
+- **표면 Lock**: `Lock`/`Unlock` 규칙을 공용 core(`PlanLock`)로 옮겼습니다. 화면에 내보내는 렌더 타깃을 Lock하면 GL 그림을 되읽고, Unlock하면 다시 올립니다. 4th의 F1(TEST) 테스트 모드 메뉴가 Linux와 Windows 모두에서 보입니다. 전에는 두 host 모두 검은 화면이었습니다.
+- **5th**: `StretchDIBits`가 8비트 팔레트 DIB를 받습니다(측정). 5th가 Linux 두 폭에서 창을 닫을 때까지 돕니다.
+
+#### 4. Windows에 영향을 주는 변경
+- 4th의 F1 테스트 모드 화면이 나옵니다(작업 425).
+- `GetFileAttributesA`를 게스트 이미지 기준으로 답합니다. 전에는 host 현재 디렉터리 기준이었습니다(작업 403).
+- 공용 core로 옮긴 규칙은 각 작업에서 Windows 실제 실행 기록을 변경 전후로 비교해, 같게 유지됐음을 확인했습니다.
+
+#### 5. 검증
+- Windows x86 CTest 6개, Linux x64·x86 CTest 4개가 통과합니다(단위 5360 / 5357 checks). Linux in-process probe에 게스트 스레드 합성 검사가 포함됩니다.
+- Linux 4th·1st SE·5th는 두 폭에서 시간 제한까지 멈추지 않았습니다. 1st는 두 폭에서 `user32!LoadImageA`까지 진행합니다.
+
+---
+
+### English
+
+On Linux x86 and x64, EZ2DJ 4th, 1st SE, and 5th now run until their window is closed, with picture, sound, keyboard and mouse input, and the IO board all connected. 1st gets through DirectX 6 initialization and its sound thread. Most new rules live in shared cores used by both Windows and Linux and follow values measured on Windows 11.
+
+#### 1. Linux 4th end to end (tasks 384–403)
+- **Input**: The DirectInput core is shared and Linux gains `dinput.dll`. IO-board port decisions moved into a shared trap core, answered by both Linux widths' signal handlers. SDL keys, mouse, and cursor reach `GetAsyncKeyState`, DirectInput, `GetCursorPos`, and the IO board.
+- **Sound**: One winmm mixer is modelled (measured on a Windows 11 host), DirectSound buffer controls moved into the core, and Linux plays sound through SDL3_mixer (`--audio-gain-db`).
+- **Picture**: The drawing rules (draw plan, fixed-function state, transforms, fade) moved into the `direct3d_draw.h` core. The Linux window draws through the shared SDL3/OpenGL backend, with a default 2x scale, Alt+1/2/3, double-click fullscreen, the title FPS, and `--fullscreen`/`--windowed`.
+- **Surfaces and GDI**: Surface DCs, `StretchDIBits`, `EnumSurfaces`/`RestoreAllSurfaces`, DX7 vertex buffers, and `CreateSolidBrush`, `FillRect`, `SetTextColor`, `SetBkMode`, and `DrawTextA` (GNU Unifont 8×16 ASCII glyphs, OFL 1.1).
+- **Files and messages**: The current directory, `GetFileType`, `FindFirstFileA` (sharing the product VFS listing rules), and `GetFileAttributesA`; `PeekMessageA`/`DispatchMessageA` with a message queue (WM_PAINT, WM_TIMER).
+- **Running**: A run goes on until the window is closed; a call limit applies only with `--call-limit`.
+
+#### 2. Linux 1st (tasks 404–419)
+- **Guest exceptions**: Guest exceptions are delivered to the guest's SEH chain, and `RtlUnwind` is implemented. A Linux x86 coredump caused by the guest changing `%gs` is fixed.
+- **kernel32 and user32**: CRT start-up functions (critical sections, TLS, Interlocked, `IsBadReadPtr`), `ShowWindow`, `EnumDisplaySettingsA`, `Sleep`, and `HeapValidate`. `GetPrivateProfileIntA`/`StringA`/`SectionNamesA` go through a shared INI core. `wsprintfA` reads its variadic arguments and follows the measured formatting rules.
+- **DirectX 6**: `DirectDrawEnumerateA`, `DirectDrawCreate`, `IDirectDraw4`, `IDirect3D3`, `IDirectDrawSurface4`, `IDirect3DDevice3`, and `IDirect3DViewport3`. `FindDevice`, the depth format, `GetCaps`, and the `D3DVIEWPORT2` transform share a core with the Windows DX6 facade.
+- **Guest threads**: Guest threads from `CreateThread` run on host threads of their own. One guest lock lets only one thread run guest code or the HLE at a time, and it changes hands only inside imports. On x64 the transition state is handed between threads. A fault or `ExitProcess` in a thread other than the main one ends the process. `SetThreadPriority`, waits on thread handles, and per-thread IDs and last errors are included.
+
+#### 3. Linux 1st SE and 5th (tasks 420–426)
+- **1st SE**: It runs from its CHD. Bitmap files (`LoadImageA` with GDI bitmaps), DX6 textures (`IDirect3DTexture2`), `Blt`/`BltFast`, and DX6 vertex buffers are added.
+- **Software pacing**: On a host whose swap does not block despite vsync (WSLg), the shared backend waits out the display period after each present, so 1st SE runs at 60 FPS instead of 112. It stays off on Windows, where vsync does block.
+- **Surface Lock**: The `Lock`/`Unlock` rules moved into a shared core (`PlanLock`). Locking the render target that is presented reads the GL picture back, and unlocking writes it back, so 4th's F1 (TEST) test-mode menu shows on both Linux and Windows; before, both hosts showed a black screen.
+- **5th**: `StretchDIBits` takes 8-bit palettized DIBs (measured), and 5th runs on both Linux widths until its window is closed.
+
+#### 4. Changes that reach Windows
+- 4th's F1 test-mode screen now shows (task 425).
+- `GetFileAttributesA` answers from the guest image; it used to query relative to the host's current directory (task 403).
+- For each rule moved into a shared core, the task compared real Windows run records before and after the change and confirmed they stayed the same.
+
+#### 5. Validation
+- All 6 Windows x86 CTest tests and all 4 Linux x64/x86 CTest tests pass (5360 / 5357 unit checks); the Linux in-process probe includes synthetic guest-thread checks.
+- Linux 4th, 1st SE, and 5th ran on both widths without stopping until the timeout; 1st gets as far as `user32!LoadImageA` on both widths.
+
+---
+
 ## v0.0.54 (2026-09-26)
 
 ### 한국어

@@ -247,16 +247,65 @@
     - [x] [작업 381 — DirectX core 3단계: 표면](work-logs/20260926-381-directx-surfaces.md). `PlanCreateSurface`·attach·표면 설명을 Windows·Linux가 함께 씀(Windows 실제 4th 기록 전후 같음), Linux `IDirectDrawSurface7`(픽셀은 guest 메모리). 실제 4th가 두 폭에서 `CreateSurface`를 지나 `IDirect3D7::CreateDevice`에서 정지
     - [x] [작업 382 — DirectX core 4단계: 장치](work-logs/20260926-382-directx-device.md). `DeviceState`(초기 상태, 상태·장면·viewport 규칙)와 `CheckCreateDevice`를 Windows·Linux가 함께 씀(Windows 실제 4th 기록 전후 같음), Linux `IDirect3DDevice7`. 실제 4th가 두 폭에서 장치 설정과 글꼴 파일 읽기를 지나 `user32!GetForegroundWindow`에서 정지
     - [x] [작업 383 — DirectSound 진입과 창 조회](work-logs/20260926-383-directsound-entry.md). DirectSound core(버퍼 생성·caps·복제·lock)를 Windows·Linux가 함께 씀(Windows 실제 4th 그래픽·오디오 기록 전후 같음), Linux `dsound.dll`(sample은 guest 메모리, 출력 없음), `GetForegroundWindow`, `GetWindowLongA`(측정). 실제 4th가 두 폭에서 `dinput.dll!DirectInputCreateA`에서 정지
-    - [ ] 다음 — DirectInput(`DirectInputCreateA`) 공용 core와 Linux module
-    - [ ] DirectSound 재생·제어(`Play`, 위치, 볼륨 등)와 Linux 소리 출력
+    - [x] [작업 384 — DirectInput 진입](work-logs/20260926-384-directinput-entry.md). DirectInput core(인터페이스·장치 판정, 장치 상태 배치)를 Windows·Linux가 함께 씀(Windows 실제 4th 그래픽·입력 기록 전후 같음, 7A IID 바로잡음), Linux `dinput.dll`(host 입력 미연결). 실제 4th가 두 폭에서 입력 장치 설정을 지나 IO 보드 `in al, dx`(port `0x0103`)에서 SIGSEGV
+    - [x] [작업 385 — Linux IO 보드 포트 입출력](work-logs/20260926-385-linux-legacy-io-ports.md). 포트 접근 판정 규칙을 core로 옮겨 Windows·Linux가 함께 씀(Windows 실제 4th 그래픽·IO 포트 기록 전후 같음), Linux 두 폭 signal handler가 `LegacyIoPortBus`로 답함. 실제 4th가 포트 읽기 3번을 지나 `winmm!mixerGetNumDevs`에서 정지
+    - [x] [작업 386 — winmm mixer](work-logs/20260926-386-winmm-mixer.md). Windows 11 host mixer를 측정해 Linux에 mixer 하나를 모델링(line·control·값·오류, 이름은 "re2DJ Audio"). 실제 4th가 mixer를 연 뒤 secondary 버퍼를 만들고 `IDirectSoundBuffer::Stop`에서 정지
+    - [x] [작업 387 — DirectSound 2단계: 버퍼 제어](work-logs/20260926-387-directsound-controls.md). 제어 규칙과 무음 재생(시계로 진행하는 cursor)을 core로, Windows `LegacyAudioBuffer`·facade가 함께 씀(Windows 실제 4th 그래픽·오디오 기록 전후 같음), Linux 버퍼 메서드 21개 모두 구현, 호출 한도 32,768. 실제 4th가 효과음 로딩(약 12,000번 호출)을 마치고 `user32!GetAsyncKeyState`에서 정지
+    - [x] [작업 388 — 키 상태 조회와 mixer 식별](work-logs/20260926-388-input-queries.md). `GetAsyncKeyState`(측정, host 입력 미연결로 모두 안 눌림), mixer ID 자리의 열린 handle 수용(측정). 실제 4th가 mixer 조회·설정을 지나 텍스처 표면 `GetDC`에서 정지
+    - [x] [작업 389 — 표면 DC와 StretchDIBits](work-logs/20260926-389-surface-dc-and-stretchdibits.md). DC 규칙을 core로(Windows 실제 4th 기록 전후 같음), Linux GDI 모델(`GuestGdi`, 측정한 `gdi_raster`), 표면 `GetDC`/`ReleaseDC`/`SetColorKey`, `StretchDIBits`(측정). 실제 4th가 텍스처 업로드를 마치고 메인 루프의 `user32!GetCursorPos`에서 정지
+    - [x] [작업 390 — 메인 루프의 입력과 메시지](work-logs/20260926-390-main-loop-input-and-messages.md). `GetCursorPos`·`ScreenToClient`·`PeekMessageA`·`TranslateMessage`·`DispatchMessageA`(측정), 커서 위치와 timer 기준 시각, 메시지 큐(WM_PAINT, WM_TIMER). 실제 4th가 첫 프레임 그리기에 들어가 `IDirect3DDevice7::Clear`에서 정지
+    - [x] [작업 391 — DirectX 5단계: 그리기와 Linux 창 표시](work-logs/20260926-391-directx-drawing.md). 그리기 규칙(draw 계획, 고정 기능 상태, DX7 변환, fade, clear 색)을 `direct3d_draw.h` core로(Windows 실제 4th 그래픽 기록 전후 같음), `HostPresentation` 그리기 계약과 Linux SDL3/OpenGL 구현, Linux `Clear`·`SetTexture`·`DrawPrimitive`·`Flip`, 텍스처 revision·폐기. 실제 4th가 두 폭의 Linux 창에 WARNING 화면을 그리고 약 490프레임 뒤 `IDirectDraw7::EnumSurfaces`에서 정지
+    - [x] [작업 392 — 표면 점검: EnumSurfaces와 RestoreAllSurfaces](work-logs/20260927-392-surface-sweep.md). Windows 11 `EnumSurfaces`·`RestoreAllSurfaces` 측정, 플래그 규칙을 core로(Windows 실제 4th 그래픽 기록 전후 같음), Linux 열거(최신 것부터, AddRef, `GetSurfaceDesc`와 같은 설명). 실제 4th가 표면 4개를 점검하고 `kernel32!GetCurrentDirectoryA`에서 정지
+    - [x] [작업 393 — 현재 디렉터리](work-logs/20260927-393-current-directory.md). `GetCurrentDirectoryA`·`SetCurrentDirectoryA`(측정), `GuestFiles` 현재 디렉터리와 상대 경로 해석. 실제 4th가 `System\Common`·`System\AmuseLogo`로 옮겨 다음 장면 텍스처를 읽고, CRT의 `GetFileType` 뒤 SIGSEGV로 정지
+    - [x] [작업 394 — 파일 handle의 GetFileType](work-logs/20260927-394-file-type.md). 열린 guest 파일은 `FILE_TYPE_DISK`(측정). 실제 4th가 CRT 파일 열기를 지나 Amuse World 로고 장면을 그리고 진단용 호출 한도 32,768번에서 정지
+    - [x] [작업 395 — 창을 닫을 때까지 실행](work-logs/20260927-395-run-until-closed.md). 호출 한도는 `--call-limit`로만, backend 이벤트 관찰자와 창 닫기 경계, API 기록 32,768번 제한. 실제 4th가 타이틀 화면까지 돌고 창을 닫으면 exit 0
+    - [x] [작업 396 — Linux 창 크기와 단축키](work-logs/20260927-396-linux-window-policy.md). 공용 창 정책(`window_policy.h`), 기본 2배(1280×960), Alt+1/2/3, 더블클릭 전체 화면, 제목 FPS, Linux `--fullscreen`/`--windowed`
+    - [ ] Windows facade `EnumSurfaces`가 측정대로 존재하는 표면을 열거(지금은 facade에 표면 목록이 없어 빈 열거)
+    - [x] [작업 397 — Linux host 입력](work-logs/20260927-397-linux-host-input.md). VK·키 이름·EZ2DJ 키 배치·턴테이블을 core로(Windows 그래픽·IO 기록 전후 같음), host 입력 상태, Linux SDL 키·마우스·커서가 `GetAsyncKeyState`·DirectInput·`GetCursorPos`·IO 보드로. 사용자 조작으로 코인 투입과 스타일 선택 화면 진입, `kernel32!FindFirstFileA`에서 정지
+    - [ ] Linux 소리의 노이즈(사용자 청취 확인 2026-09-27: 소리는 들리나 노이즈가 섞임). 원인 후보: 스트리밍 링 재채움 시점, 샘플 복사 경계, WSLg PulseAudio 버퍼 크기
+    - [x] [작업 400 — DX7 vertex buffer](work-logs/20260927-400-vertex-buffers.md). VB 규칙을 core로(Windows 그래픽·VB 60초 기록 전후 같음), Linux `IDirect3DVertexBuffer7`·`CreateVertexBuffer`·`DrawPrimitiveVB`·`DrawIndexedPrimitiveVB`. 곡 정보 화면의 `gdi32!CreateSolidBrush`에서 정지
+    - [x] [작업 401 — 표면 DC의 GDI 그리기](work-logs/20260927-401-surface-gdi-drawing.md). `CreateSolidBrush`·`DeleteObject`·`FillRect`·`SetTextColor`·`SetBkMode`·`DrawTextA`(측정). 곡 재킷이 없을 때의 대체 텍스처를 지나 `kernel32!GetFileAttributesA`에서 정지
+    - [x] [작업 402 — DrawTextA 글자를 Unifont로](work-logs/20260927-402-drawtext-unifont-glyphs.md). GNU Unifont 15.1.05 ASCII 8×16 글리프(OFL 1.1)로 측정한 셀 위치·잘라내기·OPAQUE 배경을 그림. 대체 텍스처의 `temp` 글자가 나옴
+    - [x] [작업 403 — GetFileAttributesA](work-logs/20260927-403-get-file-attributes.md). 측정, 공용 규칙(`DescribeGuestFileAttributes`), Linux `GuestFiles::Attributes`와 kernel32 export, Windows VFS hook(전에는 host 현재 디렉터리 기준으로 조회됨). Windows 60초 기록은 resolver 경로 말고 같음. Linux 두 폭이 입력 없이 attract의 DEMO PLAY까지 돌고 창을 닫을 때까지 멈추지 않음
+    - [x] [작업 404 — 게스트 예외 디스패치와 Linux x86 호스트 GS 복원](work-logs/20260927-404-guest-exception-dispatch.md). guest 예외를 guest SEH 체인으로 넘기는 일반 전달과 kernel32 `RtlUnwind` 구현, Linux x86에서 게스트의 `%gs` 수정으로 인한 시그널/브릿지 coredump 원인 규명 및 호스트 GS 트램펄린 복원. 두 폭 모두 `ez2dj1st`가 첫 예외를 통과하고 정상 동작 확인
+    - [x] [작업 405 — GetPrivateProfileIntA와 디렉터리 덤프 파일](work-logs/20260927-405-private-profile-int.md). 측정, 공용 INI core와 `DemoVolume` 정책(Windows 제품도 사용), Linux kernel32 export, `GuestFiles` 디렉터리 원본(대소문자 무시), 1st import 이름 33개 resolve-only. 실제 `bookkeeping.ini` 값이 Windows 기록과 같음. 1st는 두 폭 모두 CRT 시작의 `kernel32!InitializeCriticalSection`에서 정지
+    - [x] [작업 406 — 1st CRT 시작의 kernel32 함수](work-logs/20260927-406-crt-startup-kernel32.md). critical section, TLS(TEB 슬롯), Interlocked, `GetCurrentThread`, `IsBadReadPtr`/`IsBadWritePtr`(측정). 1st는 두 폭 모두 CRT 시작을 지나 `user32!ShowWindow`에서 정지
+    - [x] [작업 407 — ShowWindow](work-logs/20260927-407-show-window.md). 숨긴 창의 `SW_SHOW`는 `WS_VISIBLE` 생성과 같은 메시지 순서(측정), 공용 `ShowHiddenWindow`. 1st는 메시지 루프를 돌고 `user32!EnumDisplaySettingsA`에서 정지
+    - [x] [작업 408 — EnumDisplaySettingsA와 ChangeDisplaySettingsExA](work-logs/20260927-408-display-settings.md). 현재 모드는 host 데스크톱 모드(`HostPresentation::DesktopDisplayMode`, SDL), DEVMODEA는 측정한 바이트만. 모드 변경은 Windows 제품처럼 흡수. 1st는 `kernel32!Sleep`에서 정지
+    - [x] [작업 409 — Sleep](work-logs/20260927-409-sleep.md). host 대기 서비스(`WaitMilliseconds`), `Sleep(INFINITE)`은 정지. 1st는 `GetPrivateProfileIntA`를 실제로 불러 Windows와 같은 값을 읽고 `kernel32!GetPrivateProfileStringA`에서 정지
+    - [x] [작업 410 — GetPrivateProfileStringA](work-logs/20260927-410-private-profile-string.md). 따옴표·버퍼 자름·`ERROR_MORE_DATA`·기본값·키/섹션 목록(측정), 공용 INI core. 1st는 `ez2dj.ini`를 읽고 `kernel32!GetPrivateProfileSectionNamesA`에서 정지
+    - [x] [작업 411 — GetPrivateProfileSectionNamesA](work-logs/20260927-411-private-profile-section-names.md). 측정, 공용 INI core 사용. 1st는 `Songs\music.ini` 섹션 목록(167)과 `[STATISTICS]`를 Windows와 같게 읽고 `ddraw!DirectDrawEnumerateA`에서 정지
+    - [x] [작업 412 — DirectDrawEnumerateA](work-logs/20260927-412-directdraw-enumerate.md). 주 드라이버 하나(측정), Ex 판과 콜백 루프 공유. 1st는 `ddraw!DirectDrawCreate`에서 정지
+    - [x] [작업 413 — DirectDrawCreate와 DirectX 6 객체](work-logs/20260928-413-directdraw-create-dx6.md). `IDirectDraw4`·`IDirect3D3` 객체(DX7과 다른 종류), facade와 같은 `QueryInterface`. 1st는 `IDirectDraw4::SetCooperativeLevel`에서 정지
+    - [x] [작업 414 — IDirectDraw4 협력 수준·화면 모드](work-logs/20260928-414-dx6-cooperative-level.md). DX7과 같은 공용 core 본문 공유. 1st는 host 창이 열리고 `IDirect3D3::FindDevice`에서 정지
+    - [x] [작업 415 — IDirect3D3::FindDevice 공용 core](work-logs/20260928-415-dx6-find-device.md). DX6 구조체(SDK 배치 검사)와 `directx::FindDevice`를 Windows facade·Linux가 공유. 1st는 `IDirect3D3::EnumZBufferFormats`에서 정지
+    - [x] [작업 416 — DX6 장치·표면·viewport 묶음](work-logs/20260928-416-dx6-device-and-viewport.md). `EnumZBufferFormats`, `IDirectDrawSurface4`(DX7 표면 공유), `IDirect3DDevice3`(DX7 장치 상태 공유), `IDirect3DViewport3`와 장치의 viewport, `GetCaps`. Z 형식·caps·`D3DVIEWPORT2` 변환을 공용 core로(Windows facade도 사용). 1st는 두 폭 모두 DX6 초기화와 DirectSound를 지나 `kernel32!CreateThread`에서 정지
+    - [x] [작업 417 — Linux 게스트 스레드](work-logs/20260928-417-guest-threads.md). 게스트 스레드마다 host 스레드, 게스트 잠금 하나로 실행(import 안에서만 인계), 스레드별 스택·TEB·FS·실행 상태, x64 transition 상태 인계, 다른 스레드의 fault·정지·종료는 프로세스 종료. `CreateThread`·`SetThreadPriority`·`GetThreadPriority`(측정), 스레드 핸들 대기, 스레드별 ID·last error, critical section 경합 대기. 1st는 두 폭 모두 소리 스레드와 번갈아 돌고 메인 스레드의 `kernel32!HeapValidate`에서 정지
+    - [x] [작업 418 — HeapValidate](work-logs/20260928-418-heap-validate.md). 측정대로 힙 전체·블록 시작만 유효. 1st는 두 폭 모두 `user32!wsprintfA`에서 정지
+    - [x] [작업 419 — wsprintfA](work-logs/20260928-419-wsprintf.md). 측정한 서식 규칙의 공용 core, `ImportCall::arguments_address`로 가변 인자. 1st는 두 폭 모두 `user32!LoadImageA`에서 정지
+    - [x] [작업 420 — Linux에서 1st SE CHD](work-logs/20260928-420-1stse-chd-linux.md). 환경에 1st가 없어 1st SE CHD로 이어 감. 로컬 `cfg/`에 1st SE Hardlock 자료 복원, 보호 계층 Hardlock 39건 통과, `SetBkColor`(측정), legacy I/O RVA 실행 확인. 작업 421·422 뒤 두 폭 모두 창을 닫을 때까지 돎
+    - [x] [작업 421 — 파일에서 읽는 비트맵](work-logs/20260928-421-bitmap-files.md). 공용 BMP 해석, `LoadImageA`(LR_LOADFROMFILE·DIB section), `GetObjectA`·`CreateCompatibleDC`·`SelectObject`·1:1 `StretchBlt`·`DeleteDC`, 선택된 비트맵의 `DeleteObject` 미룸(측정). 1st SE(x64)는 `IDirectDrawSurface4::QueryInterface(IID_IDirect3DTexture2)`에서 정지
+    - [x] [작업 422 — Linux DX6 texture](work-logs/20260928-422-dx6-textures.md). `IDirect3DTexture2`(표면 소유, 참조 수 공유)와 `Load`, `IDirect3DDevice3::SetTexture`, 색 채우기·복사 `Blt`, `BltFast`, `RestoreAllSurfaces`, light state, DX6 vertex buffer와 두 VB draw(Windows DX6 facade 규칙). 1st SE는 두 폭 모두 창을 닫을 때까지 돎
+    - [x] 1st SE의 Linux 화면 확인: 타이틀·데모 플레이 화면 정상(2026-09-29 사용자 확인, WSLg 창 캡처)
+    - [x] 1st SE의 Linux 코인·시작 입력과 소리: 정상(2026-09-29 사용자 확인)
+    - [x] [작업 423 — 소프트웨어 페이싱](work-logs/20260929-423-software-present-pacing.md). swap이 막지 않는 host(WSLg)에서 공용 backend가 표시 주기로 present를 맞춤(`PresentPacer`). WSLg 1st SE 112 → 60 FPS, Windows에서는 켜지지 않음
+    - [ ] `StretchBlt` 확대·축소 대응(설계 421)
+    - [x] [작업 424 — 표면 Lock/Unlock](work-logs/20260929-424-surface-lock.md). Windows facade의 Lock 규칙을 공용 core(`PlanLock`)로, Linux Lock/Unlock. 4th의 F1 뒤 Linux가 멈추지 않고 Windows와 같게 검은 화면
+    - [x] [작업 425 — 렌더 타깃 Lock](work-logs/20260929-425-render-target-lock.md). 화면에 내보내는 표면의 Lock은 GL 렌더 타깃에서 되읽고 Unlock은 다시 올림(공용 backend, 두 host). 4th의 F1(TEST) 테스트 모드 메뉴가 두 host에서 보임
+    - [x] [작업 426 — 8비트 팔레트 DIB](work-logs/20260929-426-palettized-dib.md). `StretchDIBits`가 8비트 `BI_RGB` DIB를 받음(측정: 팔레트는 24비트와 같은 변환, 팔레트 밖 인덱스는 검정). Linux 5th가 두 폭 모두 창을 닫을 때까지 돎
+    - [ ] 게스트 스레드의 남은 것: `TerminateThread`(1st의 스레드 종료 시간 초과 경로), `CREATE_SUSPENDED`/`ResumeThread`, `ExitThread`, `GetExitCodeThread`, 스레드별 메시지 큐. import 없이 도는 게스트 코드는 다른 스레드를 막음(설계 417)
+    - [ ] Linux `DrawTextA`의 한글(CP949 2바이트)과 가변 폭: `System` 글꼴은 가변 폭("iW" 18px)이라 Unifont 고정 8px와 글자 배치가 다름. 한글이 필요해지면 Unifont 한글 글리프(16×16)를 더 가져옴
+    - [x] [작업 399 — FindFirstFileA와 곡·스타일 목록](work-logs/20260927-399-find-files.md). 측정, 제품 VFS 목록 규칙을 core로(Windows VFS·그래픽 60초 기록 전후 같음), Linux `GuestFiles` 검색과 kernel32 세 export, `--api-log-calls`. 코인·시작 뒤 스타일 검색(10개)을 지나 게임 화면 준비 중 `CreateVertexBuffer`에서 정지
+    - [ ] Linux `--io-config`(공용 INI 읽기), EZ2Dancer word 보드, 키·마우스 창 메시지와 마우스 이동량
+    - [x] [작업 398 — Linux 소리 출력](work-logs/20260927-398-linux-sound-output.md). `hle::HostAudio`, Linux `dsound.dll` 버퍼의 voice·host 사본(Windows facade 호출 순서), Linux SDL 오디오·SDL3_mixer와 `LinuxHostAudio`, `--audio-gain-db`. 두 폭이 재생 장치를 열고 커서가 장치를 따름(Windows 그래픽·오디오 기록 전후 같음, 스트리밍 lock 횟수만 시간 의존)
     - [ ] 남은 표면 메서드(`Lock`, `GetDC`와 Linux GDI DC, `Blt`, `Flip`), 게임이 도달하는 대로
-    - [ ] DirectX core 5단계: 그리기 명령, Linux 표시(SDL3/OpenGL)와 Linux 창 정책(guest 창 style)
-    - [ ] DirectX 6 facade(`IDirect3D3`)의 열거·caps도 공용 core로
+    - [ ] DirectX 6 facade(`IDirect3D3`)의 텍스처 형식 열거(`FillRgb565Format`)도 공용 core `Rgb565Format`으로. `FindDevice`·Z 형식·`GetCaps`·viewport 변환은 작업 415·416에서 완료
+    - [ ] (Linux 4th 플레이 가능 이후 검토) Windows도 HLE in-process runner로 통일해 네이티브 DirectX facade 제거 여부 설계. 걸리는 점: ddraw HLE가 `GuestGdi`·`GuestUser`·guest 메모리 모델에 기대므로 gdi32·user32 창/메시지·메모리까지 함께 옮겨야 하고, Windows 실행이 진짜 OS 동작 기준점 역할을 잃음
     - [ ] 그다음 message loop와 DirectInput·DirectSound
     - [ ] message queue(`PeekMessageA`/`DispatchMessageA`), window timer, `ShowCursor`/`SetCursor`
     - [ ] 게스트 호출 중 게스트 SEH가 host frame을 건너 unwind하는 경우
     - [ ] 게스트 루트 밖 경로(`windows` 지원 디렉터리)와 디렉터리 dump 실행의 게스트 파일
-    - [ ] guest thread와 막히는 대기(`CreateThread`, `WaitForSingleObject` 무한 대기)
+    - [x] guest thread와 막히는 대기(`CreateThread`, `WaitForSingleObject` 무한 대기): 작업 417. 다른 스레드가 없을 때의 `INFINITE` 대기는 여전히 정지
     - [ ] 일광 절약 규칙과 한국어 zone 이름(`GetTimeZoneInformation`)
     - [ ] CP949 두 byte 표(현재는 단일 byte만, 두 byte는 정지)
     - [ ] timer 전달과 message loop(`SetTimer` 기록은 작업 367)

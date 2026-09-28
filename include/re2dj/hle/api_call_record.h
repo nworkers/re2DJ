@@ -83,6 +83,14 @@ public:
     std::uint32_t LastError() const override;
     bool CallGuest(GuestCall* call, std::uint32_t* result, std::string* error) const override;
     HostPresentation* Presentation() const override;
+    HostAudio* Audio() const override;
+    runtime::GuestAddress ThreadEnvironmentBlock() const override;
+    bool WaitMilliseconds(std::uint32_t milliseconds) const override;
+    std::uint32_t CurrentThreadId() const override;
+    bool StartGuestThread(std::uint32_t start,
+                          std::uint32_t parameter,
+                          std::uint32_t thread_id,
+                          std::string* error) const override;
 
 private:
     void NoteBytes(ApiCallEvent::Kind kind,

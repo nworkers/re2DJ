@@ -105,6 +105,69 @@ std::uint32_t CheckAttachment(const SurfaceShape& attachment)
     return (attachment.caps & kDdsCapsZBuffer) != 0 ? kDdOk : kDdErrCannotAttachSurface;
 }
 
+SurfaceLockPlan PlanLock(const SurfaceShape& shape,
+                         std::uint32_t pitch,
+                         bool has_pixels,
+                         bool description_given,
+                         bool has_event,
+                         const SurfaceRect* rect)
+{
+    SurfaceLockPlan plan;
+    if (!description_given || has_event)
+    {
+        plan.result = kDdErrInvalidParams;
+        return plan;
+    }
+    if (!has_pixels)
+    {
+        plan.result = kDdErrInvalidObject;
+        return plan;
+    }
+    std::uint32_t left = 0;
+    std::uint32_t top = 0;
+    std::uint32_t width = shape.width;
+    std::uint32_t height = shape.height;
+    if (rect != nullptr)
+    {
+        if (rect->left < 0 || rect->top < 0 || rect->right <= rect->left || rect->bottom <= rect->top ||
+            static_cast<std::uint32_t>(rect->right) > shape.width ||
+            static_cast<std::uint32_t>(rect->bottom) > shape.height)
+        {
+            plan.result = kDdErrInvalidRect;
+            return plan;
+        }
+        left = static_cast<std::uint32_t>(rect->left);
+        top = static_cast<std::uint32_t>(rect->top);
+        width = static_cast<std::uint32_t>(rect->right - rect->left);
+        height = static_cast<std::uint32_t>(rect->bottom - rect->top);
+    }
+    plan.description = SurfaceDescription(shape, pitch);
+    plan.description.width = width;
+    plan.description.height = height;
+    plan.description.flags |= kDdsdLpSurface;
+    plan.offset = top * pitch + left * (shape.bits_per_pixel / 8);
+    return plan;
+}
+
+std::uint32_t CheckGetDc(bool has_pixels, bool held)
+{
+    if (!has_pixels)
+    {
+        return kDdErrUnsupported;
+    }
+    return held ? kDdErrDcAlreadyCreated : kDdOk;
+}
+
+std::uint32_t CheckReleaseDc(bool held, bool same_dc)
+{
+    return held && same_dc ? kDdOk : kDdErrInvalidParams;
+}
+
+std::uint32_t CheckSetColorKey(std::uint32_t flags, bool has_key)
+{
+    return flags == kDdckeySrcBlt && has_key ? kDdOk : kDdErrInvalidParams;
+}
+
 AttachmentQuery QueryAttachment(const DdsCaps2& caps)
 {
     if ((caps.caps & kDdsCapsBackBuffer) != 0)
@@ -116,6 +179,22 @@ AttachmentQuery QueryAttachment(const DdsCaps2& caps)
         return AttachmentQuery::kDepth;
     }
     return AttachmentQuery::kNone;
+}
+
+EnumSurfacesPlan PlanEnumSurfaces(std::uint32_t flags, bool has_description, bool has_callback)
+{
+    constexpr std::uint32_t kSearches = kDdEnumSurfacesAll | kDdEnumSurfacesMatch | kDdEnumSurfacesNoMatch;
+    constexpr std::uint32_t kExistence = kDdEnumSurfacesDoesExist | kDdEnumSurfacesCanBeCreated;
+    const std::uint32_t search = flags & kSearches;
+    const std::uint32_t existence = flags & kExistence;
+    const auto one_of = [](std::uint32_t bits) { return bits != 0 && (bits & (bits - 1)) == 0; };
+    if (!has_callback || (flags & ~(kSearches | kExistence)) != 0 || !one_of(search) || !one_of(existence) ||
+        (search == kDdEnumSurfacesAll && existence == kDdEnumSurfacesCanBeCreated) ||
+        (search != kDdEnumSurfacesAll && !has_description))
+    {
+        return EnumSurfacesPlan::kInvalid;
+    }
+    return search == kDdEnumSurfacesAll ? EnumSurfacesPlan::kExisting : EnumSurfacesPlan::kUnmodelled;
 }
 
 }  // namespace re2dj::directx

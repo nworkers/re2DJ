@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../native_guest_fault.h"
+#include "../native_guest_seh.h"
 #include "../native_import_gate.h"
 #include "../native_low_memory.h"
 #include "native_compat_mode_transition.h"
@@ -95,6 +96,8 @@ public:
     std::uint32_t SehDispatchCount() const;
     std::uint32_t LastSehHandler() const;
     std::uint32_t LastSehResumedEip() const;
+    // Every exception delivered to the guest's SEH chain.
+    NativeGuestExceptionCounters ExceptionCounters() const;
 
     struct Impl;
 

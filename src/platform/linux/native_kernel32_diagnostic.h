@@ -2,6 +2,7 @@
 #define RE2DJ_PLATFORM_LINUX_NATIVE_KERNEL32_DIAGNOSTIC_H_
 
 #include <cstdint>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -117,9 +118,22 @@ public:
     // Calls the guest function on the guest stack below the import being
     // dispatched; its own imports dispatch as nested calls.
     bool CallGuest(hle::GuestCall* call, std::uint32_t* result, std::string* error) const override;
+    // The calling guest thread's TEB and ID.
+    runtime::GuestAddress ThreadEnvironmentBlock() const override;
+    std::uint32_t CurrentThreadId() const override;
+    // Sleeps this guest thread on CLOCK_MONOTONIC, letting the others run.
+    bool WaitMilliseconds(std::uint32_t milliseconds) const override;
+    // A guest thread on a host thread of its own (StartNativeGuestThread),
+    // whose TEB carries the process and thread IDs.
+    bool StartGuestThread(std::uint32_t start,
+                          std::uint32_t parameter,
+                          std::uint32_t thread_id,
+                          std::string* error) const override;
     // The host's presentation for this run, or null to show nothing.
     void SetPresentation(hle::HostPresentation* presentation) { presentation_ = presentation; }
     hle::HostPresentation* Presentation() const override { return presentation_; }
+    void SetAudio(hle::HostAudio* audio) { audio_ = audio; }
+    hle::HostAudio* Audio() const override { return audio_; }
 
     // The devices the guest may open during this run, sharing the guest
     // process's handle space.
@@ -145,6 +159,7 @@ private:
 
     std::uint32_t image_base_ = 0;
     hle::HostPresentation* presentation_ = nullptr;
+    hle::HostAudio* audio_ = nullptr;
     std::uint32_t image_size_ = 0;
     mutable std::uint32_t stack_base_ = 0;
     mutable std::uint32_t stack_limit_ = 0;
@@ -176,6 +191,10 @@ private:
     NativeLowMemory private_arena_;
     mutable hle::GuestProcess process_;
     mutable std::uint32_t last_error_ = 0;
+    // The main guest thread's TEB page, which the guest may read and write.
+    std::uint32_t teb_ = 0;
+    // Guest thread IDs by TEB, the main thread's included.
+    mutable std::map<std::uint32_t, std::uint32_t> thread_ids_;
 };
 
 }  // namespace re2dj::platform::linux

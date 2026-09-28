@@ -21,9 +21,13 @@ int main()
     RunUser32ModuleTests(context);
     RunDdrawModuleTests(context);
     RunDsoundModuleTests(context);
+    RunDinputModuleTests(context);
+    RunWinmmModuleTests(context);
+    RunGdiRasterTests(context);
     RunDirectXDisplayTests(context);
     RunDirectXSurfaceTests(context);
     RunDirectXDeviceTests(context);
+    RunDirectXInputTests(context);
     RunGuestProcessTests(context);
     RunKernel32CrtTests(context);
     RunApiCallRecordTests(context);
@@ -36,6 +40,7 @@ int main()
     RunTargetProfileTests(context);
     RunVfsFileTableTests(context);
     RunLptdiChallengeResponseTests(context);
+    RunBitmapFileTests(context);
     RunLptdiResponseProfileTests(context);
     RunHardlockHandshakeResponseTests(context);
     RunHardlockApiDescriptorTests(context);
@@ -49,10 +54,14 @@ int main()
     RunEz2DjIoBoardTests(context);
     RunEz2DancerIoBoardTests(context);
     RunLegacyIoPortBusTests(context);
+    RunLegacyIoTrapTests(context);
     RunLegacyDrawCommandTests(context);
     RunPresentationFilterTests(context);
     RunPresentIntervalHistogramTests(context);
     RunPresentSyncTests(context);
+    RunWindowPolicyTests(context);
+    RunEz2DjKeyboardMapTests(context);
+    RunGuestFindTests(context);
     RunLegacyTextureTests(context);
     RunLegacyTransformTests(context);
     RunLegacyVertexBufferTests(context);

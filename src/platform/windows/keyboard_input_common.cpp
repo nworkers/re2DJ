@@ -3,6 +3,8 @@
 
 #include "keyboard_input_common.h"
 
+#include "re2dj/input/virtual_keys.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -14,54 +16,32 @@ namespace re2dj::platform::windows
 namespace
 {
 
-std::string Upper(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
-        return static_cast<char>(std::toupper(character));
-    });
-    return value;
-}
+namespace input = re2dj::input;
+
+// The core's key codes are winuser.h's.
+static_assert(input::kVkLButton == VK_LBUTTON && input::kVkRButton == VK_RBUTTON && input::kVkMButton == VK_MBUTTON);
+static_assert(input::kVkBack == VK_BACK && input::kVkTab == VK_TAB && input::kVkReturn == VK_RETURN);
+static_assert(input::kVkShift == VK_SHIFT && input::kVkControl == VK_CONTROL && input::kVkMenu == VK_MENU);
+static_assert(input::kVkPause == VK_PAUSE && input::kVkCapital == VK_CAPITAL && input::kVkEscape == VK_ESCAPE);
+static_assert(input::kVkSpace == VK_SPACE && input::kVkPrior == VK_PRIOR && input::kVkNext == VK_NEXT);
+static_assert(input::kVkEnd == VK_END && input::kVkHome == VK_HOME && input::kVkLeft == VK_LEFT);
+static_assert(input::kVkUp == VK_UP && input::kVkRight == VK_RIGHT && input::kVkDown == VK_DOWN);
+static_assert(input::kVkInsert == VK_INSERT && input::kVkDelete == VK_DELETE);
+static_assert(input::kVkLWin == VK_LWIN && input::kVkRWin == VK_RWIN && input::kVkNumpad0 == VK_NUMPAD0);
+static_assert(input::kVkMultiply == VK_MULTIPLY && input::kVkAdd == VK_ADD && input::kVkSubtract == VK_SUBTRACT);
+static_assert(input::kVkDecimal == VK_DECIMAL && input::kVkDivide == VK_DIVIDE && input::kVkF1 == VK_F1);
+static_assert(input::kVkNumLock == VK_NUMLOCK && input::kVkScroll == VK_SCROLL);
+static_assert(input::kVkLShift == VK_LSHIFT && input::kVkRShift == VK_RSHIFT);
+static_assert(input::kVkLControl == VK_LCONTROL && input::kVkRControl == VK_RCONTROL);
+static_assert(input::kVkLMenu == VK_LMENU && input::kVkRMenu == VK_RMENU);
+static_assert(input::kVkOem1 == VK_OEM_1 && input::kVkOemPlus == VK_OEM_PLUS && input::kVkOemComma == VK_OEM_COMMA);
+static_assert(input::kVkOemMinus == VK_OEM_MINUS && input::kVkOemPeriod == VK_OEM_PERIOD && input::kVkOem2 == VK_OEM_2);
+static_assert(input::kVkOem3 == VK_OEM_3 && input::kVkOem4 == VK_OEM_4 && input::kVkOem5 == VK_OEM_5);
+static_assert(input::kVkOem6 == VK_OEM_6 && input::kVkOem7 == VK_OEM_7);
 
 int ParseKey(const std::string& input)
 {
-    const std::string value = Upper(input);
-    if (value.empty() || value == "NONE") return 0;
-    if (value.size() == 1 && ((value[0] >= 'A' && value[0] <= 'Z') ||
-                              (value[0] >= '0' && value[0] <= '9'))) return value[0];
-    if (value[0] == 'F' && value.size() <= 3)
-    {
-        const int number = std::atoi(value.c_str() + 1);
-        if (number >= 1 && number <= 24) return VK_F1 + number - 1;
-    }
-    if (value.rfind("NUMPAD", 0) == 0 && value.size() == 7 &&
-        value[6] >= '0' && value[6] <= '9') return VK_NUMPAD0 + value[6] - '0';
-    if (value == "TAB") return VK_TAB;
-    if (value == "ENTER") return VK_RETURN;
-    if (value == "SPACE") return VK_SPACE;
-    if (value == "ESCAPE" || value == "ESC") return VK_ESCAPE;
-    if (value == "LSHIFT") return VK_LSHIFT;
-    if (value == "RSHIFT") return VK_RSHIFT;
-    if (value == "SHIFT") return VK_SHIFT;
-    if (value == "LCONTROL" || value == "LCTRL") return VK_LCONTROL;
-    if (value == "RCONTROL" || value == "RCTRL") return VK_RCONTROL;
-    if (value == "CONTROL" || value == "CTRL") return VK_CONTROL;
-    if (value == "LMENU" || value == "LALT") return VK_LMENU;
-    if (value == "RMENU" || value == "RALT") return VK_RMENU;
-    if (value == "ALT") return VK_MENU;
-    if (value == "BACKSPACE" || value == "BACK") return VK_BACK;
-    if (value == "CAPITAL" || value == "CAPSLOCK" || value == "CAPS") return VK_CAPITAL;
-    if (value == "LEFT") return VK_LEFT;
-    if (value == "RIGHT") return VK_RIGHT;
-    if (value == "UP") return VK_UP;
-    if (value == "DOWN") return VK_DOWN;
-    if (value == "DECIMAL") return VK_DECIMAL;
-    if (value == "INSERT") return VK_INSERT;
-    if (value == "DELETE" || value == "DEL") return VK_DELETE;
-    if (value == "HOME") return VK_HOME;
-    if (value == "END") return VK_END;
-    if (value == "PAGEUP" || value == "PGUP" || value == "PRIOR") return VK_PRIOR;
-    if (value == "PAGEDOWN" || value == "PGDN" || value == "NEXT") return VK_NEXT;
-    return -1;
+    return input::ParseKeyName(input);
 }
 
 }  // namespace

@@ -33,6 +33,8 @@
 #include "graphics_trace_log.h"
 #include "re2dj/directx/direct3d_description.h"
 #include "re2dj/directx/direct3d_device.h"
+#include "re2dj/directx/direct3d_draw.h"
+#include "re2dj/directx/direct3d_vertex_buffer.h"
 #include "re2dj/directx/directdraw_description.h"
 #include "re2dj/directx/directdraw_display.h"
 #include "re2dj/directx/directdraw_surface.h"
@@ -504,6 +506,8 @@ struct RootFacade
     LARGE_INTEGER present_previous_counter = {};
     std::uint32_t present_interval_summaries = 0;
     re2dj::graphics::Sdl3OpenGlBackend* render_backend = nullptr;
+    // Whether the backend's software pacing was already recorded.
+    bool pacing_reported = false;
 };
 
 // Calls the backend's Present and records how long it took. Every present site
@@ -514,6 +518,11 @@ bool PresentAndRecordCost(RootFacade* root, std::string* error)
     const bool timed = root->fps_frequency.QuadPart > 0 &&
                        QueryPerformanceCounter(&started) != FALSE;
     const bool presented = root->render_backend->Present(error);
+    if (!root->pacing_reported && root->render_backend->software_pacing_engaged())
+    {
+        root->pacing_reported = true;
+        re2dj::platform::windows::WriteGraphicsTraceFormat("re2dj:hle:present-sync:software-pacing=1");
+    }
     re2dj::platform::windows::ReportOsdState();
     LARGE_INTEGER finished = {};
     if (timed && QueryPerformanceCounter(&finished) != FALSE)
@@ -705,6 +714,14 @@ struct SurfaceFacade
     std::uint32_t diagnostic_nonzero_max_x = 0;
     std::uint32_t diagnostic_nonzero_max_y = 0;
     DDCOLORKEY source_blt_color_key = {};
+    // The area the last Lock handed out, which Unlock puts back on the
+    // backend's render target when this is the surface the guest presents
+    // from.
+    bool locked = false;
+    DWORD lock_x = 0;
+    DWORD lock_y = 0;
+    DWORD lock_width = 0;
+    DWORD lock_height = 0;
 };
 
 struct DeviceFacade
@@ -770,11 +787,7 @@ void FillSurfaceWithColor(SurfaceFacade* surface, std::uint16_t color)
 
 std::uint16_t Rgb565FromD3dColor(D3DCOLOR color)
 {
-    const std::uint16_t red = static_cast<std::uint16_t>((color >> 16) & 0xff);
-    const std::uint16_t green = static_cast<std::uint16_t>((color >> 8) & 0xff);
-    const std::uint16_t blue = static_cast<std::uint16_t>(color & 0xff);
-    return static_cast<std::uint16_t>(((red >> 3) << 11) | ((green >> 2) << 5) |
-                                      (blue >> 3));
+    return re2dj::directx::Rgb565FromD3dColor(static_cast<std::uint32_t>(color));
 }
 
 bool RequestRenderTargetClear(RootFacade* root,
@@ -1564,197 +1577,7 @@ bool BuildFixedFunctionState(const DeviceFacade& device,
     {
         return false;
     }
-    const auto& stage = device.state.texture_stage_states[0];
-    if (stage[D3DTSS_COLOROP] != D3DTOP_MODULATE ||
-        stage[D3DTSS_COLORARG1] != D3DTA_TEXTURE ||
-        stage[D3DTSS_COLORARG2] != D3DTA_DIFFUSE)
-    {
-        *error = "unsupported Direct3D3 texture color operation";
-        return false;
-    }
-    switch (device.state.render_states[D3DRENDERSTATE_CULLMODE])
-    {
-    case kD3dCullNone:
-        state->cull_mode = re2dj::graphics::CullMode::kNone;
-        break;
-    case kD3dCullClockwise:
-        state->cull_mode = re2dj::graphics::CullMode::kClockwise;
-        break;
-    case kD3dCullCounterClockwise:
-        state->cull_mode = re2dj::graphics::CullMode::kCounterClockwise;
-        break;
-    default:
-        *error = "unsupported Direct3D3 cull mode";
-        return false;
-    }
-    state->color_key_enabled =
-        device.state.render_states[D3DRENDERSTATE_COLORKEYENABLE] != 0;
-    state->alpha_test_enabled =
-        device.state.render_states[D3DRENDERSTATE_ALPHATESTENABLE] != 0;
-    state->alpha_reference = static_cast<std::uint8_t>(
-        device.state.render_states[D3DRENDERSTATE_ALPHAREF] & 0xff);
-    if (state->alpha_test_enabled &&
-        device.state.render_states[D3DRENDERSTATE_ALPHAFUNC] != D3DCMP_NOTEQUAL)
-    {
-        *error = "unsupported Direct3D3 alpha comparison function";
-        return false;
-    }
-    state->alpha_function = re2dj::graphics::CompareFunction::kNotEqual;
-    state->alpha_blend_enabled =
-        device.state.render_states[D3DRENDERSTATE_ALPHABLENDENABLE] != 0;
-
-    state->depth_test_enabled = device.state.render_states[D3DRENDERSTATE_ZENABLE] != 0;
-    state->depth_write_enabled = device.state.render_states[D3DRENDERSTATE_ZWRITEENABLE] != 0;
-    const auto convert_compare = [](DWORD value,
-                                    re2dj::graphics::CompareFunction* output) {
-        switch (value)
-        {
-        case D3DCMP_NEVER:
-            *output = re2dj::graphics::CompareFunction::kNever;
-            return true;
-        case D3DCMP_LESS:
-            *output = re2dj::graphics::CompareFunction::kLess;
-            return true;
-        case D3DCMP_EQUAL:
-            *output = re2dj::graphics::CompareFunction::kEqual;
-            return true;
-        case D3DCMP_LESSEQUAL:
-            *output = re2dj::graphics::CompareFunction::kLessEqual;
-            return true;
-        case D3DCMP_GREATER:
-            *output = re2dj::graphics::CompareFunction::kGreater;
-            return true;
-        case D3DCMP_NOTEQUAL:
-            *output = re2dj::graphics::CompareFunction::kNotEqual;
-            return true;
-        case D3DCMP_GREATEREQUAL:
-            *output = re2dj::graphics::CompareFunction::kGreaterEqual;
-            return true;
-        case D3DCMP_ALWAYS:
-            *output = re2dj::graphics::CompareFunction::kAlways;
-            return true;
-        default:
-            return false;
-        }
-    };
-    if (state->depth_test_enabled &&
-        !convert_compare(device.state.render_states[D3DRENDERSTATE_ZFUNC],
-                          &state->depth_function))
-    {
-        *error = "unsupported Direct3D3 depth comparison function";
-        return false;
-    }
-
-    if (state->alpha_blend_enabled &&
-        (!re2dj::graphics::DecodeLegacyBlendFactor(
-                        device.state.render_states[D3DRENDERSTATE_SRCBLEND],
-                        &state->source_blend) ||
-         !re2dj::graphics::DecodeLegacyBlendFactor(
-                        device.state.render_states[D3DRENDERSTATE_DESTBLEND],
-                        &state->destination_blend)))
-    {
-        *error = "unsupported Direct3D3 alpha blend factor";
-        return false;
-    }
-
-    const auto convert_filter = [](DWORD value,
-                                   re2dj::graphics::TextureFilter* output) {
-        if (value == D3DTFN_POINT)
-        {
-            *output = re2dj::graphics::TextureFilter::kNearest;
-            return true;
-        }
-        if (value == D3DTFN_LINEAR)
-        {
-            *output = re2dj::graphics::TextureFilter::kLinear;
-            return true;
-        }
-        return false;
-    };
-    if (!convert_filter(stage[D3DTSS_MINFILTER], &state->minification_filter) ||
-        !convert_filter(stage[D3DTSS_MAGFILTER], &state->magnification_filter))
-    {
-        *error = "unsupported Direct3D3 texture filter";
-        return false;
-    }
-    const auto convert_address = [](DWORD value,
-                                    re2dj::graphics::TextureAddressMode* output) {
-        switch (value)
-        {
-        case D3DTADDRESS_WRAP:
-            *output = re2dj::graphics::TextureAddressMode::kWrap;
-            return true;
-        case D3DTADDRESS_MIRROR:
-            *output = re2dj::graphics::TextureAddressMode::kMirror;
-            return true;
-        case D3DTADDRESS_CLAMP:
-            *output = re2dj::graphics::TextureAddressMode::kClamp;
-            return true;
-        default:
-            return false;
-        }
-    };
-    if (!convert_address(stage[D3DTSS_ADDRESSU], &state->address_u) ||
-        !convert_address(stage[D3DTSS_ADDRESSV], &state->address_v))
-    {
-        *error = "unsupported Direct3D3 texture address mode";
-        return false;
-    }
-    error->clear();
-    return true;
-}
-
-// `guest_blend_is_explicit` says the guest set blend factors we can decode, so
-// applying them to this quad reproduces what it asked for rather than inventing
-// a blend. That distinction decides whether a fully opaque quad qualifies: see
-// the alpha test below.
-bool IsFullScreenBlackFadeCandidate(
-    const re2dj::graphics::LegacyDrawCommand& command,
-    const re2dj::graphics::LegacyTextureView* texture,
-    std::uint32_t logical_width,
-    std::uint32_t logical_height,
-    bool guest_blend_is_explicit)
-{
-    if (texture != nullptr || command.topology != re2dj::graphics::PrimitiveTopology::kTriangleStrip ||
-        command.vertices.size() != 4 || logical_width == 0 || logical_height == 0)
-    {
-        return false;
-    }
-    constexpr float kPositionTolerance = 0.01f;
-    float minimum_x = command.vertices.front().x;
-    float minimum_y = command.vertices.front().y;
-    float maximum_x = minimum_x;
-    float maximum_y = minimum_y;
-    const std::uint32_t first_color = command.vertices.front().diffuse_argb;
-    const std::uint32_t first_rgb = first_color & 0x00ffffffU;
-    const std::uint32_t first_alpha = first_color >> 24;
-    // An opaque quad only counts when the guest named the blend itself. Under
-    // its own factors an alpha of 0xff can be a no-op - 1st SE fades with
-    // ZERO/SRCALPHA, where the first step, alpha 0xff, means dst*1.0 and must
-    // leave the screen alone - whereas a guest that named no blend really is
-    // asking for an opaque black fill, and treating that as a fade would erase
-    // a legitimate clear.
-    if (first_rgb != 0 || first_alpha == 0 ||
-        (first_alpha == 0xff && !guest_blend_is_explicit))
-    {
-        return false;
-    }
-    for (const auto& vertex : command.vertices)
-    {
-        minimum_x = (std::min)(minimum_x, vertex.x);
-        minimum_y = (std::min)(minimum_y, vertex.y);
-        maximum_x = (std::max)(maximum_x, vertex.x);
-        maximum_y = (std::max)(maximum_y, vertex.y);
-        if ((vertex.diffuse_argb & 0x00ffffffU) != 0 ||
-            (vertex.diffuse_argb >> 24) != first_alpha)
-        {
-            return false;
-        }
-    }
-    return std::fabs(minimum_x) <= kPositionTolerance &&
-           std::fabs(minimum_y) <= kPositionTolerance &&
-           std::fabs(maximum_x - static_cast<float>(logical_width)) <= kPositionTolerance &&
-           std::fabs(maximum_y - static_cast<float>(logical_height)) <= kPositionTolerance;
+    return re2dj::directx::BuildFixedFunctionState(device.state, state, error);
 }
 
 struct ViewportFacade
@@ -1783,14 +1606,6 @@ bool BuildLegacyTransformState(const DeviceFacade& device,
         }
         return false;
     }
-    if (device.current_viewport == nullptr && !device.state.has_viewport)
-    {
-        *error = "untransformed draw has no current viewport";
-        return false;
-    }
-    CopyMatrix(device.state.transforms[D3DTRANSFORMSTATE_WORLD], &transform->world);
-    CopyMatrix(device.state.transforms[D3DTRANSFORMSTATE_VIEW], &transform->view);
-    CopyMatrix(device.state.transforms[D3DTRANSFORMSTATE_PROJECTION], &transform->projection);
     if (device.current_viewport != nullptr)
     {
         const ViewportFacade* const viewport =
@@ -1800,33 +1615,12 @@ bool BuildLegacyTransformState(const DeviceFacade& device,
             *error = "untransformed draw has an invalid viewport";
             return false;
         }
-        const D3DVIEWPORT2& source = viewport->viewport;
-        transform->viewport.screen_x = static_cast<float>(source.dwX);
-        transform->viewport.screen_y = static_cast<float>(source.dwY);
-        transform->viewport.screen_width = static_cast<float>(source.dwWidth);
-        transform->viewport.screen_height = static_cast<float>(source.dwHeight);
-        transform->viewport.clip_x = source.dvClipX;
-        transform->viewport.clip_y = source.dvClipY;
-        transform->viewport.clip_width = source.dvClipWidth;
-        transform->viewport.clip_height = source.dvClipHeight;
-        transform->viewport.min_z = source.dvMinZ;
-        transform->viewport.max_z = source.dvMaxZ;
-        error->clear();
-        return true;
+        re2dj::directx::D3dViewport2 source;
+        re2dj::platform::windows::CopyToCore(&source, viewport->viewport);
+        return re2dj::directx::BuildViewport2TransformState(device.state, source, transform, error);
     }
-    // DirectX 7 has no clip volume on the viewport: the projection matrix
-    // already produces normalized device coordinates, which is what the clip
-    // defaults of LegacyViewportTransform describe. Only the screen rectangle
-    // and depth range come from the guest.
-    const re2dj::directx::D3dViewport7& source = device.state.viewport;
-    transform->viewport.screen_x = static_cast<float>(source.x);
-    transform->viewport.screen_y = static_cast<float>(source.y);
-    transform->viewport.screen_width = static_cast<float>(source.width);
-    transform->viewport.screen_height = static_cast<float>(source.height);
-    transform->viewport.min_z = source.min_z;
-    transform->viewport.max_z = source.max_z;
-    error->clear();
-    return true;
+    // DirectX 7 sets its viewport on the device: the core's transform.
+    return re2dj::directx::BuildTransformState(device.state, transform, error);
 }
 
 void ReportTransformDiagnostic(const DeviceFacade& device,
@@ -2364,26 +2158,21 @@ HRESULT WINAPI D3dFindDevice(IDirect3D3*,
                              D3DFINDDEVICERESULT* result)
 {
     re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kFindDeviceMessage);
-    if (search == nullptr || result == nullptr ||
-        search->dwSize != sizeof(D3DFINDDEVICESEARCH) ||
-        result->dwSize != sizeof(D3DFINDDEVICERESULT))
+    if (search == nullptr || result == nullptr)
     {
         return DDERR_INVALIDPARAMS;
     }
-    if ((search->dwFlags & D3DFDS_HARDWARE) != 0 && search->bHardware == FALSE)
+    // The shared core decides, so the Linux facade answers alike.
+    re2dj::directx::D3dFindDeviceSearch core_search;
+    re2dj::directx::D3dFindDeviceResult core_result;
+    re2dj::platform::windows::CopyToCore(&core_search, *search);
+    re2dj::platform::windows::CopyToCore(&core_result, *result);
+    const HRESULT found = static_cast<HRESULT>(re2dj::directx::FindDevice(core_search, &core_result));
+    if (found == DD_OK)
     {
-        return DDERR_NOTFOUND;
+        re2dj::platform::windows::CopyFromCore(result, core_result);
     }
-    std::memset(result, 0, sizeof(*result));
-    result->dwSize = sizeof(*result);
-    result->guid = IID_IDirect3DHALDevice;
-    result->ddHwDesc.dwSize = sizeof(D3DDEVICEDESC);
-    result->ddHwDesc.dwFlags = D3DDD_BCLIPPING | D3DDD_DEVICERENDERBITDEPTH |
-                               D3DDD_DEVICEZBUFFERBITDEPTH;
-    result->ddHwDesc.bClipping = TRUE;
-    result->ddHwDesc.dwDeviceRenderBitDepth = DDBD_16;
-    result->ddHwDesc.dwDeviceZBufferBitDepth = DDBD_16;
-    return DD_OK;
+    return found;
 }
 
 HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
@@ -2442,14 +2231,14 @@ HRESULT WINAPI D3dEnumZBufferFormats(IDirect3D3*,
                                      LPD3DENUMPIXELFORMATSCALLBACK callback,
                                      void* context)
 {
-    if (!IsEqualGUID(device_class, IID_IDirect3DHALDevice) || callback == nullptr)
+    re2dj::directx::Guid core_class;
+    re2dj::platform::windows::CopyToCore(&core_class, device_class);
+    if (callback == nullptr || re2dj::directx::CheckEnumZBufferFormats3(core_class) != DD_OK)
     {
         return DDERR_INVALIDPARAMS;
     }
-    DDPIXELFORMAT format = {};
-    format.dwSize = sizeof(format);
-    format.dwFlags = DDPF_ZBUFFER;
-    format.dwZBufferBitDepth = 16;
+    DDPIXELFORMAT format;
+    re2dj::platform::windows::CopyFromCore(&format, re2dj::directx::Direct3D3DepthFormat());
     callback(&format, context);
     return DD_OK;
 }
@@ -2460,12 +2249,29 @@ HRESULT WINAPI D3dCreateVertexBuffer(IDirect3D3* self,
                                      DWORD flags,
                                      IUnknown* outer)
 {
-    if (vertex_buffer == nullptr || descriptor == nullptr || outer != nullptr ||
-        descriptor->dwSize < sizeof(D3DVERTEXBUFFERDESC))
+    if (outer != nullptr)
     {
         return DDERR_INVALIDPARAMS;
     }
-    *vertex_buffer = nullptr;
+    re2dj::directx::D3dVertexBufferDesc core_descriptor;
+    if (descriptor != nullptr)
+    {
+        core_descriptor.size = descriptor->dwSize;
+        core_descriptor.caps = descriptor->dwCaps;
+        core_descriptor.fvf = descriptor->dwFVF;
+        core_descriptor.vertex_count = descriptor->dwNumVertices;
+    }
+    std::uint32_t stride = 0;
+    const std::uint32_t checked = re2dj::directx::CheckCreateVertexBuffer(
+        vertex_buffer != nullptr, descriptor != nullptr, core_descriptor, &stride);
+    if (vertex_buffer != nullptr)
+    {
+        *vertex_buffer = nullptr;
+    }
+    if (checked != DD_OK)
+    {
+        return static_cast<HRESULT>(checked);
+    }
     char message[160] = {};
     std::snprintf(message,
                   sizeof(message),
@@ -2945,13 +2751,11 @@ HRESULT WINAPI SurfaceGetDC(IDirectDrawSurface4* self, HDC* dc)
         return finish(DDERR_INVALIDPARAMS);
     }
     *dc = nullptr;
-    if (surface->bitmap_dc == nullptr)
+    const auto checked = static_cast<HRESULT>(
+        re2dj::directx::CheckGetDc(surface->bitmap_dc != nullptr, surface->dc_acquired));
+    if (checked != DD_OK)
     {
-        return finish(DDERR_UNSUPPORTED);
-    }
-    if (surface->dc_acquired)
-    {
-        return finish(DDERR_DCALREADYCREATED);
+        return finish(checked);
     }
     surface->dc_acquired = true;
     *dc = surface->bitmap_dc;
@@ -2970,9 +2774,11 @@ HRESULT WINAPI SurfaceReleaseDC(IDirectDrawSurface4* self, HDC dc)
         ReportSurfaceDiagnostic("ReleaseDC", surface, result);
         return result;
     };
-    if (!surface->dc_acquired || dc == nullptr || dc != surface->bitmap_dc)
+    const auto checked = static_cast<HRESULT>(
+        re2dj::directx::CheckReleaseDc(surface->dc_acquired, dc != nullptr && dc == surface->bitmap_dc));
+    if (checked != DD_OK)
     {
-        return finish(DDERR_INVALIDPARAMS);
+        return finish(checked);
     }
     surface->dc_acquired = false;
     MarkSurfaceDirty(surface);
@@ -2988,9 +2794,11 @@ HRESULT WINAPI SurfaceSetColorKey(IDirectDrawSurface4* self,
                                   DWORD flags,
                                   DDCOLORKEY* color_key)
 {
-    if (flags != DDCKEY_SRCBLT || color_key == nullptr)
+    const auto checked =
+        static_cast<HRESULT>(re2dj::directx::CheckSetColorKey(flags, color_key != nullptr));
+    if (checked != DD_OK)
     {
-        return DDERR_INVALIDPARAMS;
+        return checked;
     }
     SurfaceFacade* const surface = SurfaceFromInterface(self);
     surface->source_blt_color_key = *color_key;
@@ -3002,7 +2810,10 @@ HRESULT WINAPI SurfaceSetColorKey(IDirectDrawSurface4* self,
 // GetDC and Blt and never reaches here; the 4th guest locks its textures and
 // writes them directly, so the memory the surface already owns is what it gets.
 // A sub-rectangle lock returns the address of that rectangle's first pixel, as
-// DirectDraw does, and the pitch stays the whole surface's pitch.
+// DirectDraw does, and the pitch stays the whole surface's pitch. The surface
+// the guest presents from has its picture on the backend's render target, so
+// the locked area is read back from there first (4th's F1 screen draws into
+// the back buffer this way), and Unlock puts it back.
 HRESULT WINAPI SurfaceLock(IDirectDrawSurface4* self,
                            RECT* rect,
                            DDSURFACEDESC2* descriptor,
@@ -3010,46 +2821,47 @@ HRESULT WINAPI SurfaceLock(IDirectDrawSurface4* self,
                            HANDLE event)
 {
     (void)flags;
-    if (descriptor == nullptr || event != nullptr ||
-        descriptor->dwSize != sizeof(DDSURFACEDESC2))
-    {
-        return DDERR_INVALIDPARAMS;
-    }
     SurfaceFacade* const surface = SurfaceFromInterface(self);
-    if (surface->magic != kSurfaceMagic || surface->pixels == nullptr)
-    {
-        return DDERR_INVALIDOBJECT;
-    }
-    LONG left = 0;
-    LONG top = 0;
-    DWORD width = surface->width;
-    DWORD height = surface->height;
+    // The shared core decides, so the Linux facade answers alike.
+    re2dj::directx::SurfaceShape shape;
+    shape.width = surface->width;
+    shape.height = surface->height;
+    shape.bits_per_pixel = surface->bits_per_pixel;
+    shape.caps = surface->capabilities;
+    re2dj::directx::SurfaceRect core_rect;
     if (rect != nullptr)
     {
-        if (rect->left < 0 || rect->top < 0 || rect->right <= rect->left ||
-            rect->bottom <= rect->top ||
-            static_cast<DWORD>(rect->right) > surface->width ||
-            static_cast<DWORD>(rect->bottom) > surface->height)
-        {
-            return DDERR_INVALIDRECT;
-        }
-        left = rect->left;
-        top = rect->top;
-        width = static_cast<DWORD>(rect->right - rect->left);
-        height = static_cast<DWORD>(rect->bottom - rect->top);
+        core_rect = {rect->left, rect->top, rect->right, rect->bottom};
     }
-    const HRESULT described = SurfaceGetSurfaceDesc(self, descriptor);
-    if (described != DD_OK)
+    const re2dj::directx::SurfaceLockPlan plan = re2dj::directx::PlanLock(
+        shape, surface->pitch, surface->magic == kSurfaceMagic && surface->pixels != nullptr,
+        descriptor != nullptr && descriptor->dwSize == sizeof(DDSURFACEDESC2), event != nullptr,
+        rect == nullptr ? nullptr : &core_rect);
+    if (plan.result != DD_OK)
     {
-        return described;
+        return static_cast<HRESULT>(plan.result);
     }
-    descriptor->dwWidth = width;
-    descriptor->dwHeight = height;
-    descriptor->dwFlags |= DDSD_LPSURFACE;
-    descriptor->lpSurface =
-        static_cast<unsigned char*>(surface->pixels) +
-        static_cast<std::size_t>(top) * surface->pitch +
-        static_cast<std::size_t>(left) * (surface->bits_per_pixel / 8);
+    surface->lock_x = rect == nullptr ? 0 : static_cast<DWORD>(rect->left);
+    surface->lock_y = rect == nullptr ? 0 : static_cast<DWORD>(rect->top);
+    surface->lock_width = plan.description.width;
+    surface->lock_height = plan.description.height;
+    unsigned char* const first = static_cast<unsigned char*>(surface->pixels) + plan.offset;
+    if (surface->root != nullptr && surface == surface->root->presentation_surface &&
+        surface->root->render_backend != nullptr)
+    {
+        const std::size_t span_bytes =
+            static_cast<std::size_t>(surface->pitch) * (surface->lock_height - 1) + surface->lock_width * 2;
+        std::string error;
+        if (!surface->root->render_backend->ReadRenderTarget(surface->lock_x, surface->lock_y, surface->lock_width,
+                                                             surface->lock_height, std::span(first, span_bytes),
+                                                             surface->pitch, &error))
+        {
+            return DDERR_GENERIC;
+        }
+    }
+    surface->locked = true;
+    re2dj::platform::windows::CopyFromCore(descriptor, plan.description);
+    descriptor->lpSurface = first;
     return DD_OK;
 }
 
@@ -3063,6 +2875,25 @@ HRESULT WINAPI SurfaceUnlock(IDirectDrawSurface4* self, RECT*)
     // The guest may have written anything into the pixels, so the texture the
     // backend caches for this surface is stale from here on.
     MarkSurfaceDirty(surface);
+    const bool was_locked = surface->locked;
+    surface->locked = false;
+    if (was_locked && surface->root != nullptr && surface == surface->root->presentation_surface &&
+        surface->root->render_backend != nullptr)
+    {
+        const unsigned char* const first = static_cast<const unsigned char*>(surface->pixels) +
+                                           static_cast<std::size_t>(surface->lock_y) * surface->pitch +
+                                           static_cast<std::size_t>(surface->lock_x) * 2;
+        const std::size_t span_bytes =
+            static_cast<std::size_t>(surface->pitch) * (surface->lock_height - 1) + surface->lock_width * 2;
+        std::string error;
+        if (!surface->root->render_backend->WriteRenderTarget(surface->lock_x, surface->lock_y,
+                                                              surface->lock_width, surface->lock_height,
+                                                              std::span(first, span_bytes), surface->pitch,
+                                                              &error))
+        {
+            return DDERR_GENERIC;
+        }
+    }
     return DD_OK;
 }
 
@@ -3210,27 +3041,28 @@ HRESULT WINAPI DeviceGetCaps(IDirect3DDevice3*,
                              D3DDEVICEDESC* hardware,
                              D3DDEVICEDESC* software)
 {
-    if (hardware == nullptr || hardware->dwSize != sizeof(D3DDEVICEDESC))
+    // The shared core decides, so the Linux facade answers alike.
+    re2dj::directx::D3dDeviceDesc6 core_hardware;
+    re2dj::directx::D3dDeviceDesc6 core_software;
+    if (hardware != nullptr)
     {
-        return DDERR_INVALIDPARAMS;
+        re2dj::platform::windows::CopyToCore(&core_hardware, *hardware);
     }
-    std::memset(hardware, 0, sizeof(*hardware));
-    hardware->dwSize = sizeof(*hardware);
-    hardware->dwFlags = D3DDD_BCLIPPING | D3DDD_DEVICERENDERBITDEPTH |
-                        D3DDD_DEVICEZBUFFERBITDEPTH;
-    hardware->bClipping = TRUE;
-    hardware->dwDeviceRenderBitDepth = DDBD_16;
-    hardware->dwDeviceZBufferBitDepth = DDBD_16;
     if (software != nullptr)
     {
-        if (software->dwSize != sizeof(D3DDEVICEDESC))
-        {
-            return DDERR_INVALIDPARAMS;
-        }
-        std::memset(software, 0, sizeof(*software));
-        software->dwSize = sizeof(*software);
+        re2dj::platform::windows::CopyToCore(&core_software, *software);
     }
-    return DD_OK;
+    const HRESULT answer = static_cast<HRESULT>(re2dj::directx::GetDevice3Caps(
+        hardware == nullptr ? nullptr : &core_hardware, software == nullptr ? nullptr : &core_software));
+    if (hardware != nullptr && hardware->dwSize == sizeof(D3DDEVICEDESC))
+    {
+        re2dj::platform::windows::CopyFromCore(hardware, core_hardware);
+    }
+    if (answer == DD_OK && software != nullptr)
+    {
+        re2dj::platform::windows::CopyFromCore(software, core_software);
+    }
+    return answer;
 }
 
 HRESULT WINAPI DeviceAddViewport(IDirect3DDevice3* self, IDirect3DViewport3* viewport)
@@ -3592,22 +3424,11 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
 {
     DeviceFacade* const device = DeviceFromInterface(self);
     CountFrameDraw(device, vertex_count);
-    const bool is_triangle_strip = primitive == D3DPT_TRIANGLESTRIP && vertex_count >= 3;
-    const bool is_triangle_list =
-        primitive == D3DPT_TRIANGLELIST && vertex_count >= 3 && vertex_count % 3 == 0;
-    const bool is_line_list =
-        primitive == D3DPT_LINELIST && vertex_count >= 2 && vertex_count % 2 == 0;
-    const bool is_transformed = vertex_type == D3DFVF_TLVERTEX;
-    const bool is_untransformed =
-        vertex_type == D3DFVF_VERTEX || vertex_type == D3DFVF_LVERTEX;
-    const std::size_t vertex_stride =
-        is_transformed ? re2dj::graphics::kTransformedLitVertexStride
-                       : re2dj::graphics::VertexStrideFromFvf(vertex_type);
-    if ((!is_triangle_strip && !is_triangle_list && !is_line_list) ||
-        (!is_transformed && !is_untransformed) || vertices == nullptr ||
-        !re2dj::graphics::AreLegacyDrawFlagsSupported(flags) ||
-        vertex_stride == 0 ||
-        vertex_count > (std::numeric_limits<std::size_t>::max)() / vertex_stride)
+    const re2dj::directx::DrawPlan plan = re2dj::directx::PlanDrawPrimitive(
+        static_cast<std::uint32_t>(primitive), vertex_type, vertex_count, flags);
+    const bool is_transformed = plan.transformed;
+    const std::size_t vertex_stride = plan.vertex_stride;
+    if (plan.result != DD_OK || vertices == nullptr)
     {
         ReportDrawDiagnostic(device,
                              primitive,
@@ -3632,10 +3453,7 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     re2dj::graphics::LegacyDrawCommand command;
     std::string error;
-    const re2dj::graphics::PrimitiveTopology topology =
-        is_line_list ? re2dj::graphics::PrimitiveTopology::kLineList
-                     : is_triangle_list ? re2dj::graphics::PrimitiveTopology::kTriangleList
-                                        : re2dj::graphics::PrimitiveTopology::kTriangleStrip;
+    const re2dj::graphics::PrimitiveTopology topology = plan.topology;
     const std::span<const std::byte> vertex_bytes(
         static_cast<const std::byte*>(vertices), bytes);
     bool decoded = false;
@@ -3776,40 +3594,14 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     }
     re2dj::graphics::LegacyFixedFunctionState fixed_function_state;
     const bool state_built = BuildFixedFunctionState(*device, &fixed_function_state, &error);
-    // The factors the guest set, whether or not it also enabled blending. A
-    // guest that named a blend and then drew a full-screen black quad without
-    // enabling it is fading; honouring its own factors is what reproduces the
-    // fade it asked for. 1st SE names ZERO/SRCALPHA, which scales the
-    // framebuffer by the quad's alpha - forcing SRCALPHA/INVSRCALPHA there
-    // gives dst*(1-a) instead of dst*a and runs the fade backwards.
-    re2dj::graphics::BlendFactor guest_source_blend = {};
-    re2dj::graphics::BlendFactor guest_destination_blend = {};
-    const bool guest_blend_is_explicit =
-        re2dj::graphics::DecodeLegacyBlendFactor(
-            device->state.render_states[D3DRENDERSTATE_SRCBLEND], &guest_source_blend) &&
-        re2dj::graphics::DecodeLegacyBlendFactor(
-            device->state.render_states[D3DRENDERSTATE_DESTBLEND], &guest_destination_blend);
-    if (state_built && !fixed_function_state.alpha_blend_enabled &&
-        !fixed_function_state.alpha_test_enabled &&
-        IsFullScreenBlackFadeCandidate(command,
-                                       texture,
-                                       root->display.mode.width,
-                                       root->display.mode.height,
-                                       guest_blend_is_explicit))
+    if (state_built)
     {
-        fixed_function_state.alpha_blend_enabled = true;
-        if (guest_blend_is_explicit)
-        {
-            fixed_function_state.source_blend = guest_source_blend;
-            fixed_function_state.destination_blend = guest_destination_blend;
-        }
-        else
-        {
-            fixed_function_state.source_blend = re2dj::graphics::BlendFactor::kSourceAlpha;
-            fixed_function_state.destination_blend =
-                re2dj::graphics::BlendFactor::kInverseSourceAlpha;
-        }
-        fixed_function_state.fade_compatibility_applied = true;
+        re2dj::directx::ApplyFadeCompatibility(device->state,
+                                               command,
+                                               texture != nullptr,
+                                               root->display.mode.width,
+                                               root->display.mode.height,
+                                               &fixed_function_state);
     }
     const bool drawn = state_built && root->render_backend->Draw(command,
                                                                  fixed_function_state,
@@ -3941,28 +3733,18 @@ HRESULT WINAPI DeviceDrawPrimitiveVB(IDirect3DDevice3* self,
             device, primitive, 0, vertex_count, flags, DDERR_INVALIDPARAMS, "foreign-vb");
         return DDERR_INVALIDPARAMS;
     }
-    if (facade->buffer->locked())
+    const std::uint32_t checked = re2dj::directx::CheckDrawPrimitiveVB(
+        vertex_count, facade->buffer->locked(), start_vertex, facade->descriptor.vertex_count);
+    if (checked != DD_OK)
     {
         ReportDrawDiagnostic(device,
                              primitive,
                              facade->descriptor.fvf,
                              vertex_count,
                              flags,
-                             D3DERR_VERTEXBUFFERLOCKED,
-                             "locked-vb");
-        return D3DERR_VERTEXBUFFERLOCKED;
-    }
-    if (start_vertex > facade->descriptor.vertex_count ||
-        vertex_count > facade->descriptor.vertex_count - start_vertex)
-    {
-        ReportDrawDiagnostic(device,
-                             primitive,
-                             facade->descriptor.fvf,
-                             vertex_count,
-                             flags,
-                             DDERR_INVALIDPARAMS,
-                             "vb-range");
-        return DDERR_INVALIDPARAMS;
+                             static_cast<HRESULT>(checked),
+                             checked == D3DERR_VERTEXBUFFERLOCKED ? "locked-vb" : "vb-range");
+        return static_cast<HRESULT>(checked);
     }
     const std::span<const std::byte> vertices = facade->buffer->vertices();
     const std::size_t stride = facade->buffer->stride();
@@ -4164,11 +3946,13 @@ HRESULT WINAPI VbLock(IDirect3DVertexBuffer* self, DWORD flags, void** data, DWO
     {
         return DDERR_INVALIDOBJECT;
     }
-    std::span<std::byte> vertices = facade->buffer->Lock();
-    if (vertices.empty())
+    const std::uint32_t checked = re2dj::directx::CheckLockVertexBuffer(
+        true, facade->buffer->locked(), static_cast<std::uint32_t>(facade->buffer->vertices().size()));
+    if (checked != DD_OK)
     {
-        return D3DERR_VERTEXBUFFERLOCKED;
+        return static_cast<HRESULT>(checked);
     }
+    std::span<std::byte> vertices = facade->buffer->Lock();
     char message[128] = {};
     std::snprintf(message,
                   sizeof(message),
@@ -4192,7 +3976,7 @@ HRESULT WINAPI VbUnlock(IDirect3DVertexBuffer* self)
     {
         return DDERR_INVALIDOBJECT;
     }
-    if (!facade->buffer->Unlock())
+    if (re2dj::directx::CheckUnlockVertexBuffer(facade->buffer->locked()) != DD_OK || !facade->buffer->Unlock())
     {
         re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirect3DVertexBuffer::Unlock:not-locked");
         return DDERR_NOTLOCKED;
@@ -4221,7 +4005,8 @@ HRESULT WINAPI VbProcessVertices(IDirect3DVertexBuffer* self,
 
 HRESULT WINAPI VbGetVertexBufferDesc(IDirect3DVertexBuffer* self, D3DVERTEXBUFFERDESC* descriptor)
 {
-    if (descriptor == nullptr || descriptor->dwSize < sizeof(D3DVERTEXBUFFERDESC))
+    if (re2dj::directx::CheckGetVertexBufferDesc(descriptor != nullptr,
+                                                 descriptor == nullptr ? 0U : descriptor->dwSize) != DD_OK)
     {
         return DDERR_INVALIDPARAMS;
     }

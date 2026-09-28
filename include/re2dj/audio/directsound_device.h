@@ -62,6 +62,31 @@ bool PlanLock(std::uint32_t buffer_bytes,
               std::uint32_t flags,
               LockRegions* regions);
 
+// The controls IDirectSoundBuffer sets and reports.
+std::uint32_t WrapPosition(std::uint32_t position, std::uint32_t buffer_bytes);
+std::int32_t ClampVolume(std::int32_t volume);
+std::int32_t ClampPan(std::int32_t pan);
+// DSBFREQUENCY_ORIGINAL restores the format's own rate.
+std::uint32_t ResolveFrequency(std::uint32_t requested, const WaveFormatEx& format);
+// GetStatus: DSBSTATUS_PLAYING, with DSBSTATUS_LOOPING for a looping play.
+std::uint32_t BufferStatus(bool playing, bool looping);
+
+// Where a buffer played without a sound device would be: the cursor moves at
+// the buffer's frequency (block_align bytes per frame) from where Play or
+// SetCurrentPosition left it. A looping buffer wraps; a one-shot buffer
+// finishes at its end, and its cursor then reads 0.
+struct SilentPlayback
+{
+    std::uint32_t position = 0;
+    bool finished = false;
+};
+SilentPlayback AdvanceSilentPlayback(std::uint32_t start_position,
+                                     std::uint32_t buffer_bytes,
+                                     std::uint32_t frequency,
+                                     std::uint32_t block_align,
+                                     bool looping,
+                                     std::uint32_t elapsed_ms);
+
 }  // namespace re2dj::audio
 
 #endif  // RE2DJ_AUDIO_DIRECTSOUND_DEVICE_H_

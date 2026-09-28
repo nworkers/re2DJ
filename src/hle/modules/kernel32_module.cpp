@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <optional>
 #include <limits>
 #include <span>
@@ -12,6 +13,7 @@
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/guest_files.h"
 #include "re2dj/hle/guest_process.h"
+#include "re2dj/hle/private_profile.h"
 #include "re2dj/hle/win32_time.h"
 #include "re2dj/hle/hardlock/device_call.h"
 #include "re2dj/hle/modules/resolve_only_modules.h"
@@ -298,7 +300,8 @@ bool CloseHandle(const ImportCall& call, ImportReturn* result, std::string* erro
     GuestProcess* process = call.services->Process();
     if ((devices != nullptr && devices->Close(call.arguments[0])) ||
         (process != nullptr && (process->CloseProcessHandle(call.arguments[0]) ||
-                                process->CloseEvent(call.arguments[0]))) ||
+                                process->CloseEvent(call.arguments[0]) ||
+                                process->CloseThreadHandle(call.arguments[0]))) ||
         (call.services->Files() != nullptr && call.services->Files()->Close(call.arguments[0])))
     {
         result->eax = 1;
@@ -815,7 +818,7 @@ constexpr std::uint32_t kHeapGenerateExceptions = 0x00000004U;
 constexpr std::uint32_t kHeapZeroMemory = 0x00000008U;
 constexpr std::uint32_t kHeapReallocInPlaceOnly = 0x00000010U;
 
-// Serialization is moot for one guest thread; raising exceptions on failure
+// Serialization is moot while one guest thread runs at a time; raising exceptions on failure
 // is not modelled, so a caller asking for it stops instead.
 bool CheckHeapFlags(const ImportCall& call, std::uint32_t flags, std::uint32_t allowed, std::string* error)
 {
@@ -1012,6 +1015,34 @@ bool HeapSize(const ImportCall& call, ImportReturn* result, std::string* error)
     return true;
 }
 
+// HeapValidate(hHeap, dwFlags, lpMem), as measured on Windows 11: TRUE for a
+// NULL lpMem (the whole heap, which the model keeps consistent) or the start
+// of a live block of that heap; FALSE for a pointer inside a block, a freed
+// block, or another heap's block. The flags are not checked and the last
+// error is left alone. A handle that names no heap raises an access
+// violation there, which is not modelled.
+bool HeapValidate(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 3, "kernel32 HeapValidate argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = RequireProcess(call, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    const GuestHeap* heap = process->FindHeap(call.arguments[0]);
+    if (heap == nullptr)
+    {
+        if (error != nullptr) *error = "kernel32 HeapValidate of a handle that names no heap is not modelled";
+        return false;
+    }
+    const std::uint32_t memory = call.arguments[2];
+    result->eax = memory == 0 || heap->BlockSize(memory).has_value() ? 1U : 0U;
+    return true;
+}
+
 // The system code page of a Korean Windows, the machine the original ran on.
 // Conversions cover CP949's single bytes: ASCII, 0x80 and 0xFF, whose
 // characters were measured with MultiByteToWideChar(949) on a Korean
@@ -1079,6 +1110,686 @@ bool PutGuestBytes(const ImportCall& call,
     return true;
 }
 
+// GetCurrentDirectoryA(nBufferLength, lpBuffer), as measured on Windows 11:
+// a buffer longer than the path receives it and its length is returned; a
+// shorter one receives nothing and the length it needs, terminator included,
+// is returned. The last error never changes. A NULL buffer that claims room
+// faults on Windows, which is not modelled.
+bool GetCurrentDirectoryA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!ReturnZero(call, result, error) || call.arguments.size() != 2)
+    {
+        if (error != nullptr && error->empty())
+        {
+            *error = "kernel32 GetCurrentDirectoryA argument shape is invalid";
+        }
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 GetCurrentDirectoryA needs the guest file model";
+        return false;
+    }
+    const std::string path = files->CurrentDirectory();
+    const auto length = static_cast<std::uint32_t>(path.size());
+    const std::uint32_t size = call.arguments[0];
+    const std::uint32_t buffer = call.arguments[1];
+    if (size <= length)
+    {
+        result->eax = length + 1;
+        return true;
+    }
+    if (buffer == 0)
+    {
+        if (error != nullptr) *error = "kernel32 GetCurrentDirectoryA into a NULL buffer faults on Windows";
+        return false;
+    }
+    std::vector<std::uint8_t> bytes(path.begin(), path.end());
+    bytes.push_back(0);
+    if (!PutGuestBytes(call, buffer, bytes, error))
+    {
+        return false;
+    }
+    result->eax = length;
+    return true;
+}
+
+// SetCurrentDirectoryA(lpPathName) under GuestFiles' rules, as measured on
+// Windows 11: TRUE leaves the last error alone; a NULL path is FALSE with
+// ERROR_INVALID_PARAMETER. A directory outside the guest root is not
+// modelled and stops the call.
+bool SetCurrentDirectoryA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!ReturnZero(call, result, error) || call.arguments.size() != 1)
+    {
+        if (error != nullptr && error->empty())
+        {
+            *error = "kernel32 SetCurrentDirectoryA argument shape is invalid";
+        }
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 SetCurrentDirectoryA needs the guest file model";
+        return false;
+    }
+    if (call.arguments[0] == 0)
+    {
+        call.services->SetLastError(kWin32ErrorInvalidParameter);
+        return true;
+    }
+    std::string path;
+    std::string read_error;
+    // An empty string reads as a failure with no error text.
+    if (!call.services->ReadGuestString(runtime::GuestAddress(call.arguments[0]), &path, &read_error) &&
+        !read_error.empty())
+    {
+        if (error != nullptr) *error = "kernel32 SetCurrentDirectoryA cannot read the path: " + read_error;
+        return false;
+    }
+    bool outside_root = false;
+    const std::uint32_t failure = files->SetCurrentDirectory(path, &outside_root);
+    if (outside_root)
+    {
+        if (error != nullptr) *error = "kernel32 SetCurrentDirectoryA of a directory outside the guest root is not modelled: " + path;
+        return false;
+    }
+    if (failure != kWin32ErrorSuccess)
+    {
+        call.services->SetLastError(failure);
+        return true;
+    }
+    result->eax = 1;
+    return true;
+}
+
+// A profile file's text for the GetPrivateProfile* handlers, which read it
+// through GuestFiles relative to the current directory. kOpenFailed carries
+// the open's Win32 error; a bare name (which Windows looks up in its own
+// directory), a file outside the guest root, and a read failure stop.
+enum class ProfileFile
+{
+    kRead,
+    kOpenFailed,
+    kStop,
+};
+
+ProfileFile ReadProfileFile(const ImportCall& call,
+                            GuestFiles* files,
+                            const std::string& file_name,
+                            std::string* text,
+                            std::uint32_t* open_error,
+                            std::string* error)
+{
+    if (file_name.find_first_of("\\/") == std::string::npos)
+    {
+        if (error != nullptr) *error = "kernel32 " + call.gate.name + " of a file in the Windows directory is not modelled: " + file_name;
+        return ProfileFile::kStop;
+    }
+    const GuestFiles::OpenResult opened = files->Open(file_name, true, false, kOpenExisting);
+    if (opened.outside_root)
+    {
+        if (error != nullptr) *error = "kernel32 " + call.gate.name + " of a file outside the guest root is not modelled: " + file_name;
+        return ProfileFile::kStop;
+    }
+    if (opened.handle == 0)
+    {
+        *open_error = opened.error;
+        return ProfileFile::kOpenFailed;
+    }
+    std::uint64_t size = 0;
+    std::vector<std::uint8_t> bytes;
+    const bool read = files->Size(opened.handle, &size) == kWin32ErrorSuccess &&
+                      files->Read(opened.handle, static_cast<std::uint32_t>(size), &bytes) == kWin32ErrorSuccess;
+    files->Close(opened.handle);
+    if (!read)
+    {
+        if (error != nullptr) *error = "kernel32 " + call.gate.name + " cannot read " + file_name;
+        return ProfileFile::kStop;
+    }
+    text->assign(bytes.begin(), bytes.end());
+    return ProfileFile::kRead;
+}
+
+// Reads an optional guest string argument: false stops the handler, an
+// argument of 0 leaves present false.
+bool ReadOptionalString(const ImportCall& call, std::uint32_t address, std::string* value, bool* present, std::string* error)
+{
+    *present = address != 0;
+    if (address == 0)
+    {
+        return true;
+    }
+    std::string read_error;
+    // An empty string reads as a failure with no error text.
+    if (!call.services->ReadGuestString(runtime::GuestAddress(address), value, &read_error) && !read_error.empty())
+    {
+        if (error != nullptr) *error = "kernel32 " + call.gate.name + " cannot read its arguments: " + read_error;
+        return false;
+    }
+    return true;
+}
+
+// GetPrivateProfileIntA(lpAppName, lpKeyName, nDefault, lpFileName) over the
+// guest's files, with the reading rules in private_profile.h, as measured on
+// Windows 11: a value found sets the last error to 0; a missing key or
+// section returns nDefault with ERROR_FILE_NOT_FOUND, a file that cannot be
+// opened nDefault with the open's error; a null section or key returns 0 with
+// the last error 0. [GAMEASSIGNMENTS] DemoVolume is the product's own setting
+// and leaves the last error alone, as on the Windows product. A null file
+// name stops, as does anything ReadProfileFile stops on.
+bool GetPrivateProfileIntA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 4)
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileIntA argument shape is invalid";
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileIntA needs the guest file model";
+        return false;
+    }
+    if (call.arguments[0] == 0 || call.arguments[1] == 0)
+    {
+        result->eax = 0;
+        call.services->SetLastError(kWin32ErrorSuccess);
+        return true;
+    }
+    std::string section;
+    std::string key;
+    std::string file_name;
+    bool present = false;
+    bool file_present = false;
+    if (!ReadOptionalString(call, call.arguments[0], &section, &present, error) ||
+        !ReadOptionalString(call, call.arguments[1], &key, &present, error) ||
+        !ReadOptionalString(call, call.arguments[3], &file_name, &file_present, error))
+    {
+        return false;
+    }
+    if (!file_present)
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileIntA of win.ini (a null file name) is not modelled";
+        return false;
+    }
+    const std::uint32_t default_value = call.arguments[2];
+    if (const std::optional<std::uint32_t> configured =
+            PrivateProfileIntOverride(section, key, kDefaultDemoVolume))
+    {
+        result->eax = *configured;
+        return true;
+    }
+    std::string text;
+    std::uint32_t open_error = 0;
+    switch (ReadProfileFile(call, files, file_name, &text, &open_error, error))
+    {
+    case ProfileFile::kStop:
+        return false;
+    case ProfileFile::kOpenFailed:
+        result->eax = default_value;
+        call.services->SetLastError(open_error);
+        return true;
+    case ProfileFile::kRead:
+        break;
+    }
+    const std::optional<std::string> value = FindPrivateProfileValue(text, section, key);
+    if (!value.has_value())
+    {
+        result->eax = default_value;
+        call.services->SetLastError(kWin32ErrorFileNotFound);
+        return true;
+    }
+    result->eax = ParsePrivateProfileInt(*value, default_value);
+    call.services->SetLastError(kWin32ErrorSuccess);
+    return true;
+}
+
+// GetPrivateProfileStringA(lpAppName, lpKeyName, lpDefault, lpReturnedString,
+// nSize, lpFileName), as measured on Windows 11:
+// - a value found, without one pair of matching quotes around it, with the
+//   last error 0, or ERROR_MORE_DATA when it fills the buffer (cut to
+//   nSize - 1, or exactly that long);
+// - a missing key, section, or file gives lpDefault without trailing spaces
+//   (none when null) with ERROR_FILE_NOT_FOUND or the open's error, cut to
+//   the buffer without ERROR_MORE_DATA;
+// - a null key lists the section's keys and a null section the section
+//   names, each NUL-ended with one more NUL, cut to nSize - 2 with
+//   ERROR_MORE_DATA.
+// The number of characters written, the final NULs left out, is returned.
+// A null buffer or file name, and a listing of a missing section or file,
+// stop.
+bool GetPrivateProfileStringA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kErrorMoreData = 234;
+    if (result == nullptr || call.arguments.size() != 6)
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileStringA argument shape is invalid";
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileStringA needs the guest file model";
+        return false;
+    }
+    std::string section;
+    std::string key;
+    std::string default_value;
+    std::string file_name;
+    bool section_present = false;
+    bool key_present = false;
+    bool default_present = false;
+    bool file_present = false;
+    if (!ReadOptionalString(call, call.arguments[0], &section, &section_present, error) ||
+        !ReadOptionalString(call, call.arguments[1], &key, &key_present, error) ||
+        !ReadOptionalString(call, call.arguments[2], &default_value, &default_present, error) ||
+        !ReadOptionalString(call, call.arguments[5], &file_name, &file_present, error))
+    {
+        return false;
+    }
+    const std::uint32_t buffer = call.arguments[3];
+    const std::uint32_t size = call.arguments[4];
+    if (buffer == 0 || !file_present)
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileStringA of a null buffer or file name is not modelled";
+        return false;
+    }
+    std::string text;
+    std::uint32_t open_error = 0;
+    const ProfileFile read = ReadProfileFile(call, files, file_name, &text, &open_error, error);
+    if (read == ProfileFile::kStop)
+    {
+        return false;
+    }
+    PrivateProfileCopy copy;
+    std::uint32_t last_error = kWin32ErrorSuccess;
+    if (!section_present || !key_present)
+    {
+        std::optional<std::vector<std::string>> names;
+        if (read == ProfileFile::kRead)
+        {
+            names = section_present ? ListPrivateProfileKeys(text, section) : ListPrivateProfileSections(text);
+        }
+        if (!names.has_value())
+        {
+            if (error != nullptr) *error = "kernel32 GetPrivateProfileStringA listing a missing section or file is not modelled";
+            return false;
+        }
+        copy = CopyPrivateProfileList(*names, size);
+        last_error = copy.truncated ? kErrorMoreData : kWin32ErrorSuccess;
+    }
+    else
+    {
+        const std::optional<std::string> value =
+            read == ProfileFile::kRead ? FindPrivateProfileValue(text, section, key) : std::nullopt;
+        if (value.has_value())
+        {
+            copy = CopyPrivateProfileString(PrivateProfileStringValue(*value), size);
+            last_error = copy.truncated ? kErrorMoreData : kWin32ErrorSuccess;
+        }
+        else
+        {
+            copy = CopyPrivateProfileString(PrivateProfileStringDefault(default_value), size);
+            last_error = read == ProfileFile::kOpenFailed ? open_error : kWin32ErrorFileNotFound;
+        }
+    }
+    if (!copy.bytes.empty() && !PutGuestBytes(call, buffer, copy.bytes, error))
+    {
+        return false;
+    }
+    result->eax = copy.length;
+    call.services->SetLastError(last_error);
+    return true;
+}
+
+// GetPrivateProfileSectionNamesA(lpReturnBuffer, nSize, lpFileName), as
+// measured on Windows 11: the section names as GetPrivateProfileStringA
+// lists them (every occurrence, NUL after each and one more, cut to
+// nSize - 2 with ERROR_MORE_DATA, last error 0 otherwise); a file that cannot
+// be opened writes one NUL and returns 0 with the open's error. A null buffer
+// or file name stops.
+bool GetPrivateProfileSectionNamesA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kErrorMoreData = 234;
+    if (result == nullptr || call.arguments.size() != 3)
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileSectionNamesA argument shape is invalid";
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileSectionNamesA needs the guest file model";
+        return false;
+    }
+    std::string file_name;
+    bool file_present = false;
+    if (!ReadOptionalString(call, call.arguments[2], &file_name, &file_present, error))
+    {
+        return false;
+    }
+    const std::uint32_t buffer = call.arguments[0];
+    const std::uint32_t size = call.arguments[1];
+    if (buffer == 0 || !file_present)
+    {
+        if (error != nullptr) *error = "kernel32 GetPrivateProfileSectionNamesA of a null buffer or file name is not modelled";
+        return false;
+    }
+    std::string text;
+    std::uint32_t open_error = 0;
+    switch (ReadProfileFile(call, files, file_name, &text, &open_error, error))
+    {
+    case ProfileFile::kStop:
+        return false;
+    case ProfileFile::kOpenFailed:
+    {
+        const std::uint8_t terminator[1] = {0};
+        if (size != 0 && !PutGuestBytes(call, buffer, terminator, error))
+        {
+            return false;
+        }
+        result->eax = 0;
+        call.services->SetLastError(open_error);
+        return true;
+    }
+    case ProfileFile::kRead:
+        break;
+    }
+    const PrivateProfileCopy copy = CopyPrivateProfileList(ListPrivateProfileSections(text), size);
+    if (!copy.bytes.empty() && !PutGuestBytes(call, buffer, copy.bytes, error))
+    {
+        return false;
+    }
+    result->eax = copy.length;
+    call.services->SetLastError(copy.truncated ? kErrorMoreData : kWin32ErrorSuccess);
+    return true;
+}
+
+// GetFileAttributesA(lpFileName) under GuestFiles, as measured on Windows 11:
+// the attributes on success with the last error left alone, and
+// INVALID_FILE_ATTRIBUTES with the walk's error on failure; a null name is
+// ERROR_PATH_NOT_FOUND. A path outside the guest root stops.
+bool GetFileAttributesA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 1)
+    {
+        if (error != nullptr) *error = "kernel32 GetFileAttributesA argument shape is invalid";
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 GetFileAttributesA needs the guest file model";
+        return false;
+    }
+    result->eax = storage::kInvalidFileAttributes;
+    if (call.arguments[0] == 0)
+    {
+        call.services->SetLastError(kWin32ErrorPathNotFound);
+        return true;
+    }
+    std::string path;
+    std::string read_error;
+    // An empty string reads as a failure with no error text.
+    if (!call.services->ReadGuestString(runtime::GuestAddress(call.arguments[0]), &path, &read_error) &&
+        !read_error.empty())
+    {
+        if (error != nullptr) *error = "kernel32 GetFileAttributesA cannot read the path: " + read_error;
+        return false;
+    }
+    bool outside_root = false;
+    const storage::GuestFileAttributes attributes = files->Attributes(path, &outside_root);
+    if (outside_root)
+    {
+        if (error != nullptr) *error = "kernel32 GetFileAttributesA of a path outside the guest root is not modelled: " + path;
+        return false;
+    }
+    if (attributes.error != kWin32ErrorSuccess)
+    {
+        call.services->SetLastError(attributes.error);
+        return true;
+    }
+    result->eax = attributes.attributes;
+    return true;
+}
+
+// RtlUnwind(TargetFrame, TargetIp, ExceptionRecord, ReturnValue), as
+// measured on Windows 11 (design 404):
+// - each SEH frame above the target, innermost first, has its handler called
+//   with the record flagged EXCEPTION_UNWINDING and is then unlinked from the
+//   TEB's list, which ends at the target;
+// - with no record the handlers get STATUS_UNWIND at the caller's return
+//   address, and a record given is flagged in place;
+// - the call returns to its caller with ReturnValue in eax; TargetIp is not
+//   used.
+// A null target (an exit unwind) and a target not on the list stop.
+bool RtlUnwind(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kStatusUnwind = 0xC0000027U;
+    constexpr std::uint32_t kExceptionUnwinding = 0x2U;
+    constexpr std::uint32_t kEndOfList = 0xFFFFFFFFU;
+    constexpr std::uint32_t kRecordSize = 80;
+    constexpr std::uint32_t kContextSize = 716;
+    constexpr std::uint32_t kDispatcherContextSize = 8;
+    if (result == nullptr || call.arguments.size() != 4 || call.services == nullptr)
+    {
+        if (error != nullptr) *error = "kernel32 RtlUnwind argument shape is invalid";
+        return false;
+    }
+    const std::uint32_t teb = call.services->ThreadEnvironmentBlock().value();
+    GuestProcess* process = call.services->Process();
+    if (teb == 0 || process == nullptr)
+    {
+        if (error != nullptr) *error = "kernel32 RtlUnwind needs the guest TEB and process heap";
+        return false;
+    }
+    const std::uint32_t target = call.arguments[0];
+    if (target == 0)
+    {
+        if (error != nullptr) *error = "kernel32 RtlUnwind of every frame (an exit unwind) is not modelled";
+        return false;
+    }
+    const auto read_u32 = [&](std::uint32_t address, std::uint32_t* value) {
+        std::array<std::uint8_t, 4> bytes{};
+        std::string memory_error;
+        if (!call.services->ReadGuestBytes(runtime::GuestAddress(address), bytes, &memory_error))
+        {
+            if (error != nullptr) *error = "kernel32 RtlUnwind: " + memory_error;
+            return false;
+        }
+        std::memcpy(value, bytes.data(), sizeof(*value));
+        return true;
+    };
+    const auto write_u32 = [&](std::uint32_t address, std::uint32_t value) {
+        std::array<std::uint8_t, 4> bytes{};
+        std::memcpy(bytes.data(), &value, sizeof(value));
+        return PutGuestBytes(call, address, bytes, error);
+    };
+
+    // The record the handlers see, its CONTEXT, and a dispatcher context, in
+    // one heap block for the length of the call.
+    const std::uint32_t block = process->Allocate(kRecordSize + kContextSize + kDispatcherContextSize);
+    if (block == 0)
+    {
+        if (error != nullptr) *error = "kernel32 RtlUnwind has no heap room for its record";
+        return false;
+    }
+    std::uint32_t record = call.arguments[2];
+    std::uint32_t flags = 0;
+    bool ok = true;
+    if (record == 0)
+    {
+        std::array<std::uint8_t, kRecordSize + kContextSize + kDispatcherContextSize> bytes{};
+        const std::uint32_t words[] = {kStatusUnwind, 0, 0, call.return_address};
+        std::memcpy(bytes.data(), words, sizeof(words));
+        ok = PutGuestBytes(call, block, bytes, error);
+        record = block;
+    }
+    else
+    {
+        std::array<std::uint8_t, kContextSize + kDispatcherContextSize> bytes{};
+        ok = PutGuestBytes(call, block + kRecordSize, bytes, error);
+    }
+    ok = ok && read_u32(record + 4, &flags) && write_u32(record + 4, flags | kExceptionUnwinding);
+
+    std::uint32_t frame = 0;
+    ok = ok && read_u32(teb, &frame);
+    while (ok && frame != target)
+    {
+        if (frame == kEndOfList)
+        {
+            if (error != nullptr) *error = "kernel32 RtlUnwind to a frame not on the SEH list is not modelled";
+            ok = false;
+            break;
+        }
+        std::uint32_t next = 0;
+        std::uint32_t handler = 0;
+        ok = read_u32(frame, &next) && read_u32(frame + 4, &handler);
+        if (!ok)
+        {
+            break;
+        }
+        GuestCall handler_call;
+        handler_call.function = handler;
+        handler_call.arguments = {record, frame, block + kRecordSize, block + kRecordSize + kContextSize};
+        std::uint32_t disposition = 0;
+        std::string call_error;
+        if (!call.services->CallGuest(&handler_call, &disposition, &call_error))
+        {
+            if (error != nullptr) *error = "kernel32 RtlUnwind cannot call a handler: " + call_error;
+            ok = false;
+            break;
+        }
+        ok = write_u32(teb, next);
+        frame = next;
+    }
+    process->Free(block);
+    if (!ok)
+    {
+        return false;
+    }
+    result->eax = call.arguments[3];
+    return true;
+}
+
+// FindFirstFileA(lpFileName, lpFindFileData) under GuestFiles' search, as
+// measured on Windows 11: success returns the search handle and leaves the
+// last error alone; failure is INVALID_HANDLE_VALUE with the search's error,
+// ERROR_PATH_NOT_FOUND for a null name. A null data pointer is
+// ERROR_INVALID_PARAMETER, as the Windows product answers. A directory
+// outside the guest root is not modelled and stops the call.
+bool FindFirstFileA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!ReturnZero(call, result, error) || call.arguments.size() != 2)
+    {
+        if (error != nullptr && error->empty())
+        {
+            *error = "kernel32 FindFirstFileA argument shape is invalid";
+        }
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 FindFirstFileA needs the guest file model";
+        return false;
+    }
+    result->eax = kKernel32InvalidHandle;
+    if (call.arguments[1] == 0)
+    {
+        call.services->SetLastError(kWin32ErrorInvalidParameter);
+        return true;
+    }
+    std::string name;
+    std::string read_error;
+    if (call.arguments[0] != 0 &&
+        !call.services->ReadGuestString(runtime::GuestAddress(call.arguments[0]), &name, &read_error) &&
+        !read_error.empty())
+    {
+        if (error != nullptr) *error = "kernel32 FindFirstFileA cannot read the name: " + read_error;
+        return false;
+    }
+    const GuestFiles::FindResult found = files->FindFirst(name);
+    if (found.outside_root)
+    {
+        if (error != nullptr) *error = "kernel32 FindFirstFileA outside the guest root is not modelled: " + name;
+        return false;
+    }
+    if (found.handle == 0)
+    {
+        call.services->SetLastError(found.error);
+        return true;
+    }
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(&found.first);
+    if (!PutGuestBytes(call, call.arguments[1], std::span<const std::uint8_t>(bytes, sizeof(found.first)), error))
+    {
+        files->FindClose(found.handle);
+        return false;
+    }
+    result->eax = found.handle;
+    return true;
+}
+
+// FindNextFileA(hFindFile, lpFindFileData): the next match, TRUE leaving the
+// last error alone; FALSE with ERROR_NO_MORE_FILES at the end (measured), or
+// ERROR_INVALID_HANDLE for a handle that is no search.
+bool FindNextFileA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!ReturnZero(call, result, error) || call.arguments.size() != 2)
+    {
+        if (error != nullptr && error->empty())
+        {
+            *error = "kernel32 FindNextFileA argument shape is invalid";
+        }
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || call.arguments[1] == 0)
+    {
+        if (call.services != nullptr) call.services->SetLastError(kWin32ErrorInvalidParameter);
+        return true;
+    }
+    storage::GuestFindData data;
+    const std::uint32_t failure = files->FindNext(call.arguments[0], &data);
+    if (failure != kWin32ErrorSuccess)
+    {
+        call.services->SetLastError(failure);
+        return true;
+    }
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(&data);
+    if (!PutGuestBytes(call, call.arguments[1], std::span<const std::uint8_t>(bytes, sizeof(data)), error))
+    {
+        return false;
+    }
+    result->eax = 1;
+    return true;
+}
+
+// FindClose(hFindFile): TRUE leaving the last error alone, or FALSE with
+// ERROR_INVALID_HANDLE for a handle that is no open search.
+bool FindClose(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!ReturnZero(call, result, error) || call.arguments.size() != 1)
+    {
+        if (error != nullptr && error->empty())
+        {
+            *error = "kernel32 FindClose argument shape is invalid";
+        }
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->FindClose(call.arguments[0]))
+    {
+        if (call.services != nullptr) call.services->SetLastError(kWin32ErrorInvalidHandle);
+        return true;
+    }
+    result->eax = 1;
+    return true;
+}
+
 // Places bytes in a new process-heap block, returning its address or 0.
 std::uint32_t PlaceOnProcessHeap(const ImportCall& call,
                                  GuestProcess* process,
@@ -1126,9 +1837,13 @@ bool GetStdHandle(const ImportCall& call, ImportReturn* result, std::string* err
     return true;
 }
 
-// GetFileType(hFile): only devices are open handles, and none is a file.
+// GetFileType(hFile), as measured on Windows 11: an open file is
+// FILE_TYPE_DISK whatever its access, leaving the last error alone; a closed,
+// NULL, INVALID_HANDLE_VALUE or unknown handle is FILE_TYPE_UNKNOWN with
+// ERROR_INVALID_HANDLE. A device handle is not modelled.
 bool GetFileType(const ImportCall& call, ImportReturn* result, std::string* error)
 {
+    constexpr std::uint32_t kFileTypeDisk = 1;
     if (!CheckArgumentCount(call, result, 1, "kernel32 GetFileType argument shape is invalid", error))
     {
         return false;
@@ -1138,6 +1853,12 @@ bool GetFileType(const ImportCall& call, ImportReturn* result, std::string* erro
     {
         if (error != nullptr) *error = "kernel32 GetFileType of a device is not modelled";
         return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files != nullptr && files->IsOpen(call.arguments[0]))
+    {
+        result->eax = kFileTypeDisk;
+        return true;
     }
     if (call.services != nullptr) call.services->SetLastError(kWin32ErrorInvalidHandle);
     return true;
@@ -1160,8 +1881,499 @@ bool GetCurrentThreadId(const ImportCall& call, ImportReturn* result, std::strin
     {
         return false;
     }
-    result->eax = GuestProcess::kThreadId;
+    result->eax = call.services == nullptr ? GuestProcess::kThreadId : call.services->CurrentThreadId();
     return true;
+}
+
+// IsBadReadPtr(lp, ucb) / IsBadWritePtr(lp, ucb), as measured on Windows 11:
+// 0 when every byte can be read (or, for a write, written), nonzero
+// otherwise, 0 for a zero size whatever the pointer; the last error is left
+// alone. Readable is what the guest memory services can read; writable also
+// needs a recorded page protection that allows writing, where one is kept.
+bool IsBadPointer(const ImportCall& call, ImportReturn* result, bool write, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 2, "kernel32 IsBad*Ptr argument shape is invalid", error))
+    {
+        return false;
+    }
+    const std::uint32_t address = call.arguments[0];
+    const std::uint32_t size = call.arguments[1];
+    if (size == 0)
+    {
+        return true;
+    }
+    if (address + size - 1 < address)
+    {
+        result->eax = 1;
+        return true;
+    }
+    constexpr std::uint32_t kChunk = GuestProcess::kPageSize;
+    std::array<std::uint8_t, kChunk> scratch{};
+    const GuestProcess* process = call.services->Process();
+    for (std::uint32_t offset = 0; offset < size; offset += kChunk)
+    {
+        const std::uint32_t length = std::min(kChunk, size - offset);
+        std::string memory_error;
+        if (!call.services->ReadGuestBytes(runtime::GuestAddress(address + offset),
+                                           std::span<std::uint8_t>(scratch.data(), length), &memory_error))
+        {
+            result->eax = 1;
+            return true;
+        }
+    }
+    if (write && process != nullptr)
+    {
+        constexpr std::uint32_t kWritable = 0x04 | 0x08 | 0x40 | 0x80;  // (EXECUTE_)READWRITE, (EXECUTE_)WRITECOPY
+        const std::uint32_t first_page = address & ~(GuestProcess::kPageSize - 1);
+        for (std::uint32_t page = first_page; page - first_page < size + (address - first_page);
+             page += GuestProcess::kPageSize)
+        {
+            const std::uint32_t protection = process->PageProtection(page);
+            if (protection != 0 && (protection & kWritable) == 0)
+            {
+                result->eax = 1;
+                return true;
+            }
+        }
+    }
+    return true;
+}
+
+bool IsBadReadPtr(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return IsBadPointer(call, result, false, error);
+}
+
+bool IsBadWritePtr(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return IsBadPointer(call, result, true, error);
+}
+
+// GetCurrentThread(): the pseudo-handle (HANDLE)-2.
+bool GetCurrentThread(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 0, "kernel32 GetCurrentThread argument shape is invalid", error))
+    {
+        return false;
+    }
+    result->eax = GuestProcess::kCurrentThreadHandle;
+    return true;
+}
+
+// Reads or writes guest dwords for the handlers below, failing the handler
+// with the gate's name.
+bool ReadGuestWords(const ImportCall& call, std::uint32_t address, std::span<std::uint32_t> words, std::string* error)
+{
+    std::string memory_error;
+    const std::span<std::uint8_t> bytes(reinterpret_cast<std::uint8_t*>(words.data()), words.size_bytes());
+    if (!call.services->ReadGuestBytes(runtime::GuestAddress(address), bytes, &memory_error))
+    {
+        if (error != nullptr) *error = "kernel32 " + call.gate.name + ": " + memory_error;
+        return false;
+    }
+    return true;
+}
+
+bool WriteGuestWords(const ImportCall& call,
+                     std::uint32_t address,
+                     std::span<const std::uint32_t> words,
+                     std::string* error)
+{
+    return PutGuestBytes(
+        call, address,
+        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(words.data()), words.size_bytes()), error);
+}
+
+// A CRITICAL_SECTION's dwords: DebugInfo, LockCount, RecursionCount,
+// OwningThread, LockSemaphore, SpinCount.
+// CreateThread(lpThreadAttributes, dwStackSize, lpStartAddress, lpParameter,
+// dwCreationFlags, lpThreadId), as measured on Windows 11: a handle, the new
+// ID written when lpThreadId is given, and the last error left alone. The
+// thread runs once the caller next waits or calls an import. A suspended
+// start (CREATE_SUSPENDED) or no ThreadProc is not modelled.
+bool CreateThread(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kCreateSuspended = 0x00000004U;
+    if (!CheckArgumentCount(call, result, 6, "kernel32 CreateThread argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = RequireProcess(call, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    const std::uint32_t start = call.arguments[2];
+    if (start == 0 || (call.arguments[4] & kCreateSuspended) != 0)
+    {
+        if (error != nullptr) *error = "kernel32 CreateThread without a ThreadProc or suspended is not modelled";
+        return false;
+    }
+    std::uint32_t thread_id = 0;
+    const std::uint32_t handle = process->CreateThread(start, call.arguments[3], &thread_id);
+    if (!call.services->StartGuestThread(start, call.arguments[3], thread_id, error))
+    {
+        process->FinishThread(thread_id, 0);
+        process->CloseThreadHandle(handle);
+        return false;
+    }
+    if (call.arguments[5] != 0)
+    {
+        const std::uint32_t id_word[1] = {thread_id};
+        if (!WriteGuestWords(call, call.arguments[5], id_word, error))
+        {
+            return false;
+        }
+    }
+    result->eax = handle;
+    return true;
+}
+
+// The THREAD_PRIORITY_* values SetThreadPriority takes, as measured: IDLE
+// (-15), LOWEST (-2) through HIGHEST (2), and TIME_CRITICAL (15).
+bool IsThreadPriority(std::int32_t priority)
+{
+    return priority == -15 || priority == 15 || (priority >= -2 && priority <= 2);
+}
+
+// SetThreadPriority(hThread, nPriority) / GetThreadPriority(hThread) on the
+// GetCurrentThread pseudo-handle or a thread handle, finished threads
+// included, as measured on Windows 11. Another handle is ERROR_INVALID_HANDLE
+// and a value outside THREAD_PRIORITY_* ERROR_INVALID_PARAMETER, each with
+// 0 (GetThreadPriority: THREAD_PRIORITY_ERROR_RETURN). Host threads all run
+// at one priority; the value is only kept.
+//
+// The thread hThread names: *thread, or neither it nor anything else when
+// the pseudo-handle names the main thread (*main). False for another handle.
+bool FindPriorityThread(const ImportCall& call, GuestProcess* process, GuestThread** thread, bool* main)
+{
+    *main = false;
+    if (call.arguments[0] == GuestProcess::kCurrentThreadHandle)
+    {
+        *thread = process->FindThread(call.services->CurrentThreadId());
+        *main = *thread == nullptr;
+        return true;
+    }
+    *thread = process->FindThreadHandle(call.arguments[0]);
+    return *thread != nullptr;
+}
+
+bool SetThreadPriority(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 2, "kernel32 SetThreadPriority argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = RequireProcess(call, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    GuestThread* thread = nullptr;
+    bool main = false;
+    const auto priority = static_cast<std::int32_t>(call.arguments[1]);
+    if (!FindPriorityThread(call, process, &thread, &main))
+    {
+        call.services->SetLastError(kWin32ErrorInvalidHandle);
+        return true;
+    }
+    if (!IsThreadPriority(priority))
+    {
+        call.services->SetLastError(kWin32ErrorInvalidParameter);
+        return true;
+    }
+    if (main)
+    {
+        process->set_main_thread_priority(priority);
+    }
+    else
+    {
+        thread->priority = priority;
+    }
+    result->eax = 1;
+    return true;
+}
+
+bool GetThreadPriority(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kThreadPriorityErrorReturn = 0x7FFFFFFFU;
+    if (!CheckArgumentCount(call, result, 1, "kernel32 GetThreadPriority argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = RequireProcess(call, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    GuestThread* thread = nullptr;
+    bool main = false;
+    if (!FindPriorityThread(call, process, &thread, &main))
+    {
+        call.services->SetLastError(kWin32ErrorInvalidHandle);
+        result->eax = kThreadPriorityErrorReturn;
+        return true;
+    }
+    result->eax = static_cast<std::uint32_t>(main ? process->main_thread_priority() : thread->priority);
+    return true;
+}
+
+constexpr std::size_t kCriticalSectionWords = 6;
+constexpr std::uint32_t kCriticalSectionFree = 0xFFFFFFFFU;
+constexpr std::uint32_t kCriticalSectionOwned = 0xFFFFFFFEU;
+
+// InitializeCriticalSection(lpCriticalSection), as measured on Windows 11:
+// DebugInfo -1, LockCount -1 (free), no owner, and the default spin count
+// with its flags, 0x020007D0. The last error is left alone.
+bool InitializeCriticalSection(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 InitializeCriticalSection argument shape is invalid", error))
+    {
+        return false;
+    }
+    const std::uint32_t words[kCriticalSectionWords] = {0xFFFFFFFFU, kCriticalSectionFree, 0, 0, 0, 0x020007D0U};
+    return WriteGuestWords(call, call.arguments[0], words, error);
+}
+
+// EnterCriticalSection(lpCriticalSection): a free section becomes the
+// calling thread's (LockCount -2, count 1, owner its ID), an owned one counts
+// up, as measured on Windows 11. A section another thread owns is waited
+// for, in 1 ms steps, while that thread can still leave it; with no other
+// thread running, the wait could never end and stops.
+bool EnterCriticalSection(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 EnterCriticalSection argument shape is invalid", error))
+    {
+        return false;
+    }
+    const std::uint32_t self = call.services == nullptr ? GuestProcess::kThreadId : call.services->CurrentThreadId();
+    std::uint32_t words[kCriticalSectionWords] = {};
+    for (;;)
+    {
+        if (!ReadGuestWords(call, call.arguments[0], words, error))
+        {
+            return false;
+        }
+        if (words[1] == kCriticalSectionFree || words[3] == self)
+        {
+            break;
+        }
+        GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+        if (process == nullptr || process->running_threads() == 0 || !call.services->WaitMilliseconds(1))
+        {
+            if (error != nullptr) *error = "kernel32 EnterCriticalSection of a section another thread owns would block for good";
+            return false;
+        }
+    }
+    if (words[1] == kCriticalSectionFree)
+    {
+        words[1] = kCriticalSectionOwned;
+        words[2] = 1;
+        words[3] = self;
+    }
+    else
+    {
+        ++words[2];
+    }
+    return WriteGuestWords(call, call.arguments[0], words, error);
+}
+
+// LeaveCriticalSection(lpCriticalSection): the count goes down, and at zero
+// the section is free again with no owner, as measured on Windows 11.
+// Leaving a section this thread does not own stops.
+bool LeaveCriticalSection(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 LeaveCriticalSection argument shape is invalid", error))
+    {
+        return false;
+    }
+    std::uint32_t words[kCriticalSectionWords] = {};
+    if (!ReadGuestWords(call, call.arguments[0], words, error))
+    {
+        return false;
+    }
+    const std::uint32_t self = call.services == nullptr ? GuestProcess::kThreadId : call.services->CurrentThreadId();
+    if (words[3] != self || words[2] == 0)
+    {
+        if (error != nullptr) *error = "kernel32 LeaveCriticalSection of a section this thread does not own is not modelled";
+        return false;
+    }
+    if (--words[2] == 0)
+    {
+        words[1] = kCriticalSectionFree;
+        words[3] = 0;
+    }
+    return WriteGuestWords(call, call.arguments[0], words, error);
+}
+
+// DeleteCriticalSection(lpCriticalSection): every dword zero, as measured.
+bool DeleteCriticalSection(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 DeleteCriticalSection argument shape is invalid", error))
+    {
+        return false;
+    }
+    const std::uint32_t words[kCriticalSectionWords] = {};
+    return WriteGuestWords(call, call.arguments[0], words, error);
+}
+
+// InterlockedIncrement / InterlockedDecrement(lpAddend): the new value. One
+// guest thread runs at a time, so a plain read and write is atomic enough.
+bool InterlockedAdd(const ImportCall& call, ImportReturn* result, std::uint32_t delta, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 Interlocked argument shape is invalid", error))
+    {
+        return false;
+    }
+    std::uint32_t value[1] = {};
+    if (!ReadGuestWords(call, call.arguments[0], value, error))
+    {
+        return false;
+    }
+    value[0] += delta;
+    result->eax = value[0];
+    return WriteGuestWords(call, call.arguments[0], value, error);
+}
+
+bool InterlockedIncrement(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return InterlockedAdd(call, result, 1, error);
+}
+
+bool InterlockedDecrement(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return InterlockedAdd(call, result, 0xFFFFFFFFU, error);
+}
+
+// The TEB's TLS slot for index, or 0 when the host models no TEB.
+std::uint32_t TlsSlotAddress(const ImportCall& call, std::uint32_t index)
+{
+    const std::uint32_t teb = call.services->ThreadEnvironmentBlock().value();
+    return teb == 0 ? 0 : teb + GuestProcess::kTebTlsSlots + index * 4;
+}
+
+// TlsAlloc(): the lowest free index, its TEB slot zero, as on Windows 11,
+// where the first index a program gets is 1. The last error is left alone.
+// Running out of the TEB's 64 slots stops (the expansion slots are not
+// modelled).
+bool TlsAlloc(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 0, "kernel32 TlsAlloc argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = call.services->Process();
+    if (process == nullptr || call.services->ThreadEnvironmentBlock().value() == 0)
+    {
+        if (error != nullptr) *error = "kernel32 TlsAlloc needs the guest process and TEB";
+        return false;
+    }
+    const std::uint32_t index = process->AllocateTls();
+    if (index == GuestProcess::kTlsOutOfIndexes)
+    {
+        if (error != nullptr) *error = "kernel32 TlsAlloc beyond the TEB's slots is not modelled";
+        return false;
+    }
+    const std::uint32_t zero[1] = {};
+    result->eax = index;
+    return WriteGuestWords(call, TlsSlotAddress(call, index), zero, error);
+}
+
+// TlsFree(dwTlsIndex): TRUE for an allocated index, whose slot is cleared;
+// FALSE with ERROR_INVALID_PARAMETER otherwise (measured).
+bool TlsFree(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 TlsFree argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = call.services->Process();
+    if (process == nullptr || call.services->ThreadEnvironmentBlock().value() == 0)
+    {
+        if (error != nullptr) *error = "kernel32 TlsFree needs the guest process and TEB";
+        return false;
+    }
+    const std::uint32_t index = call.arguments[0];
+    if (!process->FreeTls(index))
+    {
+        result->eax = 0;
+        call.services->SetLastError(kWin32ErrorInvalidParameter);
+        return true;
+    }
+    const std::uint32_t zero[1] = {};
+    result->eax = 1;
+    return WriteGuestWords(call, TlsSlotAddress(call, index), zero, error);
+}
+
+// TlsGetValue(dwTlsIndex) / TlsSetValue(dwTlsIndex, lpTlsValue) on the TEB's
+// slots, as measured on Windows 11: any index below 64, allocated or not,
+// works; a get sets the last error to 0, a set leaves it alone. An index past
+// the expansion slots (1088 in all) is ERROR_INVALID_PARAMETER; an expansion
+// slot itself stops.
+enum class TlsIndexCheck
+{
+    kUsable,
+    kInvalid,  // answered: 0 with ERROR_INVALID_PARAMETER
+    kStop,
+};
+
+TlsIndexCheck CheckTlsIndex(const ImportCall& call, ImportReturn* result, std::uint32_t index, std::string* error)
+{
+    constexpr std::uint32_t kAllTlsSlots = 1088;
+    if (call.services->ThreadEnvironmentBlock().value() == 0)
+    {
+        if (error != nullptr) *error = "kernel32 " + call.gate.name + " needs the guest TEB";
+        return TlsIndexCheck::kStop;
+    }
+    if (index >= kAllTlsSlots)
+    {
+        result->eax = 0;
+        call.services->SetLastError(kWin32ErrorInvalidParameter);
+        return TlsIndexCheck::kInvalid;
+    }
+    if (index >= GuestProcess::kTlsSlots)
+    {
+        if (error != nullptr) *error = "kernel32 " + call.gate.name + " of an expansion slot is not modelled";
+        return TlsIndexCheck::kStop;
+    }
+    return TlsIndexCheck::kUsable;
+}
+
+bool TlsGetValue(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 1, "kernel32 TlsGetValue argument shape is invalid", error))
+    {
+        return false;
+    }
+    const TlsIndexCheck check = CheckTlsIndex(call, result, call.arguments[0], error);
+    if (check != TlsIndexCheck::kUsable)
+    {
+        return check == TlsIndexCheck::kInvalid;
+    }
+    std::uint32_t value[1] = {};
+    if (!ReadGuestWords(call, TlsSlotAddress(call, call.arguments[0]), value, error))
+    {
+        return false;
+    }
+    result->eax = value[0];
+    call.services->SetLastError(kWin32ErrorSuccess);
+    return true;
+}
+
+bool TlsSetValue(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 2, "kernel32 TlsSetValue argument shape is invalid", error))
+    {
+        return false;
+    }
+    const TlsIndexCheck check = CheckTlsIndex(call, result, call.arguments[0], error);
+    if (check != TlsIndexCheck::kUsable)
+    {
+        return check == TlsIndexCheck::kInvalid;
+    }
+    const std::uint32_t value[1] = {call.arguments[1]};
+    result->eax = 1;
+    return WriteGuestWords(call, TlsSlotAddress(call, call.arguments[0]), value, error);
 }
 
 // GetCommandLineA(): the quoted module path, placed once on the process heap.
@@ -1792,15 +3004,43 @@ bool ResetEvent(const ImportCall& call, ImportReturn* result, std::string* error
     return ChangeEvent(call, false, result, error);
 }
 
-// WaitForSingleObject(hHandle, dwMilliseconds) on an event. A signalled event
-// returns WAIT_OBJECT_0 (an auto-reset one resets); an unsignalled one with a
-// zero timeout returns WAIT_TIMEOUT. Only this guest thread exists, so a wait
-// that would block can never be released: it stops the call.
+// Sleep(dwMilliseconds): the host waits that long, letting other guest
+// threads run; Sleep(0) returns at once (another thread waiting for the
+// guest lock runs as the next import starts). The last error is left alone.
+// INFINITE would block the thread for good and stops.
+bool Sleep(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kInfinite = 0xFFFFFFFFU;
+    if (!CheckArgumentCount(call, result, 1, "kernel32 Sleep argument shape is invalid", error))
+    {
+        return false;
+    }
+    const std::uint32_t milliseconds = call.arguments[0];
+    if (milliseconds == kInfinite)
+    {
+        if (error != nullptr) *error = "kernel32 Sleep(INFINITE) would block the guest thread for good";
+        return false;
+    }
+    if (milliseconds != 0 && !call.services->WaitMilliseconds(milliseconds))
+    {
+        if (error != nullptr) *error = "kernel32 Sleep needs a host that can wait";
+        return false;
+    }
+    return true;
+}
+
+// WaitForSingleObject(hHandle, dwMilliseconds) on an event or a thread. A
+// signalled event returns WAIT_OBJECT_0 (an auto-reset one resets), as does
+// a finished thread; otherwise a zero timeout returns WAIT_TIMEOUT at once.
+// While another guest thread runs, which could signal the object, the wait
+// goes on in 1 ms steps until it does or the timeout has passed. With none,
+// nothing can signal it: a timeout is waited out, and INFINITE stops.
 bool WaitForSingleObject(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     constexpr std::uint32_t kWaitObject0 = 0x00000000U;
     constexpr std::uint32_t kWaitTimeout = 0x00000102U;
     constexpr std::uint32_t kWaitFailed = 0xFFFFFFFFU;
+    constexpr std::uint32_t kInfinite = 0xFFFFFFFFU;
     if (!CheckArgumentCount(call, result, 2, "kernel32 WaitForSingleObject argument shape is invalid", error))
     {
         return false;
@@ -1810,29 +3050,67 @@ bool WaitForSingleObject(const ImportCall& call, ImportReturn* result, std::stri
     {
         return false;
     }
-    GuestEvent* event = process->FindEvent(call.arguments[0]);
-    if (event == nullptr)
+    const std::uint32_t handle = call.arguments[0];
+    const std::uint32_t timeout = call.arguments[1];
+    if (process->FindEvent(handle) == nullptr && process->FindThreadHandle(handle) == nullptr)
     {
         result->eax = kWaitFailed;
         call.services->SetLastError(kWin32ErrorInvalidHandle);
         return true;
     }
-    if (event->signaled)
+    std::uint32_t waited = 0;
+    for (;;)
     {
-        if (!event->manual_reset)
+        // Looked up again after every wait: another thread may have closed it.
+        GuestEvent* event = process->FindEvent(handle);
+        const GuestThread* thread = process->FindThreadHandle(handle);
+        if (event != nullptr && event->signaled)
         {
-            event->signaled = false;
+            if (!event->manual_reset)
+            {
+                event->signaled = false;
+            }
+            result->eax = kWaitObject0;
+            return true;
         }
-        result->eax = kWaitObject0;
-        return true;
+        if (thread != nullptr && thread->finished)
+        {
+            result->eax = kWaitObject0;
+            return true;
+        }
+        if (event == nullptr && thread == nullptr)
+        {
+            result->eax = kWaitFailed;
+            call.services->SetLastError(kWin32ErrorInvalidHandle);
+            return true;
+        }
+        if (timeout != kInfinite && waited >= timeout)
+        {
+            result->eax = kWaitTimeout;
+            return true;
+        }
+        if (process->running_threads() == 0)
+        {
+            if (timeout == kInfinite)
+            {
+                if (error != nullptr) *error = "kernel32 WaitForSingleObject would block the only guest thread";
+                return false;
+            }
+            if (!call.services->WaitMilliseconds(timeout - waited))
+            {
+                if (error != nullptr) *error = "kernel32 WaitForSingleObject needs a host that can wait";
+                return false;
+            }
+            waited = timeout;
+            continue;
+        }
+        if (!call.services->WaitMilliseconds(1))
+        {
+            if (error != nullptr) *error = "kernel32 WaitForSingleObject needs a host that can wait";
+            return false;
+        }
+        ++waited;
     }
-    if (call.arguments[1] == 0)
-    {
-        result->eax = kWaitTimeout;
-        return true;
-    }
-    if (error != nullptr) *error = "kernel32 WaitForSingleObject would block the only guest thread";
-    return false;
 }
 
 bool RequireClock(const ImportCall& call, GuestClockReading* reading, std::string* error)
@@ -2117,29 +3395,27 @@ bool GetFileSize(const ImportCall& call, ImportReturn* result, std::string* erro
 
 // Exports the protection resolves, most while rebuilding the original
 // program's import table, without calling them yet (kernel32 Win32
-// signatures; RtlUnwind forwards to ntdll on Windows).
+// signatures).
 constexpr ResolveOnlyExport kKernel32ResolveOnly[] = {
-    {"Sleep", 1}, {"CreateThread", 6},
-    {"FindFirstFileA", 2},
-    {"SetCurrentDirectoryA", 1}, {"GetWindowsDirectoryA", 2}, {"DeleteFileA", 1},
+    {"GetWindowsDirectoryA", 2}, {"DeleteFileA", 1},
     {"GlobalMemoryStatus", 1}, {"CreateProcessA", 10},
-    {"GetThreadPriority", 1}, {"SetThreadPriority", 2}, {"TerminateThread", 2},
-    {"GetCurrentDirectoryA", 2},
-    {"FindNextFileA", 2}, {"FindClose", 1},
+    {"TerminateThread", 2},
     {"SetEndOfFile", 1},
     {"SetConsoleCtrlHandler", 2},
     {"RaiseException", 4},
    
     {"TerminateProcess", 2},
-    {"IsBadWritePtr", 2},
-    {"IsBadReadPtr", 2},
    
     {"UnhandledExceptionFilter", 1}, {"IsBadCodePtr", 1}, {"GetStringTypeA", 5},
-    {"GetFileAttributesA", 1},
-    {"RtlUnwind", 4},
     {"lstrcmpA", 2}, {"lstrlenA", 1}, {"SetEnvironmentVariableA", 2},
     {"CompareStringW", 6}, {"CompareStringA", 6}, {"FlushFileBuffers", 1},
     {"SetStdHandle", 2},
+    // EZ2DJ 1st's protection resolves these too (Task 405).
+    {"DebugBreak", 0}, {"OutputDebugStringA", 1},
+    {"GetUserDefaultLCID", 0}, {"IsValidLocale", 2}, {"IsValidCodePage", 1}, {"EnumSystemLocalesA", 2},
+    {"GetLocaleInfoA", 4}, {"GetLocaleInfoW", 4},
+ {"WritePrivateProfileStringA", 4},
+    {"FatalAppExitA", 2},
 };
 
 GuestExportDescriptor MakeExport(std::string name,
@@ -2192,6 +3468,7 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("HeapFree", 3, &HeapFree));
     descriptor.exports.push_back(MakeExport("HeapReAlloc", 4, &HeapReAlloc));
     descriptor.exports.push_back(MakeExport("HeapSize", 3, &HeapSize));
+    descriptor.exports.push_back(MakeExport("HeapValidate", 3, &HeapValidate));
     descriptor.exports.push_back(MakeExport("GetStartupInfoA", 1, &GetStartupInfoA));
     descriptor.exports.push_back(MakeExport("GetStdHandle", 1, &GetStdHandle));
     descriptor.exports.push_back(MakeExport("GetFileType", 1, &GetFileType));
@@ -2230,6 +3507,33 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("WriteFile", 5, &WriteFile));
     descriptor.exports.push_back(MakeExport("SetFilePointer", 4, &SetFilePointer));
     descriptor.exports.push_back(MakeExport("GetFileSize", 2, &GetFileSize));
+    descriptor.exports.push_back(MakeExport("GetCurrentDirectoryA", 2, &GetCurrentDirectoryA));
+    descriptor.exports.push_back(MakeExport("SetCurrentDirectoryA", 1, &SetCurrentDirectoryA));
+    descriptor.exports.push_back(MakeExport("FindFirstFileA", 2, &FindFirstFileA));
+    descriptor.exports.push_back(MakeExport("FindNextFileA", 2, &FindNextFileA));
+    descriptor.exports.push_back(MakeExport("FindClose", 1, &FindClose));
+    descriptor.exports.push_back(MakeExport("GetFileAttributesA", 1, &GetFileAttributesA));
+    descriptor.exports.push_back(MakeExport("RtlUnwind", 4, &RtlUnwind));
+    descriptor.exports.push_back(MakeExport("GetPrivateProfileIntA", 4, &GetPrivateProfileIntA));
+    descriptor.exports.push_back(MakeExport("GetCurrentThread", 0, &GetCurrentThread));
+    descriptor.exports.push_back(MakeExport("CreateThread", 6, &CreateThread));
+    descriptor.exports.push_back(MakeExport("SetThreadPriority", 2, &SetThreadPriority));
+    descriptor.exports.push_back(MakeExport("GetThreadPriority", 1, &GetThreadPriority));
+    descriptor.exports.push_back(MakeExport("InitializeCriticalSection", 1, &InitializeCriticalSection));
+    descriptor.exports.push_back(MakeExport("EnterCriticalSection", 1, &EnterCriticalSection));
+    descriptor.exports.push_back(MakeExport("LeaveCriticalSection", 1, &LeaveCriticalSection));
+    descriptor.exports.push_back(MakeExport("DeleteCriticalSection", 1, &DeleteCriticalSection));
+    descriptor.exports.push_back(MakeExport("InterlockedIncrement", 1, &InterlockedIncrement));
+    descriptor.exports.push_back(MakeExport("InterlockedDecrement", 1, &InterlockedDecrement));
+    descriptor.exports.push_back(MakeExport("TlsAlloc", 0, &TlsAlloc));
+    descriptor.exports.push_back(MakeExport("TlsFree", 1, &TlsFree));
+    descriptor.exports.push_back(MakeExport("TlsGetValue", 1, &TlsGetValue));
+    descriptor.exports.push_back(MakeExport("TlsSetValue", 2, &TlsSetValue));
+    descriptor.exports.push_back(MakeExport("IsBadReadPtr", 2, &IsBadReadPtr));
+    descriptor.exports.push_back(MakeExport("IsBadWritePtr", 2, &IsBadWritePtr));
+    descriptor.exports.push_back(MakeExport("Sleep", 1, &Sleep));
+    descriptor.exports.push_back(MakeExport("GetPrivateProfileStringA", 6, &GetPrivateProfileStringA));
+    descriptor.exports.push_back(MakeExport("GetPrivateProfileSectionNamesA", 3, &GetPrivateProfileSectionNamesA));
     AddResolveOnlyExports(&descriptor, kKernel32ResolveOnly);
     // The protection probes for DOS extenders (Phar Lap TNT, Borland 32-bit)
     // with these names; no Windows kernel32 exports them.

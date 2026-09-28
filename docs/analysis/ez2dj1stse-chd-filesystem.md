@@ -198,6 +198,18 @@ flowchart LR
     R --> H["1st SE HLE baseline (protection contract unconfirmed)"]
 ```
 
+### Linux in-process 실행 — 확인됨
+
+2026-09-28, [작업 420](../work-logs/20260928-420-1stse-chd-linux.md)·[421](../work-logs/20260928-421-bitmap-files.md)에서 CHD 빌드를 Linux x64 in-process 실행기로 돌렸습니다.
+
+- **확인됨.** 보호 계층이 Linux facade 위에서 Hardlock 요청 39건(initialize 2, handshake 2, descriptor 18, transform 17)을 모두 마치고 원본 import를 `GetProcAddress`로 해석합니다. 원본 `.idata` 144개 중 facade에 없던 것은 `GDI32!SetBkColor` 하나였습니다.
+- **확인됨.** legacy I/O helper RVA `0x00038987`(in)·`0x000389ab`(out)가 이 빌드에서 맞습니다. 실행 중 `reads=8 writes=9 unanswered=0`으로 답했습니다. 위의 "미확정" 두 항목은 이것으로 해소됩니다.
+- **확인됨.** 원본 코드는 `0x422b60`에서 BMP를 `LoadImageA(LR_LOADFROMFILE | LR_CREATEDIBSECTION)`로 읽습니다. `0x4228e0`에서 `StretchBlt`로 texture surface에 복사하고, surface에서 `IDirect3DTexture2`를 얻습니다. surface 크기는 `IDirect3DDevice3::GetCaps`가 보고하는 `D3DPTEXTURECAPS_POW2`·`SQUAREONLY`에 따라 늘어납니다. 설계: [작업 421](../design/20260928-421-bitmap-files.md).
+- **확인됨.** 자산 BMP 7,360개는 모두 bottom-up `BI_RGB`입니다. 24비트가 7,355개, 8비트가 5개입니다.
+- **확인됨.** [작업 422](../work-logs/20260928-422-dx6-textures.md)에서 다음을 Windows DX6 facade 규칙으로 더했습니다: 표면의 `IDirect3DTexture2`, 색 채우기·복사 `Blt`, `BltFast`, DX6 vertex buffer. 그 뒤 Linux x64 실행은 멈추지 않습니다. 시간 제한으로 창이 닫힐 때까지 983,378호출을 지나며, Warning·CompanyLogo·Title 장면의 자산을 읽고 프레임을 표시합니다.
+- **미확정.** 화면이 원본과 같은지는 확인하지 못했습니다. 이 세션에서 화면을 캡처하지 못했습니다.
+${python_ko}
+
 ## English
 
 ### Confirmed structure — confirmed
@@ -336,3 +348,15 @@ Following those facts, the [execution-policy correction](../work-logs/20260908-2
 The built-in `ez2dj1stse` profile now uses the CHD shortcut. The launcher resolves `ez2dj/Ez2DJ.exe` through the CHD FAT32 view and passes both the CHD path and the staging executable path to the Windows x86 original-process backend. Its execution defaults follow the boundary observed on this build, as tabulated above. Without local Hardlock material the run stops at the initialize request, which is the currently reachable boundary.
 
 Because `MatchBuiltInTargetProfiles` skips profiles that are not `kDirectory`, the extracted directory `roms/ez2dj1stse/ez2dj` now falls back to a generic detected profile with no built-in policy, exactly as happened with the 3rd conversion.
+
+### Linux in-process run — confirmed
+
+On 2026-09-28 the CHD build ran on the Linux x64 in-process runner ([task 420](../work-logs/20260928-420-1stse-chd-linux.md), [421](../work-logs/20260928-421-bitmap-files.md)).
+
+- **Confirmed.** The protection completes all 39 Hardlock requests (initialize 2, handshake 2, descriptor 18, transform 17) on the Linux facade, then resolves the original imports through `GetProcAddress`. Of the 144 original `.idata` imports only `GDI32!SetBkColor` was missing from the facade.
+- **Confirmed.** The legacy-I/O helper RVAs `0x00038987` (in) and `0x000389ab` (out) hold for this build: the run answered `reads=8 writes=9 unanswered=0`. This settles the two "unresolved" notes above.
+- **Confirmed.** The original code reads BMPs at `0x422b60` with `LoadImageA(LR_LOADFROMFILE | LR_CREATEDIBSECTION)`, copies them onto a texture surface with `StretchBlt` at `0x4228e0`, and takes `IDirect3DTexture2` from the surface. The surface grows only for the `D3DPTEXTURECAPS_POW2` and `SQUAREONLY` caps `IDirect3DDevice3::GetCaps` reports. Design: [task 421](../design/20260928-421-bitmap-files.md).
+- **Confirmed.** All 7,360 asset BMPs are bottom-up `BI_RGB`: 7,355 at 24 bits and 5 at 8 bits.
+- **Confirmed.** [Task 422](../work-logs/20260928-422-dx6-textures.md) added, under the Windows DX6 facade's rules, the surface's `IDirect3DTexture2`, color-fill and copy `Blt`, `BltFast`, and DX6 vertex buffers. After that the Linux x64 run no longer stops: it passes 983,378 calls until the timeout closes the window, reading the Warning, CompanyLogo, and Title scenes' assets and presenting frames.
+- **Unresolved.** Whether the picture matches the original was not checked, since the screen could not be captured in this session.
+${python_en}

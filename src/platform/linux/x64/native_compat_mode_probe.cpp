@@ -365,12 +365,13 @@ int RunProbe(bool force_arch_prctl)
                 "4 host FS base restored after the fault");
     probe.Check(ReturnsConstant(&runtime, code), "4 runtime runs again after the fault");
 
-    // 5. int3 is reported as SIGTRAP after the breakpoint byte.
+    // 5. An int3 no SEH handler takes is reported as SIGTRAP at the
+    // breakpoint byte, the exception address Windows gives it.
     call.entry = code + kBreakpoint;
     ran = runtime.Run(call, &result, &fault, &error);
     probe.Check(!ran && fault.status_code == SIGTRAP &&
-                    fault.instruction_pointer == code + kBreakpoint + 1,
-                "5 int3 reports SIGTRAP after the breakpoint");
+                    fault.instruction_pointer == code + kBreakpoint,
+                "5 int3 reports SIGTRAP at the breakpoint");
     probe.Check(ReturnsConstant(&runtime, code), "5 runtime runs again after the trap");
 
     // 6. Host callee-saved registers survive a guest that clobbers them.

@@ -5,11 +5,14 @@
 #include <dinput.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <span>
 
 #include "directinput7_com_facade.h"
+#include "re2dj/directx/directinput.h"
 #include "runtime_log.h"
 
 namespace re2dj::platform::windows
@@ -17,38 +20,34 @@ namespace re2dj::platform::windows
 namespace
 {
 
-constexpr GUID kGuidSysKeyboard = {
-    0x6f1d2b61, 0xd5a0, 0x11cf, {0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
-constexpr GUID kGuidSysMouse = {
-    0x6f1d2b60, 0xd5a0, 0x11cf, {0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
-constexpr GUID kIidDirectInputA = {
-    0x89521360, 0xaa8a, 0x11cf, {0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
-constexpr GUID kIidDirectInput7A = {
-    0x579087a0, 0x6667, 0x11cf, {0x94, 0x41, 0x00, 0xaa, 0x00, 0x32, 0x40, 0xd7}};
-constexpr GUID kIidDirectInputDeviceA = {
-    0x5944e680, 0xc92e, 0x11cf, {0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
-constexpr GUID kIidDirectInputDevice7A = {
-    0x579087a2, 0x6667, 0x11cf, {0x94, 0x41, 0x00, 0xaa, 0x00, 0x32, 0x40, 0xd7}};
-constexpr GUID kIidIUnknown = {
-    0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+namespace dx = re2dj::directx;
 
-bool IsEqualGuid(const GUID& a, const GUID& b)
+// The shared core's DirectInput ABI against the SDK.
+static_assert(sizeof(DIDEVCAPS) == sizeof(dx::DiDevCaps));
+static_assert(sizeof(DIMOUSESTATE) == sizeof(dx::DiMouseState));
+static_assert(offsetof(DIMOUSESTATE, rgbButtons) == offsetof(dx::DiMouseState, buttons));
+static_assert(static_cast<std::uint32_t>(DI_OK) == dx::kDiOk);
+static_assert(static_cast<std::uint32_t>(DIERR_INVALIDPARAM) == dx::kDiErrInvalidParam);
+static_assert(static_cast<std::uint32_t>(DIERR_NOAGGREGATION) == dx::kDiErrNoAggregation);
+static_assert(DIDC_ATTACHED == dx::kDidcAttached);
+static_assert(DISCL_NONEXCLUSIVE == dx::kDisclNonExclusive);
+static_assert(DISCL_FOREGROUND == dx::kDisclForeground);
+
+dx::Guid CoreGuid(const GUID& guid)
 {
-    return std::memcmp(&a, &b, sizeof(GUID)) == 0;
+    dx::Guid core;
+    std::memcpy(core.data(), &guid, sizeof(guid));
+    return core;
 }
 
-enum class DeviceKind
-{
-    Keyboard,
-    Mouse
-};
+using DeviceKind = dx::InputDeviceKind;
 
 struct HleDirectInputDeviceObject
 {
     IDirectInputDeviceA iface;
     IDirectInputDeviceAVtbl vtbl;
     std::atomic<ULONG> ref_count{1};
-    DeviceKind kind{DeviceKind::Keyboard};
+    DeviceKind kind{DeviceKind::kKeyboard};
     bool acquired{false};
     HWND hwnd{nullptr};
     DWORD coop_flags{0};
@@ -70,9 +69,7 @@ HRESULT STDMETHODCALLTYPE DeviceQueryInterface(IDirectInputDeviceA* self, REFIID
     {
         return E_POINTER;
     }
-    if (IsEqualGuid(riid, kIidIUnknown) ||
-        IsEqualGuid(riid, kIidDirectInputDeviceA) ||
-        IsEqualGuid(riid, kIidDirectInputDevice7A))
+    if (dx::IsDirectInputDeviceInterface(CoreGuid(riid)))
     {
         *ppvObj = self;
         self->lpVtbl->AddRef(self);
@@ -145,7 +142,7 @@ HRESULT STDMETHODCALLTYPE DeviceAcquire(IDirectInputDeviceA* self)
 {
     auto* obj = reinterpret_cast<HleDirectInputDeviceObject*>(self);
     obj->acquired = true;
-    if (obj->kind == DeviceKind::Keyboard)
+    if (obj->kind == DeviceKind::kKeyboard)
     {
         re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInputDevice::Acquire:Keyboard\n");
     }
@@ -171,62 +168,64 @@ HRESULT STDMETHODCALLTYPE DeviceGetDeviceState(IDirectInputDeviceA* self,
     {
         return E_POINTER;
     }
-    std::memset(lpvData, 0, cbData);
     auto* obj = reinterpret_cast<HleDirectInputDeviceObject*>(self);
     static std::atomic<bool> s_first_keyboard_poll{false};
-    if (obj->kind == DeviceKind::Keyboard && !s_first_keyboard_poll.exchange(true))
+    if (obj->kind == DeviceKind::kKeyboard && !s_first_keyboard_poll.exchange(true))
     {
         re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInputDevice::GetDeviceState:Keyboard:first_poll\n");
     }
-    if (obj->kind == DeviceKind::Keyboard)
+    // What the host holds, by DirectInput scan code; the core lays it out.
+    dx::InputSnapshot snapshot;
+    if (obj->kind == DeviceKind::kKeyboard)
     {
-        unsigned char* keys = static_cast<unsigned char*>(lpvData);
+        const auto hold = [&snapshot](unsigned scancode) {
+            if (scancode > 0 && scancode < snapshot.keys.size())
+            {
+                snapshot.keys.set(scancode);
+            }
+        };
         for (int vk = 1; vk < 256; ++vk)
         {
             if ((GetAsyncKeyState(vk) & 0x8000) != 0)
             {
-                const UINT scancode = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
-                if (scancode > 0 && scancode < cbData)
-                {
-                    keys[scancode] |= 0x80;
-                }
+                hold(MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC));
                 switch (vk)
                 {
                 case VK_UP:
-                    if (0xC8 < cbData) keys[0xC8] |= 0x80;
+                    hold(0xC8);
                     break;
                 case VK_DOWN:
-                    if (0xD0 < cbData) keys[0xD0] |= 0x80;
+                    hold(0xD0);
                     break;
                 case VK_LEFT:
-                    if (0xCB < cbData) keys[0xCB] |= 0x80;
+                    hold(0xCB);
                     break;
                 case VK_RIGHT:
-                    if (0xCD < cbData) keys[0xCD] |= 0x80;
+                    hold(0xCD);
                     break;
                 case VK_RETURN:
-                    if (0x1C < cbData) keys[0x1C] |= 0x80;
+                    hold(0x1C);
                     break;
                 case VK_CONTROL:
                 case VK_LCONTROL:
-                    if (0x1D < cbData) keys[0x1D] |= 0x80;
+                    hold(0x1D);
                     break;
                 case VK_RCONTROL:
-                    if (0x9D < cbData) keys[0x9D] |= 0x80;
+                    hold(0x9D);
                     break;
                 case VK_SHIFT:
                 case VK_LSHIFT:
-                    if (0x2A < cbData) keys[0x2A] |= 0x80;
+                    hold(0x2A);
                     break;
                 case VK_RSHIFT:
-                    if (0x36 < cbData) keys[0x36] |= 0x80;
+                    hold(0x36);
                     break;
                 case VK_MENU:
                 case VK_LMENU:
-                    if (0x38 < cbData) keys[0x38] |= 0x80;
+                    hold(0x38);
                     break;
                 case VK_RMENU:
-                    if (0xB8 < cbData) keys[0xB8] |= 0x80;
+                    hold(0xB8);
                     break;
                 default:
                     break;
@@ -234,16 +233,13 @@ HRESULT STDMETHODCALLTYPE DeviceGetDeviceState(IDirectInputDeviceA* self,
             }
         }
     }
-    else if (obj->kind == DeviceKind::Mouse)
+    else
     {
-        if (cbData >= sizeof(DIMOUSESTATE))
-        {
-            auto* mouse = static_cast<DIMOUSESTATE*>(lpvData);
-            if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) mouse->rgbButtons[0] = 0x80;
-            if ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0) mouse->rgbButtons[1] = 0x80;
-            if ((GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0) mouse->rgbButtons[2] = 0x80;
-        }
+        snapshot.mouse_buttons[0] = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        snapshot.mouse_buttons[1] = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        snapshot.mouse_buttons[2] = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
     }
+    dx::ComposeDeviceState(obj->kind, snapshot, std::span<std::uint8_t>(static_cast<std::uint8_t*>(lpvData), cbData));
     return DI_OK;
 }
 
@@ -374,9 +370,7 @@ HRESULT STDMETHODCALLTYPE DiQueryInterface(IDirectInputA* self, REFIID riid, LPV
     {
         return E_POINTER;
     }
-    if (IsEqualGuid(riid, kIidIUnknown) ||
-        IsEqualGuid(riid, kIidDirectInputA) ||
-        IsEqualGuid(riid, kIidDirectInput7A))
+    if (dx::IsDirectInputInterface(CoreGuid(riid)))
     {
         *ppvObj = self;
         self->lpVtbl->AddRef(self);
@@ -414,15 +408,15 @@ HRESULT STDMETHODCALLTYPE DiCreateDevice(IDirectInputA* self,
     {
         return E_POINTER;
     }
-    DeviceKind kind = DeviceKind::Keyboard;
-    if (IsEqualGuid(rguid, kGuidSysMouse))
+    // The core names the system keyboard and mouse; this facade has always
+    // given anything else a keyboard.
+    const DeviceKind kind = dx::DeviceKindOf(CoreGuid(rguid)).value_or(DeviceKind::kKeyboard);
+    if (kind == DeviceKind::kMouse)
     {
-        kind = DeviceKind::Mouse;
         re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInput::CreateDevice:SysMouse\n");
     }
-    else if (IsEqualGuid(rguid, kGuidSysKeyboard))
+    else if (dx::DeviceKindOf(CoreGuid(rguid)).has_value())
     {
-        kind = DeviceKind::Keyboard;
         re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, "re2dj:hle:IDirectInput::CreateDevice:SysKeyboard\n");
     }
     *lplpDirectInputDevice = CreateHleDirectInputDevice(kind);

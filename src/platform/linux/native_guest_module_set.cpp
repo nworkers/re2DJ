@@ -174,7 +174,8 @@ bool NativeGuestModuleSet::Dispatch(const NativeImportGateEvent& event,
     }
 
     hle::ImportReturn import_result;
-    const hle::ImportCall call{binding->gate, arguments, services};
+    const hle::ImportCall call{binding->gate, arguments, services, event.instruction_pointer,
+                               event.stack_pointer + static_cast<std::uint32_t>(sizeof(std::uint32_t))};
     if (!binding->descriptor.handler(call, &import_result, error))
     {
         if (error->empty())

@@ -10,6 +10,7 @@
 #include "../native_dynamic_thunk.h"
 #include "../native_in_process_runner.h"
 #include "../native_instruction_trace.h"
+#include "../native_thread_probe.h"
 #include "../../native_probe_fixture.h"
 
 using namespace re2dj::platform::native_probe;
@@ -427,6 +428,12 @@ int main(int argc, char** argv)
                      exit_handler.calls,
                      exit_result.fault.status_code);
         return 8;
+    }
+
+    if (!re2dj::platform::linux::RunNativeGuestThreadProbe("x86") ||
+        !re2dj::platform::linux::RunNativeGuestThreadFaultProbe("x86"))
+    {
+        return 9;
     }
 
     std::printf("linux-native-in-process-probe: imports=2 dynamic=2 exit=51 signal=%u "

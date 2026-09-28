@@ -80,6 +80,53 @@ DdSurfaceDesc2 SurfaceDescription(const SurfaceShape& shape, std::uint32_t pitch
 std::uint32_t CheckAttachment(const SurfaceShape& attachment);
 
 // Which attachment IDirectDrawSurface7::GetAttachedSurface asks for.
+// IDirectDrawSurface7::GetDC: a surface without pixels has no DC
+// (DDERR_UNSUPPORTED), and one whose DC the guest already holds refuses a
+// second (DDERR_DCALREADYCREATED). ReleaseDC takes back only the DC it gave,
+// while held (else DDERR_INVALIDPARAMS).
+std::uint32_t CheckGetDc(bool has_pixels, bool held);
+std::uint32_t CheckReleaseDc(bool held, bool same_dc);
+
+// A RECT argument, as the guest passes it.
+struct SurfaceRect
+{
+    std::int32_t left = 0;
+    std::int32_t top = 0;
+    std::int32_t right = 0;
+    std::int32_t bottom = 0;
+};
+
+// What IDirectDrawSurface7::Lock answers: the result, the description to
+// write, and the byte offset of the locked area's first pixel from the
+// surface's pixels (the caller puts that address in description.surface).
+struct SurfaceLockPlan
+{
+    std::uint32_t result = kDdOk;
+    DdSurfaceDesc2 description;
+    std::uint32_t offset = 0;
+};
+
+// IDirectDrawSurface7::Lock(lpDestRect, lpDDSurfaceDesc, dwFlags, hEvent),
+// as the Windows facade answers it: the surface's own pixels, whatever the
+// flags; a render target is not read back from the render backend.
+// - no description, one whose dwSize is wrong, or an event:
+//   DDERR_INVALIDPARAMS;
+// - a surface without pixels: DDERR_INVALIDOBJECT;
+// - a rectangle that is empty or leaves the surface: DDERR_INVALIDRECT;
+// - otherwise GetSurfaceDesc's description with DDSD_LPSURFACE, the size of
+//   the rectangle (or the surface), the whole surface's pitch, and the
+//   offset of the rectangle's first pixel.
+SurfaceLockPlan PlanLock(const SurfaceShape& shape,
+                         std::uint32_t pitch,
+                         bool has_pixels,
+                         bool description_given,
+                         bool has_event,
+                         const SurfaceRect* rect);
+
+// IDirectDrawSurface7::SetColorKey: only a source blit key (DDCKEY_SRCBLT)
+// is modelled; any other flags, or no key, are DDERR_INVALIDPARAMS.
+std::uint32_t CheckSetColorKey(std::uint32_t flags, bool has_key);
+
 enum class AttachmentQuery : std::uint8_t
 {
     kNone,
@@ -87,6 +134,25 @@ enum class AttachmentQuery : std::uint8_t
     kDepth,
 };
 AttachmentQuery QueryAttachment(const DdsCaps2& caps);
+
+// IDirectDraw7::EnumSurfaces, as Windows 11 answers it:
+// - DDENUMSURFACES_ALL | DDENUMSURFACES_DOESEXIST lists every surface of the
+//   DirectDraw object that still exists, attached ones included, newest
+//   first. Each is AddRef'd for the callback, which owns that reference, and
+//   described as GetSurfaceDesc describes it. DDENUMRET_CANCEL stops the
+//   list; the result is DD_OK either way;
+// - no callback, unknown flags, not exactly one of ALL/MATCH/NOMATCH and one
+//   of DOESEXIST/CANBECREATED, ALL with CANBECREATED, or MATCH/NOMATCH
+//   without a description are DDERR_INVALIDPARAMS;
+// - the matching searches (MATCH/NOMATCH with a description) are not
+//   modelled.
+enum class EnumSurfacesPlan : std::uint8_t
+{
+    kInvalid,
+    kExisting,
+    kUnmodelled,
+};
+EnumSurfacesPlan PlanEnumSurfaces(std::uint32_t flags, bool has_description, bool has_callback);
 
 }  // namespace re2dj::directx
 

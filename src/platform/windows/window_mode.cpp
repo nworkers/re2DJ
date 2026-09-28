@@ -2,6 +2,7 @@
 
 #include "graphics_trace_log.h"
 #include "host_window_shell.h"
+#include "re2dj/graphics/window_policy.h"
 #include "re2dj/version.h"
 
 #include <dwmapi.h>
@@ -21,7 +22,7 @@ namespace
 {
 
 // "re2DJ v0.0.52 (Win/x86 Debug) - Build Sep 26 2026 - SDL3 OpenGL - FPS : 60.0"
-constexpr DWORD kDefaultWindowScale = 2;
+constexpr DWORD kDefaultWindowScale = re2dj::graphics::kDefaultWindowScale;
 constexpr DWORD kWindowedStyle = WS_OVERLAPPEDWINDOW;
 constexpr DWORD kFullscreenStyle = WS_POPUP;
 constexpr DWORD kExtendedStyle = WS_EX_APPWINDOW;
@@ -375,7 +376,7 @@ bool ApplyRe2djWindowMode(HWND window, DWORD client_width, DWORD client_height)
 
 bool SetRe2djWindowScale(HWND window, DWORD scale)
 {
-    if (scale < 1 || scale > 3 || g_logical_client_width == 0 ||
+    if (!re2dj::graphics::IsWindowScale(scale) || g_logical_client_width == 0 ||
         g_logical_client_height == 0)
     {
         SetLastError(ERROR_INVALID_PARAMETER);

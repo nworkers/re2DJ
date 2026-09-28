@@ -85,6 +85,8 @@ public:
     // Adds a window and returns its new handle; the handle field is ignored.
     std::uint32_t AddWindow(GuestWindow window);
     GuestWindow* LookupWindow(std::uint32_t handle);
+    // Every window, by handle.
+    const std::map<std::uint32_t, GuestWindow>& windows() const { return windows_; }
 
     // ShowCursor: moves the display counter up or down and returns it. The
     // cursor shows while the counter is 0 or more; with a mouse installed it
@@ -99,6 +101,10 @@ public:
     void set_active_window(std::uint32_t window) { active_window_ = window; }
     std::uint32_t focus_window() const { return focus_window_; }
     void set_focus_window(std::uint32_t window) { focus_window_ = window; }
+    // The cursor's screen position. No host pointer reaches the guest yet, so
+    // it stays at the screen origin until one does.
+    std::int32_t cursor_x() const { return cursor_x_; }
+    std::int32_t cursor_y() const { return cursor_y_; }
 
 private:
     std::uint32_t AllocateHandle();
@@ -112,6 +118,8 @@ private:
     std::uint32_t active_window_ = 0;
     std::uint32_t focus_window_ = 0;
     std::uint32_t primary_monitor_ = 0;
+    std::int32_t cursor_x_ = 0;
+    std::int32_t cursor_y_ = 0;
     std::int32_t cursor_count_ = 0;
 };
 

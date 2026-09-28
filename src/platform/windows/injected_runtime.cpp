@@ -3,6 +3,7 @@
 #include <mmsystem.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cctype>
 #include <cstdio>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <intrin.h>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,8 +24,10 @@
 #include "re2dj/hle/hardlock/transform_responses.h"
 #include "re2dj/device/lptdi_challenge_response.h"
 #include "re2dj/input/legacy_io_port_bus.h"
+#include "re2dj/input/legacy_io_trap.h"
 #include "re2dj/input/ez2dancer_io_port_bus.h"
 #include "re2dj/storage/fat32_chd.h"
+#include "re2dj/storage/guest_find.h"
 #include "re2dj/storage/guest_path.h"
 #include "direct3d3_com_facade.h"
 #include "guest_wait_accounting.h"
@@ -1655,52 +1659,25 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
 
     const DWORD address = static_cast<DWORD>(
         reinterpret_cast<std::uintptr_t>(exception->ExceptionRecord->ExceptionAddress));
-    // A word-wide port instruction in 32-bit code carries a 0x66 operand-size
-    // prefix, so the faulting address is that prefix and the opcode follows it.
-    // Getting this wrong does not merely answer the wrong port: advancing EIP
-    // by one would resume inside the instruction.
-    const unsigned char first_byte = *reinterpret_cast<const unsigned char*>(address);
-    const bool word_prefixed = first_byte == 0x66;
-    const unsigned char opcode =
-        word_prefixed ? *reinterpret_cast<const unsigned char*>(address + 1) : first_byte;
-    const DWORD instruction_length = word_prefixed ? 2u : 1u;
-    const bool profile_is_word = g_re2dj_io_word_width != 0;
-    // The profile states the board's width, so a guest instruction of the other
-    // width is not this boundary's business. Unprefixed 0xed and 0xef are
-    // 32-bit accesses, which no supported product has been observed using.
-    const unsigned char read_opcode = profile_is_word ? 0xed : 0xec;
-    const unsigned char write_opcode = profile_is_word ? 0xef : 0xee;
-    if (word_prefixed != profile_is_word)
+    // The shared rules decide whether this is the board's access: its width,
+    // its direction from the confirmed helpers or the opcode, and its length.
+    re2dj::input::LegacyIoTrapPolicy policy;
+    policy.enabled = true;
+    policy.word_width = g_re2dj_io_word_width != 0;
+    policy.image_base = g_re2dj_io_image_base;
+    policy.in_rva = g_re2dj_io_in_byte_rva;
+    policy.out_rva = g_re2dj_io_out_byte_rva;
+    const auto* const instruction = reinterpret_cast<const unsigned char*>(address);
+    const std::optional<re2dj::input::LegacyIoAccess> access =
+        re2dj::input::DecodeLegacyIoAccess(policy, address, instruction[0], instruction[0] == 0x66 ? instruction[1] : 0);
+    if (!access.has_value())
     {
         ReportCrashException(exception);
         return EXCEPTION_CONTINUE_SEARCH;
     }
-
-    const bool configured_read = g_re2dj_io_in_byte_rva != 0 &&
-                                 address == g_re2dj_io_image_base +
-                                                g_re2dj_io_in_byte_rva;
-    const bool configured_write = g_re2dj_io_out_byte_rva != 0 &&
-                                  address == g_re2dj_io_image_base +
-                                                g_re2dj_io_out_byte_rva;
-    // A direction whose helper RVA is still unknown is judged by opcode alone.
-    // Bring-up reaches one direction before the other, and the width is pinned
-    // by the profile, so the opcode is unambiguous.
-    const bool read_by_opcode = g_re2dj_hle_io_ports != 0 &&
-                                g_re2dj_io_in_byte_rva == 0 && opcode == read_opcode;
-    const bool write_by_opcode = g_re2dj_hle_io_ports != 0 &&
-                                 g_re2dj_io_out_byte_rva == 0 && opcode == write_opcode;
-    const bool is_read = configured_read || (!configured_write && read_by_opcode);
-    const bool is_write = configured_write || (!configured_read && write_by_opcode);
-    if (!is_read && !is_write)
-    {
-        ReportCrashException(exception);
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    if (opcode != (is_read ? read_opcode : write_opcode))
-    {
-        ReportCrashException(exception);
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
+    const bool profile_is_word = access->word;
+    const bool is_read = access->read;
+    const DWORD instruction_length = access->length;
 
     const std::uint16_t port = static_cast<std::uint16_t>(exception->ContextRecord->Edx);
     std::uint8_t value = static_cast<std::uint8_t>(exception->ContextRecord->Eax);
@@ -1809,12 +1786,8 @@ LONG CALLBACK HandleLegacyIoPortException(EXCEPTION_POINTERS* exception)
     }
     if (is_read)
     {
-        // Only the operand's own width is replaced; the rest of EAX belongs to
-        // the guest.
-        exception->ContextRecord->Eax =
-            profile_is_word
-                ? ((exception->ContextRecord->Eax & 0xffff0000u) | word_value)
-                : ((exception->ContextRecord->Eax & 0xffffff00u) | value);
+        exception->ContextRecord->Eax = re2dj::input::MergeLegacyIoRead(
+            *access, exception->ContextRecord->Eax, profile_is_word ? word_value : value);
     }
     exception->ContextRecord->Eip += instruction_length;
     return EXCEPTION_CONTINUE_EXECUTION;
@@ -2311,15 +2284,15 @@ bool MaterializeChdFile(const char* name, const char* output)
     return g_chd_volume->MaterializeFile(relative, output, &g_chd_mount_error);
 }
 
-// True when a resolved guest path names a directory. The overlay and the
-// native tree are consulted first because a materialized copy is what the host
-// will actually open, and the CHD last because it is the source of truth for
-// anything not yet copied out.
-bool GuestDirectoryExists(const std::string& relative)
+// What a resolved guest path names. The overlay and the native tree are
+// consulted first because a materialized copy is what the host will actually
+// open, and the CHD last because it is the source of truth for anything not
+// yet copied out. A directory anywhere wins over a file elsewhere.
+re2dj::storage::GuestEntryKind GuestEntryAt(const std::string& relative)
 {
     if (relative.empty())
     {
-        return true;
+        return re2dj::storage::GuestEntryKind::kDirectory;
     }
     std::string native = relative;
     for (char& value : native)
@@ -2329,6 +2302,7 @@ bool GuestDirectoryExists(const std::string& relative)
             value = '\\';
         }
     }
+    bool file = false;
     const char* const roots[] = {g_re2dj_vfs_hdd_root, g_re2dj_vfs_overlay_root};
     for (const char* root : roots)
     {
@@ -2338,19 +2312,30 @@ bool GuestDirectoryExists(const std::string& relative)
             continue;
         }
         const DWORD attributes = GetFileAttributesA(path);
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        if (attributes != INVALID_FILE_ATTRIBUTES)
         {
-            return true;
+            if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+            {
+                return re2dj::storage::GuestEntryKind::kDirectory;
+            }
+            file = true;
         }
-    }
-    if (!IsChdConfigured() || !EnsureChdMounted())
-    {
-        return false;
     }
     re2dj::storage::Fat32Entry entry;
     std::string error;
-    return g_chd_volume->Find(ChdPathFromRelative(relative), &entry, &error) && entry.directory;
+    if (IsChdConfigured() && EnsureChdMounted() &&
+        g_chd_volume->Find(ChdPathFromRelative(relative), &entry, &error))
+    {
+        return entry.directory ? re2dj::storage::GuestEntryKind::kDirectory
+                               : re2dj::storage::GuestEntryKind::kFile;
+    }
+    return file ? re2dj::storage::GuestEntryKind::kFile : re2dj::storage::GuestEntryKind::kMissing;
+}
+
+// True when a resolved guest path names a directory.
+bool GuestDirectoryExists(const std::string& relative)
+{
+    return GuestEntryAt(relative) == re2dj::storage::GuestEntryKind::kDirectory;
 }
 
 std::vector<std::string> SplitGuestRelative(const std::string& relative)
@@ -2411,6 +2396,23 @@ void ReportVfsCurrentDirectory(const char* stage,
                   requested == nullptr ? "" : requested,
                   resolved == nullptr ? "" : resolved,
                   success ? 1U : 0U);
+    AppendVfsTraceMessage(message);
+}
+
+void ReportVfsFileAttributes(const char* requested, const char* resolved, DWORD attributes, DWORD error)
+{
+    if (g_re2dj_vfs_trace_path[0] == '\0' || !ClaimVfsOpenTraceBudget())
+    {
+        return;
+    }
+    char message[900] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "re2dj:vfs:file-attributes:request=%.383s:resolved=%.383s:attributes=0x%08lx:error=%lu\r\n",
+                  requested == nullptr ? "" : requested,
+                  resolved == nullptr ? "" : resolved,
+                  static_cast<unsigned long>(attributes),
+                  static_cast<unsigned long>(error));
     AppendVfsTraceMessage(message);
 }
 
@@ -2583,6 +2585,48 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetCurrentDirectoryA(DWORD
     ReportVfsCurrentDirectory("get", path, path, true);
     SetLastError(ERROR_SUCCESS);
     return length;
+}
+
+// A name on the HDD answers from the image, walked by the shared rule
+// (storage::DescribeGuestFileAttributes) against the tracked current
+// directory; the host's own current directory is not the guest's. An empty
+// or null name is ERROR_PATH_NOT_FOUND as Windows 11 reports it. Support
+// directory names and names the guest syntax rejects keep the OS's answer.
+extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileAttributesA(LPCSTR name)
+{
+    if (name == nullptr || name[0] == '\0')
+    {
+        ReportVfsFileAttributes(name, "", INVALID_FILE_ATTRIBUTES, ERROR_PATH_NOT_FOUND);
+        SetLastError(ERROR_PATH_NOT_FOUND);
+        return INVALID_FILE_ATTRIBUTES;
+    }
+    const char* hdd_suffix = nullptr;
+    const char* support_suffix = nullptr;
+    const bool support = !FindPathSuffixUnderRoot(name, g_re2dj_vfs_hdd_root, &hdd_suffix) &&
+                         (FindPathSuffixUnderRoot(name, g_re2dj_hle_windows_directory, &support_suffix) ||
+                          HasPrefixIgnoreCase(name, "C:\\windows"));
+    std::string resolved;
+    if (support || !ResolveGuestRelativePath(name, &resolved))
+    {
+        const DWORD previous_error = GetLastError();
+        char mapped[MAX_PATH] = {};
+        const DWORD attributes =
+            GetFileAttributesA(MapVfsPath(name, false, mapped, nullptr) ? mapped : name);
+        const DWORD error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_SUCCESS;
+        ReportVfsFileAttributes(name, mapped, attributes, error);
+        SetLastError(attributes == INVALID_FILE_ATTRIBUTES ? error : previous_error);
+        return attributes;
+    }
+    // The lookups below probe host paths that may be missing; success must
+    // hand the guest back the last error it had.
+    const DWORD previous_error = GetLastError();
+    const std::size_t length = std::strlen(name);
+    const bool trailing_separator = name[length - 1] == '\\' || name[length - 1] == '/';
+    const re2dj::storage::GuestFileAttributes result = re2dj::storage::DescribeGuestFileAttributes(
+        SplitGuestRelative(resolved), trailing_separator, &GuestEntryAt);
+    ReportVfsFileAttributes(name, resolved.c_str(), result.attributes, result.error);
+    SetLastError(result.error != ERROR_SUCCESS ? result.error : previous_error);
+    return result.attributes;
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFullPathNameA(
@@ -3159,48 +3203,18 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetFileType(HANDLE handle)
 
 bool WildcardMatch(const char* pattern, const char* text)
 {
-    if (pattern == nullptr || text == nullptr)
-    {
-        return false;
-    }
-    if (std::strcmp(pattern, "*.*") == 0 || std::strcmp(pattern, "*") == 0)
-    {
-        return true;
-    }
-    while (*pattern != '\0')
-    {
-        if (*pattern == '*')
-        {
-            ++pattern;
-            if (*pattern == '\0')
-            {
-                return true;
-            }
-            while (*text != '\0')
-            {
-                if (WildcardMatch(pattern, text))
-                {
-                    return true;
-                }
-                ++text;
-            }
-            return false;
-        }
-        if (*text == '\0')
-        {
-            return false;
-        }
-        if (*pattern != '?' &&
-            std::tolower(static_cast<unsigned char>(*pattern)) !=
-            std::tolower(static_cast<unsigned char>(*text)))
-        {
-            return false;
-        }
-        ++pattern;
-        ++text;
-    }
-    return *text == '\0';
+    return pattern != nullptr && text != nullptr && re2dj::storage::MatchesFindPattern(pattern, text);
 }
+
+// The core's WIN32_FIND_DATAA is the guest's layout.
+static_assert(sizeof(re2dj::storage::GuestFindData) == sizeof(WIN32_FIND_DATAA));
+static_assert(offsetof(WIN32_FIND_DATAA, ftCreationTime) == offsetof(re2dj::storage::GuestFindData, creation_time));
+static_assert(offsetof(WIN32_FIND_DATAA, ftLastWriteTime) == offsetof(re2dj::storage::GuestFindData, last_write_time));
+static_assert(offsetof(WIN32_FIND_DATAA, nFileSizeHigh) == offsetof(re2dj::storage::GuestFindData, size_high));
+static_assert(offsetof(WIN32_FIND_DATAA, nFileSizeLow) == offsetof(re2dj::storage::GuestFindData, size_low));
+static_assert(offsetof(WIN32_FIND_DATAA, cFileName) == offsetof(re2dj::storage::GuestFindData, file_name));
+static_assert(offsetof(WIN32_FIND_DATAA, cAlternateFileName) ==
+              offsetof(re2dj::storage::GuestFindData, alternate_file_name));
 
 void PopulateFindData(const re2dj::storage::Fat32Entry& entry, LPWIN32_FIND_DATAA data)
 {
@@ -3208,25 +3222,8 @@ void PopulateFindData(const re2dj::storage::Fat32Entry& entry, LPWIN32_FIND_DATA
     {
         return;
     }
-    std::memset(data, 0, sizeof(*data));
-    data->dwFileAttributes = entry.directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-    data->nFileSizeLow = entry.size;
-    data->nFileSizeHigh = 0;
-    // Win32 reports real file times here. The FAT32 entry stores them as DOS
-    // date and time words, and a zero word means the entry carries no such
-    // stamp, so it is left as the zero the memset already wrote rather than
-    // being converted: DosDateTimeToFileTime rejects zero.
-    const auto fill_time = [](std::uint16_t date, std::uint16_t time, FILETIME* out) {
-        if (date == 0)
-        {
-            return;
-        }
-        DosDateTimeToFileTime(date, time, out);
-    };
-    fill_time(entry.creation_date, entry.creation_time, &data->ftCreationTime);
-    fill_time(entry.last_access_date, 0, &data->ftLastAccessTime);
-    fill_time(entry.write_date, entry.write_time, &data->ftLastWriteTime);
-    strncpy_s(data->cFileName, sizeof(data->cFileName), entry.name.c_str(), _TRUNCATE);
+    const re2dj::storage::GuestFindData described = re2dj::storage::DescribeFindEntry(entry);
+    std::memcpy(data, &described, sizeof(*data));
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsFindClose(HANDLE handle)
@@ -3818,6 +3815,14 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
             {
                 const FARPROC result =
                     reinterpret_cast<FARPROC>(&Re2djVfsGetCurrentDirectoryA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "GetFileAttributesA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsGetFileAttributesA);
                 ReportDynamicResolverName(
                     name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
                 return result;

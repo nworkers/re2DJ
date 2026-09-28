@@ -26,7 +26,7 @@ void AddResolveOnlyExports(GuestModuleDescriptor* descriptor,
 
 // The DLLs 4th's protection envelope resolves when it rebuilds the original
 // program's import table, beyond kernel32, user32, advapi32, and winmm:
-// dinput, avifil32, and ws2_32 (gdi32, ddraw, and dsound have their own
+// avifil32 and ws2_32 (gdi32, ddraw, dsound, and dinput have their own
 // modules). Every export is resolve-only until a call is observed.
 std::vector<GuestModuleDescriptor> MakeResolveOnlyModuleDescriptors();
 

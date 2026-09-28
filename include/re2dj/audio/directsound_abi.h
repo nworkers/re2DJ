@@ -27,6 +27,14 @@ inline constexpr std::uint32_t kDscapsPrimaryStereo = 0x00000002U;
 inline constexpr std::uint32_t kDscaps16Bit = 0x00000008U;
 inline constexpr std::uint32_t kDsSpeakerStereo = 0x00000004U;
 inline constexpr std::uint32_t kDsbLockEntireBuffer = 0x00000002U;
+inline constexpr std::uint32_t kDsbPlayLooping = 0x00000001U;
+inline constexpr std::uint32_t kDsbStatusPlaying = 0x00000001U;
+inline constexpr std::uint32_t kDsbStatusLooping = 0x00000004U;
+inline constexpr std::uint32_t kDsbFrequencyOriginal = 0;
+inline constexpr std::int32_t kDsbVolumeMin = -10000;
+inline constexpr std::int32_t kDsbVolumeMax = 0;
+inline constexpr std::int32_t kDsbPanLeft = -10000;
+inline constexpr std::int32_t kDsbPanRight = 10000;
 
 // WAVEFORMATEX (18 bytes, byte-packed as in mmeapi.h).
 #pragma pack(push, 1)

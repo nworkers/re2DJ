@@ -1,6 +1,8 @@
 #include "re2dj/hle/guest_files.h"
 
 #include <algorithm>
+#include <cctype>
+#include <fstream>
 #include <system_error>
 #include <utility>
 
@@ -63,9 +65,136 @@ public:
         std::string error;
         return volume_->MaterializeFile(relative_path, output, &error);
     }
+    bool ListDirectory(std::string_view relative_path, std::vector<storage::Fat32Entry>* entries) const override
+    {
+        std::string error;
+        return volume_->ReadDirectory(relative_path, entries, &error);
+    }
 
 private:
     std::unique_ptr<storage::Fat32Volume> volume_;
+};
+
+// A directory dump on the host as a file source. A host file system may tell
+// case apart where the guest's does not, so each component is matched
+// without case when its exact spelling is missing. Entries list in the order
+// NTFS gives the Windows product, names compared without case; they carry no
+// dates, since a dump's host times are when it was copied, not the image's.
+class HostDirectorySource final : public GuestFileSource
+{
+public:
+    explicit HostDirectorySource(std::filesystem::path root) : root_(std::move(root)) {}
+
+    bool Find(std::string_view relative_path, bool* directory, std::uint64_t* size) const override
+    {
+        std::filesystem::path path;
+        std::error_code code;
+        if (!Resolve(relative_path, &path))
+        {
+            return false;
+        }
+        *directory = std::filesystem::is_directory(path, code);
+        *size = *directory ? 0 : static_cast<std::uint64_t>(std::filesystem::file_size(path, code));
+        return !code;
+    }
+    bool ReadRange(std::string_view relative_path,
+                   std::uint64_t offset,
+                   void* destination,
+                   std::size_t length) const override
+    {
+        std::filesystem::path path;
+        if (!Resolve(relative_path, &path))
+        {
+            return false;
+        }
+        std::ifstream stream(path, std::ios::binary);
+        stream.seekg(static_cast<std::streamoff>(offset));
+        stream.read(static_cast<char*>(destination), static_cast<std::streamsize>(length));
+        return static_cast<std::size_t>(stream.gcount()) == length;
+    }
+    bool Materialize(std::string_view relative_path, const std::filesystem::path& output) const override
+    {
+        std::filesystem::path path;
+        std::error_code code;
+        return Resolve(relative_path, &path) &&
+               std::filesystem::copy_file(path, output, std::filesystem::copy_options::overwrite_existing, code) &&
+               !code;
+    }
+    bool ListDirectory(std::string_view relative_path, std::vector<storage::Fat32Entry>* entries) const override
+    {
+        std::filesystem::path path;
+        std::error_code code;
+        if (!Resolve(relative_path, &path) || !std::filesystem::is_directory(path, code))
+        {
+            return false;
+        }
+        entries->clear();
+        for (const auto& item : std::filesystem::directory_iterator(path, code))
+        {
+            storage::Fat32Entry entry;
+            entry.name = item.path().filename().string();
+            entry.directory = item.is_directory(code);
+            entry.size = entry.directory ? 0 : static_cast<std::uint32_t>(item.file_size(code));
+            entries->push_back(std::move(entry));
+        }
+        const auto upper_less = [](char left, char right) {
+            return std::toupper(static_cast<unsigned char>(left)) < std::toupper(static_cast<unsigned char>(right));
+        };
+        std::sort(entries->begin(), entries->end(),
+                  [&](const storage::Fat32Entry& left, const storage::Fat32Entry& right) {
+                      return std::lexicographical_compare(left.name.begin(), left.name.end(), right.name.begin(),
+                                                          right.name.end(), upper_less);
+                  });
+        return !code;
+    }
+
+private:
+    bool Resolve(std::string_view relative_path, std::filesystem::path* resolved) const
+    {
+        std::filesystem::path path = root_;
+        std::size_t start = 0;
+        while (start <= relative_path.size())
+        {
+            const std::size_t slash = relative_path.find('/', start);
+            const std::size_t end = slash == std::string_view::npos ? relative_path.size() : slash;
+            const std::string_view component = relative_path.substr(start, end - start);
+            if (!component.empty())
+            {
+                std::error_code code;
+                std::filesystem::path exact = path / std::string(component);
+                if (std::filesystem::exists(exact, code))
+                {
+                    path = std::move(exact);
+                }
+                else
+                {
+                    bool found = false;
+                    for (const auto& item : std::filesystem::directory_iterator(path, code))
+                    {
+                        if (storage::EqualsIgnoreAsciiCase(item.path().filename().string(), component))
+                        {
+                            path = item.path();
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                    {
+                        return false;
+                    }
+                }
+            }
+            if (slash == std::string_view::npos)
+            {
+                break;
+            }
+            start = slash + 1;
+        }
+        *resolved = std::move(path);
+        return true;
+    }
+
+    std::filesystem::path root_;
 };
 
 }  // namespace
@@ -85,6 +214,11 @@ bool GuestFiles::Configure(GuestFileConfig config, std::string* error)
 {
     if (config.chd_image.empty())
     {
+        if (!config.hdd_directory.empty())
+        {
+            std::filesystem::path directory = config.hdd_directory;
+            return Configure(std::move(config), std::make_unique<HostDirectorySource>(std::move(directory)), error);
+        }
         config_ = std::move(config);
         source_.reset();
         return true;
@@ -109,18 +243,17 @@ bool GuestFiles::Configure(GuestFileConfig config,
         if (error != nullptr) *error = "guest root is not a drive-absolute path: " + config_.guest_root;
         return false;
     }
+    current_ = root_;
     source_ = std::move(source);
     return true;
 }
 
-bool GuestFiles::RelativeToRoot(std::string_view guest_path, std::string* relative) const
+bool GuestFiles::BelowRoot(const storage::GuestPath& combined,
+                           bool allow_root,
+                           std::vector<std::string>* below) const
 {
-    storage::GuestPath parsed;
-    storage::GuestPath combined;
-    if (!storage::ParseGuestPath(guest_path, &parsed) ||
-        !storage::CombineGuestPath(root_, parsed, &combined) ||
-        combined.drive_letter != root_.drive_letter ||
-        combined.components.size() <= root_.components.size())
+    if (combined.drive_letter != root_.drive_letter || combined.components.size() < root_.components.size() ||
+        (!allow_root && combined.components.size() == root_.components.size()))
     {
         return false;
     }
@@ -131,11 +264,220 @@ bool GuestFiles::RelativeToRoot(std::string_view guest_path, std::string* relati
             return false;
         }
     }
-    combined.components.erase(combined.components.begin(),
-                              combined.components.begin() +
-                                  static_cast<std::ptrdiff_t>(root_.components.size()));
-    *relative = storage::GuestPathToRelativeString(combined);
+    below->assign(combined.components.begin() + static_cast<std::ptrdiff_t>(root_.components.size()),
+                  combined.components.end());
     return true;
+}
+
+bool GuestFiles::RelativeToRoot(std::string_view guest_path, std::string* relative) const
+{
+    storage::GuestPath parsed;
+    storage::GuestPath combined;
+    storage::GuestPath below;
+    if (!storage::ParseGuestPath(guest_path, &parsed) || !storage::CombineGuestPath(current_, parsed, &combined) ||
+        !BelowRoot(combined, false, &below.components))
+    {
+        return false;
+    }
+    *relative = storage::GuestPathToRelativeString(below);
+    return true;
+}
+
+GuestFiles::Entry GuestFiles::Lookup(const std::string& relative) const
+{
+    if (!config_.overlay_root.empty())
+    {
+        std::error_code code;
+        const std::filesystem::path overlay = HostPath(config_.overlay_root, relative);
+        if (std::filesystem::is_directory(overlay, code))
+        {
+            return Entry::kDirectory;
+        }
+        if (std::filesystem::is_regular_file(overlay, code))
+        {
+            return Entry::kFile;
+        }
+    }
+    bool directory = false;
+    std::uint64_t size = 0;
+    const std::string chd_relative = config_.chd_root.empty() ? relative : config_.chd_root + "/" + relative;
+    if (source_ == nullptr || !source_->Find(chd_relative, &directory, &size))
+    {
+        return Entry::kMissing;
+    }
+    return directory ? Entry::kDirectory : Entry::kFile;
+}
+
+GuestFiles::FindResult GuestFiles::FindFirst(std::string_view guest_pattern)
+{
+    FindResult result;
+    if (guest_pattern.empty())
+    {
+        result.error = kWin32ErrorPathNotFound;
+        return result;
+    }
+    // The pattern is split off first: '*' and '?' are not path characters.
+    const std::size_t separator = guest_pattern.find_last_of("\\/");
+    const std::string_view directory =
+        separator == std::string_view::npos ? std::string_view(".") : guest_pattern.substr(0, separator);
+    const std::string_view pattern =
+        separator == std::string_view::npos ? guest_pattern : guest_pattern.substr(separator + 1);
+    if (pattern.empty())
+    {
+        result.error = kWin32ErrorInvalidParameter;
+        return result;
+    }
+    storage::GuestPath parsed;
+    storage::GuestPath combined;
+    std::vector<std::string> below;
+    if (directory.empty())
+    {
+        // "\name" searches the drive's root, which the model does not serve.
+        result.outside_root = true;
+        return result;
+    }
+    if (!storage::ParseGuestPath(directory, &parsed))
+    {
+        result.error = kWin32ErrorPathNotFound;
+        return result;
+    }
+    if (!storage::CombineGuestPath(current_, parsed, &combined) || !BelowRoot(combined, true, &below))
+    {
+        result.outside_root = true;
+        return result;
+    }
+    storage::GuestPath relative;
+    relative.components = below;
+    const std::string below_root = storage::GuestPathToRelativeString(relative);
+    std::string chd_relative = config_.chd_root;
+    if (!below_root.empty())
+    {
+        chd_relative += (chd_relative.empty() ? "" : "/") + below_root;
+    }
+    std::vector<storage::Fat32Entry> entries;
+    if (source_ == nullptr || !source_->ListDirectory(chd_relative, &entries))
+    {
+        result.error = kWin32ErrorPathNotFound;
+        return result;
+    }
+    Search search;
+    for (storage::Fat32Entry& entry : entries)
+    {
+        if (storage::MatchesFindPattern(pattern, entry.name))
+        {
+            search.matches.push_back(std::move(entry));
+        }
+    }
+    if (search.matches.empty())
+    {
+        result.error = kWin32ErrorFileNotFound;
+        return result;
+    }
+    GuestHandleAllocator* handles = handles_ != nullptr ? handles_ : &own_handles_;
+    result.handle = handles->Allocate();
+    result.first = storage::DescribeFindEntry(search.matches.front());
+    search.next = 1;
+    searches_[result.handle] = std::move(search);
+    return result;
+}
+
+std::uint32_t GuestFiles::FindNext(std::uint32_t handle, storage::GuestFindData* data)
+{
+    const auto found = searches_.find(handle);
+    if (found == searches_.end())
+    {
+        return kWin32ErrorInvalidHandle;
+    }
+    Search& search = found->second;
+    if (search.next >= search.matches.size())
+    {
+        return kWin32ErrorNoMoreFiles;
+    }
+    *data = storage::DescribeFindEntry(search.matches[search.next++]);
+    return kWin32ErrorSuccess;
+}
+
+bool GuestFiles::FindClose(std::uint32_t handle)
+{
+    return searches_.erase(handle) != 0;
+}
+
+std::string GuestFiles::CurrentDirectory() const
+{
+    return storage::GuestPathToString(current_);
+}
+
+std::uint32_t GuestFiles::SetCurrentDirectory(std::string_view guest_path, bool* outside_root)
+{
+    *outside_root = false;
+    storage::GuestPath parsed;
+    storage::GuestPath combined;
+    if (!storage::ParseGuestPath(guest_path, &parsed) || parsed.kind == storage::GuestPathKind::kUnc)
+    {
+        return kWin32ErrorInvalidName;
+    }
+    std::vector<std::string> below;
+    if (!storage::CombineGuestPath(current_, parsed, &combined) || !BelowRoot(combined, true, &below))
+    {
+        *outside_root = true;
+        return kWin32ErrorSuccess;
+    }
+    std::string relative;
+    for (std::size_t index = 0; index < below.size(); ++index)
+    {
+        relative += (index == 0 ? "" : "/") + below[index];
+        const bool last = index + 1 == below.size();
+        switch (Lookup(relative))
+        {
+        case Entry::kMissing:
+            return last ? kWin32ErrorFileNotFound : kWin32ErrorPathNotFound;
+        case Entry::kFile:
+            // A file in the middle of the path was not measured; Windows
+            // reports a missing path for the like.
+            return last ? kWin32ErrorDirectory : kWin32ErrorPathNotFound;
+        case Entry::kDirectory:
+            break;
+        }
+    }
+    current_ = std::move(combined);
+    return kWin32ErrorSuccess;
+}
+
+storage::GuestFileAttributes GuestFiles::Attributes(std::string_view guest_path, bool* outside_root) const
+{
+    *outside_root = false;
+    storage::GuestFileAttributes result;
+    if (guest_path.empty())
+    {
+        result.error = kWin32ErrorPathNotFound;
+        return result;
+    }
+    storage::GuestPath parsed;
+    storage::GuestPath combined;
+    if (!storage::ParseGuestPath(guest_path, &parsed) || parsed.kind == storage::GuestPathKind::kUnc)
+    {
+        result.error = kWin32ErrorInvalidName;
+        return result;
+    }
+    std::vector<std::string> below;
+    if (!storage::CombineGuestPath(current_, parsed, &combined) || !BelowRoot(combined, true, &below))
+    {
+        *outside_root = true;
+        return result;
+    }
+    const bool trailing_separator = guest_path.back() == '\\' || guest_path.back() == '/';
+    return storage::DescribeGuestFileAttributes(below, trailing_separator, [this](const std::string& relative) {
+        switch (Lookup(relative))
+        {
+        case Entry::kFile:
+            return storage::GuestEntryKind::kFile;
+        case Entry::kDirectory:
+            return storage::GuestEntryKind::kDirectory;
+        case Entry::kMissing:
+            break;
+        }
+        return storage::GuestEntryKind::kMissing;
+    });
 }
 
 std::uint32_t GuestFiles::OpenHost(const std::filesystem::path& path,
@@ -193,7 +535,10 @@ GuestFiles::OpenResult GuestFiles::Open(std::string_view guest_path,
     }
     if ((disposition == kOpenExisting || disposition == kTruncateExisting) && !exists)
     {
-        result.error = kWin32ErrorFileNotFound;
+        // A missing directory on the way is ERROR_PATH_NOT_FOUND, as on Windows.
+        const std::size_t slash = relative.rfind('/');
+        const bool parent_missing = slash != std::string::npos && Lookup(relative.substr(0, slash)) != Entry::kDirectory;
+        result.error = parent_missing ? kWin32ErrorPathNotFound : kWin32ErrorFileNotFound;
         return result;
     }
 

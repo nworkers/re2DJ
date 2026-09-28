@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -18,7 +19,9 @@
 
 #include "native_in_process_runner.h"
 #include "native_kernel32_diagnostic.h"
+#include "native_legacy_io.h"
 #include "re2dj/hle/api_call_record.h"
+#include "re2dj/hle/host_presentation.h"
 #include "re2dj/hle/modules/guest_module.h"
 #include "re2dj/logging/logging.h"
 
@@ -57,12 +60,13 @@ struct StringArguments
 
 StringArguments StringArgumentIndices(std::string_view export_name)
 {
-    if (export_name == "GetModuleHandleA" || export_name == "CreateFileA" ||
+    if (export_name == "GetModuleHandleA" || export_name == "CreateFileA" || export_name == "FindFirstFileA" ||
+        export_name == "SetCurrentDirectoryA" || export_name == "GetFileAttributesA" ||
         export_name == "LoadLibraryA" || export_name == "GetEnvironmentVariableA")
     {
         return {0, -1};
     }
-    if (export_name == "GetProcAddress")
+    if (export_name == "GetProcAddress" || export_name == "DrawTextA" || export_name == "wsprintfA")
     {
         return {1, -1};
     }
@@ -85,8 +89,12 @@ struct ContinuationContext
     std::vector<OriginalApiCall> calls;
     std::deque<OriginalApiCall> tail_calls;
     std::uint32_t call_count = 0;
-    // Calls being handled; above one, the guest is inside a guest call.
-    std::uint32_t depth = 0;
+    std::uint32_t call_limit = 0;
+    std::uint32_t api_log_calls = kOriginalApiLogFullCalls;
+    hle::HostPresentation* presentation = nullptr;
+    // Calls each guest thread is handling; above one, the guest is inside a
+    // guest call.
+    std::map<std::uint32_t, std::uint32_t> depths;
     bool stop_requested = false;
     bool stop_redirect_failed = false;
     OriginalRunBoundary stop = OriginalRunBoundary::kStopped;
@@ -107,6 +115,11 @@ void LogApiCallHead(const OriginalApiCall& call, std::uint32_t depth)
     const std::string indent(depth * 4, ' ');
     std::string arguments;
     char word[12] = {};
+    char thread[24] = {};
+    if (call.thread_id != 0)
+    {
+        std::snprintf(thread, sizeof(thread), "[thread %04x] ", call.thread_id);
+    }
     for (std::uint32_t index = 0; index < call.argument_count; ++index)
     {
         std::snprintf(word, sizeof(word), index == 0 ? "%08x" : ", %08x", call.arguments[index]);
@@ -115,8 +128,9 @@ void LogApiCallHead(const OriginalApiCall& call, std::uint32_t depth)
     char head[256] = {};
     std::snprintf(head,
                   sizeof(head),
-                  "#%04u %s ret=%08x args=(%s)",
+                  "#%04u %s%s ret=%08x args=(%s)",
                   call.sequence,
+                  thread,
                   call.name.c_str(),
                   call.return_address,
                   arguments.c_str());
@@ -196,6 +210,9 @@ bool HandleContinuationGate(const NativeImportGateEvent& event,
 
     OriginalApiCall call;
     call.sequence = ++state->call_count;
+    const std::uint32_t thread_id = state->kernel32.CurrentThreadId();
+    call.thread_id = thread_id == hle::GuestProcess::kThreadId ? 0 : thread_id;
+    std::uint32_t& depth = state->depths[thread_id];
     call.name = state->kernel32.GateName(event);
     call.return_address = event.instruction_pointer;
     const hle::modules::RegisteredGuestExport* facade_export =
@@ -232,12 +249,28 @@ bool HandleContinuationGate(const NativeImportGateEvent& event,
         }
     }
 
-    LogApiCallHead(call, state->depth);
-    ++state->depth;
+    const bool logged = state->api_log_calls == 0 || call.sequence <= state->api_log_calls;
+    if (logged)
+    {
+        LogApiCallHead(call, depth);
+    }
+    else if (call.sequence == state->api_log_calls + 1)
+    {
+        const std::shared_ptr<spdlog::logger> logger = logging::GetApiLogger();
+        if (logger != nullptr)
+        {
+            logger->info("... calls after #{} are not recorded here; the last {} are reported with the result",
+                         state->api_log_calls, kOriginalApiCallLogTail);
+        }
+    }
+    ++depth;
     call.handled = state->kernel32.Dispatch(event, output);
-    --state->depth;
+    --depth;
     call.eax = call.handled ? output->eax : 0;
-    LogApiCallOutcome(state->kernel32, call, facade_export != nullptr, output, state->depth);
+    if (logged)
+    {
+        LogApiCallOutcome(state->kernel32, call, facade_export != nullptr, output, depth);
+    }
     if (state->calls.size() < kOriginalApiCallLogHead)
     {
         state->calls.push_back(call);
@@ -288,7 +321,11 @@ bool HandleContinuationGate(const NativeImportGateEvent& event,
                     OriginalRunBoundary::kContinuationUnresolvedLookup,
                     "GetProcAddress(" + std::string(module) + ", " + requested + ")");
     }
-    else if (state->call_count >= kOriginalContinuationCallLimit)
+    else if (state->presentation != nullptr && state->presentation->CloseRequested())
+    {
+        RequestStop(state, event, OriginalRunBoundary::kContinuationHostClosed, call.name);
+    }
+    else if (state->call_limit != 0 && state->call_count >= state->call_limit)
     {
         RequestStop(state, event, OriginalRunBoundary::kContinuationCallLimit, call.name);
     }
@@ -318,6 +355,10 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
                                 image_info.size_of_image);
     context.kernel32.ConfigureDevices(environment.devices);
     context.kernel32.SetPresentation(environment.presentation);
+    context.kernel32.SetAudio(environment.audio);
+    context.presentation = environment.presentation;
+    context.call_limit = environment.call_limit;
+    context.api_log_calls = environment.api_log_calls;
     context.kernel32.DescribeImage(image_info, environment.module_path);
     if (!context.kernel32.ConfigureFiles(environment.files, error))
     {
@@ -330,6 +371,9 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
 
     NativeInProcessRunResult run;
     *result = {};
+    input::LegacyIoTrapPolicy legacy_io = environment.legacy_io;
+    legacy_io.image_base = context.kernel32.image_base();
+    SetNativeLegacyIo(legacy_io, environment.presentation == nullptr ? nullptr : &environment.presentation->Input());
     const bool completed = RunConfiguredNativePeInProcess(file_bytes,
                                                           image_info,
                                                           context.kernel32.image_base(),
@@ -339,6 +383,8 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
                                                           &context.kernel32,
                                                           &run,
                                                           error);
+    ClearNativeLegacyIo();
+    const NativeLegacyIoActivity legacy_io_activity = NativeLegacyIoActivitySnapshot();
     const std::uint32_t stop_address = context.kernel32.stop_stub();
     if (context.stop_requested && !context.stop_redirect_failed &&
         run.fault.status_code == SIGTRAP && run.fault.instruction_pointer == stop_address + 1)
@@ -392,6 +438,11 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
     context.kernel32.CopyTo(result);
     result->device_activity = context.kernel32.devices().activity();
     result->hardlock_material_applied = environment.devices.hardlock.has_value();
+    result->legacy_io_reads = legacy_io_activity.reads;
+    result->legacy_io_writes = legacy_io_activity.writes;
+    result->legacy_io_unanswered = legacy_io_activity.unanswered;
+    result->legacy_io_first_port = legacy_io_activity.first_port;
+    result->legacy_io_first_read = legacy_io_activity.first_read;
     error->clear();
     return true;
 }

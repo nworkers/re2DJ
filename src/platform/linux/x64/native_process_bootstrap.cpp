@@ -1,5 +1,6 @@
 #include "../native_process_bootstrap.h"
 
+#include "../native_guest_threads.h"
 #include "native_compat_mode.h"
 
 namespace re2dj::platform::linux
@@ -100,7 +101,8 @@ bool NativeProcessBootstrap::IsGuestStackRange(std::uint32_t address, std::uint3
 {
     const std::uint32_t limit = GuestStackLimit();
     const std::uint32_t base = GuestStackBase();
-    return base != 0 && address >= limit && address <= base && size <= base - address;
+    return (base != 0 && address >= limit && address <= base && size <= base - address) ||
+           NativeGuestThreadMemoryContains(address, size);
 }
 
 std::uint32_t NativeProcessBootstrap::Teb() const { return impl_->runtime.Teb(); }
@@ -118,6 +120,11 @@ std::uint32_t NativeProcessBootstrap::LastSehHandler() const
 std::uint32_t NativeProcessBootstrap::LastSehResumedEip() const
 {
     return impl_->runtime.LastSehResumedEip();
+}
+
+NativeGuestExceptionCounters NativeProcessBootstrap::ExceptionCounters() const
+{
+    return impl_->runtime.ExceptionCounters();
 }
 
 bool NativeProcessBootstrap::GuestProcessExited() const

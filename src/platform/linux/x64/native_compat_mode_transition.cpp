@@ -209,10 +209,14 @@ __asm__(
 
     // sa_sigaction entry. The kernel does not touch FS, so a signal raised in
     // guest code arrives with the guest TEB as the FS base; restore the host
-    // base before any C code reads TLS or the stack-protector canary. When
-    // the C handler returns 1 the guest resumes, and since rt_sigreturn does
-    // not restore FS either, reload the guest selector before returning to
-    // __restore_rt, which issues only the syscall.
+    // base before any C code reads TLS or the stack-protector canary. Only
+    // the thread holding the guest lock runs guest code, and the state holds
+    // its host base; a signal raised in 64-bit code (any thread's host code)
+    // already has its own FS, so the interrupted CS (ucontext offset 184,
+    // gregs[REG_CSGSFS]) decides. When the C handler returns 1 the guest
+    // resumes, and since rt_sigreturn does not restore FS either, reload the
+    // guest selector before returning to __restore_rt, which issues only the
+    // syscall.
     ".balign 16\n"
     ".hidden NativeCompatSignalEntry\n"
     ".globl NativeCompatSignalEntry\n"
@@ -222,6 +226,8 @@ __asm__(
     "    movq g_native_compat_active_state(%rip), %rax\n"
     "    testq %rax, %rax\n"
     "    jz 1f\n"
+    "    cmpw $0x23, 184(%rdx)\n"
+    "    jne 1f\n"
     "    pushq %rdi\n"
     "    pushq %rsi\n"
     "    pushq %rdx\n"

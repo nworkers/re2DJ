@@ -14,6 +14,7 @@
 #include "directx_abi_windows.h"
 #include "graphics_trace_log.h"
 #include "re2dj/directx/directdraw_description.h"
+#include "re2dj/directx/directdraw_surface.h"
 
 // IDirectDraw7 and IDirectDrawSurface7 repeat their version 4 predecessors slot
 // for slot and append to them, so this file is mostly a table of adoptions: a
@@ -463,11 +464,19 @@ HRESULT WINAPI Dd7GetMonitorFrequency(IDirectDraw7*, LPDWORD frequency)
     return DD_OK;
 }
 
-// The guest sweeps its surfaces before restoring them. This facade never loses
-// a surface, so there is nothing to enumerate and the sweep finds nothing.
-HRESULT WINAPI Dd7EnumSurfaces(IDirectDraw7*, DWORD, LPDDSURFACEDESC2, LPVOID, LPDDENUMSURFACESCALLBACK7)
+// The guest sweeps its surfaces before restoring them. The flags follow the
+// shared core's plan. Windows 11 would list every existing surface, but this
+// facade keeps no list of them, so a valid sweep still finds nothing; none
+// is ever lost.
+HRESULT WINAPI Dd7EnumSurfaces(IDirectDraw7*,
+                               DWORD flags,
+                               LPDDSURFACEDESC2 description,
+                               LPVOID,
+                               LPDDENUMSURFACESCALLBACK7 callback)
 {
-    return DD_OK;
+    const re2dj::directx::EnumSurfacesPlan plan =
+        re2dj::directx::PlanEnumSurfaces(flags, description != nullptr, callback != nullptr);
+    return plan == re2dj::directx::EnumSurfacesPlan::kInvalid ? DDERR_INVALIDPARAMS : DD_OK;
 }
 
 HRESULT WINAPI Dd7TestCooperativeLevel(IDirectDraw7*)

@@ -413,7 +413,8 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                        "_Re2djVfsGetFullPathNameA@16",
                                        "_Re2djVfsFindFirstFileA@8",
                                        "_Re2djVfsFindNextFileA@8",
-                                       "_Re2djVfsFindClose@4"};
+                                       "_Re2djVfsFindClose@4",
+                                       "_Re2djVfsGetFileAttributesA@4"};
     const char* const vfs_imports[] = {"CreateFileA",
                                        "ReadFile",
                                        "WriteFile",
@@ -426,7 +427,8 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                        "GetFullPathNameA",
                                        "FindFirstFileA",
                                        "FindNextFileA",
-                                       "FindClose"};
+                                       "FindClose",
+                                       "GetFileAttributesA"};
     for (std::size_t index = 0; prepared && index < std::size(vfs_exports); ++index)
     {
         std::uint32_t slot = 0;

@@ -9,6 +9,7 @@
 #include "re2dj/directx/abi.h"
 #include "re2dj/directx/direct3d_description.h"
 #include "re2dj/directx/direct3d_device.h"
+#include "re2dj/directx/direct3d_vertex_buffer.h"
 #include "re2dj/hle/guest_com.h"
 #include "re2dj/hle/guest_process.h"
 
@@ -142,7 +143,7 @@ bool CreateDevice(const ImportCall& call, ImportReturn* result, std::string* err
         return Succeed(result, checked, error);
     }
     const std::uint32_t direct_draw = process->com().Find(call.arguments[0])->parent;
-    const std::uint32_t device = CreateDirect3DDevice7(call, *process, direct_draw, render_target, error);
+    const std::uint32_t device = CreateDirect3DDevice7(call, *process, direct_draw, render_target, false, error);
     if (device == 0)
     {
         return false;
@@ -173,6 +174,45 @@ bool EnumZBufferFormats(const ImportCall& call, ImportReturn* result, std::strin
            Succeed(result, dx::kDdOk, error);
 }
 
+// IDirect3D7::CreateVertexBuffer(this, lpVBDesc, lplpD3DVertexBuffer,
+// dwFlags) under the core's rules; the out pointer is cleared first, as the
+// Windows facade clears it.
+bool CreateVertexBuffer(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 4, kDirect3DObject, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    const std::uint32_t out = call.arguments[2];
+    if (out != 0 && !com::WriteWord(call, out, 0, error))
+    {
+        return false;
+    }
+    dx::D3dVertexBufferDesc description;
+    if (call.arguments[1] != 0 && !com::ReadStruct(call, call.arguments[1], &description, error))
+    {
+        return false;
+    }
+    std::uint32_t stride = 0;
+    const std::uint32_t checked = dx::CheckCreateVertexBuffer(out != 0, call.arguments[1] != 0, description, &stride);
+    if (checked != dx::kDdOk)
+    {
+        return Succeed(result, checked, error);
+    }
+    const std::uint32_t buffer = CreateVertexBuffer7(call, *process, call.arguments[0], description, stride, false, error);
+    if (buffer == 0)
+    {
+        return false;
+    }
+    if (!com::WriteWord(call, out, buffer, error))
+    {
+        process->com().Release(*process, buffer);
+        return false;
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
 bool EvictManagedTextures(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     return MethodProcess(call, result, 1, kDirect3DObject, error) != nullptr && Succeed(result, dx::kDdOk, error);
@@ -185,7 +225,7 @@ constexpr com::Method kMethods[] = {
     {"Release", 1, &com::Release},
     {"EnumDevices", 3, &EnumDevices},
     {"CreateDevice", 4, &CreateDevice},
-    {"CreateVertexBuffer", 4, &UnimplementedExport},
+    {"CreateVertexBuffer", 4, &CreateVertexBuffer},
     {"EnumZBufferFormats", 4, &EnumZBufferFormats},
     {"EvictManagedTextures", 1, &EvictManagedTextures},
 };

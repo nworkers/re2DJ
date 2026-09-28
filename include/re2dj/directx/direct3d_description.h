@@ -34,6 +34,33 @@ D3dDeviceDesc7 DeviceDescription(const Guid& device_guid, bool hardware_transfor
 // IDirect3DDevice7::GetCaps: the HAL device the enumeration published.
 D3dDeviceDesc7 CreatedDeviceDescription();
 
+// IDirect3D3::FindDevice(lpD3DFDS, lpD3DFDR), as the DirectX 6 facade
+// answers EZ2DJ 1st: a search or result of the wrong size is
+// DDERR_INVALIDPARAMS; a search that asks for a software device
+// (D3DFDS_HARDWARE with bHardware FALSE) is DDERR_NOTFOUND; otherwise the
+// HAL device, whose hardware description reports clipping and 16-bit render
+// and depth targets, everything else zero. The result is filled only on
+// DD_OK.
+std::uint32_t FindDevice(const D3dFindDeviceSearch& search, D3dFindDeviceResult* result);
+
+// The DirectX 6 HAL device's hardware description, as FindDevice and
+// IDirect3DDevice3::GetCaps give it: clipping and 16-bit render and depth
+// targets, everything else zero.
+D3dDeviceDesc6 Direct3D3HardwareDescription();
+
+// IDirect3DDevice3::GetCaps(lpD3DHWDevDesc, lpD3DHELDevDesc), as the DX6
+// facade answers: a missing hardware description or one of the wrong size is
+// DDERR_INVALIDPARAMS; otherwise it is filled, then a software description,
+// when given, is zeroed with its size set, or DDERR_INVALIDPARAMS when its
+// size is wrong (the hardware one stays filled).
+std::uint32_t GetDevice3Caps(D3dDeviceDesc6* hardware, D3dDeviceDesc6* software);
+
+// IDirect3D3::EnumZBufferFormats, as the DirectX 6 facade answers: only the
+// HAL device class is DD_OK, anything else DDERR_INVALIDPARAMS; its one
+// format is a 16-bit Z-buffer without a Z mask.
+std::uint32_t CheckEnumZBufferFormats3(const Guid& device_class);
+DdPixelFormat Direct3D3DepthFormat();
+
 // The one depth format IDirect3D7::EnumZBufferFormats offers: 16-bit.
 DdPixelFormat Depth16Format();
 // The one texture format the shared surface backing stores: RGB565.

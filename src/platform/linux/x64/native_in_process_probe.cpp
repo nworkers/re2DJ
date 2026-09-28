@@ -10,6 +10,7 @@
 #include "../native_guest_module_set.h"
 #include "../native_in_process_runner.h"
 #include "../native_instruction_trace.h"
+#include "../native_thread_probe.h"
 #include "native_compat_mode.h"
 #include "re2dj/hle/modules/kernel32_module.h"
 #include "../../native_probe_fixture.h"
@@ -391,6 +392,13 @@ int main()
     if (!RunGuestProcessExit() || !RunSyntheticToExit("run after exit"))
     {
         return 6;
+    }
+
+    if (!linux_platform::RunNativeGuestThreadProbe("x64") ||
+        !linux_platform::RunNativeGuestThreadFaultProbe("x64") ||
+        !RunSyntheticToExit("run after threads"))
+    {
+        return 7;
     }
 
     std::printf("linux-x64-in-process-probe: imports=2 exit=51 fault=SIGILL@0x%08x "

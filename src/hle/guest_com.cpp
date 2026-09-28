@@ -78,6 +78,18 @@ GuestComObject* GuestComObjects::Find(std::uint32_t address)
     return found == objects_.end() ? nullptr : &found->second;
 }
 
+std::vector<std::uint32_t> GuestComObjects::Addresses() const
+{
+    std::vector<std::uint32_t> addresses;
+    addresses.reserve(objects_.size());
+    for (const auto& [address, object] : objects_)
+    {
+        static_cast<void>(object);
+        addresses.push_back(address);
+    }
+    return addresses;
+}
+
 std::uint32_t GuestComObjects::AddRef(std::uint32_t address)
 {
     GuestComObject* object = Find(address);

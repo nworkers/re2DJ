@@ -17,6 +17,18 @@ bool ConfigureNativeImportGateHandler(NativeImportGateHandler handler, void* con
 void ConfigureNativeImportGateStackRange(std::uint32_t stack_limit,
                                          std::uint32_t stack_base);
 void ClearNativeImportGateHandler();
+// The handler imports on this thread reach, which a guest thread it starts
+// inherits.
+void CurrentNativeImportGateHandler(NativeImportGateHandler* handler, void** context);
+
+// Whether host code is running for an import right now, as opposed to guest
+// code (a guest call from an import runs guest code again). On an i386 host
+// both run in the same mode on the guest stack, so this is what tells a guest
+// fault, delivered to the guest's SEH, from a host one.
+bool NativeHostCodeRunning();
+// Forgets imports a guest run left unfinished, such as one that ended the
+// process by jumping out; called as each guest run starts.
+void ResetNativeImportGateNesting();
 
 // Guest-addressable (below 4 GiB) addresses baked into import thunks: the
 // one-argument stdcall bridge and the cleanup byte count it leaves behind.

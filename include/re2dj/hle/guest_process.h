@@ -2,6 +2,7 @@
 #define RE2DJ_HLE_GUEST_PROCESS_H_
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <span>
@@ -10,6 +11,8 @@
 #include <vector>
 
 #include "re2dj/hle/guest_com.h"
+#include "re2dj/hle/guest_gdi.h"
+#include "re2dj/hle/guest_mixer.h"
 #include "re2dj/hle/guest_handles.h"
 #include "re2dj/hle/guest_user.h"
 #include "re2dj/hle/guest_heap.h"
@@ -50,6 +53,9 @@ struct GuestTimer
     std::uint32_t id = 0;
     std::uint32_t elapse_ms = 0;
     std::uint32_t procedure = 0;
+    // The tick the next WM_TIMER counts from: when the timer was set, or
+    // when a WM_TIMER last left the queue.
+    std::uint32_t base_tick = 0;
 };
 
 // An unnamed event object from CreateEvent.
@@ -57,6 +63,20 @@ struct GuestEvent
 {
     bool manual_reset = false;
     bool signaled = false;
+};
+
+// A guest thread CreateThread started; the main thread has none.
+struct GuestThread
+{
+    std::uint32_t id = 0;
+    std::uint32_t start = 0;
+    std::uint32_t parameter = 0;
+    // SetThreadPriority's value, kept for GetThreadPriority; host threads all
+    // run at one priority.
+    std::int32_t priority = 0;
+    // Set when the ThreadProc returned, with its value.
+    bool finished = false;
+    std::uint32_t exit_code = 0;
 };
 
 // One section of a mapped PE image, relative to the image base.
@@ -86,9 +106,13 @@ public:
 
     GuestProcess() = default;
 
-    // GetCurrentThreadId's value: a multiple of four like Windows thread IDs,
-    // next to the process ID.
+    // The main thread's ID: a multiple of four like Windows thread IDs, next
+    // to the process ID. Threads CreateThread starts take the next ones.
     static constexpr std::uint32_t kThreadId = 0x00000F04U;
+    // GetCurrentThread's pseudo-handle, (HANDLE)-2.
+    static constexpr std::uint32_t kCurrentThreadHandle = 0xFFFFFFFEU;
+    // GetExitCodeThread's value while a thread runs.
+    static constexpr std::uint32_t kStillActive = 259U;
 
     // The main image: GetModuleHandleA(NULL) and GetModuleFileNameA(NULL)
     // answer with these, and the command line quotes the path.
@@ -102,6 +126,17 @@ public:
 
     // The single handle space devices and processes share.
     GuestHandleAllocator& handles() { return handles_; }
+
+    // TLS_MINIMUM_AVAILABLE: the slots the TEB holds itself, at kTebTlsSlots.
+    static constexpr std::uint32_t kTlsSlots = 64;
+    static constexpr std::uint32_t kTebTlsSlots = 0xE10;
+    static constexpr std::uint32_t kTlsOutOfIndexes = 0xFFFFFFFFU;
+    // TlsAlloc: the lowest free index, 1 first as on Windows 11, where index
+    // 0 is taken before a program runs; kTlsOutOfIndexes once the TEB's slots
+    // are used up (the expansion slots are not modelled).
+    std::uint32_t AllocateTls();
+    // TlsFree: false for an index that is not allocated.
+    bool FreeTls(std::uint32_t index);
 
     // OpenProcess: a new handle for this process's ID, 0 for any other.
     std::uint32_t OpenProcess(std::uint32_t process_id);
@@ -139,6 +174,23 @@ public:
     GuestEvent* FindEvent(std::uint32_t handle);
     bool CloseEvent(std::uint32_t handle);
 
+    // CreateThread: a thread record with the next thread ID, and a handle to
+    // it from the shared handle space.
+    std::uint32_t CreateThread(std::uint32_t start, std::uint32_t parameter, std::uint32_t* thread_id);
+    // The thread a handle names (closed handles no longer do), or null.
+    GuestThread* FindThreadHandle(std::uint32_t handle);
+    // The thread with this ID, finished or not, or null (the main thread).
+    GuestThread* FindThread(std::uint32_t thread_id);
+    bool CloseThreadHandle(std::uint32_t handle);
+    // Records that the thread's ThreadProc returned exit_code.
+    void FinishThread(std::uint32_t thread_id, std::uint32_t exit_code);
+    // Threads CreateThread started that have not finished; while there are
+    // none, only the calling thread can change what a wait waits for.
+    std::size_t running_threads() const;
+    // The main thread's SetThreadPriority value.
+    std::int32_t main_thread_priority() const { return main_thread_priority_; }
+    void set_main_thread_priority(std::int32_t priority) { main_thread_priority_ = priority; }
+
     // SetUnhandledExceptionFilter: stores the filter and returns the previous
     // one. Nothing consults it yet: an unhandled guest exception ends the run.
     std::uint32_t ExchangeUnhandledExceptionFilter(std::uint32_t filter);
@@ -150,13 +202,25 @@ public:
     // SetTimer(NULL, id, elapse, procedure): replaces the timer named by id
     // when it exists, otherwise creates one with a new ID. Returns the ID.
     // Windows clamps elapse to [USER_TIMER_MINIMUM, USER_TIMER_MAXIMUM].
-    std::uint32_t SetThreadTimer(std::uint32_t id, std::uint32_t elapse_ms, std::uint32_t procedure);
+    std::uint32_t SetThreadTimer(std::uint32_t id,
+                                 std::uint32_t elapse_ms,
+                                 std::uint32_t procedure,
+                                 std::uint32_t now_tick);
+    // The first thread timer whose interval has passed at now_tick, or null.
+    GuestTimer* DueTimer(std::uint32_t now_tick);
+    // The timer with this ID and procedure, as DispatchMessage checks a
+    // WM_TIMER's callback; null when there is none.
+    const GuestTimer* FindTimer(std::uint32_t id, std::uint32_t procedure) const;
     const std::vector<GuestTimer>& timers() const { return timers_; }
 
     // The process's USER objects: icons, cursors, and window classes.
     GuestUser& user() { return user_; }
     // The facade's COM objects, such as DirectDraw's.
     GuestComObjects& com() { return com_; }
+    // The winmm facade's mixer: open handles and control values.
+    GuestMixer& mixer() { return mixer_; }
+    // The gdi32 facade's device contexts and bitmaps.
+    GuestGdi& gdi() { return gdi_; }
 
     // Records a mapped image with the protections the Windows loader gives:
     // read-only headers, then each section by its characteristics.
@@ -211,6 +275,7 @@ private:
     std::string module_path_;
     std::uint32_t command_line_ = 0;
     std::vector<std::uint32_t> process_handles_;
+    std::array<bool, kTlsSlots> tls_allocated_ = {true};
     GuestHeap process_heap_;
     // HeapCreate heaps by handle.
     std::map<std::uint32_t, GuestHeap> heaps_;
@@ -220,9 +285,16 @@ private:
     std::uint32_t arena_size_ = 0;
     std::vector<GuestTimer> timers_;
     std::map<std::uint32_t, GuestEvent> events_;
+    // Threads by ID, and the open handles naming them.
+    std::map<std::uint32_t, GuestThread> threads_;
+    std::map<std::uint32_t, std::uint32_t> thread_handles_;
+    std::uint32_t next_thread_id_ = kThreadId + 4;
+    std::int32_t main_thread_priority_ = 0;
     std::uint32_t next_timer_id_ = 1;
     GuestUser user_;
     GuestComObjects com_;
+    GuestMixer mixer_;
+    GuestGdi gdi_;
     // Image and private regions by base address.
     std::map<std::uint32_t, Region> regions_;
 };

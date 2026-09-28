@@ -16,6 +16,7 @@ namespace re2dj::hle
 class GuestDeviceSet;
 class GuestFiles;
 class GuestProcess;
+class HostAudio;
 class HostPresentation;
 
 // One reading of the host clock as the guest sees it.
@@ -107,6 +108,34 @@ public:
     virtual std::uint32_t LastError() const { return 0; }
     // The host's presentation, or null for a host that shows nothing.
     virtual HostPresentation* Presentation() const { return nullptr; }
+    // The host's sound output, or null for a host that plays nothing.
+    virtual HostAudio* Audio() const { return nullptr; }
+    // Blocks the guest thread for about milliseconds of host time; false for
+    // a host that cannot wait.
+    virtual bool WaitMilliseconds(std::uint32_t milliseconds) const
+    {
+        static_cast<void>(milliseconds);
+        return false;
+    }
+    // The calling guest thread's TEB, or 0 for a host that models none.
+    virtual runtime::GuestAddress ThreadEnvironmentBlock() const { return runtime::GuestAddress(); }
+    // The calling guest thread's ID; a host without threads has only the main one.
+    virtual std::uint32_t CurrentThreadId() const { return 0x00000F04U; }
+    // Starts a guest thread with this ID that calls start(parameter) as a
+    // ThreadProc once the calling thread next waits or calls an import; when
+    // it returns, the host records that through Process()->FinishThread.
+    // False for a host without threads.
+    virtual bool StartGuestThread(std::uint32_t start,
+                                  std::uint32_t parameter,
+                                  std::uint32_t thread_id,
+                                  std::string* error) const
+    {
+        static_cast<void>(start);
+        static_cast<void>(parameter);
+        static_cast<void>(thread_id);
+        if (error != nullptr) *error = "guest threads are not provided";
+        return false;
+    }
     // Runs a guest function to completion and gives its eax. The guest may
     // call imports meanwhile, which dispatch as nested calls.
     virtual bool CallGuest(GuestCall* call, std::uint32_t* result, std::string* error) const
@@ -129,6 +158,12 @@ struct ImportCall
     const runtime::ImportGate& gate;
     std::span<const std::uint32_t> arguments;
     const ImportCallServices* services = nullptr;
+    // Where the guest's call returns to, or 0 when the host does not say.
+    std::uint32_t return_address = 0;
+    // The guest address of the first argument on the guest stack, or 0 when
+    // the host does not say. A variadic handler reads the arguments past its
+    // declared ones from here.
+    std::uint32_t arguments_address = 0;
 };
 
 struct ImportReturn

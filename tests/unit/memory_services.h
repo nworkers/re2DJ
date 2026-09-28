@@ -15,6 +15,8 @@
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/guest_files.h"
 #include "re2dj/hle/guest_process.h"
+#include "re2dj/hle/host_audio.h"
+#include "re2dj/hle/host_presentation.h"
 #include "re2dj/hle/import_dispatcher.h"
 #include "re2dj/hle/modules/guest_module.h"
 
@@ -22,6 +24,63 @@
 
 namespace re2dj::test
 {
+
+// A host presentation that only reports input: what a test sets in `input`
+// is what the guest's input APIs read. Drawing is accepted and ignored.
+class InputPresentation final : public hle::HostPresentation
+{
+public:
+    hle::HostInputState input;
+
+    bool ShowGuestWindow(std::uint32_t, std::uint32_t, std::uint32_t, std::string*) override { return true; }
+    void SetRetainBetweenFrames(bool) override {}
+    bool ClearTarget(std::uint16_t, std::string*) override { return true; }
+    bool ReadTarget(std::uint32_t,
+                    std::uint32_t,
+                    std::uint32_t,
+                    std::uint32_t,
+                    std::span<std::uint8_t>,
+                    std::uint32_t,
+                    std::string*) override
+    {
+        return true;
+    }
+    bool WriteTarget(std::uint32_t,
+                     std::uint32_t,
+                     std::uint32_t,
+                     std::uint32_t,
+                     std::span<const std::uint8_t>,
+                     std::uint32_t,
+                     std::string*) override
+    {
+        return true;
+    }
+    bool Draw(const graphics::LegacyDrawCommand&,
+              const graphics::LegacyFixedFunctionState&,
+              std::uint32_t,
+              std::uint32_t,
+              const graphics::LegacyTextureView*,
+              std::string*) override
+    {
+        return true;
+    }
+    bool Present(std::string*) override { return true; }
+    void DiscardTexture(std::uint64_t) override {}
+    bool CloseRequested() const override { return false; }
+    const hle::HostInputState& Input() const override { return input; }
+    // The desktop the test reports; none while its width is 0.
+    hle::HostDisplayMode desktop;
+    bool DesktopDisplayMode(hle::HostDisplayMode* mode, std::string* error) const override
+    {
+        if (desktop.width == 0)
+        {
+            *error = "test host has no desktop";
+            return false;
+        }
+        *mode = desktop;
+        return true;
+    }
+};
 
 // Guest memory at one fixed range holding the heap and the VirtualAlloc
 // arena, a device set sharing the guest process's handles, a last-error slot,
@@ -151,6 +210,9 @@ public:
     // The host presentation the test provides; none by default.
     hle::HostPresentation* presentation = nullptr;
     hle::HostPresentation* Presentation() const override { return presentation; }
+    // The host sound output the test provides; none by default.
+    hle::HostAudio* audio = nullptr;
+    hle::HostAudio* Audio() const override { return audio; }
     hle::GuestProcess* Process() const override { return &process_; }
     // Guest files the test provides; none by default.
     void SetFiles(hle::GuestFiles* files) { files_ = files; }
@@ -170,6 +232,50 @@ public:
         *reading = clock_;
         return true;
     }
+    // The guest TEB the test sets up in test memory; none by default.
+    std::uint32_t teb = 0;
+    runtime::GuestAddress ThreadEnvironmentBlock() const override { return runtime::GuestAddress(teb); }
+    // Every wait asked of the host, answered without waiting; on_wait stands
+    // in for what other guest threads do meanwhile.
+    mutable std::vector<std::uint32_t> waits;
+    std::function<void()> on_wait;
+    bool WaitMilliseconds(std::uint32_t milliseconds) const override
+    {
+        waits.push_back(milliseconds);
+        if (on_wait)
+        {
+            on_wait();
+        }
+        return true;
+    }
+    // The calling guest thread's ID, and every thread started, none run.
+    std::uint32_t thread_id = hle::GuestProcess::kThreadId;
+    std::uint32_t CurrentThreadId() const override { return thread_id; }
+    struct StartedThread
+    {
+        std::uint32_t start = 0;
+        std::uint32_t parameter = 0;
+        std::uint32_t thread_id = 0;
+    };
+    mutable std::vector<StartedThread> started_threads;
+    bool refuse_threads = false;
+    bool StartGuestThread(std::uint32_t start,
+                          std::uint32_t parameter,
+                          std::uint32_t id,
+                          std::string* error) const override
+    {
+        if (refuse_threads)
+        {
+            *error = "test host refuses threads";
+            return false;
+        }
+        started_threads.push_back({start, parameter, id});
+        return true;
+    }
+    // The return address CallModuleExport reports for the call, and where it
+    // says the arguments lie in test memory (0: nowhere).
+    std::uint32_t return_address = 0;
+    std::uint32_t arguments_address = 0;
     void SetLastError(std::uint32_t value) const override { last_error_ = value; }
     std::uint32_t LastError() const override { return last_error_; }
 
@@ -241,7 +347,7 @@ inline hle::ImportReturn CallModuleExport(Context& context,
         gate.module = descriptor.name;
         gate.name = export_descriptor.name;
         const std::vector<std::uint32_t> values(arguments);
-        const hle::ImportCall call{gate, values, &services};
+        const hle::ImportCall call{gate, values, &services, services.return_address, services.arguments_address};
         std::string message;
         const bool ok = export_descriptor.handler(call, &result, &message);
         if (handled != nullptr)

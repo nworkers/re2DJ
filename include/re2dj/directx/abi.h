@@ -29,8 +29,15 @@ inline constexpr std::uint32_t kDdErrCannotAttachSurface = 0x8876000AU;
 inline constexpr std::uint32_t kDdErrInvalidObject = 0x88760082U;
 inline constexpr std::uint32_t kDdErrInvalidPixelFormat = 0x88760091U;
 inline constexpr std::uint32_t kDdErrNotFound = 0x887600FFU;
+inline constexpr std::uint32_t kDdErrDcAlreadyCreated = 0x8876026CU;
 inline constexpr std::uint32_t kD3dErrSceneInScene = 0x887602F8U;
 inline constexpr std::uint32_t kD3dErrSceneNotInScene = 0x887602F9U;
+inline constexpr std::uint32_t kD3dErrVertexBufferLocked = 0x8876080EU;
+inline constexpr std::uint32_t kDdErrNotLocked = 0x88760248U;
+inline constexpr std::uint32_t kDdErrSurfaceBusy = 0x887601AEU;
+inline constexpr std::uint32_t kD3dErrTextureLoadFailed = 0x887602D5U;
+inline constexpr std::uint32_t kDdErrInvalidRect = 0x88760096U;
+inline constexpr std::uint32_t kDdErrNoColorKey = 0x887600D7U;
 
 // Enumeration callback answers (ddraw.h, d3d.h): 0 stops, 1 continues.
 inline constexpr std::uint32_t kEnumCancel = 0;
@@ -123,6 +130,83 @@ struct D3dPrimCaps
     std::uint32_t stipple_width = 0;
     std::uint32_t stipple_height = 0;
 };
+
+// DirectX 6's D3DDEVICEDESC (DIRECT3D_VERSION 0x0600), as EZ2DJ 1st and the
+// Windows DX6 facade use it: 252 bytes.
+struct D3dDeviceDesc6
+{
+    std::uint32_t size = 0;
+    std::uint32_t flags = 0;
+    std::uint32_t color_model = 0;
+    std::uint32_t device_caps = 0;
+    std::uint32_t transform_caps[2] = {};
+    std::uint32_t clipping = 0;
+    std::uint32_t lighting_caps[4] = {};
+    D3dPrimCaps line_caps;
+    D3dPrimCaps triangle_caps;
+    std::uint32_t render_bit_depth = 0;
+    std::uint32_t z_buffer_bit_depth = 0;
+    std::uint32_t max_buffer_size = 0;
+    std::uint32_t max_vertex_count = 0;
+    std::uint32_t texture_and_stipple_limits[8] = {};
+    std::uint32_t max_texture_repeat = 0;
+    std::uint32_t max_texture_aspect_ratio = 0;
+    std::uint32_t max_anisotropy = 0;
+    float guard_band[4] = {};
+    float extents_adjust = 0;
+    std::uint32_t stencil_caps = 0;
+    std::uint32_t fvf_caps = 0;
+    std::uint32_t texture_op_caps = 0;
+    std::uint16_t max_texture_blend_stages = 0;
+    std::uint16_t max_simultaneous_textures = 0;
+};
+static_assert(sizeof(D3dDeviceDesc6) == 252);
+
+// D3DFINDDEVICESEARCH (92 bytes) and D3DFINDDEVICERESULT (524 bytes, with
+// the DirectX 6 device descriptions).
+struct D3dFindDeviceSearch
+{
+    std::uint32_t size = 0;
+    std::uint32_t flags = 0;
+    std::uint32_t hardware = 0;
+    std::uint32_t color_model = 0;
+    Guid guid = {};
+    std::uint32_t caps = 0;
+    D3dPrimCaps primitive_caps;
+};
+static_assert(sizeof(D3dFindDeviceSearch) == 92);
+
+struct D3dFindDeviceResult
+{
+    std::uint32_t size = 0;
+    Guid guid = {};
+    D3dDeviceDesc6 hardware;
+    D3dDeviceDesc6 software;
+};
+static_assert(sizeof(D3dFindDeviceResult) == 524);
+
+// D3DVIEWPORT2, which IDirect3DViewport3 keeps: 44 bytes.
+struct D3dViewport2
+{
+    std::uint32_t size = 0;
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    float clip_x = 0;
+    float clip_y = 0;
+    float clip_width = 0;
+    float clip_height = 0;
+    float min_z = 0;
+    float max_z = 0;
+};
+static_assert(sizeof(D3dViewport2) == 44);
+
+// D3DFDS_* and D3DDD_* (d3dcaps.h).
+inline constexpr std::uint32_t kD3dFdsHardware = 0x00000004U;
+inline constexpr std::uint32_t kD3dDdBClipping = 0x00000010U;
+inline constexpr std::uint32_t kD3dDdDeviceRenderBitDepth = 0x00000080U;
+inline constexpr std::uint32_t kD3dDdDeviceZBufferBitDepth = 0x00000100U;
 static_assert(sizeof(D3dPrimCaps) == 56);
 
 // D3DDEVICEDESC7 (236 bytes).
@@ -219,6 +303,16 @@ static_assert(sizeof(D3dMaterial7) == 68);
 // ddraw.h flags this facade reports.
 inline constexpr std::uint32_t kDdCaps3d = 0x00000001U;
 inline constexpr std::uint32_t kDdCapsBlt = 0x00000040U;
+// IDirectDrawSurface::Blt: DDBLT_COLORFILL and the DDBLTFX it reads (100 bytes,
+// dwFillColor at +80).
+inline constexpr std::uint32_t kDdBltColorFill = 0x00000400U;
+inline constexpr std::uint32_t kDdBltKeySrc = 0x00008000U;
+inline constexpr std::uint32_t kDdBltWait = 0x01000000U;
+inline constexpr std::uint32_t kDdBltFxSize = 100;
+inline constexpr std::uint32_t kDdBltFxFillColorOffset = 80;
+// IDirectDrawSurface::BltFast flags.
+inline constexpr std::uint32_t kDdBltFastSrcColorKey = 0x00000001U;
+inline constexpr std::uint32_t kDdBltFastWait = 0x00000010U;
 inline constexpr std::uint32_t kDdCapsColorKey = 0x00400000U;
 inline constexpr std::uint32_t kDdCaps2Certified = 0x00000001U;
 inline constexpr std::uint32_t kDdCaps2WideSurfaces = 0x00001000U;
@@ -234,10 +328,12 @@ inline constexpr std::uint32_t kDdsCapsPrimarySurface = 0x00000200U;
 inline constexpr std::uint32_t kDdsCaps3dDevice = 0x00002000U;
 inline constexpr std::uint32_t kDdsCapsVideoMemory = 0x00004000U;
 inline constexpr std::uint32_t kDdsdCaps = 0x00000001U;
+inline constexpr std::uint32_t kDdckeySrcBlt = 0x00000008U;
 inline constexpr std::uint32_t kDdsdHeight = 0x00000002U;
 inline constexpr std::uint32_t kDdsdWidth = 0x00000004U;
 inline constexpr std::uint32_t kDdsdPitch = 0x00000008U;
 inline constexpr std::uint32_t kDdsdBackBufferCount = 0x00000020U;
+inline constexpr std::uint32_t kDdsdLpSurface = 0x00000800U;
 inline constexpr std::uint32_t kDdsdPixelFormat = 0x00001000U;
 inline constexpr std::uint32_t kDdsdRefreshRate = 0x00040000U;
 inline constexpr std::uint32_t kDdpfAlphaPixels = 0x00000001U;
@@ -351,10 +447,59 @@ inline constexpr std::uint32_t kD3dTaTexture = 2;
 inline constexpr std::uint32_t kD3dTfgPoint = 1;
 inline constexpr std::uint32_t kD3dTfnPoint = 1;
 inline constexpr std::uint32_t kD3dTAddressWrap = 1;
+inline constexpr std::uint32_t kD3dTAddressMirror = 2;
+inline constexpr std::uint32_t kD3dTAddressClamp = 3;
+inline constexpr std::uint32_t kD3dTfnLinear = 2;
+inline constexpr std::uint32_t kD3dCullNone = 1;
+inline constexpr std::uint32_t kD3dCullCw = 2;
+inline constexpr std::uint32_t kD3dRenderStateZEnable = 7;
+inline constexpr std::uint32_t kD3dRenderStateZWriteEnable = 14;
+inline constexpr std::uint32_t kD3dRenderStateAlphaTestEnable = 15;
+inline constexpr std::uint32_t kD3dRenderStateZFunc = 23;
+inline constexpr std::uint32_t kD3dRenderStateAlphaRef = 24;
+inline constexpr std::uint32_t kD3dRenderStateAlphaFunc = 25;
+inline constexpr std::uint32_t kD3dRenderStateAlphaBlendEnable = 27;
+inline constexpr std::uint32_t kD3dRenderStateColorKeyEnable = 41;
+// D3DCMPFUNC, D3DCMP_NEVER (1) through D3DCMP_ALWAYS (8).
+inline constexpr std::uint32_t kD3dCmpNever = 1;
+inline constexpr std::uint32_t kD3dCmpNotEqual = 6;
+inline constexpr std::uint32_t kD3dCmpAlways = 8;
+// D3DPRIMITIVETYPE members this facade draws.
+inline constexpr std::uint32_t kD3dPtLineList = 2;
+inline constexpr std::uint32_t kD3dPtTriangleList = 4;
+inline constexpr std::uint32_t kD3dPtTriangleStrip = 5;
+// Flexible vertex formats: D3DFVF_TLVERTEX, D3DFVF_VERTEX, D3DFVF_LVERTEX.
+inline constexpr std::uint32_t kD3dFvfTlVertex = 0x000001C4U;
+inline constexpr std::uint32_t kD3dFvfVertex = 0x00000112U;
+inline constexpr std::uint32_t kD3dFvfLVertex = 0x000001E2U;
+inline constexpr std::uint32_t kD3dClearTarget = 0x00000001U;
+inline constexpr std::uint32_t kD3dClearZBuffer = 0x00000002U;
+inline constexpr std::uint32_t kDdErrNotFlippable = 0x88760246U;
+
+// IDirectDraw7::EnumSurfaces flags (DDENUMSURFACES_*).
+inline constexpr std::uint32_t kDdEnumSurfacesAll = 0x00000001U;
+inline constexpr std::uint32_t kDdEnumSurfacesMatch = 0x00000002U;
+inline constexpr std::uint32_t kDdEnumSurfacesNoMatch = 0x00000004U;
+inline constexpr std::uint32_t kDdEnumSurfacesCanBeCreated = 0x00000008U;
+inline constexpr std::uint32_t kDdEnumSurfacesDoesExist = 0x00000010U;
 
 // Interface and device identifiers (ddraw.h, d3d.h).
 inline constexpr Guid kIidUnknown = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                                      0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46};
+// DirectX 6 (EZ2DJ 1st): IDirectDraw, IDirectDraw4, and IDirect3D3.
+inline constexpr Guid kIidDirectDraw = {0x80, 0xDB, 0x14, 0x6C, 0x33, 0xA7, 0xCE, 0x11,
+                                        0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60};
+inline constexpr Guid kIidDirectDraw4 = {0x9A, 0x50, 0x59, 0x9C, 0xBD, 0x39, 0xD1, 0x11,
+                                         0x8C, 0x4A, 0x00, 0xC0, 0x4F, 0xD9, 0x30, 0xC5};
+inline constexpr Guid kIidDirect3D3 = {0x40, 0x32, 0x22, 0xBB, 0x2B, 0xE7, 0xD0, 0x11,
+                                       0xA9, 0xB4, 0x00, 0xAA, 0x00, 0xC0, 0x99, 0x3E};
+inline constexpr Guid kIidDirectDrawSurface4 = {0x30, 0x86, 0x2B, 0x0B, 0x35, 0xAD, 0xD0, 0x11,
+                                                0x8E, 0xA6, 0x00, 0x60, 0x97, 0x97, 0xEA, 0x5B};
+inline constexpr Guid kIidDirect3DViewport3 = {0x61, 0x3B, 0xAB, 0xB0, 0xD7, 0x33, 0xD1, 0x11,
+                                               0xA9, 0x81, 0x00, 0xC0, 0x4F, 0xD7, 0xB1, 0x74};
+// IID_IDirect3DTexture2, as 1st SE passes it (checked in its decrypted image).
+inline constexpr Guid kIidDirect3DTexture2 = {0x02, 0x15, 0x28, 0x93, 0xF8, 0x8C, 0xD0, 0x11,
+                                              0x89, 0xAB, 0x00, 0xA0, 0xC9, 0x05, 0x41, 0x29};
 inline constexpr Guid kIidDirectDraw7 = {0xC0, 0x5E, 0xE6, 0x15, 0x9C, 0x3B, 0xD2, 0x11,
                                          0xB9, 0x2F, 0x00, 0x60, 0x97, 0x97, 0xEA, 0x5B};
 inline constexpr Guid kIidDirectDrawSurface7 = {0x80, 0x5A, 0x67, 0x06, 0x9B, 0x3B, 0xD2, 0x11,
@@ -369,6 +514,10 @@ inline constexpr Guid kIidDirect3DHalDevice = {0xE0, 0x3D, 0xE6, 0x84, 0xAA, 0x4
                                                0x81, 0x6F, 0x00, 0x00, 0xC0, 0x20, 0x15, 0x6E};
 inline constexpr Guid kIidDirect3DTnLHalDevice = {0x78, 0x9E, 0x04, 0xF5, 0x61, 0x48, 0xD2, 0x11,
                                                   0xA4, 0x07, 0x00, 0xA0, 0xC9, 0x06, 0x29, 0xA8};
+inline constexpr Guid kIidDirect3DVertexBuffer7 = {0x7D, 0x9E, 0x04, 0xF5, 0x61, 0x48, 0xD2, 0x11,
+                                                   0xA4, 0x07, 0x00, 0xA0, 0xC9, 0x06, 0x29, 0xA8};
+inline constexpr Guid kIidDirect3DVertexBuffer = {0x55, 0x35, 0x50, 0x7A, 0x83, 0x4A, 0xD1, 0x11,
+                                                  0xA5, 0xDB, 0x00, 0xA0, 0xC9, 0x03, 0x67, 0xF8};
 
 }  // namespace re2dj::directx
 

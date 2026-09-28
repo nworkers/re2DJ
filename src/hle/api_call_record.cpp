@@ -208,6 +208,34 @@ HostPresentation* RecordingImportCallServices::Presentation() const
     return inner_.Presentation();
 }
 
+HostAudio* RecordingImportCallServices::Audio() const
+{
+    return inner_.Audio();
+}
+
+runtime::GuestAddress RecordingImportCallServices::ThreadEnvironmentBlock() const
+{
+    return inner_.ThreadEnvironmentBlock();
+}
+
+bool RecordingImportCallServices::WaitMilliseconds(std::uint32_t milliseconds) const
+{
+    return inner_.WaitMilliseconds(milliseconds);
+}
+
+std::uint32_t RecordingImportCallServices::CurrentThreadId() const
+{
+    return inner_.CurrentThreadId();
+}
+
+bool RecordingImportCallServices::StartGuestThread(std::uint32_t start,
+                                                   std::uint32_t parameter,
+                                                   std::uint32_t thread_id,
+                                                   std::string* error) const
+{
+    return inner_.StartGuestThread(start, parameter, thread_id, error);
+}
+
 bool RecordingImportCallServices::CallGuest(GuestCall* call,
                                             std::uint32_t* result,
                                             std::string* error) const

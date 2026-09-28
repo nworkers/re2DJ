@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 
+#include "re2dj/input/ez2dj_keyboard_map.h"
 #include "re2dj/input/legacy_io_port_bus.h"
 
 namespace re2dj::platform::windows
@@ -33,9 +34,8 @@ private:
 
     std::array<int, kButtonCount> button_keys_ = {};
     std::array<int, 4> turntable_keys_ = {};
-    std::array<std::uint8_t, 2> turntable_positions_ = {0x80, 0x80};
-    std::uint8_t turntable_step_ = 4;
-    std::uint64_t last_turntable_update_ms_ = 0;
+    std::uint8_t turntable_step_ = re2dj::input::kEz2DjDefaultTurntableStep;
+    re2dj::input::Ez2DjTurntables turntables_;
 };
 
 }  // namespace re2dj::platform::windows

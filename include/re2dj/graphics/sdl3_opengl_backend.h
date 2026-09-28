@@ -2,6 +2,8 @@
 #define RE2DJ_GRAPHICS_SDL3_OPENGL_BACKEND_H_
 
 #include <cstdint>
+#include <functional>
+#include <span>
 #include <string>
 
 #include "re2dj/graphics/legacy_draw_command.h"
@@ -33,6 +35,11 @@ struct Sdl3OpenGlWindowConfig
     // before this became explicit, so a caller that leaves it alone sees no
     // change.
     PresentSync present_sync = PresentSync::kVerticalSync;
+    // Last, so callers that list the fields in order keep their meaning.
+    // For a window this backend makes (no native_window): whether the user
+    // can resize it, and whether it opens centred on its display.
+    bool resizable = false;
+    bool centered = false;
 };
 
 class Sdl3OpenGlBackend
@@ -52,18 +59,64 @@ public:
     // Fills the logical render target with one RGB565 color for an explicit
     // guest clear that does not arrive as a draw command.
     bool ClearRenderTarget(std::uint16_t rgb565_color, std::string* error);
+    // Copies the logical render target's RGB565 pixels in [x, y, width,
+    // height] (guest coordinates, top row first) out to, or in from, rows
+    // pitch bytes apart starting at the rectangle's first pixel: what a guest
+    // Lock of the surface it renders into sees, and what its Unlock puts back.
+    bool ReadRenderTarget(std::uint32_t x,
+                          std::uint32_t y,
+                          std::uint32_t width,
+                          std::uint32_t height,
+                          std::span<std::uint8_t> pixels,
+                          std::uint32_t pitch,
+                          std::string* error);
+    bool WriteRenderTarget(std::uint32_t x,
+                           std::uint32_t y,
+                           std::uint32_t width,
+                           std::uint32_t height,
+                           std::span<const std::uint8_t> pixels,
+                           std::uint32_t pitch,
+                           std::string* error);
     bool Present(std::string* error);
     // Installs what Present draws over each composited frame, or removes it
     // when null. Takes effect only after Initialize succeeds, since that is
     // where the backend's state comes into being. The backend does not own the
     // overlay, which must outlive it or be removed first.
     void SetPresentOverlay(PresentOverlay* overlay);
+    // Changes Sdl3OpenGlWindowConfig::retain_between_frames once the window
+    // is open, for a host that learns how the guest presents only after the
+    // window is shown.
+    void SetRetainBetweenFrames(bool retain);
+    // Called with each window event Present takes from the queue, for a host
+    // that acts on them itself; without one they are dropped, as the Windows
+    // host has its own window procedure. The argument is an SDL_Event.
+    void SetEventObserver(std::function<void(const void* sdl_event)> observer);
+    // Window controls for a window this backend made: its size in window
+    // coordinates, centred again on its display; monitor-sized borderless
+    // fullscreen on or off; and its title.
+    bool ResizeWindow(std::uint32_t width, std::uint32_t height, std::string* error);
+    bool SetFullscreen(bool fullscreen, std::string* error);
+    void SetTitle(const char* title);
     // The swap interval the driver actually applied, read back after the
     // policy was requested: 1 for vertical sync, 0 for immediate, -1 for
     // adaptive. A driver can refuse a request, so this is the value to report
     // rather than the one in the config. Zero before Initialize succeeds.
     // This layer keeps no log of its own, so the host reads it and records it.
     int applied_swap_interval() const;
+    // True once presents were found not to block despite the policy, so the
+    // backend paces them at the display rate itself (present_pacer.h). The
+    // host reads it and records when it turns on.
+    bool software_pacing_engaged() const;
+
+    // The primary display's desktop mode, read without a window: its size,
+    // bits per pixel (bytes per pixel times eight, as Windows reports a
+    // 32-bit desktop), and refresh rate rounded to whole hertz. False with
+    // error when SDL video cannot start or reports no display.
+    static bool QueryDesktopDisplayMode(std::uint32_t* width,
+                                        std::uint32_t* height,
+                                        std::uint32_t* bits_per_pixel,
+                                        std::uint32_t* refresh_hz,
+                                        std::string* error);
 
 private:
     struct Impl;

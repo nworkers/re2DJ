@@ -11,7 +11,9 @@
 #include "re2dj/exe/pe_image.h"
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/guest_files.h"
+#include "re2dj/hle/host_audio.h"
 #include "re2dj/hle/host_presentation.h"
+#include "re2dj/input/legacy_io_trap.h"
 #include "re2dj/runtime/address_space.h"
 
 namespace re2dj::platform::linux
@@ -24,7 +26,10 @@ constexpr std::size_t kOriginalInstructionTraceMaximumFrames = 128;
 constexpr std::size_t kOriginalApiCallLogHead = 128;
 constexpr std::size_t kOriginalApiCallLogTail = 128;
 constexpr std::size_t kOriginalApiCallMaximumArguments = 13;
-constexpr std::uint32_t kOriginalContinuationCallLimit = 4096;
+// By default the API log records this many calls in full; later ones are
+// left out, since a product run goes on until its window is closed. The last
+// calls before a stop are kept in memory and reported with the result.
+constexpr std::uint32_t kOriginalApiLogFullCalls = 32768;
 
 enum class OriginalRunBoundary
 {
@@ -42,11 +47,14 @@ enum class OriginalRunBoundary
     kContinuationUnresolvedLookup,
     kContinuationFault,
     kContinuationCallLimit,
+    kContinuationHostClosed,
 };
 
 struct OriginalApiCall
 {
     std::uint32_t sequence = 0;
+    // The calling guest thread's ID, or 0 for the main thread.
+    std::uint32_t thread_id = 0;
     std::string name;
     std::uint32_t return_address = 0;
     // Arguments are known only for facade exports, whose descriptors declare them.
@@ -188,6 +196,13 @@ struct OriginalRunResult
     hle::hardlock::HardlockDeviceActivity device_activity;
     // Whether the device set held Hardlock material; never the material itself.
     bool hardlock_material_applied = false;
+    // The guest's I/O board port accesses the run answered, and those it did
+    // not; the first access's port and direction.
+    std::uint32_t legacy_io_reads = 0;
+    std::uint32_t legacy_io_writes = 0;
+    std::uint32_t legacy_io_unanswered = 0;
+    std::uint16_t legacy_io_first_port = 0;
+    bool legacy_io_first_read = false;
 };
 
 bool RunOriginalInProcessFirstImport(const std::filesystem::path& executable_path,
@@ -222,6 +237,18 @@ struct OriginalRunEnvironment
     // Where the guest's window appears on the host, or null to show nothing.
     // The caller owns it, so the window can outlive the run.
     hle::HostPresentation* presentation = nullptr;
+    // Where the guest's sound plays, or null to play it silently; the caller
+    // owns it too.
+    hle::HostAudio* audio = nullptr;
+    // The profile's I/O board port contract; the run places it at the loaded
+    // main image.
+    input::LegacyIoTrapPolicy legacy_io;
+    // Stops the run after this many calls, for diagnostics and regression
+    // runs that must end on their own; 0 runs until the guest exits, stops,
+    // or the host window is closed.
+    std::uint32_t call_limit = 0;
+    // How many calls the API log records in full; 0 records every call.
+    std::uint32_t api_log_calls = kOriginalApiLogFullCalls;
 };
 
 bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_path,

@@ -5,13 +5,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <functional>
 #include <limits>
 #include <new>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "re2dj/graphics/present_pacer.h"
 #include "re2dj/graphics/presentation_filter.h"
+#include "re2dj/graphics/window_policy.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 
 namespace re2dj::graphics
@@ -73,6 +77,7 @@ using DeleteRenderbuffersFunction = void(APIENTRY*)(GLsizei, const GLuint*);
 using BindRenderbufferFunction = void(APIENTRY*)(GLenum, GLuint);
 using RenderbufferStorageFunction = void(APIENTRY*)(GLenum, GLenum, GLsizei, GLsizei);
 using FramebufferRenderbufferFunction = void(APIENTRY*)(GLenum, GLenum, GLenum, GLuint);
+using ReadPixelsFunction = void(APIENTRY*)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
 
 constexpr GLenum kVertexShader = 0x8b31;
 constexpr GLenum kFragmentShader = 0x8b30;
@@ -123,6 +128,9 @@ std::array<float, 4> ArgbToFloats(std::uint32_t argb)
 
 struct Sdl3OpenGlBackend::Impl
 {
+    // The host's own handler for window events, when it has one.
+    std::function<void(const void* sdl_event)> event_observer;
+
     struct CachedTexture
     {
         GLuint name = 0;
@@ -168,6 +176,8 @@ struct Sdl3OpenGlBackend::Impl
     // What SDL reported after the present-sync policy was applied. Reported to
     // the host rather than logged here, since this layer has no log.
     int applied_swap_interval = 0;
+    // Stands in for vertical sync when the swap does not block (WSLg).
+    PresentPacer pacer;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
     // Drawn over the composited frame just before the swap. Not owned.
     PresentOverlay* present_overlay = nullptr;
@@ -215,6 +225,7 @@ struct Sdl3OpenGlBackend::Impl
     TexParameteriFunction tex_parameter_i = nullptr;
     PixelStoreiFunction pixel_store_i = nullptr;
     TexSubImage2dFunction tex_sub_image_2d = nullptr;
+    ReadPixelsFunction read_pixels = nullptr;
     TexImage2dFunction tex_image_2d = nullptr;
     EnableFunction enable = nullptr;
     CullFaceFunction cull_face = nullptr;
@@ -289,6 +300,36 @@ struct Sdl3OpenGlBackend::Impl
         delete_shader(shader);
         *error = std::string("OpenGL shader compilation failed: ") + message.data();
         return 0;
+    }
+
+    // The first thing drawn into a frame starts it, with the render target
+    // bound. Depth is scratch that nothing reads across frames, so it always
+    // goes. Colour stays when the guest presents by flipping: it keeps drawing
+    // into buffers it owns, and a frame in which it redraws only part of the
+    // screen needs the rest still there.
+    void BeginFrame()
+    {
+        if (frame_started)
+        {
+            return;
+        }
+        viewport(0, 0, static_cast<GLsizei>(logical_width), static_cast<GLsizei>(logical_height));
+        depth_mask(GL_TRUE);
+        GLbitfield mask = GL_DEPTH_BUFFER_BIT;
+        if (!retain_between_frames)
+        {
+            clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+            mask |= GL_COLOR_BUFFER_BIT;
+        }
+        clear(mask);
+        frame_started = true;
+    }
+
+    // Whether [x, y, width, height] lies within the logical render target.
+    bool TargetContains(std::uint32_t x, std::uint32_t y, std::uint32_t width, std::uint32_t height) const
+    {
+        return width != 0 && height != 0 && x <= logical_width && width <= logical_width - x &&
+               y <= logical_height && height <= logical_height - y;
     }
 
     void DestroyRenderTarget()
@@ -548,6 +589,11 @@ int Sdl3OpenGlBackend::applied_swap_interval() const
     return impl_ == nullptr ? 0 : impl_->applied_swap_interval;
 }
 
+bool Sdl3OpenGlBackend::software_pacing_engaged() const
+{
+    return impl_ != nullptr && impl_->pacer.engaged();
+}
+
 bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::string* error)
 {
     if (impl_ != nullptr || error == nullptr || config.width == 0 || config.height == 0 ||
@@ -595,6 +641,19 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
         SDL_SetNumberProperty(properties, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER,
                               static_cast<Sint64>(config.height)) &&
         SDL_SetBooleanProperty(properties, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
+    if (config.native_window == nullptr)
+    {
+        properties_set =
+            properties_set &&
+            SDL_SetBooleanProperty(properties, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, config.resizable);
+        if (config.centered)
+        {
+            properties_set =
+                properties_set &&
+                SDL_SetNumberProperty(properties, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED) &&
+                SDL_SetNumberProperty(properties, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED);
+        }
+    }
     if (config.native_window != nullptr)
     {
 #if defined(SDL_PLATFORM_WINDOWS)
@@ -625,6 +684,11 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
     }
 
     ApplyPresentSync(config.present_sync, &impl->applied_swap_interval);
+    // Paced at the window's display rate, as vertical sync would; a policy
+    // that asks presents not to block is left alone.
+    const SDL_DisplayMode* display_mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(impl->window));
+    impl->pacer = PresentPacer(display_mode == nullptr ? 0.0 : static_cast<double>(display_mode->refresh_rate),
+                               config.present_sync != PresentSync::kImmediate);
 
     const bool loaded =
         LoadGlFunction("glCreateShader", &impl->create_shader) &&
@@ -660,6 +724,7 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
         LoadGlFunction("glTexParameteri", &impl->tex_parameter_i) &&
         LoadGlFunction("glPixelStorei", &impl->pixel_store_i) &&
         LoadGlFunction("glTexSubImage2D", &impl->tex_sub_image_2d) &&
+        LoadGlFunction("glReadPixels", &impl->read_pixels) &&
         LoadGlFunction("glTexImage2D", &impl->tex_image_2d) &&
         LoadGlFunction("glEnable", &impl->enable) &&
         LoadGlFunction("glCullFace", &impl->cull_face) &&
@@ -736,26 +801,7 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
         return false;
     }
     impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
-    if (!impl_->frame_started)
-    {
-        impl_->viewport(0,
-                        0,
-                        static_cast<GLsizei>(impl_->logical_width),
-                        static_cast<GLsizei>(impl_->logical_height));
-        impl_->depth_mask(GL_TRUE);
-        // Depth is scratch that nothing reads across frames, so it always goes.
-        // Colour stays when the guest presents by flipping: it keeps drawing
-        // into buffers it owns, and a frame in which it redraws only part of
-        // the screen needs the rest still there.
-        GLbitfield mask = GL_DEPTH_BUFFER_BIT;
-        if (!impl_->retain_between_frames)
-        {
-            impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-            mask |= GL_COLOR_BUFFER_BIT;
-        }
-        impl_->clear(mask);
-        impl_->frame_started = true;
-    }
+    impl_->BeginFrame();
 
     std::vector<GlVertex>& vertices = impl_->vertex_scratch;
     vertices.clear();
@@ -1083,6 +1129,182 @@ bool Sdl3OpenGlBackend::ClearRenderTarget(std::uint16_t rgb565_color, std::strin
     return true;
 }
 
+// The render target's rows run bottom-up in OpenGL and top-down for the
+// guest, so both copies flip them through a packed scratch buffer.
+bool Sdl3OpenGlBackend::ReadRenderTarget(std::uint32_t x,
+                                         std::uint32_t y,
+                                         std::uint32_t width,
+                                         std::uint32_t height,
+                                         std::span<std::uint8_t> pixels,
+                                         std::uint32_t pitch,
+                                         std::string* error)
+{
+    if (impl_ == nullptr || error == nullptr || !impl_->MakeCurrent(error))
+    {
+        return false;
+    }
+    const std::size_t row_bytes = static_cast<std::size_t>(width) * 2;
+    if (impl_->render_framebuffer == 0 || !impl_->TargetContains(x, y, width, height) || pitch < row_bytes ||
+        pixels.size() < static_cast<std::size_t>(pitch) * (height - 1) + row_bytes)
+    {
+        *error = "render-target read outside the OpenGL RGB565 render target";
+        return false;
+    }
+    std::vector<std::uint8_t> scratch(row_bytes * height);
+    impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
+    impl_->pixel_store_i(GL_PACK_ALIGNMENT, 2);
+    impl_->read_pixels(static_cast<GLint>(x), static_cast<GLint>(impl_->logical_height - y - height),
+                       static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGB,
+                       GL_UNSIGNED_SHORT_5_6_5, scratch.data());
+    impl_->pixel_store_i(GL_PACK_ALIGNMENT, 4);
+    if (impl_->get_error() != GL_NO_ERROR)
+    {
+        *error = "OpenGL RGB565 render-target read failed";
+        return false;
+    }
+    for (std::uint32_t row = 0; row < height; ++row)
+    {
+        std::memcpy(pixels.data() + static_cast<std::size_t>(row) * pitch,
+                    scratch.data() + static_cast<std::size_t>(height - 1 - row) * row_bytes, row_bytes);
+    }
+    error->clear();
+    return true;
+}
+
+bool Sdl3OpenGlBackend::WriteRenderTarget(std::uint32_t x,
+                                          std::uint32_t y,
+                                          std::uint32_t width,
+                                          std::uint32_t height,
+                                          std::span<const std::uint8_t> pixels,
+                                          std::uint32_t pitch,
+                                          std::string* error)
+{
+    if (impl_ == nullptr || error == nullptr || !impl_->MakeCurrent(error))
+    {
+        return false;
+    }
+    const std::size_t row_bytes = static_cast<std::size_t>(width) * 2;
+    if (impl_->render_framebuffer == 0 || !impl_->TargetContains(x, y, width, height) || pitch < row_bytes ||
+        pixels.size() < static_cast<std::size_t>(pitch) * (height - 1) + row_bytes)
+    {
+        *error = "render-target write outside the OpenGL RGB565 render target";
+        return false;
+    }
+    std::vector<std::uint8_t> scratch(row_bytes * height);
+    for (std::uint32_t row = 0; row < height; ++row)
+    {
+        std::memcpy(scratch.data() + static_cast<std::size_t>(height - 1 - row) * row_bytes,
+                    pixels.data() + static_cast<std::size_t>(row) * pitch, row_bytes);
+    }
+    // Starting the frame first, so its first draw does not clear what this
+    // puts down.
+    impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
+    impl_->BeginFrame();
+    impl_->bind_texture(GL_TEXTURE_2D, impl_->render_color_texture);
+    impl_->pixel_store_i(GL_UNPACK_ALIGNMENT, 2);
+    impl_->tex_sub_image_2d(GL_TEXTURE_2D, 0, static_cast<GLint>(x),
+                            static_cast<GLint>(impl_->logical_height - y - height), static_cast<GLsizei>(width),
+                            static_cast<GLsizei>(height), GL_RGB, GL_UNSIGNED_SHORT_5_6_5, scratch.data());
+    impl_->pixel_store_i(GL_UNPACK_ALIGNMENT, 4);
+    if (impl_->get_error() != GL_NO_ERROR)
+    {
+        *error = "OpenGL RGB565 render-target write failed";
+        return false;
+    }
+    error->clear();
+    return true;
+}
+
+void Sdl3OpenGlBackend::SetEventObserver(std::function<void(const void* sdl_event)> observer)
+{
+    if (impl_ != nullptr)
+    {
+        impl_->event_observer = std::move(observer);
+    }
+}
+
+bool Sdl3OpenGlBackend::ResizeWindow(std::uint32_t width, std::uint32_t height, std::string* error)
+{
+    if (impl_ == nullptr || impl_->window == nullptr)
+    {
+        *error = "no SDL3 window to resize";
+        return false;
+    }
+    if (!SDL_SetWindowSize(impl_->window, static_cast<int>(width), static_cast<int>(height)) ||
+        !SDL_SetWindowPosition(impl_->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED))
+    {
+        *error = std::string("cannot resize the SDL3 window: ") + SDL_GetError();
+        return false;
+    }
+    return true;
+}
+
+bool Sdl3OpenGlBackend::QueryDesktopDisplayMode(std::uint32_t* width,
+                                                std::uint32_t* height,
+                                                std::uint32_t* bits_per_pixel,
+                                                std::uint32_t* refresh_hz,
+                                                std::string* error)
+{
+    const bool owns_video = (SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0;
+    if (owns_video && !SDL_InitSubSystem(SDL_INIT_VIDEO))
+    {
+        *error = std::string("cannot initialize SDL3 video: ") + SDL_GetError();
+        return false;
+    }
+    const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+    const bool found = mode != nullptr && mode->w > 0 && mode->h > 0;
+    if (found)
+    {
+        *width = static_cast<std::uint32_t>(mode->w);
+        *height = static_cast<std::uint32_t>(mode->h);
+        *bits_per_pixel = static_cast<std::uint32_t>(SDL_BYTESPERPIXEL(mode->format)) * 8;
+        *refresh_hz = static_cast<std::uint32_t>(mode->refresh_rate + 0.5f);
+    }
+    else
+    {
+        *error = std::string("SDL3 reports no desktop display mode: ") + SDL_GetError();
+    }
+    if (owns_video)
+    {
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    }
+    return found;
+}
+
+bool Sdl3OpenGlBackend::SetFullscreen(bool fullscreen, std::string* error)
+{
+    if (impl_ == nullptr || impl_->window == nullptr)
+    {
+        *error = "no SDL3 window to change";
+        return false;
+    }
+    // With no exclusive mode chosen, SDL3's fullscreen is borderless at the
+    // desktop's own resolution, as the Windows host's is.
+    if (!SDL_SetWindowFullscreenMode(impl_->window, nullptr) ||
+        !SDL_SetWindowFullscreen(impl_->window, fullscreen))
+    {
+        *error = std::string("cannot change the SDL3 window's fullscreen state: ") + SDL_GetError();
+        return false;
+    }
+    return true;
+}
+
+void Sdl3OpenGlBackend::SetTitle(const char* title)
+{
+    if (impl_ != nullptr && impl_->window != nullptr && title != nullptr)
+    {
+        SDL_SetWindowTitle(impl_->window, title);
+    }
+}
+
+void Sdl3OpenGlBackend::SetRetainBetweenFrames(bool retain)
+{
+    if (impl_ != nullptr)
+    {
+        impl_->retain_between_frames = retain;
+    }
+}
+
 void Sdl3OpenGlBackend::SetPresentOverlay(PresentOverlay* overlay)
 {
     if (impl_ != nullptr)
@@ -1100,6 +1322,10 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     SDL_Event event = {};
     while (SDL_PollEvent(&event))
     {
+        if (impl_->event_observer)
+        {
+            impl_->event_observer(&event);
+        }
     }
     if (!impl_->MakeCurrent(error))
     {
@@ -1126,25 +1352,12 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     impl_->viewport(0, 0, pixel_width, pixel_height);
     impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
     impl_->clear(GL_COLOR_BUFFER_BIT);
-    int presentation_width = pixel_width;
-    int presentation_height = pixel_height;
-    if (static_cast<std::int64_t>(pixel_width) * impl_->logical_height >
-        static_cast<std::int64_t>(pixel_height) * impl_->logical_width)
-    {
-        presentation_height = pixel_height;
-        presentation_width = static_cast<int>(
-            (static_cast<std::int64_t>(pixel_height) * impl_->logical_width) /
-            impl_->logical_height);
-    }
-    else
-    {
-        presentation_width = pixel_width;
-        presentation_height = static_cast<int>(
-            (static_cast<std::int64_t>(pixel_width) * impl_->logical_height) /
-            impl_->logical_width);
-    }
-    const int presentation_x = (pixel_width - presentation_width) / 2;
-    const int presentation_y = (pixel_height - presentation_height) / 2;
+    const PresentRect fit =
+        FitPresentation(pixel_width, pixel_height, impl_->logical_width, impl_->logical_height);
+    const int presentation_width = fit.width;
+    const int presentation_height = fit.height;
+    const int presentation_x = fit.x;
+    const int presentation_y = fit.y;
     const PresentationFilter presentation_filter = SelectPresentationFilter(
         impl_->logical_width,
         impl_->logical_height,
@@ -1237,6 +1450,11 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     {
         *error = std::string("cannot swap the SDL3 OpenGL buffers: ") + SDL_GetError();
         return false;
+    }
+    const std::uint64_t wait_ns = impl_->pacer.AfterPresent(SDL_GetTicksNS());
+    if (wait_ns != 0)
+    {
+        SDL_DelayPrecise(wait_ns);
     }
     impl_->frame_started = false;
     error->clear();

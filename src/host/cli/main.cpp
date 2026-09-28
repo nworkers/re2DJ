@@ -36,6 +36,7 @@
 #include "re2dj/config/hardlock_secret_config.h"
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/hardlock/device_material.h"
+#include "re2dj/platform/linux/host_audio.h"
 #include "re2dj/platform/linux/host_presentation.h"
 #include "re2dj/platform/linux/original_runner.h"
 #elif defined(_WIN32)
@@ -133,6 +134,10 @@ struct Options
     bool linux_in_process_createfile_call = false;
     bool linux_in_process_continue = false;
     bool hold_window = false;
+    // 0 runs until the guest exits or its window is closed.
+    std::uint32_t call_limit = 0;
+    // Calls the API log records in full; 0 for all.
+    std::uint32_t api_log_calls = 32768;
     std::filesystem::path io_config;
     std::string target_id;
     std::string resolve_path;
@@ -327,6 +332,11 @@ void PrintUsage()
         "  --run               Start the selected guest executable.\n"
         "  --hold-window       Linux: keep the guest's window open after the run stops,\n"
         "                      until it is closed.\n"
+        "  --call-limit <n>    Linux: stop the run after n guest API calls, for\n"
+        "                      diagnostics and regression runs. By default the run\n"
+        "                      goes on until the guest exits or its window is closed.\n"
+        "  --api-log-calls <n> Linux: record the first n guest API calls in the API\n"
+        "                      log (default 32768; 0 records every call).\n"
         "  --linux-in-process-first-import\n"
         "                      Linux diagnostic: complete only the first import in-process.\n"
         "  --linux-in-process-first-resolver\n"
@@ -339,7 +349,7 @@ void PrintUsage()
         "                      Linux diagnostic: run on the kernel32 facade until the\n"
         "                      first unhandled import, unresolved lookup, or fault.\n"
         "  --audio-gain-db <dB>\n"
-        "                      Windows output gain (-24..+18, default 0).\n"
+        "                      Output gain (-24..+18, default 0).\n"
         "  --demo-volume <0..3>\n"
         "                      Windows title/demo profile (default 3 = 0 dB).\n"
         "  --guest-wait-trace  Account the guest's Sleep, WaitForSingleObject, and\n"
@@ -350,8 +360,8 @@ void PrintUsage()
         "                      Wait before the second image dump (default 5000).\n"
         "  --audio-volume-trace\n"
         "                      Record bounded DirectSound/WINMM volume evidence.\n"
-        "  --fullscreen        Use monitor-sized borderless fullscreen on Windows.\n"
-        "  --windowed          Override a profile's fullscreen default on Windows.\n"
+        "  --fullscreen        Start in monitor-sized borderless fullscreen.\n"
+        "  --windowed          Override a profile's fullscreen default.\n"
         "  --vsync <on|off|adaptive>\n"
         "                      When a present returns. 'on' waits for the display's\n"
         "                      refresh (default), 'off' never waits and allows\n"
@@ -595,8 +605,14 @@ void PrintApiCalls(const re2dj::platform::linux::OriginalRunResult& result)
         {
             std::snprintf(part, sizeof(part), " -> UNHANDLED");
         }
-        LogInfo("  #%04u %-32s ret=%08x%s%s",
+        char thread[24] = {};
+        if (call.thread_id != 0)
+        {
+            std::snprintf(thread, sizeof(thread), "[thread %04x] ", call.thread_id);
+        }
+        LogInfo("  #%04u %s%-32s ret=%08x%s%s",
                 call.sequence,
+                thread,
                 call.name.c_str(),
                 call.return_address,
                 arguments.c_str(),
@@ -623,6 +639,10 @@ bool PrintContinuationBoundary(const re2dj::platform::linux::OriginalRunResult& 
         LogInfo("continuation    : stopped at the call limit after %s, return 0x%08x",
                     result.continuation_stop_detail.c_str(),
                     result.import_return_address);
+        break;
+    case OriginalRunBoundary::kContinuationHostClosed:
+        LogInfo("continuation    : host window closed, after %s",
+                    result.continuation_stop_detail.c_str());
         break;
     case OriginalRunBoundary::kContinuationFault:
         LogInfo("continuation    : guest fault signal %u, EIP 0x%08x",
@@ -701,11 +721,25 @@ void PrintDeviceActivity(const re2dj::platform::linux::OriginalRunResult& result
                 activity.rejected,
                 activity.last_kind,
                 activity.last_outcome);
+    if (result.legacy_io_reads + result.legacy_io_writes + result.legacy_io_unanswered != 0)
+    {
+        LogInfo("legacy io       : reads=%u writes=%u unanswered=%u first=%s 0x%04x",
+                result.legacy_io_reads,
+                result.legacy_io_writes,
+                result.legacy_io_unanswered,
+                result.legacy_io_first_read ? "in" : "out",
+                static_cast<unsigned>(result.legacy_io_first_port));
+    }
 }
 
 // The host window a Linux run shows the guest's window in, made when the
 // guest takes the display and kept for the process's life.
 std::unique_ptr<re2dj::platform::linux::LinuxHostPresentation> g_linux_presentation;
+#if defined(RE2DJ_LINUX_HOST_AUDIO)
+// Where a Linux run's sound plays, kept for the process's life like the
+// window.
+std::unique_ptr<re2dj::platform::linux::LinuxHostAudio> g_linux_audio;
+#endif
 
 // Keeps a Linux run's window on screen after everything else is reported,
 // whichever way main returns, when --hold-window asked for it.
@@ -729,6 +763,7 @@ bool RunLinuxOriginal(const Options& options,
                       const std::filesystem::path& executable_path,
                       const re2dj::exe::PeImageInfo& image_info,
                       const std::filesystem::path& chd_image,
+                      const std::filesystem::path& hdd_directory,
                       re2dj::platform::linux::OriginalRunResult* result,
                       std::string* error)
 {
@@ -741,16 +776,53 @@ bool RunLinuxOriginal(const Options& options,
             return false;
         }
         environment.module_path = re2dj::target::GuestExecutablePath(profile);
+        // The profile's I/O board contract, as the Windows runtime applies it
+        // by default.
+        const re2dj::target::TargetLptdiPolicy& lptdi = profile.run_defaults.lptdi;
+        environment.legacy_io.enabled = lptdi.legacy_io_ports && lptdi.legacy_io_ports_default;
+        environment.legacy_io.word_width = lptdi.legacy_io_width == re2dj::target::LegacyIoWidth::kWord;
+        environment.legacy_io.in_rva = lptdi.legacy_io_in_rva;
+        environment.legacy_io.out_rva = lptdi.legacy_io_out_rva;
         if (g_linux_presentation == nullptr)
         {
             g_linux_presentation = std::make_unique<linux_platform::LinuxHostPresentation>();
         }
+        // The window starts as the Windows host's does: fullscreen when asked
+        // or when the profile defaults to it, windowed otherwise.
+        g_linux_presentation->SetStartFullscreen(options.fullscreen_explicit ? options.fullscreen
+                                                                             : profile.run_defaults.fullscreen);
         environment.presentation = g_linux_presentation.get();
-        // Guest files come from the CHD, with writes in overlays/<profile>
-        // as on the Windows path; a directory dump provides none yet.
-        if (!chd_image.empty())
+#if defined(RE2DJ_LINUX_HOST_AUDIO)
+        // The master gain the Windows host applies: --audio-gain-db, or the
+        // profile's default.
+        if (g_linux_audio == nullptr)
+        {
+            const float gain_db = options.audio_gain_explicit ? options.audio_gain_db
+                                                              : profile.run_defaults.audio_gain_db.value_or(0.0f);
+            auto audio = std::make_unique<linux_platform::LinuxHostAudio>();
+            std::string audio_error;
+            if (audio->Initialize(std::pow(10.0f, gain_db / 20.0f), &audio_error))
+            {
+                LogInfo("host audio      : SDL3_mixer, master gain %.1f dB%s%s", static_cast<double>(gain_db),
+                        audio->headless_reason().empty() ? "" : ", no playback device: ",
+                        audio->headless_reason().c_str());
+                g_linux_audio = std::move(audio);
+            }
+            else
+            {
+                LogInfo("host audio      : none, sound plays silently (%s)", audio_error.c_str());
+            }
+        }
+        environment.audio = g_linux_audio.get();
+#endif
+        environment.call_limit = options.call_limit;
+        environment.api_log_calls = options.api_log_calls;
+        // Guest files come from the CHD or the directory dump, with writes in
+        // overlays/<profile> as on the Windows path.
+        if (!chd_image.empty() || !hdd_directory.empty())
         {
             environment.files.chd_image = chd_image;
+            environment.files.hdd_directory = hdd_directory;
             environment.files.chd_root =
                 std::filesystem::path(profile.executable_relative_path).parent_path().generic_string();
             environment.files.guest_root = re2dj::target::GuestRootPath(profile);
@@ -834,6 +906,52 @@ bool ParseOptions(int argc, char** argv, Options* options)
         else if (argument == "--hold-window")
         {
             options->hold_window = true;
+        }
+        else if (argument == "--api-log-calls")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            try
+            {
+                std::size_t parsed = 0;
+                const unsigned long parsed_value = std::stoul(value, &parsed);
+                if (parsed != value.size() || parsed_value > 0xFFFFFFFFUL)
+                {
+                    throw std::out_of_range("api log calls");
+                }
+                options->api_log_calls = static_cast<std::uint32_t>(parsed_value);
+            }
+            catch (const std::exception&)
+            {
+                LogError("--api-log-calls must be a number of calls");
+                return false;
+            }
+        }
+        else if (argument == "--call-limit")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            try
+            {
+                std::size_t parsed = 0;
+                const unsigned long parsed_value = std::stoul(value, &parsed);
+                if (parsed != value.size() || parsed_value == 0 || parsed_value > 0xFFFFFFFFUL)
+                {
+                    throw std::out_of_range("call limit");
+                }
+                options->call_limit = static_cast<std::uint32_t>(parsed_value);
+            }
+            catch (const std::exception&)
+            {
+                LogError("--call-limit must be a positive number of calls");
+                return false;
+            }
         }
         else if (argument == "--hdd")
         {
@@ -1220,7 +1338,7 @@ int RunChdTarget(const Options& options,
         staging_root / profile.executable_relative_path;
     re2dj::platform::linux::OriginalRunResult run_result;
     const bool executed = RunLinuxOriginal(
-        options, profile, staged_executable_path, executable_info, chd_path, &run_result, &error);
+        options, profile, staged_executable_path, executable_info, chd_path, {}, &run_result, &error);
     if (!executed)
     {
         LogFatal("EXECUTION_FAILED", "Linux execution failed: %s", error.c_str());
@@ -1377,9 +1495,8 @@ int main(int argc, char** argv)
         return options.show_help ? kExitOk : kExitUsage;
     }
 #if !defined(_WIN32)
-    if (options.audio_gain_explicit || options.demo_volume_explicit ||
+    if (options.demo_volume_explicit ||
         options.audio_volume_trace || options.guest_wait_trace || options.image_dump ||
-        options.fullscreen_explicit ||
         options.present_sync_explicit ||
         !options.io_config.empty())
     {
@@ -1567,7 +1684,7 @@ int main(int argc, char** argv)
 
     re2dj::platform::linux::OriginalRunResult run_result;
     const bool executed = RunLinuxOriginal(
-        options, *selected, executable_path, selected_entry->pe_info, {}, &run_result, &error);
+        options, *selected, executable_path, selected_entry->pe_info, {}, scan.root, &run_result, &error);
     if (!executed)
     {
         LogFatal("EXECUTION_FAILED", "Linux execution failed: %s", error.c_str());
@@ -1691,6 +1808,7 @@ int main(int argc, char** argv)
     case re2dj::platform::linux::OriginalRunBoundary::kContinuationUnresolvedLookup:
     case re2dj::platform::linux::OriginalRunBoundary::kContinuationFault:
     case re2dj::platform::linux::OriginalRunBoundary::kContinuationCallLimit:
+    case re2dj::platform::linux::OriginalRunBoundary::kContinuationHostClosed:
         PrintContinuationBoundary(run_result);
         return kExitOk;
     }

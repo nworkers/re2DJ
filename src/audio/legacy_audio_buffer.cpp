@@ -45,11 +45,11 @@ bool LegacyAudioBuffer::ValidateUnlock(const LegacyAudioLock& lock) const
     };
     return valid(lock.first) && valid(lock.second) && lock.first.size() + lock.second.size() <= samples_->size();
 }
-void LegacyAudioBuffer::set_current_position(std::uint32_t position) { current_position_ = samples_->empty() ? 0 : position % static_cast<std::uint32_t>(samples_->size()); }
+void LegacyAudioBuffer::set_current_position(std::uint32_t position) { current_position_ = WrapPosition(position, static_cast<std::uint32_t>(samples_->size())); }
 std::uint32_t LegacyAudioBuffer::current_position() const { return current_position_; }
-void LegacyAudioBuffer::set_volume(std::int32_t volume) { volume_ = std::clamp(volume, -10000, 0); }
+void LegacyAudioBuffer::set_volume(std::int32_t volume) { volume_ = ClampVolume(volume); }
 std::int32_t LegacyAudioBuffer::volume() const { return volume_; }
-void LegacyAudioBuffer::set_pan(std::int32_t pan) { pan_ = std::clamp(pan, -10000, 10000); }
+void LegacyAudioBuffer::set_pan(std::int32_t pan) { pan_ = ClampPan(pan); }
 std::int32_t LegacyAudioBuffer::pan() const { return pan_; }
 void LegacyAudioBuffer::set_frequency(std::uint32_t frequency) { frequency_ = frequency; }
 std::uint32_t LegacyAudioBuffer::frequency() const { return frequency_; }
