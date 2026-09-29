@@ -27,6 +27,7 @@
 #include "re2dj/hdd/hdd_scan.h"
 #include "re2dj/storage/guest_path.h"
 #include "re2dj/storage/fat32_chd.h"
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/present_sync.h"
 #include "re2dj/logging/logging.h"
 #include "re2dj/target/target_profile.h"
@@ -147,12 +148,14 @@ struct Options
     bool demo_volume_explicit = false;
     bool fullscreen_explicit = false;
     bool present_sync_explicit = false;
+    bool color_depth_explicit = false;
     bool audio_volume_trace = false;
     bool guest_wait_trace = false;
     bool image_dump = false;
     unsigned image_dump_delay_ms = 0;
     bool fullscreen = false;
     re2dj::graphics::PresentSync present_sync = re2dj::graphics::PresentSync::kVerticalSync;
+    re2dj::graphics::ColorDepth color_depth = re2dj::graphics::ColorDepth::k16;
     bool list_targets = false;
     bool run = false;
     bool positional_target = false;
@@ -367,6 +370,12 @@ void PrintUsage()
         "                      refresh (default), 'off' never waits and allows\n"
         "                      tearing, 'adaptive' waits only for frames that met\n"
         "                      the deadline. A driver may refuse 'adaptive'.\n"
+        "  --color-depth <16|32>\n"
+        "                      How deep the host keeps colours. '16' shows the\n"
+        "                      original's 16-bit picture (default); '32' keeps\n"
+        "                      24-bit images and blends at 8 bits per channel.\n"
+        "                      The game still sees a 16-bit display. The OSD's\n"
+        "                      '32-bit color' switches it while running.\n"
         "  --io-config <path>  Windows keyboard I/O mapping INI for the selected target.\n"
         "                      Overrides only the entries it lists; the built-in\n"
         "                      mapping covers the rest.\n"
@@ -791,7 +800,18 @@ bool RunLinuxOriginal(const Options& options,
         // or when the profile defaults to it, windowed otherwise.
         g_linux_presentation->SetStartFullscreen(options.fullscreen_explicit ? options.fullscreen
                                                                              : profile.run_defaults.fullscreen);
+        // The OSD shows what the Windows host's shows.
+        g_linux_presentation->SetOsdInfoLines(
+            {re2dj::VersionBanner("re2DJ", re2dj::VersionString()) + " - Build " + __DATE__,
+             "Target Profile : " + profile.id,
+             "Executable : " + std::filesystem::path(profile.executable_relative_path).filename().string()});
         environment.presentation = g_linux_presentation.get();
+        // The colour depth: --color-depth, or the profile's default. The OSD
+        // may change it while the guest runs.
+        const re2dj::graphics::ColorDepth color_depth =
+            options.color_depth_explicit ? options.color_depth : profile.run_defaults.color_depth;
+        re2dj::graphics::SelectColorDepth(color_depth);
+        LogInfo("colour depth    : %s-bit", re2dj::graphics::ColorDepthName(color_depth));
 #if defined(RE2DJ_LINUX_HOST_AUDIO)
         // The master gain the Windows host applies: --audio-gain-db, or the
         // profile's default.
@@ -1064,6 +1084,20 @@ bool ParseOptions(int argc, char** argv, Options* options)
             }
             options->present_sync_explicit = true;
         }
+        else if (argument == "--color-depth")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+            if (!re2dj::graphics::ParseColorDepthName(value, &options->color_depth))
+            {
+                LogError("--color-depth must be 16 or 32");
+                return false;
+            }
+            options->color_depth_explicit = true;
+        }
         else if (argument == "--io-config")
         {
             std::string value;
@@ -1305,6 +1339,10 @@ int RunChdTarget(const Options& options,
     if (options.present_sync_explicit)
     {
         run_options.profile_defaults.present_sync = options.present_sync;
+    }
+    if (options.color_depth_explicit)
+    {
+        run_options.profile_defaults.color_depth = options.color_depth;
     }
     if (options.guest_wait_trace)
     {
@@ -1855,6 +1893,10 @@ int main(int argc, char** argv)
     if (options.present_sync_explicit)
     {
         run_options.profile_defaults.present_sync = options.present_sync;
+    }
+    if (options.color_depth_explicit)
+    {
+        run_options.profile_defaults.color_depth = options.color_depth;
     }
     if (options.guest_wait_trace)
     {

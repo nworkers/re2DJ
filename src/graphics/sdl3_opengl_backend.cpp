@@ -13,8 +13,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/present_pacer.h"
 #include "re2dj/graphics/presentation_filter.h"
+#include "re2dj/graphics/true_color.h"
 #include "re2dj/graphics/window_policy.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 
@@ -91,6 +93,7 @@ constexpr GLenum kDepthAttachment = 0x8d00;
 constexpr GLenum kFramebufferComplete = 0x8cd5;
 constexpr GLenum kDepthComponent16 = 0x81a5;
 constexpr GLenum kRgb565 = 0x8d62;
+constexpr GLenum kRgb8 = 0x8051;
 
 template <typename Function>
 bool LoadGlFunction(const char* name, Function* function)
@@ -138,6 +141,9 @@ struct Sdl3OpenGlBackend::Impl
         std::uint32_t height = 0;
         std::uint64_t revision = 0;
         Rgb565ColorKey color_key;
+        // Whether the texels came from the surface's true-color plane rather
+        // than its RGB565 pixels, so a change of colour depth uploads again.
+        bool true_color = false;
         // Last values actually handed to glTexParameteri for this texture, so a
         // draw that keeps the same sampler state issues no parameter calls.
         GLenum minification_filter = 0;
@@ -166,6 +172,13 @@ struct Sdl3OpenGlBackend::Impl
     GLuint render_framebuffer = 0;
     GLuint render_color_texture = 0;
     GLuint render_depth_renderbuffer = 0;
+    // The render target's colour depth: RGB565, or 8 bits per channel while
+    // 32-bit colour is selected (color_depth.h). Neither has alpha, so a
+    // destination-alpha blend reads 1.0 either way, as on the original's
+    // 16-bit surfaces. Set when a driver cannot render into RGB8, which then
+    // keeps the target at RGB565.
+    ColorDepth render_target_depth = ColorDepth::k16;
+    bool true_color_unavailable = false;
     // Set when the guest presents by flipping. The colour buffer then carries
     // over from one frame to the next instead of being cleared. One buffer is
     // kept rather than one per buffer in the guest's chain: rotating two would
@@ -351,30 +364,116 @@ struct Sdl3OpenGlBackend::Impl
         render_framebuffer = 0;
     }
 
-    bool CreateRenderTarget(std::uint32_t width, std::uint32_t height, std::string* error)
+    // A colour texture the size of the logical target, in the given depth,
+    // holding rgba (rows bottom-up, RGBA8) or undefined contents when null. A
+    // 16-bit texture gets the rows narrowed as a plane is (true_color.h).
+    GLuint MakeColorTexture(ColorDepth depth, const std::uint8_t* rgba)
     {
-        logical_width = width;
-        logical_height = height;
-        gen_textures(1, &render_color_texture);
-        if (render_color_texture == 0)
+        GLuint name = 0;
+        gen_textures(1, &name);
+        if (name == 0)
         {
-            *error = "cannot create RGB565 OpenGL render-target texture";
-            return false;
+            return 0;
         }
-        bind_texture(GL_TEXTURE_2D, render_color_texture);
+        bind_texture(GL_TEXTURE_2D, name);
         tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampToEdge);
         tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampToEdge);
-        tex_image_2d(GL_TEXTURE_2D,
-                     0,
-                     static_cast<GLint>(kRgb565),
-                     static_cast<GLsizei>(width),
-                     static_cast<GLsizei>(height),
-                     0,
-                     GL_RGB,
-                     GL_UNSIGNED_SHORT_5_6_5,
-                     nullptr);
+        const auto width = static_cast<GLsizei>(logical_width);
+        const auto height = static_cast<GLsizei>(logical_height);
+        if (depth == ColorDepth::k32)
+        {
+            pixel_store_i(GL_UNPACK_ALIGNMENT, 4);
+            tex_image_2d(GL_TEXTURE_2D, 0, static_cast<GLint>(kRgb8), width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                         rgba);
+            return name;
+        }
+        std::vector<std::uint16_t> packed;
+        if (rgba != nullptr)
+        {
+            packed.resize(static_cast<std::size_t>(logical_width) * logical_height);
+            for (std::size_t index = 0; index < packed.size(); ++index)
+            {
+                const std::uint8_t* const pixel = rgba + index * 4;
+                packed[index] = NarrowToRgb565((static_cast<std::uint32_t>(pixel[0]) << 16) |
+                                               (static_cast<std::uint32_t>(pixel[1]) << 8) | pixel[2]);
+            }
+        }
+        pixel_store_i(GL_UNPACK_ALIGNMENT, 2);
+        tex_image_2d(GL_TEXTURE_2D, 0, static_cast<GLint>(kRgb565), width, height, 0, GL_RGB,
+                     GL_UNSIGNED_SHORT_5_6_5, packed.empty() ? nullptr : packed.data());
+        pixel_store_i(GL_UNPACK_ALIGNMENT, 4);
+        return name;
+    }
+
+    // Puts color on the bound framebuffer's colour attachment and reports
+    // whether the framebuffer is complete with it.
+    bool AttachColor(GLuint color)
+    {
+        framebuffer_texture_2d(kFramebuffer, kColorAttachment0, GL_TEXTURE_2D, color, 0);
+        return check_framebuffer_status(kFramebuffer) == kFramebufferComplete;
+    }
+
+    // The depth the render target should have now: the selected one, unless
+    // the driver has already refused RGB8.
+    ColorDepth WantedDepth() const
+    {
+        const ColorDepth selected = SelectedColorDepth();
+        return selected == ColorDepth::k32 && true_color_unavailable ? ColorDepth::k16 : selected;
+    }
+
+    // Re-creates the render target in the selected depth when that changed,
+    // carrying its picture over. Every entry point that touches the target
+    // calls this first, which is how a switch made on the OSD takes effect.
+    bool ApplySelectedColorDepth(std::string* error)
+    {
+        const ColorDepth wanted = WantedDepth();
+        if (wanted == render_target_depth || render_framebuffer == 0 || render_color_texture == 0)
+        {
+            return true;
+        }
+        std::vector<std::uint8_t> rgba(static_cast<std::size_t>(logical_width) * logical_height * 4);
+        bind_framebuffer(kFramebuffer, render_framebuffer);
+        pixel_store_i(GL_PACK_ALIGNMENT, 4);
+        read_pixels(0, 0, static_cast<GLsizei>(logical_width), static_cast<GLsizei>(logical_height), GL_RGBA,
+                    GL_UNSIGNED_BYTE, rgba.data());
+        const GLuint replacement = MakeColorTexture(wanted, rgba.data());
+        if (replacement == 0)
+        {
+            *error = "cannot create the OpenGL render target in the selected colour depth";
+            return false;
+        }
+        if (!AttachColor(replacement))
+        {
+            AttachColor(render_color_texture);
+            delete_textures(1, &replacement);
+            if (wanted != ColorDepth::k32)
+            {
+                *error = "OpenGL RGB565 render-target framebuffer is incomplete";
+                return false;
+            }
+            // The driver cannot render into RGB8; the target stays RGB565.
+            true_color_unavailable = true;
+            return true;
+        }
+        delete_textures(1, &render_color_texture);
+        render_color_texture = replacement;
+        render_target_depth = wanted;
+        return true;
+    }
+
+    bool CreateRenderTarget(std::uint32_t width, std::uint32_t height, std::string* error)
+    {
+        logical_width = width;
+        logical_height = height;
+        ColorDepth depth = WantedDepth();
+        render_color_texture = MakeColorTexture(depth, nullptr);
+        if (render_color_texture == 0)
+        {
+            *error = "cannot create the OpenGL render-target texture";
+            return false;
+        }
 
         gen_framebuffers(1, &render_framebuffer);
         gen_renderbuffers(1, &render_depth_renderbuffer);
@@ -385,8 +484,6 @@ struct Sdl3OpenGlBackend::Impl
             return false;
         }
         bind_framebuffer(kFramebuffer, render_framebuffer);
-        framebuffer_texture_2d(
-            kFramebuffer, kColorAttachment0, GL_TEXTURE_2D, render_color_texture, 0);
         bind_renderbuffer(kRenderbuffer, render_depth_renderbuffer);
         renderbuffer_storage(kRenderbuffer,
                              kDepthComponent16,
@@ -394,8 +491,18 @@ struct Sdl3OpenGlBackend::Impl
                              static_cast<GLsizei>(height));
         framebuffer_renderbuffer(
             kFramebuffer, kDepthAttachment, kRenderbuffer, render_depth_renderbuffer);
-        const GLenum status = check_framebuffer_status(kFramebuffer);
-        if (status == kFramebufferComplete)
+        bool complete = AttachColor(render_color_texture);
+        if (!complete && depth == ColorDepth::k32)
+        {
+            // The driver cannot render into RGB8; the target stays RGB565.
+            true_color_unavailable = true;
+            delete_textures(1, &render_color_texture);
+            depth = ColorDepth::k16;
+            render_color_texture = MakeColorTexture(depth, nullptr);
+            complete = render_color_texture != 0 && AttachColor(render_color_texture);
+        }
+        render_target_depth = depth;
+        if (complete)
         {
             // A retained target is never cleared implicitly again, so the
             // undefined contents glTexImage2D leaves behind have to go now.
@@ -405,7 +512,7 @@ struct Sdl3OpenGlBackend::Impl
             clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         }
         bind_framebuffer(kFramebuffer, 0);
-        if (status != kFramebufferComplete)
+        if (!complete)
         {
             DestroyRenderTarget();
             *error = "OpenGL RGB565 render-target framebuffer is incomplete";
@@ -592,6 +699,16 @@ int Sdl3OpenGlBackend::applied_swap_interval() const
 bool Sdl3OpenGlBackend::software_pacing_engaged() const
 {
     return impl_ != nullptr && impl_->pacer.engaged();
+}
+
+ColorDepth Sdl3OpenGlBackend::render_target_depth() const
+{
+    return impl_ == nullptr ? ColorDepth::k16 : impl_->render_target_depth;
+}
+
+bool Sdl3OpenGlBackend::true_color_unavailable() const
+{
+    return impl_ != nullptr && impl_->true_color_unavailable;
 }
 
 bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::string* error)
@@ -797,7 +914,11 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
     if (logical_width != impl_->logical_width || logical_height != impl_->logical_height ||
         impl_->render_framebuffer == 0 || impl_->render_color_texture == 0)
     {
-        *error = "logical draw size does not match the OpenGL RGB565 render target";
+        *error = "logical draw size does not match the OpenGL render target";
+        return false;
+    }
+    if (!impl_->ApplySelectedColorDepth(error))
+    {
         return false;
     }
     impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
@@ -911,7 +1032,12 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
         const bool key_changed = cached.color_key.enabled != effective_key.enabled ||
                                  cached.color_key.low != effective_key.low ||
                                  cached.color_key.high != effective_key.high;
-        if (cached.revision != texture_view->revision || key_changed ||
+        // A 16-bit target keeps uploading the RGB565 pixels, exactly as before
+        // 32-bit colour existed.
+        const bool from_plane = impl_->render_target_depth == ColorDepth::k32 &&
+                                texture_view->true_color != nullptr &&
+                                texture_view->true_color_stride >= texture_view->width;
+        if (cached.revision != texture_view->revision || key_changed || cached.true_color != from_plane ||
             cached.width != texture_view->width || cached.height != texture_view->height)
         {
             const std::uint64_t pixel_count =
@@ -927,14 +1053,20 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
             {
                 const auto* const row = reinterpret_cast<const std::uint16_t*>(
                     source + static_cast<std::size_t>(y) * texture_view->pitch);
+                const std::uint32_t* const plane_row =
+                    from_plane ? texture_view->true_color + static_cast<std::size_t>(y) * texture_view->true_color_stride
+                               : nullptr;
                 for (std::uint32_t x = 0; x < texture_view->width; ++x)
                 {
                     const std::uint16_t pixel = row[x];
+                    // The plane gives the colour; the key is always decided on
+                    // the RGB565 pixel, which is what the guest's key means.
+                    const std::uint32_t colour = plane_row != nullptr ? plane_row[x] : WidenRgb565(pixel);
                     const std::size_t offset =
                         (static_cast<std::size_t>(y) * texture_view->width + x) * 4;
-                    rgba[offset] = static_cast<std::uint8_t>(((pixel >> 11) & 0x1f) * 255 / 31);
-                    rgba[offset + 1] = static_cast<std::uint8_t>(((pixel >> 5) & 0x3f) * 255 / 63);
-                    rgba[offset + 2] = static_cast<std::uint8_t>((pixel & 0x1f) * 255 / 31);
+                    rgba[offset] = static_cast<std::uint8_t>(colour >> 16);
+                    rgba[offset + 1] = static_cast<std::uint8_t>(colour >> 8);
+                    rgba[offset + 2] = static_cast<std::uint8_t>(colour);
                     rgba[offset + 3] = IsRgb565ColorKeyMatch(pixel, effective_key) ? 0 : 255;
                 }
             }
@@ -957,6 +1089,7 @@ bool Sdl3OpenGlBackend::Draw(const LegacyDrawCommand& command,
             cached.height = texture_view->height;
             cached.revision = texture_view->revision;
             cached.color_key = effective_key;
+            cached.true_color = from_plane;
         }
         const GLenum minification_filter =
             state.minification_filter == TextureFilter::kLinear ? GL_LINEAR : GL_NEAREST;
@@ -1098,6 +1231,20 @@ void Sdl3OpenGlBackend::DiscardTexture(std::uint64_t identity)
 
 bool Sdl3OpenGlBackend::ClearRenderTarget(std::uint16_t rgb565_color, std::string* error)
 {
+    return ClearTo(static_cast<float>((rgb565_color >> 11) & 0x1f) / 31.0f,
+                   static_cast<float>((rgb565_color >> 5) & 0x3f) / 63.0f,
+                   static_cast<float>(rgb565_color & 0x1f) / 31.0f, error);
+}
+
+bool Sdl3OpenGlBackend::ClearRenderTargetColor(std::uint32_t xrgb, std::string* error)
+{
+    constexpr float kScale = 1.0f / 255.0f;
+    return ClearTo(static_cast<float>((xrgb >> 16) & 0xff) * kScale, static_cast<float>((xrgb >> 8) & 0xff) * kScale,
+                   static_cast<float>(xrgb & 0xff) * kScale, error);
+}
+
+bool Sdl3OpenGlBackend::ClearTo(float red, float green, float blue, std::string* error)
+{
     if (impl_ == nullptr || error == nullptr)
     {
         return false;
@@ -1108,7 +1255,11 @@ bool Sdl3OpenGlBackend::ClearRenderTarget(std::uint16_t rgb565_color, std::strin
     }
     if (impl_->render_framebuffer == 0 || impl_->render_color_texture == 0)
     {
-        *error = "OpenGL RGB565 render target is unavailable";
+        *error = "OpenGL render target is unavailable";
+        return false;
+    }
+    if (!impl_->ApplySelectedColorDepth(error))
+    {
         return false;
     }
     impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
@@ -1116,9 +1267,6 @@ bool Sdl3OpenGlBackend::ClearRenderTarget(std::uint16_t rgb565_color, std::strin
                     0,
                     static_cast<GLsizei>(impl_->logical_width),
                     static_cast<GLsizei>(impl_->logical_height));
-    const float red = static_cast<float>((rgb565_color >> 11) & 0x1f) / 31.0f;
-    const float green = static_cast<float>((rgb565_color >> 5) & 0x3f) / 63.0f;
-    const float blue = static_cast<float>(rgb565_color & 0x1f) / 31.0f;
     impl_->depth_mask(GL_TRUE);
     impl_->clear_color(red, green, blue, 1.0f);
     impl_->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1147,14 +1295,47 @@ bool Sdl3OpenGlBackend::ReadRenderTarget(std::uint32_t x,
     if (impl_->render_framebuffer == 0 || !impl_->TargetContains(x, y, width, height) || pitch < row_bytes ||
         pixels.size() < static_cast<std::size_t>(pitch) * (height - 1) + row_bytes)
     {
-        *error = "render-target read outside the OpenGL RGB565 render target";
+        *error = "render-target read outside the OpenGL render target";
         return false;
     }
-    std::vector<std::uint8_t> scratch(row_bytes * height);
+    if (!impl_->ApplySelectedColorDepth(error))
+    {
+        return false;
+    }
     impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
+    const auto gl_y = static_cast<GLint>(impl_->logical_height - y - height);
+    if (impl_->render_target_depth == ColorDepth::k32)
+    {
+        // Narrowed as a plane is, so the guest reads what a surface holding
+        // these colours would give it.
+        std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * height * 4);
+        impl_->pixel_store_i(GL_PACK_ALIGNMENT, 4);
+        impl_->read_pixels(static_cast<GLint>(x), gl_y, static_cast<GLsizei>(width), static_cast<GLsizei>(height),
+                           GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        if (impl_->get_error() != GL_NO_ERROR)
+        {
+            *error = "OpenGL render-target read failed";
+            return false;
+        }
+        for (std::uint32_t row = 0; row < height; ++row)
+        {
+            const std::uint8_t* const source = rgba.data() + static_cast<std::size_t>(height - 1 - row) * width * 4;
+            std::uint8_t* const destination = pixels.data() + static_cast<std::size_t>(row) * pitch;
+            for (std::uint32_t column = 0; column < width; ++column)
+            {
+                const std::uint8_t* const texel = source + static_cast<std::size_t>(column) * 4;
+                const std::uint16_t pixel = NarrowToRgb565((static_cast<std::uint32_t>(texel[0]) << 16) |
+                                                           (static_cast<std::uint32_t>(texel[1]) << 8) | texel[2]);
+                destination[static_cast<std::size_t>(column) * 2] = static_cast<std::uint8_t>(pixel);
+                destination[static_cast<std::size_t>(column) * 2 + 1] = static_cast<std::uint8_t>(pixel >> 8);
+            }
+        }
+        error->clear();
+        return true;
+    }
+    std::vector<std::uint8_t> scratch(row_bytes * height);
     impl_->pixel_store_i(GL_PACK_ALIGNMENT, 2);
-    impl_->read_pixels(static_cast<GLint>(x), static_cast<GLint>(impl_->logical_height - y - height),
-                       static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGB,
+    impl_->read_pixels(static_cast<GLint>(x), gl_y, static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGB,
                        GL_UNSIGNED_SHORT_5_6_5, scratch.data());
     impl_->pixel_store_i(GL_PACK_ALIGNMENT, 4);
     if (impl_->get_error() != GL_NO_ERROR)
@@ -1187,8 +1368,58 @@ bool Sdl3OpenGlBackend::WriteRenderTarget(std::uint32_t x,
     if (impl_->render_framebuffer == 0 || !impl_->TargetContains(x, y, width, height) || pitch < row_bytes ||
         pixels.size() < static_cast<std::size_t>(pitch) * (height - 1) + row_bytes)
     {
-        *error = "render-target write outside the OpenGL RGB565 render target";
+        *error = "render-target write outside the OpenGL render target";
         return false;
+    }
+    if (!impl_->ApplySelectedColorDepth(error))
+    {
+        return false;
+    }
+    // Starting the frame first, so its first draw does not clear what this
+    // puts down.
+    impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
+    impl_->BeginFrame();
+    const auto gl_y = static_cast<GLint>(impl_->logical_height - y - height);
+    if (impl_->render_target_depth == ColorDepth::k32)
+    {
+        // Reconciled as a plane is: a target pixel the guest left as it read
+        // it keeps its 8 bits per channel, so a guest that locks its render
+        // target every frame does not cut the whole area down to 565.
+        std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * height * 4);
+        impl_->pixel_store_i(GL_PACK_ALIGNMENT, 4);
+        impl_->read_pixels(static_cast<GLint>(x), gl_y, static_cast<GLsizei>(width), static_cast<GLsizei>(height),
+                           GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        std::vector<std::uint32_t> line(width);
+        for (std::uint32_t row = 0; row < height; ++row)
+        {
+            std::uint8_t* const texels = rgba.data() + static_cast<std::size_t>(height - 1 - row) * width * 4;
+            for (std::uint32_t column = 0; column < width; ++column)
+            {
+                const std::uint8_t* const texel = texels + static_cast<std::size_t>(column) * 4;
+                line[column] = (static_cast<std::uint32_t>(texel[0]) << 16) |
+                               (static_cast<std::uint32_t>(texel[1]) << 8) | texel[2];
+            }
+            ReconcileTrueColorRow(line.data(), pixels.data() + static_cast<std::size_t>(row) * pitch, width);
+            for (std::uint32_t column = 0; column < width; ++column)
+            {
+                std::uint8_t* const texel = texels + static_cast<std::size_t>(column) * 4;
+                texel[0] = static_cast<std::uint8_t>(line[column] >> 16);
+                texel[1] = static_cast<std::uint8_t>(line[column] >> 8);
+                texel[2] = static_cast<std::uint8_t>(line[column]);
+                texel[3] = 255;
+            }
+        }
+        impl_->bind_texture(GL_TEXTURE_2D, impl_->render_color_texture);
+        impl_->pixel_store_i(GL_UNPACK_ALIGNMENT, 4);
+        impl_->tex_sub_image_2d(GL_TEXTURE_2D, 0, static_cast<GLint>(x), gl_y, static_cast<GLsizei>(width),
+                                static_cast<GLsizei>(height), GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        if (impl_->get_error() != GL_NO_ERROR)
+        {
+            *error = "OpenGL render-target write failed";
+            return false;
+        }
+        error->clear();
+        return true;
     }
     std::vector<std::uint8_t> scratch(row_bytes * height);
     for (std::uint32_t row = 0; row < height; ++row)
@@ -1196,10 +1427,6 @@ bool Sdl3OpenGlBackend::WriteRenderTarget(std::uint32_t x,
         std::memcpy(scratch.data() + static_cast<std::size_t>(height - 1 - row) * row_bytes,
                     pixels.data() + static_cast<std::size_t>(row) * pitch, row_bytes);
     }
-    // Starting the frame first, so its first draw does not clear what this
-    // puts down.
-    impl_->bind_framebuffer(kFramebuffer, impl_->render_framebuffer);
-    impl_->BeginFrame();
     impl_->bind_texture(GL_TEXTURE_2D, impl_->render_color_texture);
     impl_->pixel_store_i(GL_UNPACK_ALIGNMENT, 2);
     impl_->tex_sub_image_2d(GL_TEXTURE_2D, 0, static_cast<GLint>(x),
@@ -1341,7 +1568,13 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     }
     if (impl_->render_framebuffer == 0 || impl_->render_color_texture == 0)
     {
-        *error = "OpenGL RGB565 render target is unavailable";
+        *error = "OpenGL render target is unavailable";
+        return false;
+    }
+    // A switch made on the OSD shows from this frame even when the guest
+    // draws nothing further.
+    if (!impl_->ApplySelectedColorDepth(error))
+    {
         return false;
     }
     impl_->bind_framebuffer(kFramebuffer, 0);

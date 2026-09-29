@@ -230,6 +230,12 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
         arguments->push_back("--present-sync");
         arguments->push_back(re2dj::graphics::PresentSyncName(defaults.present_sync));
     }
+    // The same for the colour depth: 16 bits is the runtime's own default.
+    if (defaults.color_depth != re2dj::graphics::ColorDepth::k16)
+    {
+        arguments->push_back("--color-depth");
+        arguments->push_back(re2dj::graphics::ColorDepthName(defaults.color_depth));
+    }
     if (!options.io_config.empty())
     {
         arguments->push_back("--io-config");

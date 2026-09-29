@@ -164,7 +164,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
     target_link_libraries(re2dj_linux_native_backend
         PUBLIC re2dj_core
-        PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_logging re2dj_warnings
+        PRIVATE re2dj_sdl3_opengl_backend re2dj_osd SDL3::SDL3-static re2dj_logging re2dj_warnings
     )
 endif()
 
@@ -290,6 +290,7 @@ target_include_directories(re2dj_directx PUBLIC include)
 target_link_libraries(re2dj_directx PUBLIC re2dj_legacy_graphics PRIVATE re2dj_warnings)
 
 add_library(re2dj_legacy_graphics STATIC
+    src/graphics/color_depth.cpp
     src/graphics/legacy_draw_command.cpp
     src/graphics/legacy_texture.cpp
     src/graphics/legacy_transform.cpp
@@ -298,6 +299,7 @@ add_library(re2dj_legacy_graphics STATIC
     src/graphics/present_sync.cpp
     src/graphics/present_pacer.cpp
     src/graphics/presentation_filter.cpp
+    src/graphics/true_color.cpp
 )
 target_include_directories(re2dj_legacy_graphics PUBLIC include)
 target_link_libraries(re2dj_legacy_graphics PRIVATE re2dj_warnings)
@@ -325,6 +327,7 @@ target_include_directories(re2dj_imgui SYSTEM PUBLIC
 # The on-screen display. Platform-neutral: it takes input through its own
 # queue and draws through the backend's present overlay point.
 add_library(re2dj_osd STATIC
+    src/ui/display_controls.cpp
     src/ui/osd.cpp
 )
 target_include_directories(re2dj_osd PUBLIC include)
@@ -739,6 +742,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/legacy_draw_command_test.cpp
         tests/unit/presentation_filter_test.cpp
         tests/unit/legacy_texture_test.cpp
+        tests/unit/true_color_test.cpp
         tests/unit/legacy_transform_test.cpp
         tests/unit/legacy_vertex_buffer_test.cpp
         tests/unit/directsound_buffer_policy_test.cpp
@@ -784,6 +788,10 @@ if(RE2DJ_BUILD_TESTS)
     if(TARGET re2dj_sdl3_opengl_backend)
         add_executable(re2dj_opengl_blend_probe tests/graphics/opengl_blend_probe.cpp)
         target_link_libraries(re2dj_opengl_blend_probe
+            PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_warnings
+        )
+        add_executable(re2dj_opengl_true_color_probe tests/graphics/opengl_true_color_probe.cpp)
+        target_link_libraries(re2dj_opengl_true_color_probe
             PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_warnings
         )
     endif()

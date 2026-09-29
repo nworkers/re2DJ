@@ -10,6 +10,8 @@
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 #include "re2dj/input/virtual_keys.h"
 #include "re2dj/logging/logging.h"
+#include "re2dj/ui/display_controls.h"
+#include "re2dj/ui/osd.h"
 #include "re2dj/version.h"
 
 namespace re2dj::platform::linux
@@ -89,13 +91,97 @@ bool LinuxHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
     logical_width_ = width;
     logical_height_ = height;
     backend_->SetEventObserver([this](const void* sdl_event) { HandleEvent(sdl_event); });
+    if (osd_ == nullptr)
+    {
+        osd_ = std::make_unique<ui::Osd>();
+        osd_->SetInfoLines(osd_info_lines_);
+        ui::AddColorDepthToggle(osd_.get());
+    }
+    backend_->SetPresentOverlay(osd_.get());
     if (!ApplyWindowMode(error) || !backend_->ClearRenderTarget(0, error) || !backend_->Present(error))
     {
         backend_.reset();
         return false;
     }
+    ReportColorDepth();
     error->clear();
     return true;
+}
+
+void LinuxHostPresentation::ReportColorDepth()
+{
+    if (backend_ == nullptr)
+    {
+        return;
+    }
+    const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+    const graphics::ColorDepth depth = backend_->render_target_depth();
+    if (!depth_reported_ || depth != reported_depth_)
+    {
+        depth_reported_ = true;
+        reported_depth_ = depth;
+        if (logger != nullptr)
+        {
+            logger->info("presentation: {}-bit colour", graphics::ColorDepthName(depth));
+        }
+    }
+    if (!true_color_refusal_reported_ && backend_->true_color_unavailable())
+    {
+        true_color_refusal_reported_ = true;
+        if (logger != nullptr)
+        {
+            logger->warn("presentation: the OpenGL driver cannot render into RGB8, so colour stays 16-bit");
+        }
+    }
+}
+
+bool LinuxHostPresentation::HandleOsdEvent(const void* sdl_event)
+{
+    if (osd_ == nullptr)
+    {
+        return false;
+    }
+    const auto* event = static_cast<const SDL_Event*>(sdl_event);
+    switch (event->type)
+    {
+    case SDL_EVENT_KEY_DOWN:
+        if (event->key.scancode != SDL_SCANCODE_GRAVE)
+        {
+            return false;
+        }
+        // Holding the key repeats it; only the first press toggles.
+        if (!event->key.repeat)
+        {
+            osd_->ToggleVisible();
+        }
+        return true;
+    case SDL_EVENT_KEY_UP:
+        // The rest of the backtick keystroke belongs to the toggle as well.
+        return event->key.scancode == SDL_SCANCODE_GRAVE;
+    case SDL_EVENT_MOUSE_MOTION:
+    {
+        // The OSD draws in window pixels, which SDL's window coordinates are
+        // scaled by on a high-density display. The guest keeps the pointer.
+        SDL_Window* window = SDL_GetWindowFromEvent(event);
+        const float density = window == nullptr ? 1.0f : SDL_GetWindowPixelDensity(window);
+        osd_->QueueMousePosition(event->motion.x * density, event->motion.y * density);
+        return false;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    {
+        const int button = event->button.button == SDL_BUTTON_LEFT    ? 0
+                           : event->button.button == SDL_BUTTON_RIGHT ? 1
+                                                                      : -1;
+        if (button >= 0)
+        {
+            osd_->QueueMouseButton(button, event->type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+        }
+        return osd_->visible();
+    }
+    default:
+        return false;
+    }
 }
 
 bool LinuxHostPresentation::DesktopDisplayMode(hle::HostDisplayMode* mode, std::string* error) const
@@ -132,6 +218,10 @@ void LinuxHostPresentation::ChangeWindowMode(std::uint32_t scale, bool fullscree
 
 void LinuxHostPresentation::HandleEvent(const void* sdl_event)
 {
+    if (HandleOsdEvent(sdl_event))
+    {
+        return;
+    }
     const auto* event = static_cast<const SDL_Event*>(sdl_event);
     switch (event->type)
     {
@@ -253,6 +343,16 @@ bool LinuxHostPresentation::ClearTarget(std::uint16_t rgb565, std::string* error
     return backend_->ClearRenderTarget(rgb565, error);
 }
 
+bool LinuxHostPresentation::ClearTargetColor(std::uint32_t xrgb, std::string* error)
+{
+    if (backend_ == nullptr)
+    {
+        *error = "no host window to clear";
+        return false;
+    }
+    return backend_->ClearRenderTargetColor(xrgb, error);
+}
+
 bool LinuxHostPresentation::ReadTarget(std::uint32_t x,
                                        std::uint32_t y,
                                        std::uint32_t width,
@@ -311,6 +411,7 @@ bool LinuxHostPresentation::Present(std::string* error)
     {
         return false;
     }
+    ReportColorDepth();
     if (!pacing_reported_ && backend_->software_pacing_engaged())
     {
         pacing_reported_ = true;

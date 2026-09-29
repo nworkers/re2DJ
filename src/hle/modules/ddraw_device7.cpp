@@ -15,7 +15,9 @@
 #include "re2dj/directx/direct3d_device.h"
 #include "re2dj/directx/direct3d_draw.h"
 #include "re2dj/directx/directdraw_surface.h"
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/legacy_transform.h"
+#include "re2dj/graphics/true_color.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 #include "re2dj/hle/host_presentation.h"
 #include "re2dj/hle/guest_com.h"
@@ -220,14 +222,19 @@ bool Clear(const ImportCall& call, ImportReturn* result, std::string* error)
     if (whole_target && device.render_target != 0 &&
         device.render_target == DirectDrawOf(*process, call.arguments[0]).presentation_surface)
     {
+        // In 32-bit colour the guest's 8-bit channels are kept; the RGB565
+        // pixel is their narrowing either way.
         const std::uint16_t color = dx::Rgb565FromD3dColor(call.arguments[4]);
-        if (!FillSurface(call, *process, device.render_target, color, error))
+        const bool true_color = graphics::TrueColorSelected();
+        const std::uint32_t xrgb = true_color ? call.arguments[4] & 0x00FFFFFFU : graphics::WidenRgb565(color);
+        if (!FillSurface(call, *process, device.render_target, color, xrgb, error))
         {
             return false;
         }
         HostPresentation* presentation = call.services->Presentation();
         std::string clear_error;
-        if (presentation != nullptr && !presentation->ClearTarget(color, &clear_error))
+        if (presentation != nullptr && !(true_color ? presentation->ClearTargetColor(xrgb, &clear_error)
+                                                    : presentation->ClearTarget(color, &clear_error)))
         {
             return Fail(error, CallName(call) + " cannot clear the host target: " + clear_error);
         }

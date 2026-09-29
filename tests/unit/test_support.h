@@ -113,6 +113,7 @@ void RunWindowPolicyTests(re2dj::test::Context& context);
 void RunEz2DjKeyboardMapTests(re2dj::test::Context& context);
 void RunGuestFindTests(re2dj::test::Context& context);
 void RunLegacyTextureTests(re2dj::test::Context& context);
+void RunTrueColorTests(re2dj::test::Context& context);
 void RunLegacyTransformTests(re2dj::test::Context& context);
 void RunLegacyVertexBufferTests(re2dj::test::Context& context);
 void RunLegacyAudioBufferTests(re2dj::test::Context& context);

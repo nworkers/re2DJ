@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "re2dj/config/hardlock_secret_config.h"
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/present_sync.h"
 #include "re2dj/hle/hardlock/device.h"
 #include "re2dj/logging/logging.h"
@@ -181,7 +182,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics] [--present-sync <vsync|immediate|adaptive>] [--guest-wait-trace]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--image-dump [path]] [--image-dump-delay <milliseconds>] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics] [--present-sync <vsync|immediate|adaptive>] [--color-depth <16|32>] [--guest-wait-trace]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--image-dump [path]] [--image-dump-delay <milliseconds>] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -8690,6 +8691,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     // 0 vertical sync, 1 immediate, 2 adaptive. Zero is the runtime's own
     // default, so nothing is written unless an option asked for another one.
     unsigned long present_sync = 0;
+    // Colour depth written into the injected runtime, in bits: 32, or zero
+    // for the runtime's own default of 16, which writes nothing.
+    unsigned long color_depth = 0;
     bool ksnd_load_trace = false;
     bool device_mock_lptdi = false;
     bool device_mock_lptdi_ioctl_success = false;
@@ -8974,6 +8978,21 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                 return 2;
             }
             present_sync = static_cast<unsigned long>(parsed);
+        }
+        else if (option == "--color-depth")
+        {
+            if (index + 1 >= argc)
+            {
+                LogLauncherError("error: --color-depth requires a value");
+                return 2;
+            }
+            re2dj::graphics::ColorDepth parsed = re2dj::graphics::ColorDepth::k16;
+            if (!re2dj::graphics::ParseColorDepthName(argv[++index], &parsed))
+            {
+                LogLauncherError("error: --color-depth must be 16 or 32\n");
+                return 2;
+            }
+            color_depth = parsed == re2dj::graphics::ColorDepth::k32 ? 32 : 0;
         }
         else if (option == "--ksnd-load-trace")
         {
@@ -9844,7 +9863,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         return 2;
     }
     g_diagnostic_log = &diagnostic_log;
-    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"hle_message_box\":%s,\"run_detached\":%s,\"follow_child\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u,\"graphics_draw_diagnostics\":%s,\"present_sync\":%lu}",
+    RecordDiagnostic("{\"event\":\"launch\",\"target\":\"%s\",\"executable\":\"%s\",\"chd\":\"%s\",\"trace\":%s,\"software_breakpoint\":%s,\"instruction_trace_steps\":%u,\"api_trace\":%s,\"slot_writer_trace\":%s,\"null_context_object_source_trace\":%s,\"null_context_field_writer_early_trace\":%s,\"null_context_field_writer_trace\":%s,\"null_context_field_access_trace\":%s,\"null_context_field_reference_execution_trace\":%s,\"null_context_object_state_trace\":%s,\"null_context_allocation_trace\":%s,\"hle_display_mode\":%s,\"hle_d3d3\":%s,\"fullscreen\":%s,\"hle_directsound\":%s,\"hle_io_ports\":%s,\"hle_message_box\":%s,\"run_detached\":%s,\"follow_child\":%s,\"d3d_init_trace\":%s,\"ksnd_load_trace\":%s,\"device_mock_lptdi\":%s,\"device_mock_lptdi_ioctl_success\":%s,\"device_mock_lptdi_ioctl_full_success\":%s,\"device_mock_wts_console_session\":%s,\"device_response_profile_entries\":%u,\"device_target_state\":%s,\"lptdi_post_ioctl_trace_steps\":%u,\"lptdi_post_ioctl_trace_code\":\"0x%08x\",\"diagnostic_idle_timeout_ms\":%u,\"graphics_draw_diagnostics\":%s,\"present_sync\":%lu,\"color_depth\":%lu}",
                      target->id.c_str(),
                      executable.generic_string().c_str(),
                      chd_path.generic_string().c_str(),
@@ -9880,7 +9899,8 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                      lptdi_post_ioctl_trace_code,
                      diagnostic_idle_timeout_ms,
                      graphics_draw_diagnostics ? "true" : "false",
-                     present_sync);
+                     present_sync,
+                     color_depth);
     if (hardlock_cfg_replay || hardlock_cfg_tail || hardlock_cfg_map)
     {
         // Records which material a profile default applied, never its values.
@@ -10323,6 +10343,21 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
                                      runtime_base + present_sync_rva,
                                      reinterpret_cast<const std::uint8_t*>(&present_sync_value),
                                      sizeof(present_sync_value),
+                                     &error);
+            }
+
+            // Likewise the colour depth, whose runtime default is 16 bits.
+            if (d3d3_prepared && color_depth != 0)
+            {
+                std::uint32_t color_depth_rva = 0;
+                const DWORD color_depth_value = static_cast<DWORD>(color_depth);
+                d3d3_prepared =
+                    re2dj::platform::windows::FindPe32ExportRva(
+                        runtime_path, "g_re2dj_color_depth", &color_depth_rva, &error) &&
+                    WriteRemoteBytes(child.hProcess,
+                                     runtime_base + color_depth_rva,
+                                     reinterpret_cast<const std::uint8_t*>(&color_depth_value),
+                                     sizeof(color_depth_value),
                                      &error);
             }
 
@@ -11944,6 +11979,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.hle_d3d3 = child_hle_d3d3;
         child_follow_options.graphics_draw_diagnostics = graphics_draw_diagnostics;
         child_follow_options.present_sync = present_sync;
+        child_follow_options.color_depth = color_depth;
         child_follow_options.fullscreen = child_fullscreen;
         child_follow_options.hle_directsound = child_hle_directsound;
         child_follow_options.hle_io_ports = child_hle_io_ports;

@@ -22,6 +22,8 @@ inline constexpr GdiPixelLayout kGdiRgb565 = {16, {0xF800U, 0x07E0U, 0x001FU}};
 inline constexpr GdiPixelLayout kGdiBgr888 = {24, {0xFF0000U, 0x00FF00U, 0x0000FFU}};
 // A COLORREF (0x00BBGGRR) as a pixel: red in the low byte.
 inline constexpr GdiPixelLayout kGdiColorref = {24, {0x0000FFU, 0x00FF00U, 0xFF0000U}};
+// A true-color plane pixel (graphics/true_color.h), 0x00RRGGBB.
+inline constexpr GdiPixelLayout kGdiXrgb8888 = {32, {0xFF0000U, 0x00FF00U, 0x0000FFU}};
 
 // A channel moved between widths: narrowing drops low bits, widening repeats
 // the high bits below them (5-bit green 0x1F becomes 6-bit 0x3F).

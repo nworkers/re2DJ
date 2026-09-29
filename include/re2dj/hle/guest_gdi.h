@@ -4,7 +4,10 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <vector>
+
+#include "re2dj/graphics/true_color.h"
 
 // The GDI objects the Linux facade models: device contexts, the bitmaps
 // selected into them, and solid brushes. A bitmap's pixels live in guest memory: a DirectDraw
@@ -33,6 +36,11 @@ struct GuestBitmap
     // DeleteObject came while a DC had the bitmap selected: it goes when
     // deselected, as on Windows.
     bool delete_pending = false;
+    // A DirectDraw surface's true-color plane, shared with the surface, when
+    // it has one: GDI drawing writes the same pixels there at 8 bits per
+    // channel, so what reaches the surface at 24 bits keeps them (see
+    // graphics/true_color.h). Rows run top-down whatever top_down says.
+    std::shared_ptr<graphics::TrueColorPlane> true_color;
 };
 
 // A device context and what is selected into it.

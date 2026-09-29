@@ -936,6 +936,13 @@ bool FillRect(const ImportCall& call, ImportReturn* result, std::string* error)
             {
                 return Fail(error, "user32 FillRect cannot write the bitmap: " + write_error);
             }
+            // A surface's true-color plane takes the brush colour at 24 bits.
+            if (bitmap->true_color != nullptr)
+            {
+                std::uint32_t* const plane_row = bitmap->true_color->Row(static_cast<std::uint32_t>(y));
+                std::fill(plane_row + area.left, plane_row + area.right,
+                          ConvertGdiPixel(*color, kGdiColorref, kGdiXrgb8888));
+            }
         }
     }
     result->eax = 1;
@@ -1011,9 +1018,14 @@ bool DrawTextPixels(const ImportCall& call,
     const GdiPixelLayout layout = has_masks ? GdiPixelLayout{16, bitmap->masks} : kGdiRgb555;
     const std::uint32_t text_pixel = ConvertGdiPixel(dc->text_color, kGdiColorref, layout);
     const std::uint32_t background_pixel = ConvertGdiPixel(dc->background_color, kGdiColorref, layout);
+    // A surface's true-color plane takes both colours at 24 bits.
+    const std::uint32_t text_true_color = ConvertGdiPixel(dc->text_color, kGdiColorref, kGdiXrgb8888);
+    const std::uint32_t background_true_color = ConvertGdiPixel(dc->background_color, kGdiColorref, kGdiXrgb8888);
     std::vector<std::uint8_t> row(static_cast<std::size_t>(clip.right - clip.left) * 2);
     for (std::int32_t py = clip.top; py < clip.bottom; ++py)
     {
+        std::uint32_t* const plane_row =
+            bitmap->true_color == nullptr ? nullptr : bitmap->true_color->Row(static_cast<std::uint32_t>(py));
         const std::uint32_t line =
             bitmap->top_down ? static_cast<std::uint32_t>(py) : bitmap->height - 1 - static_cast<std::uint32_t>(py);
         const std::uint32_t address = bitmap->bits + line * bitmap->pitch + static_cast<std::uint32_t>(clip.left) * 2;
@@ -1031,10 +1043,18 @@ bool DrawTextPixels(const ImportCall& call,
             if (set)
             {
                 WriteGdiPixel(span, 16, text_pixel);
+                if (plane_row != nullptr)
+                {
+                    plane_row[px] = text_true_color;
+                }
             }
             else if (opaque)
             {
                 WriteGdiPixel(span, 16, background_pixel);
+                if (plane_row != nullptr)
+                {
+                    plane_row[px] = background_true_color;
+                }
             }
         }
         if (!call.services->WriteGuestBytes(runtime::GuestAddress(address), row, &access_error))

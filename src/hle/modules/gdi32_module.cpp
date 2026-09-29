@@ -342,6 +342,9 @@ bool StretchDIBits(const ImportCall& call, ImportReturn* result, std::string* er
             return false;
         }
         target_row.assign(static_cast<std::size_t>(end_column - first_column) * 2, 0);
+        // A surface's true-color plane takes the source pixel at its own depth.
+        std::uint32_t* const plane_row =
+            target->true_color == nullptr ? nullptr : target->true_color->Row(static_cast<std::uint32_t>(target_y));
         for (std::int32_t column = first_column; column < end_column; ++column)
         {
             const std::uint32_t source_x =
@@ -350,13 +353,15 @@ bool StretchDIBits(const ImportCall& call, ImportReturn* result, std::string* er
                                    static_cast<std::uint32_t>(src_width));
             const std::span<const std::uint8_t> source_pixel =
                 std::span<const std::uint8_t>(source_row).subspan(source_x * source_pixel_bytes);
-            const std::uint32_t converted =
-                palette.empty()
-                    ? ConvertGdiPixel(ReadGdiPixel(source_pixel, source_layout.bits_per_pixel), source_layout,
-                                      target_layout)
-                    : ConvertGdiPixel(palette[source_pixel[0]], kGdiBgr888, target_layout);
+            const std::uint32_t pixel =
+                palette.empty() ? ReadGdiPixel(source_pixel, source_layout.bits_per_pixel) : palette[source_pixel[0]];
+            const GdiPixelLayout& layout = palette.empty() ? source_layout : kGdiBgr888;
             WriteGdiPixel(std::span<std::uint8_t>(target_row).subspan(static_cast<std::size_t>(column - first_column) * 2),
-                          16, converted);
+                          16, ConvertGdiPixel(pixel, layout, target_layout));
+            if (plane_row != nullptr)
+            {
+                plane_row[column] = ConvertGdiPixel(pixel, layout, kGdiXrgb8888);
+            }
         }
         const std::uint32_t target_memory_row =
             target->top_down ? static_cast<std::uint32_t>(target_y) : target->height - 1 - static_cast<std::uint32_t>(target_y);

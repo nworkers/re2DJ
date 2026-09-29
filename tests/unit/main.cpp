@@ -63,6 +63,7 @@ int main()
     RunEz2DjKeyboardMapTests(context);
     RunGuestFindTests(context);
     RunLegacyTextureTests(context);
+    RunTrueColorTests(context);
     RunLegacyTransformTests(context);
     RunLegacyVertexBufferTests(context);
     RunLegacyAudioBufferTests(context);

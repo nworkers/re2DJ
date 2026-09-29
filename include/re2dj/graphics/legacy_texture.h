@@ -23,6 +23,12 @@ struct LegacyTextureView
     std::uint64_t identity = 0;
     std::uint64_t revision = 0;
     Rgb565ColorKey source_color_key;
+    // The surface's true-color plane when it has one (true_color.h): XRGB8888
+    // rows true_color_stride pixels apart, the size of the RGB565 pixels. A
+    // 32-bit render target takes its colours from here and its colour key
+    // from the RGB565 pixels.
+    const std::uint32_t* true_color = nullptr;
+    std::size_t true_color_stride = 0;
 };
 
 struct Rgb565SurfaceView

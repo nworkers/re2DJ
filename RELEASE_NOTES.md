@@ -1,5 +1,73 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.58 (2026-09-30)
+
+### 한국어
+
+32비트 트루컬러 표면 모드를 선택 옵션으로 추가했습니다(작업 429). 게스트는 그대로 16비트 화면과 RGB565 표면을 쓰고, host가 표면마다 32비트 사본을 함께 유지해 더 부드러운 색으로 그립니다. 기본값은 지금과 같은 16비트입니다.
+
+#### 1. 트루컬러 표면 (작업 429)
+- **색 사본**
+  - 표면마다 host 쪽 XRGB8888 사본을 둡니다.
+  - GDI, Blt/BltFast, 색 채우기, Clear, 텍스처 Load, Unlock이 이 사본을 16비트 표면과 함께 갱신합니다.
+  - 렌더 타깃은 선택에 따라 `GL_RGB565`와 `GL_RGB8` 사이를 오가며 내용을 옮깁니다. `GL_RGB8`을 쓸 수 없으면 16비트로 남습니다.
+- **선택 방법**
+  - `--color-depth 16|32`로 고릅니다(기본 16).
+  - 실행 중에는 OSD의 "32-bit color" 토글로 바꿉니다.
+  - 공용 core(`color_depth`, `true_color`, `ui::AddColorDepthToggle`)를 Windows와 Linux가 함께 씁니다.
+- **Linux OSD**: Linux host에도 Windows와 같은 OSD(백틱, 마우스, 정보 줄)가 생겼습니다.
+- **Windows**
+  - DX6 facade가 32bpp DIB 사본을 씁니다.
+  - 그래픽 trace에 선택한 색 깊이와 렌더 타깃 깊이를 기록합니다.
+
+#### 2. 확인된 효과
+- Linux 1st SE에서 16비트는 금속 배경과 어두운 장면에 가로 띠와 색 얼룩이 보였습니다. 32비트에서는 부드러운 그라데이션으로 나옵니다.
+- 같은 프레임의 한 영역에서 고유 색 수가 16비트 61개에서 32비트 351개로 늘었습니다.
+
+#### 3. 미확정
+- 실제 마우스로 OSD 토글을 눌러 실행 중에 전환되는지는 두 host 모두 아직 보지 못했습니다. 실행 중 전환 자체는 실제 GL에서 true-color probe로 확인했습니다.
+- Windows 32비트 화면은 작업 당시 데스크톱이 잠겨 있어 캡처하지 못했습니다.
+
+#### 4. 검증
+- Windows x86 CTest 6개와 Linux x64·x86 CTest 4개가 통과합니다(단위 5644 / 5641 checks).
+- true-color probe는 두 host에서 모두 통과합니다(13 checks).
+- Windows blend probe의 "white mask preserves background" 한 검사는 이 변경 전 main에서도 같은 값으로 실패합니다. host 드라이버의 필터링 결과로 추정합니다.
+
+---
+
+### English
+
+An optional 32-bit true-color surface mode is added (task 429). The guest keeps its 16-bit display and RGB565 surfaces; the host keeps a 32-bit copy of each surface alongside and draws from it with smoother colour. The default stays 16-bit, as before.
+
+#### 1. True-color surfaces (task 429)
+- **Colour copy**
+  - Each surface can carry a host-side XRGB8888 copy.
+  - GDI, Blt/BltFast, colour fills, Clear, texture Load, and Unlock keep that copy in step with the 16-bit surface.
+  - The render target moves between `GL_RGB565` and `GL_RGB8` with the selection, carrying its contents, and stays 16-bit when `GL_RGB8` is unavailable.
+- **Choosing it**
+  - `--color-depth 16|32` selects it (default 16).
+  - The OSD's "32-bit color" toggle switches it while running.
+  - Windows and Linux share the cores (`color_depth`, `true_color`, `ui::AddColorDepthToggle`).
+- **Linux OSD**: The Linux host now has the same OSD as Windows (backtick, mouse, information lines).
+- **Windows**
+  - The DX6 facade keeps a 32bpp DIB copy.
+  - The graphics trace records the selected depth and the render target's depth.
+
+#### 2. Observed effect
+- On Linux 1st SE, 16 bits showed horizontal bands and colour blotches on metal backgrounds and dark scenes; 32 bits shows smooth gradients.
+- In one area of the same frame, the number of distinct colours rose from 61 at 16 bits to 351 at 32 bits.
+
+#### 3. Unresolved
+- Whether a real mouse click on the OSD toggle switches depth while running has not been seen on either host yet. The run-time switch itself was confirmed on real GL by the true-color probe.
+- The Windows 32-bit picture was not captured, because the desktop was locked during the task.
+
+#### 4. Validation
+- All 6 Windows x86 CTest tests and all 4 Linux x64/x86 CTest tests pass (5644 / 5641 unit checks).
+- The true-color probe passes on both hosts (13 checks).
+- One Windows blend-probe check, "white mask preserves background", fails with the same value on main before this change. It is inferred to be the host driver's filtering result.
+
+---
+
 ## v0.0.57 (2026-09-30)
 
 ### 한국어

@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
 #include "re2dj/graphics/present_overlay.h"
@@ -59,10 +60,16 @@ public:
     // Fills the logical render target with one RGB565 color for an explicit
     // guest clear that does not arrive as a draw command.
     bool ClearRenderTarget(std::uint16_t rgb565_color, std::string* error);
+    // The same with an XRGB8888 colour, for a clear whose guest colour is
+    // 8 bits per channel while 32-bit colour is selected.
+    bool ClearRenderTargetColor(std::uint32_t xrgb, std::string* error);
     // Copies the logical render target's RGB565 pixels in [x, y, width,
     // height] (guest coordinates, top row first) out to, or in from, rows
     // pitch bytes apart starting at the rectangle's first pixel: what a guest
     // Lock of the surface it renders into sees, and what its Unlock puts back.
+    // On a 32-bit target a read narrows the colours as a true-color plane
+    // does, and a write keeps every pixel that still narrows to what the guest
+    // wrote (true_color.h).
     bool ReadRenderTarget(std::uint32_t x,
                           std::uint32_t y,
                           std::uint32_t width,
@@ -107,6 +114,14 @@ public:
     // backend paces them at the display rate itself (present_pacer.h). The
     // host reads it and records when it turns on.
     bool software_pacing_engaged() const;
+    // The logical render target's colour depth. It follows the process's
+    // selection (color_depth.h) from the next operation after a change, and
+    // stays 16-bit when the driver cannot render into RGB8, which
+    // true_color_unavailable() then reports for the host to record. While it
+    // is 32-bit, textures take their colours from the surfaces' true-color
+    // planes.
+    ColorDepth render_target_depth() const;
+    bool true_color_unavailable() const;
 
     // The primary display's desktop mode, read without a window: its size,
     // bits per pixel (bytes per pixel times eight, as Windows reports a
@@ -119,6 +134,8 @@ public:
                                         std::string* error);
 
 private:
+    bool ClearTo(float red, float green, float blue, std::string* error);
+
     struct Impl;
     Impl* impl_ = nullptr;
 };

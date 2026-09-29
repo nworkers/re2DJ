@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/ui/display_controls.h"
 #include "re2dj/version.h"
 
 extern "C" __declspec(dllexport) unsigned long g_re2dj_autoplay_flag_address = 0;
@@ -68,6 +69,8 @@ void RegisterGameControls(re2dj::ui::Osd* osd)
         autoplay.write = &WriteAutoplay;
         osd->AddToggle(autoplay);
     }
+    // Every run offers it, as the Linux host's OSD does.
+    re2dj::ui::AddColorDepthToggle(osd);
 }
 
 }  // namespace re2dj::platform::windows

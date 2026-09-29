@@ -136,8 +136,13 @@ bool SurfaceTextureView(const ImportCall& call,
                         graphics::LegacyTextureView* view,
                         std::string* error);
 // Fills a surface's pixels with one 5-6-5 color, as a full target clear
-// does.
-bool FillSurface(const ImportCall& call, GuestProcess& process, std::uint32_t surface, std::uint16_t color,
+// does, and its true-color plane, when it has one or 32-bit colour is
+// selected, with true_color (XRGB8888, narrowing to color).
+bool FillSurface(const ImportCall& call,
+                 GuestProcess& process,
+                 std::uint32_t surface,
+                 std::uint16_t color,
+                 std::uint32_t true_color,
                  std::string* error);
 
 // IDirect3D7 in vtable order (ddraw_direct3d7.cpp).

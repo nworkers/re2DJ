@@ -9,6 +9,8 @@
 #include "memory_services.h"
 #include "re2dj/directx/direct3d_description.h"
 #include "re2dj/directx/directdraw_description.h"
+#include "re2dj/graphics/color_depth.h"
+#include "re2dj/graphics/true_color.h"
 #include "re2dj/hle/guest_process.h"
 #include "re2dj/hle/guest_user.h"
 #include "re2dj/hle/host_presentation.h"
@@ -900,6 +902,12 @@ public:
         clears.push_back(rgb565);
         return true;
     }
+    std::vector<std::uint32_t> true_color_clears;
+    bool ClearTargetColor(std::uint32_t xrgb, std::string*) override
+    {
+        true_color_clears.push_back(xrgb);
+        return true;
+    }
     // Reads fill each pixel with target_pixel; writes keep their rectangle
     // and first pixel.
     std::uint16_t target_pixel = 0;
@@ -954,8 +962,16 @@ public:
     {
         draws.push_back(command);
         textured.push_back(texture != nullptr);
+        // The first row of the texture's true-color plane, empty without one.
+        std::vector<std::uint32_t> plane_row;
+        if (texture != nullptr && texture->true_color != nullptr)
+        {
+            plane_row.assign(texture->true_color, texture->true_color + texture->width);
+        }
+        true_color_rows.push_back(plane_row);
         return true;
     }
+    std::vector<std::vector<std::uint32_t>> true_color_rows;
     bool Present(std::string*) override
     {
         ++presents;
@@ -2084,6 +2100,247 @@ void CheckSurfaceDc(re2dj::test::Context& context)
     RE2DJ_CHECK(context, services.Process()->gdi().FindDc(dc) == nullptr);
 }
 
+// Selects a colour depth for one test and puts the default back after it.
+class ScopedColorDepth
+{
+public:
+    explicit ScopedColorDepth(re2dj::graphics::ColorDepth depth) { re2dj::graphics::SelectColorDepth(depth); }
+    ~ScopedColorDepth() { re2dj::graphics::SelectColorDepth(re2dj::graphics::ColorDepth::k16); }
+    ScopedColorDepth(const ScopedColorDepth&) = delete;
+    ScopedColorDepth& operator=(const ScopedColorDepth&) = delete;
+};
+
+// 32-bit colour (design 429): the guest's RGB565 pixels stay what 16-bit
+// colour gives, while each surface's true-color plane keeps what GDI, clears,
+// copies, and fills put there at 8 bits per channel, the pixels a guest lock
+// changed are widened, and textures reach the host with their plane.
+void CheckTrueColorSurfaces(re2dj::test::Context& context)
+{
+    namespace dx = re2dj::directx;
+    namespace graphics = re2dj::graphics;
+    const ScopedColorDepth depth(graphics::ColorDepth::k32);
+    const auto descriptor = modules::MakeDdrawModuleDescriptor();
+    const auto gdi32 = modules::MakeGdi32ModuleDescriptor();
+    FakePresentation presentation;
+    MemoryServices services;
+    services.presentation = &presentation;
+    const std::uint32_t direct_draw = CreateDirectDraw(context, services, descriptor);
+    const auto call = [&](const char* name, std::initializer_list<std::uint32_t> arguments) {
+        return CallModuleExport(context, services, descriptor, name, arguments).eax;
+    };
+    constexpr std::uint32_t kGuid = MemoryServices::kBase + 0x40;
+    constexpr std::uint32_t kOut = MemoryServices::kBase + 0x70;
+    constexpr std::uint32_t kData = MemoryServices::kBase + 0x100;
+    const auto put_desc = [&](const dx::DdSurfaceDesc2& desc) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(&desc);
+        for (std::uint32_t index = 0; index < sizeof(desc); ++index)
+        {
+            services.Byte(kData + index) = bytes[index];
+        }
+    };
+    const auto put_guid = [&](const dx::Guid& guid) {
+        for (std::uint32_t index = 0; index < 16; ++index)
+        {
+            services.Byte(kGuid + index) = guid[index];
+        }
+    };
+    dx::DdSurfaceDesc2 primary;
+    primary.size = sizeof(primary);
+    primary.flags = dx::kDdsdCaps | dx::kDdsdBackBufferCount;
+    primary.caps.caps = 0x00002218U;
+    primary.back_buffer_count = 1;
+    put_desc(primary);
+    call("IDirectDraw7::CreateSurface", {direct_draw, kData, kOut, 0});
+    const std::uint32_t front = services.U32(kOut);
+    services.PutU32(kData, dx::kDdsCapsBackBuffer);
+    call("IDirectDrawSurface7::GetAttachedSurface", {front, kData, kOut});
+    const std::uint32_t back = services.U32(kOut);
+    dx::DdSurfaceDesc2 texture_desc;
+    texture_desc.size = sizeof(texture_desc);
+    texture_desc.flags = 0x00001007U;
+    texture_desc.caps.caps = 0x10005000U;
+    texture_desc.width = 4;
+    texture_desc.height = 2;
+    texture_desc.pixel_format = dx::Rgb565Format();
+    put_desc(texture_desc);
+    call("IDirectDraw7::CreateSurface", {direct_draw, kData, kOut, 0});
+    const std::uint32_t texture = services.U32(kOut);
+    put_desc(texture_desc);
+    call("IDirectDraw7::CreateSurface", {direct_draw, kData, kOut, 0});
+    const std::uint32_t copy = services.U32(kOut);
+    put_guid(dx::kIidDirect3D7);
+    call("IDirectDraw7::QueryInterface", {direct_draw, kGuid, kOut});
+    const std::uint32_t direct3d = services.U32(kOut);
+    put_guid(dx::kIidDirect3DHalDevice);
+    call("IDirect3D7::CreateDevice", {direct3d, kGuid, back, kOut});
+    const std::uint32_t device = services.U32(kOut);
+
+    // A surface's DC, its RGB565 pixels, and its plane.
+    struct SurfaceDc
+    {
+        std::uint32_t dc = 0;
+        std::uint32_t pixels = 0;
+        std::uint32_t pitch = 0;
+        const re2dj::hle::GuestBitmap* bitmap = nullptr;
+    };
+    const auto open_dc = [&](std::uint32_t surface) {
+        SurfaceDc result;
+        RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::GetDC", {surface, kOut}), dx::kDdOk);
+        result.dc = services.U32(kOut);
+        const re2dj::hle::GuestDc* guest_dc = services.Process()->gdi().FindDc(result.dc);
+        result.bitmap = guest_dc == nullptr ? nullptr : services.Process()->gdi().FindBitmap(guest_dc->bitmap);
+        if (result.bitmap != nullptr)
+        {
+            result.pixels = result.bitmap->bits;
+            result.pitch = result.bitmap->pitch;
+        }
+        return result;
+    };
+    const auto rgb565 = [&](const SurfaceDc& surface, std::uint32_t x, std::uint32_t y) {
+        return static_cast<std::uint32_t>(services.Byte(surface.pixels + y * surface.pitch + x * 2) |
+                                          (services.Byte(surface.pixels + y * surface.pitch + x * 2 + 1) << 8));
+    };
+    const auto plane = [&](const SurfaceDc& surface, std::uint32_t x, std::uint32_t y) {
+        return surface.bitmap == nullptr || surface.bitmap->true_color == nullptr
+                   ? 0xFFFFFFFFU
+                   : surface.bitmap->true_color->Row(y)[x];
+    };
+
+    // A whole-target clear keeps the guest's 8-bit channels on the host and in
+    // the back buffer's plane, and gives the RGB565 pixels their narrowing.
+    call("IDirect3DDevice7::Clear", {device, 0, 0, dx::kD3dClearTarget, 0x80123456U, 0, 0});
+    RE2DJ_CHECK(context, presentation.clears.empty());
+    RE2DJ_CHECK(context, presentation.true_color_clears == std::vector<std::uint32_t>{0x00123456U});
+    const SurfaceDc back_dc = open_dc(back);
+    RE2DJ_CHECK_EQ(context, rgb565(back_dc, 0, 0), 0x11AAU);
+    RE2DJ_CHECK_EQ(context, plane(back_dc, 639, 479), 0x00123456U);
+    call("IDirectDrawSurface7::ReleaseDC", {back, back_dc.dc});
+
+    // A bottom-up 4x2 24-bit DIB through the texture's DC: RGB565 narrowed as
+    // in 16-bit colour, the plane as given.
+    constexpr std::uint32_t kInfo = MemoryServices::kBase + 0x4000;
+    constexpr std::uint32_t kBits = MemoryServices::kBase + 0x4100;
+    services.PutU32(kInfo, 40);
+    services.PutU32(kInfo + 4, 4);
+    services.PutU32(kInfo + 8, 2);
+    services.PutU32(kInfo + 12, 0x00180001U);
+    services.PutU32(kInfo + 16, 0);
+    const std::uint32_t top[4] = {0x7F8081U, 0x070803U, 0xFFFFFFU, 0x000001U};
+    const std::uint32_t bottom[4] = {0x123456U, 0xABCDEFU, 0x808080U, 0x010203U};
+    for (std::uint32_t x = 0; x < 4; ++x)
+    {
+        // Stored bottom row first, each pixel blue, green, red.
+        for (std::uint32_t channel = 0; channel < 3; ++channel)
+        {
+            services.Byte(kBits + x * 3 + channel) = static_cast<std::uint8_t>(bottom[x] >> (8 * channel));
+            services.Byte(kBits + 12 + x * 3 + channel) = static_cast<std::uint8_t>(top[x] >> (8 * channel));
+        }
+    }
+    const SurfaceDc texture_dc = open_dc(texture);
+    RE2DJ_CHECK_EQ(context,
+                   CallModuleExport(context, services, gdi32, "StretchDIBits",
+                                    {texture_dc.dc, 0, 0, 4, 2, 0, 0, 4, 2, kBits, kInfo, 0, 0x00CC0020U}).eax,
+                   2U);
+    bool gdi_matches = true;
+    for (std::uint32_t x = 0; x < 4; ++x)
+    {
+        gdi_matches &= plane(texture_dc, x, 0) == top[x] && plane(texture_dc, x, 1) == bottom[x];
+        gdi_matches &= rgb565(texture_dc, x, 0) == graphics::NarrowToRgb565(top[x]);
+        gdi_matches &= rgb565(texture_dc, x, 1) == graphics::NarrowToRgb565(bottom[x]);
+    }
+    RE2DJ_CHECK(context, gdi_matches);
+    call("IDirectDrawSurface7::ReleaseDC", {texture, texture_dc.dc});
+
+    // The texture reaches the host with its plane.
+    call("IDirect3DDevice7::SetTexture", {device, 0, texture});
+    constexpr std::uint32_t kVertices = MemoryServices::kBase + 0x400;
+    for (std::uint32_t index = 0; index < 4; ++index)
+    {
+        const std::uint32_t vertex = kVertices + index * 32;
+        const float corner[2] = {index < 2 ? 0.0f : 640.0f, index % 2 == 0 ? 480.0f : 0.0f};
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &corner[0], sizeof(bits));
+        services.PutU32(vertex, bits);
+        std::memcpy(&bits, &corner[1], sizeof(bits));
+        services.PutU32(vertex + 4, bits);
+        services.PutU32(vertex + 8, 0x3F000000U);
+        services.PutU32(vertex + 12, 0x3F800000U);
+        services.PutU32(vertex + 16, 0xFFFFFFFFU);
+    }
+    call("IDirect3DDevice7::DrawPrimitive", {device, dx::kD3dPtTriangleStrip, dx::kD3dFvfTlVertex, kVertices, 4, 0});
+    RE2DJ_CHECK_EQ(context, presentation.true_color_rows.size(), std::size_t{1});
+    if (presentation.true_color_rows.size() == 1)
+    {
+        RE2DJ_CHECK(context, presentation.true_color_rows[0] == std::vector<std::uint32_t>(top, top + 4));
+    }
+
+    // A lock: the pixel the guest changed is widened, the others keep theirs.
+    constexpr std::uint32_t kLockDesc = MemoryServices::kBase + 0x3000;
+    services.PutU32(kLockDesc, sizeof(dx::DdSurfaceDesc2));
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::Lock", {texture, 0, kLockDesc, 1, 0}), dx::kDdOk);
+    const std::uint32_t locked = services.U32(kLockDesc + 36);
+    services.Byte(locked + 2) = 0x1F;
+    services.Byte(locked + 3) = 0x00;
+    call("IDirectDrawSurface7::Unlock", {texture, 0});
+    const SurfaceDc relocked = open_dc(texture);
+    RE2DJ_CHECK_EQ(context, plane(relocked, 0, 0), top[0]);
+    RE2DJ_CHECK_EQ(context, plane(relocked, 1, 0), graphics::WidenRgb565(0x001F));
+    RE2DJ_CHECK_EQ(context, plane(relocked, 2, 0), top[2]);
+    call("IDirectDrawSurface7::ReleaseDC", {texture, relocked.dc});
+
+    // A keyed copy takes the source's plane where the source's RGB565 pixel
+    // is not the key, and a partial colour fill widens its RGB565 colour.
+    constexpr std::uint32_t kKey = MemoryServices::kBase + 0x60;
+    const std::uint32_t key = graphics::NarrowToRgb565(top[2]);
+    services.PutU32(kKey, key);
+    services.PutU32(kKey + 4, key);
+    call("IDirectDrawSurface7::SetColorKey", {texture, dx::kDdckeySrcBlt, kKey});
+    RE2DJ_CHECK_EQ(context,
+                   call("IDirectDrawSurface7::BltFast", {copy, 0, 0, texture, 0, dx::kDdBltFastSrcColorKey}),
+                   dx::kDdOk);
+    constexpr std::uint32_t kFx = MemoryServices::kBase + 0x3200;
+    constexpr std::uint32_t kFillRect = MemoryServices::kBase + 0x3300;
+    services.PutU32(kFx, dx::kDdBltFxSize);
+    services.PutU32(kFx + dx::kDdBltFxFillColorOffset, 0x8410);
+    services.PutU32(kFillRect, 3);
+    services.PutU32(kFillRect + 4, 1);
+    services.PutU32(kFillRect + 8, 4);
+    services.PutU32(kFillRect + 12, 2);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::Blt", {copy, kFillRect, 0, 0, dx::kDdBltColorFill, kFx}),
+                   dx::kDdOk);
+    const SurfaceDc copy_dc = open_dc(copy);
+    RE2DJ_CHECK_EQ(context, plane(copy_dc, 0, 0), top[0]);
+    RE2DJ_CHECK_EQ(context, plane(copy_dc, 2, 0), 0U);
+    RE2DJ_CHECK_EQ(context, plane(copy_dc, 1, 1), bottom[1]);
+    RE2DJ_CHECK_EQ(context, plane(copy_dc, 3, 1), graphics::WidenRgb565(0x8410));
+    RE2DJ_CHECK_EQ(context, rgb565(copy_dc, 1, 1), graphics::NarrowToRgb565(bottom[1]));
+    call("IDirectDrawSurface7::ReleaseDC", {copy, copy_dc.dc});
+
+    // A surface made in 16-bit colour has no plane until 32-bit colour needs
+    // one; its first texture view then widens its RGB565 pixels.
+    graphics::SelectColorDepth(graphics::ColorDepth::k16);
+    put_desc(texture_desc);
+    call("IDirectDraw7::CreateSurface", {direct_draw, kData, kOut, 0});
+    const std::uint32_t plain = services.U32(kOut);
+    const SurfaceDc plain_dc = open_dc(plain);
+    RE2DJ_CHECK(context, plain_dc.bitmap != nullptr && plain_dc.bitmap->true_color == nullptr);
+    services.Byte(plain_dc.pixels) = 0x10;
+    services.Byte(plain_dc.pixels + 1) = 0x84;
+    call("IDirectDrawSurface7::ReleaseDC", {plain, plain_dc.dc});
+    call("IDirect3DDevice7::SetTexture", {device, 0, plain});
+    call("IDirect3DDevice7::DrawPrimitive", {device, dx::kD3dPtTriangleStrip, dx::kD3dFvfTlVertex, kVertices, 4, 0});
+    graphics::SelectColorDepth(graphics::ColorDepth::k32);
+    call("IDirect3DDevice7::DrawPrimitive", {device, dx::kD3dPtTriangleStrip, dx::kD3dFvfTlVertex, kVertices, 4, 0});
+    RE2DJ_CHECK_EQ(context, presentation.true_color_rows.size(), std::size_t{3});
+    if (presentation.true_color_rows.size() == 3)
+    {
+        RE2DJ_CHECK(context, presentation.true_color_rows[1].empty());
+        RE2DJ_CHECK_EQ(context, presentation.true_color_rows[2].size(), std::size_t{4});
+        RE2DJ_CHECK_EQ(context, presentation.true_color_rows[2][0], graphics::WidenRgb565(0x8410));
+    }
+    call("IDirect3DDevice7::SetTexture", {device, 0, 0});
+}
+
 }  // namespace
 
 void RunDdrawModuleTests(re2dj::test::Context& context)
@@ -2093,6 +2350,7 @@ void RunDdrawModuleTests(re2dj::test::Context& context)
     CheckEnumSurfaces(context);
     CheckDrawing(context);
     CheckSurfaceDc(context);
+    CheckTrueColorSurfaces(context);
     CheckDevice(context);
     CheckSurfaces(context);
     CheckHostWindow(context);

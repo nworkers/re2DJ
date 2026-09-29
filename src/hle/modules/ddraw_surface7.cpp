@@ -16,8 +16,10 @@
 #include "re2dj/directx/abi.h"
 #include "re2dj/directx/direct3d_description.h"
 #include "re2dj/directx/directdraw_surface.h"
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/true_color.h"
 #include "re2dj/hle/guest_com.h"
 #include "re2dj/hle/guest_gdi.h"
 #include "re2dj/hle/guest_process.h"
@@ -68,6 +70,10 @@ struct SurfaceState final : GuestComState
     std::uint64_t revision = 1;
     std::uint64_t cached_revision = 0;
     std::vector<std::uint8_t> cached_pixels;
+    // The pixels at 8 bits per channel, from the first time 32-bit colour
+    // needed them until the surface goes (graphics/true_color.h). Shared with
+    // the DC's bitmap, so GDI drawing writes it too.
+    std::shared_ptr<graphics::TrueColorPlane> true_color;
     // The host that may hold a texture made from the pixels; it outlives the
     // guest process.
     hle::HostPresentation* presentation = nullptr;
@@ -104,6 +110,58 @@ SurfaceState* StateOf(GuestProcess& process, std::uint32_t surface)
 {
     const GuestComObject* object = process.com().Find(surface);
     return object == nullptr ? nullptr : object->StateAs<SurfaceState>();
+}
+
+// Gives a surface a true-color plane, the RGB565 pixels widened, if it has
+// none yet, and hands it to the surface's DC bitmap as well. With widen off
+// the new plane stays black, for a caller about to overwrite all of it.
+bool EnsureTrueColor(const ImportCall& call, GuestProcess& process, SurfaceState& state, bool widen,
+                     std::string* error)
+{
+    if (state.true_color != nullptr || state.pixels == 0)
+    {
+        return true;
+    }
+    auto plane = std::make_shared<graphics::TrueColorPlane>(state.shape.width, state.shape.height);
+    if (widen)
+    {
+        std::vector<std::uint8_t> row(static_cast<std::size_t>(state.shape.width) * 2);
+        for (std::uint32_t y = 0; y < state.shape.height; ++y)
+        {
+            if (!com::ReadBytes(call, state.pixels + y * state.pitch, row, error))
+            {
+                return false;
+            }
+            graphics::WidenRgb565Row(row.data(), plane->Row(y), state.shape.width);
+        }
+    }
+    state.true_color = std::move(plane);
+    if (GuestBitmap* bitmap = state.dc_bitmap == 0 ? nullptr : process.gdi().FindBitmap(state.dc_bitmap))
+    {
+        bitmap->true_color = state.true_color;
+    }
+    return true;
+}
+
+// Matches a surface's plane, when it has one, to the RGB565 pixels in an area
+// the guest may have written itself (graphics::ReconcileTrueColorRow).
+bool ReconcileTrueColor(const ImportCall& call, SurfaceState& state, std::uint32_t x, std::uint32_t y,
+                        std::uint32_t width, std::uint32_t height, std::string* error)
+{
+    if (state.true_color == nullptr || width == 0)
+    {
+        return true;
+    }
+    std::vector<std::uint8_t> row(static_cast<std::size_t>(width) * 2);
+    for (std::uint32_t line = y; line < y + height; ++line)
+    {
+        if (!com::ReadBytes(call, state.pixels + line * state.pitch + x * 2, row, error))
+        {
+            return false;
+        }
+        graphics::ReconcileTrueColorRow(state.true_color->Row(line) + x, row.data(), width);
+    }
+    return true;
 }
 
 bool ReadGuestWord(const ImportCall& call, std::uint32_t address, std::uint32_t* value, std::string* error)
@@ -453,6 +511,11 @@ bool Unlock(const ImportCall& call, ImportReturn* result, std::string* error)
     ++state->revision;
     const bool was_locked = state->locked;
     state->locked = false;
+    if (was_locked && !ReconcileTrueColor(call, *state, state->lock_x, state->lock_y, state->lock_width,
+                                          state->lock_height, error))
+    {
+        return false;
+    }
     if (was_locked && IsPresentationSurface(*process, call.arguments[0]) && call.services->Presentation() != nullptr)
     {
         bool copied = false;
@@ -491,6 +554,11 @@ bool GetDC(const ImportCall& call, ImportReturn* result, std::string* error)
     {
         return Succeed(result, checked, error);
     }
+    // In 32-bit colour, what the guest draws through the DC is kept at 24 bits.
+    if (graphics::TrueColorSelected() && !EnsureTrueColor(call, *process, *state, true, error))
+    {
+        return false;
+    }
     if (state->dc == 0)
     {
         GuestBitmap bitmap;
@@ -502,6 +570,7 @@ bool GetDC(const ImportCall& call, ImportReturn* result, std::string* error)
         bitmap.top_down = true;
         const dx::DdPixelFormat format = dx::Rgb565Format();
         bitmap.masks = {format.red_mask, format.green_mask, format.blue_mask};
+        bitmap.true_color = state->true_color;
         state->dc_bitmap = process->gdi().AddBitmap(std::move(bitmap));
         GuestDc dc;
         dc.bitmap = state->dc_bitmap;
@@ -640,8 +709,14 @@ bool CopySurfaceRegion(const ImportCall& call,
     key.enabled = keyed;
     key.low = static_cast<std::uint16_t>(source->color_key.low);
     key.high = static_cast<std::uint16_t>(source->color_key.high);
+    // In 32-bit colour the target keeps what the source has at 24 bits.
+    if (graphics::TrueColorSelected() && !EnsureTrueColor(call, process, *target, true, error))
+    {
+        return false;
+    }
     std::vector<std::uint8_t> from(static_cast<std::size_t>(width) * 2);
     std::vector<std::uint8_t> into(from.size());
+    std::vector<std::uint32_t> source_line;
     for (std::uint32_t row = 0; row < height; ++row)
     {
         const std::uint32_t from_address =
@@ -651,6 +726,21 @@ bool CopySurfaceRegion(const ImportCall& call,
         if (!com::ReadBytes(call, from_address, from, error) || !com::ReadBytes(call, into_address, into, error))
         {
             return false;
+        }
+        // The plane side, deciding the key on the source row as read. The
+        // source plane row is read in full first, as the RGB565 row is, in
+        // case both are one surface's.
+        if (target->true_color != nullptr)
+        {
+            const std::uint32_t* source_plane = nullptr;
+            if (source->true_color != nullptr)
+            {
+                const std::uint32_t* const first =
+                    source->true_color->Row(static_cast<std::uint32_t>(rect[1]) + row) + rect[0];
+                source_line.assign(first, first + width);
+                source_plane = source_line.data();
+            }
+            graphics::CopyTrueColorRow(target->true_color->Row(y + row) + x, source_plane, from.data(), width, key);
         }
         for (std::size_t offset = 0; offset < from.size(); offset += 2)
         {
@@ -754,9 +844,10 @@ bool ColorFill(const ImportCall& call, ImportReturn* result, GuestProcess* proce
     const auto [left, top, right, bottom] = rect;
     const auto color = static_cast<std::uint16_t>(fx[dx::kDdBltFxFillColorOffset / 4]);
     const bool whole = left == 0 && top == 0 && right == width && bottom == height;
+    // The fill colour is an RGB565 pixel, so the plane gets it widened.
     if (whole)
     {
-        if (!FillSurface(call, *process, call.arguments[0], color, error))
+        if (!FillSurface(call, *process, call.arguments[0], color, graphics::WidenRgb565(color), error))
         {
             return false;
         }
@@ -776,6 +867,11 @@ bool ColorFill(const ImportCall& call, ImportReturn* result, GuestProcess* proce
                                  row, error))
             {
                 return false;
+            }
+            if (state->true_color != nullptr)
+            {
+                std::uint32_t* const plane_row = state->true_color->Row(static_cast<std::uint32_t>(y));
+                std::fill(plane_row + left, plane_row + right, graphics::WidenRgb565(color));
             }
         }
         ++state->revision;
@@ -992,6 +1088,11 @@ std::uint32_t MakeSurface(const ImportCall& call,
                 return 0;
             }
         }
+        // Zeroed pixels widen to a black plane, which a new one already is.
+        if (graphics::TrueColorSelected())
+        {
+            state->true_color = std::make_shared<graphics::TrueColorPlane>(shape.width, shape.height);
+        }
     }
     GuestComObject object;
     object.kind = kSurfaceObject;
@@ -1034,6 +1135,10 @@ bool SurfaceTextureView(const ImportCall& call,
     {
         return Fail(error, CallName(call) + " has no pixels to texture from");
     }
+    if (graphics::TrueColorSelected() && !EnsureTrueColor(call, process, *state, true, error))
+    {
+        return false;
+    }
     if (state->cached_revision != state->revision)
     {
         state->cached_pixels.resize(static_cast<std::size_t>(state->pitch) * state->shape.height);
@@ -1052,16 +1157,34 @@ bool SurfaceTextureView(const ImportCall& call,
     view->source_color_key.enabled = state->has_color_key;
     view->source_color_key.low = static_cast<std::uint16_t>(state->color_key.low);
     view->source_color_key.high = static_cast<std::uint16_t>(state->color_key.high);
+    // The plane lives in host memory and the backend copies it at upload, so
+    // it is handed over as it is rather than cached.
+    view->true_color = state->true_color == nullptr ? nullptr : state->true_color->Row(0);
+    view->true_color_stride = state->true_color == nullptr ? 0 : state->shape.width;
     return true;
 }
 
-bool FillSurface(const ImportCall& call, GuestProcess& process, std::uint32_t surface, std::uint16_t color,
+bool FillSurface(const ImportCall& call,
+                 GuestProcess& process,
+                 std::uint32_t surface,
+                 std::uint16_t color,
+                 std::uint32_t true_color,
                  std::string* error)
 {
     SurfaceState* state = StateOf(process, surface);
     if (state == nullptr || state->pixels == 0)
     {
         return Fail(error, CallName(call) + " has no pixels to fill");
+    }
+    // The whole plane is about to be written, so a new one need not widen.
+    if (graphics::TrueColorSelected() && !EnsureTrueColor(call, process, *state, false, error))
+    {
+        return false;
+    }
+    if (state->true_color != nullptr)
+    {
+        graphics::FillTrueColorRectangle(state->true_color->View(), {0, 0, state->shape.width, state->shape.height},
+                                         true_color);
     }
     // The rows are contiguous, so one write fills them and leaves one record
     // in the call log rather than one per row.
@@ -1148,7 +1271,13 @@ bool LoadTextureSurface(const ImportCall& call,
         *answer = dx::kDdErrSurfaceBusy;
         return true;
     }
-    // RGB565 rows, each row's padding cleared.
+    // In 32-bit colour the target keeps what the source has at 24 bits; the
+    // whole plane is about to be written, so a new one need not widen.
+    if (graphics::TrueColorSelected() && !EnsureTrueColor(call, process, *target, false, error))
+    {
+        return false;
+    }
+    // RGB565 rows, each row's padding cleared, and the plane's rows.
     const std::uint32_t row_bytes = target->shape.width * 2;
     std::vector<std::uint8_t> row(target->pitch, 0);
     for (std::uint32_t y = 0; y < target->shape.height; ++y)
@@ -1158,6 +1287,18 @@ bool LoadTextureSurface(const ImportCall& call,
             !com::WriteBytes(call, target->pixels + y * target->pitch, row, error))
         {
             return false;
+        }
+        if (target->true_color == nullptr)
+        {
+            continue;
+        }
+        if (from->true_color != nullptr)
+        {
+            std::copy_n(from->true_color->Row(y), target->shape.width, target->true_color->Row(y));
+        }
+        else
+        {
+            graphics::WidenRgb565Row(row.data(), target->true_color->Row(y), target->shape.width);
         }
     }
     target->has_color_key = from->has_color_key;

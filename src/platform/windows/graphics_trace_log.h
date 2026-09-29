@@ -57,4 +57,10 @@ bool AreCompleteDiagnosticsEnabled();
 // became explicit, so a launcher that never writes it changes nothing.
 re2dj::graphics::PresentSync SelectedPresentSync();
 
+// Selects the colour depth the launcher wrote into the exported
+// g_re2dj_color_depth word (graphics/color_depth.h), once per process: the
+// first DirectDraw object calls it, and later ones leave the selection, which
+// the OSD may have changed by then, alone.
+void ApplyLauncherColorDepth();
+
 }  // namespace re2dj::platform::windows

@@ -100,6 +100,8 @@ private:
 
 int main()
 {
+    // Unbuffered, so a run the driver cuts short still shows how far it got.
+    std::cout.setf(std::ios::unitbuf);
     try
     {
         Sdl3OpenGlBackend backend;

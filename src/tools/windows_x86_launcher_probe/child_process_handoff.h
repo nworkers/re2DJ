@@ -47,6 +47,9 @@ struct BootstrapChildHandoffOptions
     // Present synchronization policy for the child: 0 vertical sync,
     // 1 immediate, 2 adaptive. Zero is the runtime's own default.
     unsigned long present_sync = 0;
+    // Colour depth for the child in bits: 32, or zero for the runtime's own
+    // default of 16.
+    unsigned long color_depth = 0;
     bool fullscreen = false;
     bool hle_directsound = false;
     bool hle_io_ports = false;

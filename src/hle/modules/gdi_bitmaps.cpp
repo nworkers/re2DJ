@@ -415,11 +415,19 @@ bool StretchBlt(const ImportCall& call, ImportReturn* result, std::string* error
             return false;
         }
         target_row.assign(static_cast<std::size_t>(end_column - first_column) * 2, 0);
+        // A surface's true-color plane takes the source pixel at 24 bits.
+        std::uint32_t* const plane_row =
+            target->true_color == nullptr ? nullptr : target->true_color->Row(static_cast<std::uint32_t>(target_y));
         for (std::int32_t column = first_column; column < end_column; ++column)
         {
             const auto source_x = static_cast<std::uint32_t>(x_src + column - x_dest);
+            const std::uint32_t pixel = SourcePixel(*source, source_row, source_x);
             WriteGdiPixel(std::span<std::uint8_t>(target_row).subspan(static_cast<std::size_t>(column - first_column) * 2),
-                          16, ConvertGdiPixel(SourcePixel(*source, source_row, source_x), kGdiBgr888, target_layout));
+                          16, ConvertGdiPixel(pixel, kGdiBgr888, target_layout));
+            if (plane_row != nullptr)
+            {
+                plane_row[column] = ConvertGdiPixel(pixel, kGdiBgr888, kGdiXrgb8888);
+            }
         }
         const std::uint32_t target_memory_row = target->top_down ? static_cast<std::uint32_t>(target_y)
                                                                  : target->height - 1 - static_cast<std::uint32_t>(target_y);

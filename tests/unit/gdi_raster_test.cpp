@@ -28,6 +28,24 @@ void CheckConversions(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, hle::ConvertGdiPixel(0x010307U, hle::kGdiBgr888, hle::kGdiRgb565), 0U);
 }
 
+// A true-color plane's pixels: 24-bit sources and COLORREFs as given, 5-5-5
+// widened by repeating high bits; narrowing any of them to 5-6-5 gives what
+// GDI writes into the RGB565 pixels.
+void CheckTrueColorConversions(re2dj::test::Context& context)
+{
+    RE2DJ_CHECK_EQ(context, hle::ConvertGdiPixel(0x7F8081U, hle::kGdiBgr888, hle::kGdiXrgb8888), 0x7F8081U);
+    RE2DJ_CHECK_EQ(context, hle::ConvertGdiPixel(0x00563412U, hle::kGdiColorref, hle::kGdiXrgb8888), 0x123456U);
+    RE2DJ_CHECK_EQ(context, hle::ConvertGdiPixel(0x4210U, hle::kGdiRgb555, hle::kGdiXrgb8888), 0x848484U);
+    bool narrows_alike = true;
+    for (std::uint32_t pixel = 0; pixel < 0x8000U; ++pixel)
+    {
+        const std::uint32_t plane = hle::ConvertGdiPixel(pixel, hle::kGdiRgb555, hle::kGdiXrgb8888);
+        narrows_alike &= hle::ConvertGdiPixel(plane, hle::kGdiXrgb8888, hle::kGdiRgb565) ==
+                         hle::ConvertGdiPixel(pixel, hle::kGdiRgb555, hle::kGdiRgb565);
+    }
+    RE2DJ_CHECK(context, narrows_alike);
+}
+
 void CheckLayoutHelpers(re2dj::test::Context& context)
 {
     std::array<std::uint8_t, 4> bytes{};
@@ -66,6 +84,7 @@ void CheckFillArea(re2dj::test::Context& context)
 void RunGdiRasterTests(re2dj::test::Context& context)
 {
     CheckConversions(context);
+    CheckTrueColorConversions(context);
     CheckLayoutHelpers(context);
     CheckFillArea(context);
 }

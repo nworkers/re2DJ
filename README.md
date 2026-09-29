@@ -48,9 +48,9 @@ flowchart LR
     HLE --> PLAT["Platform backend<br/>windows / linux"]
 ```
 
-x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86·x86-64 제품 CLI의 `re2dj --run`이 별도 helper 없이 같은 프로세스 안에서 원본 PE32를 실행합니다. x86-64는 CPU compatibility mode를 씁니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86·x86-64 제품 CLI의 `re2dj --run`이 별도 helper 없이 같은 프로세스 안에서 원본 PE32를 실행합니다. x86-64는 CPU compatibility mode를 씁니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 두 호스트 모두 실행 중 백틱(`` ` ``) 키로 OSD를 열 수 있습니다. OSD의 "32-bit color"는 24비트 이미지와 반투명 합성을 채널당 8비트로 보여 주는 표시 모드를 켜고 끕니다(`--color-depth`). 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, `re2dj --run` in the x86 and x86-64 product CLIs executes the original PE32 in the same process without a separate helper (x86-64 uses CPU compatibility mode), through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, `re2dj --run` in the x86 and x86-64 product CLIs executes the original PE32 in the same process without a separate helper (x86-64 uses CPU compatibility mode), through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. On both hosts, backtick (`` ` ``) opens the OSD while running; its "32-bit color" switches a display mode that shows 24-bit images and translucent compositing at 8 bits per channel (`--color-depth`). See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -232,6 +232,11 @@ re2dj --hdd <directory> [options]
                       기다리고(기본값), off는 기다리지 않아 tearing을 허용하며,
                       adaptive는 마감을 지킨 프레임만 기다립니다. 드라이버가
                       adaptive를 거부하면 on으로 내려갑니다.
+  --color-depth <16|32>
+                      호스트가 색을 얼마나 깊게 다룰지 고릅니다. 16은 원본의
+                      16비트 화면(기본값), 32는 24비트 이미지와 블렌드를 채널당
+                      8비트로 유지합니다. 게임은 계속 16비트 화면을 봅니다.
+                      실행 중에는 OSD의 "32-bit color"로 바꿀 수 있습니다.
   --io-config <path>  선택한 타깃용 Windows 키보드 I/O mapping INI. 적힌 항목만
                       내장 기본 매핑을 덮어씁니다.
   --version           버전 출력.

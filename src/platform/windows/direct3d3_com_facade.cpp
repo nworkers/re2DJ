@@ -19,9 +19,11 @@
 #include <span>
 #include <string>
 
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "runtime_log.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/true_color.h"
 #include "re2dj/graphics/legacy_transform.h"
 #include "re2dj/graphics/legacy_vertex_buffer.h"
 #include "re2dj/graphics/present_interval_histogram.h"
@@ -492,6 +494,10 @@ struct RootFacade
     // latest full-target color until the logical render target exists.
     bool pending_render_target_clear = false;
     std::uint16_t pending_render_target_clear_color = 0;
+    // The same clear at 8 bits per channel, and whether it was made in
+    // 32-bit colour and so clears to that rather than to the RGB565 colour.
+    std::uint32_t pending_render_target_clear_true_color = 0;
+    bool pending_render_target_clear_in_true_color = false;
     LARGE_INTEGER fps_frequency = {};
     LARGE_INTEGER fps_interval_start = {};
     std::uint32_t fps_interval_frames = 0;
@@ -508,6 +514,10 @@ struct RootFacade
     re2dj::graphics::Sdl3OpenGlBackend* render_backend = nullptr;
     // Whether the backend's software pacing was already recorded.
     bool pacing_reported = false;
+    // The render target's colour depth last recorded (0 before the first),
+    // and whether the driver's refusal of RGB8 was recorded.
+    unsigned reported_color_bits = 0;
+    bool true_color_refusal_reported = false;
 };
 
 // Calls the backend's Present and records how long it took. Every present site
@@ -522,6 +532,20 @@ bool PresentAndRecordCost(RootFacade* root, std::string* error)
     {
         root->pacing_reported = true;
         re2dj::platform::windows::WriteGraphicsTraceFormat("re2dj:hle:present-sync:software-pacing=1");
+    }
+    // When 32-bit colour took effect on screen, whether from the command line
+    // or the OSD, and whether the driver refused it.
+    const unsigned color_bits =
+        root->render_backend->render_target_depth() == re2dj::graphics::ColorDepth::k32 ? 32U : 16U;
+    if (color_bits != root->reported_color_bits)
+    {
+        root->reported_color_bits = color_bits;
+        re2dj::platform::windows::WriteGraphicsTraceFormat("re2dj:hle:color-depth:render-target=%u", color_bits);
+    }
+    if (!root->true_color_refusal_reported && root->render_backend->true_color_unavailable())
+    {
+        root->true_color_refusal_reported = true;
+        re2dj::platform::windows::WriteGraphicsTraceFormat("re2dj:hle:color-depth:rgb8-unavailable=1");
     }
     re2dj::platform::windows::ReportOsdState();
     LARGE_INTEGER finished = {};
@@ -693,6 +717,14 @@ struct SurfaceFacade
     HBITMAP bitmap = nullptr;
     HGDIOBJ previous_bitmap = nullptr;
     void* pixels = nullptr;
+    // The pixels at 8 bits per channel (graphics/true_color.h), from the first
+    // time 32-bit colour needed them until the surface goes. A top-down 32bpp
+    // DIB section, so that in 32-bit colour GetDC can select it into the DC
+    // and let Windows GDI draw into it at full depth; dc_on_true_color says
+    // it is the one selected.
+    HBITMAP true_color_bitmap = nullptr;
+    std::uint32_t* true_color_pixels = nullptr;
+    bool dc_on_true_color = false;
     std::uint32_t diagnostic_id = 0;
     std::uint64_t texture_identity = 0;
     std::uint64_t texture_revision = 1;
@@ -770,7 +802,70 @@ void MarkSurfaceDirty(SurfaceFacade* surface)
     surface->diagnostic_nonzero_max_y = 0;
 }
 
-void FillSurfaceWithColor(SurfaceFacade* surface, std::uint16_t color)
+re2dj::graphics::TrueColorView TrueColorOf(const SurfaceFacade& surface)
+{
+    return {surface.true_color_pixels, surface.width, surface.height, surface.width};
+}
+
+re2dj::graphics::Rgb565SurfaceView Rgb565Of(const SurfaceFacade& surface)
+{
+    return {surface.pixels, surface.width, surface.height, surface.pitch};
+}
+
+re2dj::graphics::Rgb565Rectangle WholeSurface(const SurfaceFacade& surface)
+{
+    return {0, 0, surface.width, surface.height};
+}
+
+// Gives a surface a true-color plane, its RGB565 pixels widened, if it has
+// none yet. With widen off the new plane stays black, for a caller about to
+// overwrite all of it. False when the DIB section cannot be made; the surface
+// then carries on without one.
+bool EnsureTrueColor(SurfaceFacade* surface, bool widen)
+{
+    if (surface->true_color_pixels != nullptr)
+    {
+        return true;
+    }
+    if (surface->pixels == nullptr || surface->bitmap_dc == nullptr)
+    {
+        return false;
+    }
+    BITMAPINFOHEADER header = {};
+    header.biSize = sizeof(header);
+    header.biWidth = static_cast<LONG>(surface->width);
+    header.biHeight = -static_cast<LONG>(surface->height);
+    header.biPlanes = 1;
+    header.biBitCount = 32;
+    header.biCompression = BI_RGB;
+    void* bits = nullptr;
+    // A 32bpp BI_RGB pixel is B, G, R, unused: 0x00RRGGBB read as a DWORD,
+    // which is the plane's layout.
+    HBITMAP bitmap = CreateDIBSection(surface->bitmap_dc, reinterpret_cast<BITMAPINFO*>(&header), DIB_RGB_COLORS,
+                                      &bits, nullptr, 0);
+    if (bitmap == nullptr || bits == nullptr)
+    {
+        if (bitmap != nullptr)
+        {
+            DeleteObject(bitmap);
+        }
+        return false;
+    }
+    surface->true_color_bitmap = bitmap;
+    surface->true_color_pixels = static_cast<std::uint32_t*>(bits);
+    if (widen)
+    {
+        // Drawing GDI may still hold in its batch belongs in what is widened.
+        GdiFlush();
+        re2dj::graphics::WidenRgb565Rectangle(Rgb565Of(*surface), TrueColorOf(*surface), WholeSurface(*surface));
+    }
+    return true;
+}
+
+// Fills a surface with one colour, as a full target clear does: the RGB565
+// pixels with color and the plane, when there is one or 32-bit colour is
+// selected, with true_color, which narrows to color.
+void FillSurfaceWithColor(SurfaceFacade* surface, std::uint16_t color, std::uint32_t true_color)
 {
     if (surface == nullptr || surface->pixels == nullptr || surface->pitch == 0)
     {
@@ -782,6 +877,14 @@ void FillSurfaceWithColor(SurfaceFacade* surface, std::uint16_t color)
         auto* const row = reinterpret_cast<std::uint16_t*>(pixels + y * surface->pitch);
         std::fill(row, row + surface->width, color);
     }
+    if (re2dj::graphics::TrueColorSelected())
+    {
+        EnsureTrueColor(surface, false);
+    }
+    if (surface->true_color_pixels != nullptr)
+    {
+        re2dj::graphics::FillTrueColorRectangle(TrueColorOf(*surface), WholeSurface(*surface), true_color);
+    }
     MarkSurfaceDirty(surface);
 }
 
@@ -790,8 +893,12 @@ std::uint16_t Rgb565FromD3dColor(D3DCOLOR color)
     return re2dj::directx::Rgb565FromD3dColor(static_cast<std::uint32_t>(color));
 }
 
+// Clears the render target to color, or to true_color when the clear was made
+// in 32-bit colour, now or once the backend exists.
 bool RequestRenderTargetClear(RootFacade* root,
                               std::uint16_t color,
+                              std::uint32_t true_color,
+                              bool in_true_color,
                               std::string* error)
 {
     if (root == nullptr || error == nullptr)
@@ -802,10 +909,13 @@ bool RequestRenderTargetClear(RootFacade* root,
     {
         root->pending_render_target_clear = true;
         root->pending_render_target_clear_color = color;
+        root->pending_render_target_clear_true_color = true_color;
+        root->pending_render_target_clear_in_true_color = in_true_color;
         error->clear();
         return true;
     }
-    if (!root->render_backend->ClearRenderTarget(color, error))
+    if (!(in_true_color ? root->render_backend->ClearRenderTargetColor(true_color, error)
+                        : root->render_backend->ClearRenderTarget(color, error)))
     {
         return false;
     }
@@ -1506,16 +1616,38 @@ HRESULT CopySurfaceRectangle(SurfaceFacade* destination,
         key.low = static_cast<std::uint16_t>(source->source_blt_color_key.dwColorSpaceLowValue);
         key.high = static_cast<std::uint16_t>(source->source_blt_color_key.dwColorSpaceHighValue);
     }
-    const re2dj::graphics::Rgb565SurfaceView destination_view = {
-        destination->pixels, destination->width, destination->height, destination->pitch};
-    const re2dj::graphics::LegacyTextureView source_view = {
-        source->pixels,
-        source->width,
-        source->height,
-        source->pitch,
-        source->texture_identity,
-        source->texture_revision,
-        key};
+    const re2dj::graphics::Rgb565SurfaceView destination_view = Rgb565Of(*destination);
+    re2dj::graphics::LegacyTextureView source_view;
+    source_view.pixels = source->pixels;
+    source_view.width = source->width;
+    source_view.height = source->height;
+    source_view.pitch = source->pitch;
+    source_view.identity = source->texture_identity;
+    source_view.revision = source->texture_revision;
+    source_view.source_color_key = key;
+    source_view.true_color = source->true_color_pixels;
+    source_view.true_color_stride = source->true_color_pixels == nullptr ? 0 : source->width;
+    // In 32-bit colour the destination keeps what the source has at 24 bits.
+    // The plane side goes first: within one surface it decides the key on the
+    // source's RGB565 pixels before the copy below overwrites them.
+    if (re2dj::graphics::TrueColorSelected())
+    {
+        EnsureTrueColor(destination, true);
+    }
+    if (destination->true_color_pixels != nullptr)
+    {
+        const re2dj::graphics::TrueColorView source_plane = TrueColorOf(*source);
+        if (!re2dj::graphics::CopyTrueColorRectangle(TrueColorOf(*destination),
+                                                     destination_rectangle.x,
+                                                     destination_rectangle.y,
+                                                     source->true_color_pixels == nullptr ? nullptr : &source_plane,
+                                                     source_view,
+                                                     source_rectangle,
+                                                     key))
+        {
+            return DDERR_INVALIDRECT;
+        }
+    }
     if (!re2dj::graphics::CopyRgb565Rectangle(destination_view,
                                               destination_rectangle.x,
                                               destination_rectangle.y,
@@ -1877,6 +2009,11 @@ void DestroyGdiBacking(SurfaceFacade* surface)
     {
         DeleteObject(surface->bitmap);
     }
+    // Deselected above along with the RGB565 bitmap, whichever the DC held.
+    if (surface->true_color_bitmap != nullptr)
+    {
+        DeleteObject(surface->true_color_bitmap);
+    }
     if (surface->bitmap_dc != nullptr)
     {
         DeleteDC(surface->bitmap_dc);
@@ -1885,6 +2022,9 @@ void DestroyGdiBacking(SurfaceFacade* surface)
     surface->bitmap = nullptr;
     surface->previous_bitmap = nullptr;
     surface->pixels = nullptr;
+    surface->true_color_bitmap = nullptr;
+    surface->true_color_pixels = nullptr;
+    surface->dc_on_true_color = false;
     surface->dc_acquired = false;
 }
 
@@ -2031,6 +2171,13 @@ HRESULT WINAPI RootCreateSurface(IDirectDraw4* self,
             {
                 delete created;
                 return nullptr;
+            }
+            // Zeroed pixels widen to a black plane, which a new one already
+            // is. A surface whose plane cannot be made gets one later, if it
+            // can then.
+            if (re2dj::graphics::TrueColorSelected())
+            {
+                EnsureTrueColor(created, false);
             }
         }
         return created;
@@ -2464,6 +2611,16 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         auto* const row = reinterpret_cast<std::uint16_t*>(pixels + y * surface->pitch);
         std::fill(row + rectangle.left, row + rectangle.right, color);
     }
+    // The fill colour is an RGB565 pixel, so the plane gets it widened.
+    if (surface->true_color_pixels != nullptr)
+    {
+        re2dj::graphics::FillTrueColorRectangle(
+            TrueColorOf(*surface),
+            {static_cast<std::uint32_t>(rectangle.left), static_cast<std::uint32_t>(rectangle.top),
+             static_cast<std::uint32_t>(rectangle.right - rectangle.left),
+             static_cast<std::uint32_t>(rectangle.bottom - rectangle.top)},
+            re2dj::graphics::WidenRgb565(color));
+    }
     MarkSurfaceDirty(surface);
     // Filling the surface the guest presents from is a display-layer screen
     // clear. Only a fill of the whole surface maps onto a target clear; a
@@ -2475,7 +2632,7 @@ HRESULT WINAPI SurfaceBlt(IDirectDrawSurface4* self,
         rectangle.bottom == full.bottom)
     {
         std::string clear_error;
-        if (!RequestRenderTargetClear(root, color, &clear_error))
+        if (!RequestRenderTargetClear(root, color, re2dj::graphics::WidenRgb565(color), false, &clear_error))
         {
             re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             return finish(DDERR_GENERIC);
@@ -2757,6 +2914,13 @@ HRESULT WINAPI SurfaceGetDC(IDirectDrawSurface4* self, HDC* dc)
     {
         return finish(checked);
     }
+    // In 32-bit colour the DC draws into the plane, so Windows GDI keeps what
+    // it draws at 24 bits; ReleaseDC narrows it into the RGB565 pixels.
+    if (re2dj::graphics::TrueColorSelected() && EnsureTrueColor(surface, true))
+    {
+        SelectObject(surface->bitmap_dc, surface->true_color_bitmap);
+        surface->dc_on_true_color = true;
+    }
     surface->dc_acquired = true;
     *dc = surface->bitmap_dc;
     return finish(DD_OK);
@@ -2781,6 +2945,24 @@ HRESULT WINAPI SurfaceReleaseDC(IDirectDrawSurface4* self, HDC dc)
         return finish(checked);
     }
     surface->dc_acquired = false;
+    if (surface->true_color_pixels != nullptr)
+    {
+        // GDI batches its drawing; the DIB memory is read only after it lands.
+        GdiFlush();
+        if (surface->dc_on_true_color)
+        {
+            SelectObject(surface->bitmap_dc, surface->bitmap);
+            surface->dc_on_true_color = false;
+            re2dj::graphics::NarrowTrueColorRectangle(TrueColorOf(*surface), Rgb565Of(*surface),
+                                                      WholeSurface(*surface));
+        }
+        else
+        {
+            // Drawn in RGB565 in 16-bit colour; the plane follows.
+            re2dj::graphics::ReconcileTrueColorRectangle(TrueColorOf(*surface), Rgb565Of(*surface),
+                                                         WholeSurface(*surface));
+        }
+    }
     MarkSurfaceDirty(surface);
     return finish(DD_OK);
 }
@@ -2877,6 +3059,12 @@ HRESULT WINAPI SurfaceUnlock(IDirectDrawSurface4* self, RECT*)
     MarkSurfaceDirty(surface);
     const bool was_locked = surface->locked;
     surface->locked = false;
+    if (was_locked && surface->true_color_pixels != nullptr)
+    {
+        re2dj::graphics::ReconcileTrueColorRectangle(
+            TrueColorOf(*surface), Rgb565Of(*surface),
+            {surface->lock_x, surface->lock_y, surface->lock_width, surface->lock_height});
+    }
     if (was_locked && surface->root != nullptr && surface == surface->root->presentation_surface &&
         surface->root->render_backend != nullptr)
     {
@@ -2977,6 +3165,25 @@ HRESULT WINAPI TextureLoad(IDirect3DTexture2* self, IDirect3DTexture2* source)
         std::fill(destination_row + row_bytes,
                   destination_row + destination->pitch,
                   static_cast<unsigned char>(0));
+    }
+    // In 32-bit colour the destination keeps what the source has at 24 bits;
+    // the whole plane is written here, so a new one need not widen.
+    if (re2dj::graphics::TrueColorSelected())
+    {
+        EnsureTrueColor(destination, false);
+    }
+    if (destination->true_color_pixels != nullptr)
+    {
+        if (source_surface->true_color_pixels != nullptr)
+        {
+            std::memcpy(destination->true_color_pixels, source_surface->true_color_pixels,
+                        static_cast<std::size_t>(destination->width) * destination->height * sizeof(std::uint32_t));
+        }
+        else
+        {
+            re2dj::graphics::WidenRgb565Rectangle(Rgb565Of(*destination), TrueColorOf(*destination),
+                                                  WholeSurface(*destination));
+        }
     }
     destination->has_source_blt_color_key = source_surface->has_source_blt_color_key;
     destination->source_blt_color_key = source_surface->source_blt_color_key;
@@ -3559,7 +3766,9 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     if (root->pending_render_target_clear)
     {
         const std::uint16_t color = root->pending_render_target_clear_color;
-        if (!root->render_backend->ClearRenderTarget(color, &error))
+        if (!(root->pending_render_target_clear_in_true_color
+                  ? root->render_backend->ClearRenderTargetColor(root->pending_render_target_clear_true_color, &error)
+                  : root->render_backend->ClearRenderTarget(color, &error)))
         {
             re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             ReportDrawDiagnostic(device,
@@ -3578,7 +3787,11 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
     const re2dj::graphics::LegacyTextureView* texture = nullptr;
     if (device->texture_stage_zero != nullptr)
     {
-        const SurfaceFacade* const surface = SurfaceFromTexture(device->texture_stage_zero);
+        SurfaceFacade* const surface = SurfaceFromTexture(device->texture_stage_zero);
+        if (re2dj::graphics::TrueColorSelected())
+        {
+            EnsureTrueColor(surface, true);
+        }
         texture_view.pixels = surface->pixels;
         texture_view.width = surface->width;
         texture_view.height = surface->height;
@@ -3590,6 +3803,8 @@ HRESULT WINAPI DeviceDrawPrimitive(IDirect3DDevice3* self,
             static_cast<std::uint16_t>(surface->source_blt_color_key.dwColorSpaceLowValue);
         texture_view.source_color_key.high =
             static_cast<std::uint16_t>(surface->source_blt_color_key.dwColorSpaceHighValue);
+        texture_view.true_color = surface->true_color_pixels;
+        texture_view.true_color_stride = surface->true_color_pixels == nullptr ? 0 : surface->width;
         texture = &texture_view;
     }
     re2dj::graphics::LegacyFixedFunctionState fixed_function_state;
@@ -4071,6 +4286,7 @@ HRESULT CreateLegacyDirectDrawRoot(const LegacyFacadeVtables& vtables, IDirectDr
         return DDERR_INVALIDPARAMS;
     }
     *root = nullptr;
+    re2dj::platform::windows::ApplyLauncherColorDepth();
     auto* const facade = new (std::nothrow) RootFacade;
     if (facade == nullptr)
     {
@@ -4207,10 +4423,15 @@ HRESULT LegacyDeviceClear(IDirect3DDevice3* device,
         facade->render_target == facade->root->presentation_surface;
     if (full_target && clears_target && targets_presentation_surface)
     {
+        // In 32-bit colour the guest's 8-bit channels are kept; the RGB565
+        // pixel is their narrowing either way.
         const std::uint16_t color565 = Rgb565FromD3dColor(color);
-        FillSurfaceWithColor(facade->render_target, color565);
+        const bool in_true_color = re2dj::graphics::TrueColorSelected();
+        const std::uint32_t true_color =
+            in_true_color ? static_cast<std::uint32_t>(color) & 0x00FFFFFFU : re2dj::graphics::WidenRgb565(color565);
+        FillSurfaceWithColor(facade->render_target, color565, true_color);
         std::string clear_error;
-        if (!RequestRenderTargetClear(facade->root, color565, &clear_error))
+        if (!RequestRenderTargetClear(facade->root, color565, true_color, in_true_color, &clear_error))
         {
             re2dj::platform::windows::WriteRuntimeLog(re2dj::platform::windows::RuntimeLogChannel::kRuntime, kOpenGlFailureMessage);
             return DDERR_GENERIC;
@@ -4272,6 +4493,7 @@ extern "C" __declspec(dllexport) HRESULT WINAPI Re2djHleDirectDrawCreate(
     {
         return CLASS_E_NOAGGREGATION;
     }
+    re2dj::platform::windows::ApplyLauncherColorDepth();
     auto* const facade = new (std::nothrow) RootFacade;
     if (facade == nullptr)
     {

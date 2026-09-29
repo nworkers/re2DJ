@@ -7,6 +7,7 @@
 
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/true_color.h"
 #include "re2dj/hle/host_input.h"
 
 namespace re2dj::hle
@@ -43,6 +44,13 @@ public:
     // into it at the guest's logical size, and presenting it. Each is false
     // with error when the host cannot, or before the window is shown.
     virtual bool ClearTarget(std::uint16_t rgb565, std::string* error) = 0;
+    // The same clear with an XRGB8888 colour, which a guest clear carries
+    // while 32-bit colour is selected. A host without a deeper target clears
+    // to the colour narrowed to 5-6-5.
+    virtual bool ClearTargetColor(std::uint32_t xrgb, std::string* error)
+    {
+        return ClearTarget(graphics::NarrowToRgb565(xrgb), error);
+    }
     virtual bool Draw(const graphics::LegacyDrawCommand& command,
                       const graphics::LegacyFixedFunctionState& state,
                       std::uint32_t logical_width,

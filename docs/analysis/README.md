@@ -35,6 +35,7 @@
 새 분석 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 
 | [graphics-transition-depth.md](graphics-transition-depth.md) | 장면 전환 fade 후보와 Direct3D/OpenGL 깊이 상태 경계 | 작업 096 ddraw trace와 Win32 실행으로 확인 |
+| [graphics-color-depth.md](graphics-color-depth.md) | 원본이 요구하는 16비트 표시 모드, 1st SE 24비트 BMP 자산, 32비트 모드 실행 결과 / The 16-bit display the originals ask for, 1st SE's 24-bit BMP assets, and 32-bit-mode runs | 1st SE·4th 실행 로그로 확인됨. 나머지 타깃은 미확정 |
 
 | [ez2dj1stse-chd-filesystem.md](ez2dj1stse-chd-filesystem.md) | 1st SE CHD v5, FAT32 geometry, StartUp guest boot path, the `.protect` vs `.gtide` executable difference, the FEnteDev Hardlock IOCTL sequence, the resolved transform response, and the Linux in-process run | Hardlock transform response resolved; Windows reaches gameplay; Linux passes the Hardlock and bitmap loading, with legacy-I/O RVAs confirmed |
 | [ez2dj3rd-hardlock-function-0e.md](ez2dj3rd-hardlock-function-0e.md) | 3rd Hardlock device name, API descriptor, and Function 0x0e boundary | Device/API boundary confirmed; valid 0x0e response unresolved |

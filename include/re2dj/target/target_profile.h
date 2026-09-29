@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/present_sync.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
@@ -103,6 +104,10 @@ struct TargetRunDefaults
     // the behavior every profile had before the policy became explicit, and a
     // product-specific value needs its own runtime evidence first.
     graphics::PresentSync present_sync = graphics::PresentSync::kVerticalSync;
+    // How deep the host keeps colours (graphics/color_depth.h). No profile
+    // overrides this: 16 bits is the original's own picture, and 32 bits is
+    // an enhancement the user asks for.
+    graphics::ColorDepth color_depth = graphics::ColorDepth::k16;
     // Accounts the guest's blocking calls so frame time that is neither
     // computation nor presentation can be attributed. Off by default: it
     // patches guest import slots that the product path leaves alone.

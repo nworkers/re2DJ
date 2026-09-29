@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "graphics_trace_log.h"
+#include "re2dj/graphics/color_depth.h"
 #include "runtime_log.h"
 
 // The launcher resolves this export in the injected runtime and writes the
@@ -26,6 +27,10 @@ extern "C" __declspec(dllexport) unsigned long g_re2dj_graphics_draw_diagnostics
 // became explicit, so a launcher that never writes it changes nothing. It
 // keeps this exact name because the launcher looks it up by name.
 extern "C" __declspec(dllexport) unsigned long g_re2dj_present_sync = 0;
+
+// The launcher resolves this export by name and writes the colour depth into
+// it in bits: 32, or nothing, which leaves the default of 16.
+extern "C" __declspec(dllexport) unsigned long g_re2dj_color_depth = 0;
 
 namespace re2dj::platform::windows
 {
@@ -100,6 +105,22 @@ re2dj::graphics::PresentSync SelectedPresentSync()
         // reading of a value this build does not know is the old behavior.
         return re2dj::graphics::PresentSync::kVerticalSync;
     }
+}
+
+void ApplyLauncherColorDepth()
+{
+    static bool applied = false;
+    if (applied)
+    {
+        return;
+    }
+    applied = true;
+    // Anything but 32 is the default, for the reason SelectedPresentSync
+    // gives.
+    const re2dj::graphics::ColorDepth depth =
+        g_re2dj_color_depth == 32 ? re2dj::graphics::ColorDepth::k32 : re2dj::graphics::ColorDepth::k16;
+    re2dj::graphics::SelectColorDepth(depth);
+    WriteGraphicsTraceFormat("re2dj:hle:color-depth:selected=%s", re2dj::graphics::ColorDepthName(depth));
 }
 
 void ReportUnimplementedGraphicsCall(const char* interface_name,
