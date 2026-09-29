@@ -6,8 +6,10 @@
 
 | 스크립트 | 호스트 | 내용 |
 | --- | --- | --- |
+| `build_win32_debug.bat` | Windows command prompt | Win32 Debug configure + build (`build.ps1` 실행) |
+| `build_win32_release.bat` | Windows command prompt | Win32 Release configure + build + ctest (`build_release.ps1` 실행) |
 | `build.ps1` | 64-bit Windows + WOW64 | Win32 runtime configure + build |
-| `build_win32.bat` | Windows command prompt | `build.ps1` wrapper for the Win32 runtime build |
+| `build_release.ps1` | 64-bit Windows + WOW64 | Win32 Release configure + build + ctest, 경고를 오류로 처리 |
 | `test_all.ps1` | 64-bit Windows + WOW64 | Win32 runtime build + ctest, 경고를 오류로 처리 |
 | `test_windows_native_helper_probe.ps1` | 64-bit Windows + WOW64 | Win32 x86 native helper probe build + ctest |
 | `test_linux_native_helper_probe.sh` | Linux x86/x86-64 + i386 multilib | 두 product host가 production i386 helper를 실행하는 synthetic PE32 IPC integration 검증 |
@@ -18,9 +20,9 @@
 
 *The `test_all` scripts configure with `RE2DJ_WARNINGS_AS_ERRORS=ON`, because a warning caught only by CI is a warning that already reached the default branch.*
 
-Windows command prompt에서는 `scripts\build_win32.bat`를 어느 작업 디렉터리에서나 실행할 수 있습니다. 이 BAT는 `build.ps1`에 위임하며, `scripts\build_win32.bat -Preset windows-x86-debug -Configuration Debug`처럼 PowerShell 인자도 전달합니다.
+Windows command prompt에서는 Win32 Debug를 `scripts\build_win32_debug.bat`, Release를 `scripts\build_win32_release.bat`로 빌드합니다. 둘 다 어느 작업 디렉터리에서나 실행할 수 있습니다. 결과물은 각각 `build\windows-x86\bin\Debug`와 `build\windows-x86\bin\Release`에 생깁니다. 추가 인자는 PowerShell script로 넘어갑니다. 예를 들어 `scripts\build_win32_release.bat -SkipTests`는 테스트 없이 빌드합니다.
 
-*From a Windows command prompt, run `scripts\build_win32.bat` from any working directory. It delegates to `build.ps1` and passes PowerShell parameters through, for example `scripts\build_win32.bat -Preset windows-x86-debug -Configuration Debug`.*
+*From a Windows command prompt, build Win32 Debug with `scripts\build_win32_debug.bat` and Release with `scripts\build_win32_release.bat`. Both run from any working directory. Outputs go to `build\windows-x86\bin\Debug` and `build\windows-x86\bin\Release`. Extra arguments pass through to the PowerShell script; for example, `scripts\build_win32_release.bat -SkipTests` builds without tests.*
 
 PowerShell script 실행이 시스템 policy로 제한된 환경에서는 `powershell -ExecutionPolicy Bypass -File scripts/<script>.ps1`로 현재 process에만 예외를 적용하거나, 표에 대응하는 CMake preset 명령을 직접 실행합니다.
 
@@ -28,9 +30,9 @@ PowerShell script 실행이 시스템 policy로 제한된 환경에서는 `power
 
 ## Windows x86 Release
 
-`scripts\build_release.ps1`는 `windows-x86-debug` preset을 configure에 재사용하면서 `Release` configuration으로 빌드하고, 기본적으로 Release CTest를 실행합니다. 테스트 없이 빌드하려면 `-SkipTests`를 지정합니다. 결과물은 `build\windows-x86\bin\Release`에 생성됩니다. Windows command prompt에서는 `scripts\build_release.bat`를 사용합니다.
+`scripts\build_release.ps1`는 `windows-x86-debug` preset을 configure에 재사용하면서 `Release` configuration으로 빌드하고, 기본적으로 Release CTest를 실행합니다. 테스트 없이 빌드하려면 `-SkipTests`를 지정합니다. 결과물은 `build\windows-x86\bin\Release`에 생성됩니다. Windows command prompt에서는 `scripts\build_win32_release.bat`를 사용합니다.
 
-*`scripts\build_release.ps1` reuses the `windows-x86-debug` preset for configuration, builds the `Release` configuration, and runs Release CTest by default. Pass `-SkipTests` to build without tests. Outputs are written to `build\windows-x86\bin\Release`. Use `scripts\build_release.bat` from Windows command prompt.*
+*`scripts\build_release.ps1` reuses the `windows-x86-debug` preset for configuration, builds the `Release` configuration, and runs Release CTest by default. Pass `-SkipTests` to build without tests. Outputs are written to `build\windows-x86\bin\Release`. Use `scripts\build_win32_release.bat` from Windows command prompt.*
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_release.ps1

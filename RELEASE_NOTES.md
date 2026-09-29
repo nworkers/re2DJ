@@ -1,5 +1,43 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.57 (2026-09-30)
+
+### 한국어
+
+Windows command prompt용 빌드 bat를 Win32 Debug용과 Release용 두 개로 정리했습니다. Release 스크립트가 테스트 단계에서 항상 실패하던 문제도 고쳤습니다.
+
+#### 1. 빌드 bat 정리
+- `scripts\build_win32_debug.bat`: Win32 Debug를 configure하고 빌드합니다. 결과물은 `build\windows-x86\bin\Debug`에 생깁니다.
+- `scripts\build_win32_release.bat`: Win32 Release를 configure하고 빌드한 뒤 CTest를 실행합니다. `-SkipTests`를 주면 테스트를 건너뜁니다. 결과물은 `build\windows-x86\bin\Release`에 생깁니다.
+- 기존 `build_win32.bat`와 `build_release.bat`는 이 두 파일로 대체했습니다. 둘 다 어느 작업 디렉터리에서나 실행할 수 있습니다.
+
+#### 2. 빌드 디렉터리 수정
+- `build.ps1`과 `build_release.ps1`은 빌드 디렉터리를 `build\<preset 이름>`으로 가정했습니다. 그런데 `windows-x86-debug` preset은 `build\windows-x86`에 빌드합니다. 그래서 Release CTest 단계가 없는 디렉터리를 찾다가 실패했고, 두 스크립트가 안내하는 결과물 경로도 틀렸습니다.
+- 이제 두 스크립트는 `CMakePresets.json`에서 preset의 `binaryDir`을 읽습니다.
+
+#### 3. 검증
+- 두 bat를 저장소 밖 디렉터리에서 실행했습니다. Debug 빌드가 성공했고, Release는 빌드와 CTest 6개가 모두 통과했습니다.
+
+---
+
+### English
+
+The Windows command-prompt build batch files are now two: one for Win32 Debug and one for Win32 Release. A bug that always failed the Release script at its test step is fixed.
+
+#### 1. Build batch files
+- `scripts\build_win32_debug.bat` configures and builds Win32 Debug into `build\windows-x86\bin\Debug`.
+- `scripts\build_win32_release.bat` configures and builds Win32 Release into `build\windows-x86\bin\Release`, then runs CTest. `-SkipTests` skips the tests.
+- They replace `build_win32.bat` and `build_release.bat`. Both run from any working directory.
+
+#### 2. Build directory fix
+- `build.ps1` and `build_release.ps1` assumed the build directory was `build\<preset name>`, but the `windows-x86-debug` preset builds into `build\windows-x86`. The Release CTest step therefore looked for a directory that did not exist and failed, and both scripts printed the wrong output path.
+- Both scripts now read the preset's `binaryDir` from `CMakePresets.json`.
+
+#### 3. Validation
+- Both batch files were run from a directory outside the repository. The Debug build succeeded, and Release built and passed all 6 CTest tests.
+
+---
+
 ## v0.0.56 (2026-09-29)
 
 ### 한국어

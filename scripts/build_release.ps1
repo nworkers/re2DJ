@@ -23,8 +23,13 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+# The preset's binaryDir, which need not be named after the preset:
+# windows-x86-debug builds into build/windows-x86.
+$presets = Get-Content (Join-Path $repository "CMakePresets.json") -Raw | ConvertFrom-Json
+$binaryDir = ($presets.configurePresets | Where-Object { $_.name -eq $Preset }).binaryDir
+$buildDirectory = [System.IO.Path]::GetFullPath($binaryDir.Replace('${sourceDir}', $repository))
+
 if (-not $SkipTests) {
-    $buildDirectory = Join-Path $repository "build/$Preset"
     ctest --test-dir $buildDirectory -C Release --output-on-failure
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
@@ -32,4 +37,4 @@ if (-not $SkipTests) {
 }
 
 Write-Host ""
-Write-Host "Release output: build/$Preset/bin/Release"
+Write-Host "Release output: $buildDirectory\bin\Release"
