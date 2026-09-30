@@ -1222,6 +1222,11 @@ void CheckDevice(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetRenderState", {device, dx::kD3dRenderStateCullMode, kOut}),
                    dx::kDdOk);
     RE2DJ_CHECK_EQ(context, services.U32(kOut), dx::kD3dCullCcw);
+    // A Direct3D 7 device starts lit, with LESSEQUAL depth, as on Windows 11.
+    call("IDirect3DDevice7::GetRenderState", {device, dx::kD3dRenderStateLighting, kOut});
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), 1U);
+    call("IDirect3DDevice7::GetRenderState", {device, dx::kD3dRenderStateZFunc, kOut});
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), dx::kD3dCmpLessEqual);
     RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetRenderState", {device, 137, 1}), dx::kDdOk);
     call("IDirect3DDevice7::GetRenderState", {device, 137, kOut});
     RE2DJ_CHECK_EQ(context, services.U32(kOut), 1U);
@@ -1273,7 +1278,15 @@ void CheckDevice(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, services.U32(kMatrix + 4), 0x40000000U);
     RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetTransform", {device, 32, kMatrix}), dx::kDdErrInvalidParams);
 
+    // The material: zero on a new device, then what was set (task 430).
+    constexpr std::uint32_t kMaterial = MemoryServices::kBase + 0x300;
+    services.PutU32(kMaterial + 12, 0xCDCDCDCDU);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetMaterial", {device, kMaterial}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kMaterial + 12), 0U);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetMaterial", {device, 0}), dx::kDdErrInvalidParams);
     RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::SetMaterial", {device, kMatrix}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, call("IDirect3DDevice7::GetMaterial", {device, kMaterial}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kMaterial + 4), 0x40000000U);
 
     // The render target: the same one again changes nothing, and it must be
     // a surface.
@@ -2084,6 +2097,32 @@ void CheckSurfaceDc(re2dj::test::Context& context)
     CallModuleExport(context, services, gdi32, "StretchDIBits",
                      {dc, 0, 0, 4, 2, 0, 0, 4, 2, kBits8, kInfo8, 1, 0x00CC0020U}, &handled);
     RE2DJ_CHECK(context, !handled);
+
+    // A top-down 4x2 32-bit BI_RGB DIB, with the pixels measured on Windows
+    // 11 (task 431): each converts as its 24-bit colour does, the top byte
+    // ignored.
+    constexpr std::uint32_t kInfo32 = MemoryServices::kBase + 0x4800;
+    constexpr std::uint32_t kBits32 = MemoryServices::kBase + 0x4900;
+    services.PutU32(kInfo32, 40);
+    services.PutU32(kInfo32 + 4, 4);
+    services.PutU32(kInfo32 + 8, static_cast<std::uint32_t>(-2));
+    services.PutU32(kInfo32 + 12, 0x00200001U);
+    services.PutU32(kInfo32 + 16, 0);
+    const std::uint32_t source32[8] = {0x00FF7F3FU, 0xFF123456U, 0x80FFFFFFU, 0x00070307U,
+                                       0x00080408U, 0x12F8FCF8U, 0x00000000U, 0xFF0000FFU};
+    for (std::uint32_t index = 0; index < 8; ++index)
+    {
+        services.PutU32(kBits32 + index * 4, source32[index]);
+    }
+    RE2DJ_CHECK_EQ(context,
+                   CallModuleExport(context, services, gdi32, "StretchDIBits",
+                                    {dc, 0, 0, 4, 2, 0, 0, 4, 2, kBits32, kInfo32, 0, 0x00CC0020U}).eax,
+                   2U);
+    const std::uint16_t expected32[8] = {0xFBE7, 0x11AA, 0xFFFF, 0x0000, 0x0821, 0xFFFF, 0x0000, 0x001F};
+    for (std::uint32_t index = 0; index < 8; ++index)
+    {
+        RE2DJ_CHECK_EQ(context, read_pixel(index), static_cast<std::uint32_t>(expected32[index]));
+    }
 
     RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::ReleaseDC", {texture, dc + 4}), dx::kDdErrInvalidParams);
     RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::ReleaseDC", {texture, dc}), dx::kDdOk);

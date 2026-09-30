@@ -84,6 +84,7 @@ public:
     bool CallGuest(GuestCall* call, std::uint32_t* result, std::string* error) const override;
     HostPresentation* Presentation() const override;
     HostAudio* Audio() const override;
+    HostProcessLauncher* ProcessLauncher() const override;
     runtime::GuestAddress ThreadEnvironmentBlock() const override;
     bool WaitMilliseconds(std::uint32_t milliseconds) const override;
     std::uint32_t CurrentThreadId() const override;

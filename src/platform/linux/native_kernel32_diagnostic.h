@@ -134,6 +134,10 @@ public:
     hle::HostPresentation* Presentation() const override { return presentation_; }
     void SetAudio(hle::HostAudio* audio) { audio_ = audio; }
     hle::HostAudio* Audio() const override { return audio_; }
+    void SetProcessLauncher(hle::HostProcessLauncher* launcher) { process_launcher_ = launcher; }
+    hle::HostProcessLauncher* ProcessLauncher() const override { return process_launcher_; }
+    // How the guest process was launched (hle::GuestProcess::SetStartup).
+    void SetStartup(hle::GuestStartup startup) { process_.SetStartup(std::move(startup)); }
 
     // The devices the guest may open during this run, sharing the guest
     // process's handle space.
@@ -160,6 +164,7 @@ private:
     std::uint32_t image_base_ = 0;
     hle::HostPresentation* presentation_ = nullptr;
     hle::HostAudio* audio_ = nullptr;
+    hle::HostProcessLauncher* process_launcher_ = nullptr;
     std::uint32_t image_size_ = 0;
     mutable std::uint32_t stack_base_ = 0;
     mutable std::uint32_t stack_limit_ = 0;

@@ -42,6 +42,9 @@ struct LegacyTransformState
     LegacyMatrix4x4 view;
     LegacyMatrix4x4 projection;
     LegacyViewportTransform viewport;
+    // The ARGB colour of a D3DVERTEX, which carries none: opaque white unless
+    // the device lights it.
+    std::uint32_t vertex_color = 0xffffffffU;
 };
 
 bool DecodeUntransformedVertices(std::span<const std::byte> source,

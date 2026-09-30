@@ -79,6 +79,20 @@ void RunLegacyTransformTests(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, command.vertices[0].diffuse_argb, std::uint32_t{0xffffffff});
     RE2DJ_CHECK(context, NearlyEqual(command.vertices[2].texture_u, 1.0f));
 
+    // A lit device's colour replaces the white (task 430).
+    re2dj::graphics::LegacyTransformState lit = transform;
+    lit.vertex_color = 0x80402010U;
+    RE2DJ_CHECK(context,
+                re2dj::graphics::DecodeUntransformedVertices(
+                    bytes,
+                    vertices.size(),
+                    0x112,
+                    re2dj::graphics::PrimitiveTopology::kTriangleStrip,
+                    lit,
+                    &command,
+                    &error));
+    RE2DJ_CHECK_EQ(context, command.vertices[3].diffuse_argb, std::uint32_t{0x80402010});
+
     re2dj::graphics::LegacyTransformState translated;
     translated.world.values[12] = 0.25f;
     translated.view.values[12] = 0.25f;

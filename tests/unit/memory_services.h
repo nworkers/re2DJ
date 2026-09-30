@@ -131,6 +131,16 @@ public:
         std::memcpy(&value, memory_.data() + (address - kBase), sizeof(value));
         return value;
     }
+    // The NUL-terminated text at address, empty outside the memory.
+    std::string String(std::uint32_t address) const
+    {
+        std::string text;
+        for (std::uint32_t at = address; Contains(at, 1) && memory_[at - kBase] != 0; ++at)
+        {
+            text.push_back(static_cast<char>(memory_[at - kBase]));
+        }
+        return text;
+    }
 
     bool ReadGuestString(runtime::GuestAddress address,
                          std::string* value,
@@ -213,6 +223,9 @@ public:
     // The host sound output the test provides; none by default.
     hle::HostAudio* audio = nullptr;
     hle::HostAudio* Audio() const override { return audio; }
+    // The host that starts child processes; none by default.
+    hle::HostProcessLauncher* launcher = nullptr;
+    hle::HostProcessLauncher* ProcessLauncher() const override { return launcher; }
     hle::GuestProcess* Process() const override { return &process_; }
     // Guest files the test provides; none by default.
     void SetFiles(hle::GuestFiles* files) { files_ = files; }

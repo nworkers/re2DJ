@@ -619,8 +619,8 @@ bool GetViewport(const ImportCall& call, ImportReturn* result, std::string* erro
     return Succeed(result, answer, error);
 }
 
-// SetMaterial(this, lpMaterial): kept on the device. The Windows facade
-// answers D3D_OK without keeping it, as its draw path lights nothing.
+// SetMaterial(this, lpMaterial): kept on the device, where it colours lit
+// D3DVERTEX draws (dx::UntransformedVertexColor).
 bool SetMaterial(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     GuestProcess* process = MethodProcess(call, result, 2, kDeviceObject, error);
@@ -630,6 +630,23 @@ bool SetMaterial(const ImportCall& call, ImportReturn* result, std::string* erro
     }
     if (call.arguments[1] != 0 &&
         !com::ReadStruct(call, call.arguments[1], &StateOf(*process, call.arguments[0]).material, error))
+    {
+        return false;
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
+// GetMaterial(this, lpMaterial): the device's material, all zero on a new
+// device as on Windows 11.
+bool GetMaterial(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    bool valid = false;
+    GuestProcess* process = PointerMethod(call, result, 2, 1, &valid, error);
+    if (process == nullptr)
+    {
+        return valid;
+    }
+    if (!com::WriteStruct(call, call.arguments[1], StateOf(*process, call.arguments[0]).material, error))
     {
         return false;
     }
@@ -742,7 +759,7 @@ constexpr com::Method kMethods[] = {
     {"MultiplyTransform", 3, &UnimplementedExport},
     {"GetViewport", 2, &GetViewport},
     {"SetMaterial", 2, &SetMaterial},
-    {"GetMaterial", 2, &UnimplementedExport},
+    {"GetMaterial", 2, &GetMaterial},
     {"SetLight", 3, &UnimplementedExport},
     {"GetLight", 3, &UnimplementedExport},
     {"SetRenderState", 3, &SetRenderState},
@@ -982,6 +999,10 @@ std::uint32_t CreateDirect3DDevice7(const ImportCall& call,
                                     std::string* error)
 {
     auto state = std::make_shared<DeviceState>();
+    if (!directx6)
+    {
+        state->device = dx::InitialDevice7State();
+    }
     state->render_target = render_target;
     GuestComObject object;
     object.kind = kDeviceObject;

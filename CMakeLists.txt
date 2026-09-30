@@ -114,6 +114,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/linux/native_pe_image.cpp
         src/platform/linux/host_presentation.cpp
         src/platform/linux/host_keyboard.cpp
+        src/platform/linux/host_process_launcher.cpp
         src/platform/linux/native_pe_session.cpp
         src/platform/linux/original_runner.cpp
     )

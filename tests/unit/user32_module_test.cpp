@@ -41,8 +41,8 @@ void CheckDescriptor(re2dj::test::Context& context)
     }
     // Nineteen implemented exports from GetActiveWindow to DispatchMessageA,
     // then 18 resolve-only exports.
-    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{40});
-    if (descriptor.exports.size() != 40)
+    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{41});
+    if (descriptor.exports.size() != 41)
     {
         return;
     }
@@ -543,6 +543,14 @@ void CheckCreateWindow(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetAsyncKeyState", {10}).eax, 0U);
     RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetAsyncKeyState", {0x10009U}).eax, 0U);
+    // GetKeyState: a held key is 0x0000FF80 in EAX, as Windows 11 returns it
+    // (task 431); a key up, or a code above 0xFF, is 0 with the last error
+    // left alone.
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetKeyState", {9}).eax, 0x0000FF80U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetKeyState", {0x91}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetKeyState", {0x1FF}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
     host.input.cursor_window = window;
     host.input.cursor_x = 100;
     host.input.cursor_y = 50;

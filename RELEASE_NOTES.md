@@ -1,5 +1,69 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.59 (2026-09-30)
+
+### 한국어
+
+EZ2DJ 6th가 Linux x86·x64에서 launcher의 자식 프로세스를 거쳐 실행됩니다(작업 431). 6th의 모드 선택 화면에 빠져 있던 모드별 그림도 두 host에서 나옵니다(작업 430).
+
+#### 1. Direct3D 조명과 깊이 기본값 (작업 430)
+- 6th 모드 선택은 모드별 로고를 조명이 켜진 `D3DVERTEX`로 그리면서 `ZFUNC`를 설정하지 않았습니다. 그래서 core의 초기 비교 함수 0 때문에 그리기가 모두 실패했습니다.
+- 새 장치의 render state를 Windows 11 측정값으로 맞췄습니다(`ZWRITEENABLE` 켬, `ZFUNC` LESSEQUAL, `ALPHAFUNC` ALWAYS). Direct3D 7 장치는 조명이 켜진 상태로 시작합니다.
+- 광원이 없을 때 `D3DVERTEX`의 색은 emissive + ambient × 재질 ambient와 diffuse alpha입니다. 측정대로 자르고 반올림합니다.
+- Windows DX7 facade가 `SetMaterial`을 보관하고 `GetMaterial`에 답합니다. Linux에는 `GetMaterial`을 더했습니다.
+
+#### 2. Linux 6th와 자식 프로세스 (작업 431)
+- 6th 프로파일의 실행 파일은 launcher입니다. launcher는 `CreateProcessA`로 `EZ2DJ6th.EXE`를 실행하며 `STARTUPINFO.lpReserved2`로 숫자를 넘기고, 자식의 종료 코드를 기다립니다.
+- 게스트 이미지는 모두 같은 base에 적재되므로, Linux에서는 자식을 별도 host 프로세스로 실행합니다. 공용 `HostProcessLauncher`가 부모의 옵션과 자식의 실행 파일, 명령줄, 현재 디렉터리, reserved 바이트로 `/proc/self/exe`를 시작하고, 자식은 32비트 종료 코드를 pipe로 돌려줍니다.
+- `CreateProcessA`, `GetExitCodeProcess`, `SetPriorityClass`, 자식 핸들의 wait와 `CloseHandle`, `GetStartupInfoA`의 reserved 바이트, `GetKeyState`, `GetFullPathNameA`, 32비트 `StretchDIBits`를 Windows 11 측정대로 구현했습니다.
+- 실행이 멈춘 호출은 API 로그 한도를 넘어서도 사유와 함께 기록합니다.
+
+#### 3. 확인된 동작
+- Win32 6th: 모드 선택 화면에 Ruby Mix, Remember 1st, Street Mix 로고가 나옵니다. Windows 4th·5th 타이틀도 정상입니다.
+- Linux x64: 6th가 타이틀, 코인 투입, 모드 선택, Ruby Mix 소개 화면까지 진행하고 시간 제한까지 멈추지 않습니다. 창을 닫으면 launcher가 `ExitProcess(0)`으로 끝납니다.
+- Linux x86: 모드 선택 화면까지 나오고 시간 제한까지 멈추지 않습니다.
+
+#### 4. 남은 일
+- 6th 데모 플레이의 BGA 자리에 보이는 색 노이즈가 원본 연출인지 확인하지 못했습니다.
+- Linux x86 Debug는 모드 선택 전환 중 4.5 FPS까지 떨어집니다.
+- 첫 코인 키는 창에 초점이 옮겨지는 동안 빠질 수 있습니다.
+
+#### 5. 검증
+- Windows x86 CTest 6개와 Linux x64·x86 CTest 4개가 통과합니다(단위 5,773 / 5,770 checks).
+
+---
+
+### English
+
+EZ2DJ 6th runs on Linux x86 and x64 through its launcher's child process (task 431), and the per-mode pictures missing from 6th's mode select now show on both hosts (task 430).
+
+#### 1. Direct3D lighting and depth defaults (task 430)
+- 6th's mode select draws its per-mode logos as lit `D3DVERTEX` geometry without setting `ZFUNC`, so every draw failed on the core's initial comparison of 0.
+- A new device's render states now match Windows 11 measurements (`ZWRITEENABLE` on, `ZFUNC` LESSEQUAL, `ALPHAFUNC` ALWAYS), and a Direct3D 7 device starts lit.
+- With no light, a `D3DVERTEX` takes emissive + ambient × material ambient and the diffuse alpha, clamped and rounded as measured.
+- The Windows DX7 facade keeps `SetMaterial` and answers `GetMaterial`; Linux gains `GetMaterial`.
+
+#### 2. Linux 6th and child processes (task 431)
+- 6th's profile executable is a launcher that starts `EZ2DJ6th.EXE` with `CreateProcessA`, passing a number in `STARTUPINFO.lpReserved2`, then waits for its exit code.
+- Every guest image loads at the same base, so on Linux the child runs as another host process: the shared `HostProcessLauncher` starts `/proc/self/exe` with the parent's options and the child's executable, command line, current directory, and reserved bytes, and the child writes its 32-bit exit code back over a pipe.
+- `CreateProcessA`, `GetExitCodeProcess`, `SetPriorityClass`, waits and `CloseHandle` on the child's handles, `GetStartupInfoA`'s reserved bytes, `GetKeyState`, `GetFullPathNameA`, and 32-bit `StretchDIBits` follow Windows 11 measurements.
+- The call a run stops on is logged with its reason past the API log's limit.
+
+#### 3. Observed behaviour
+- Win32 6th: mode select shows the Ruby Mix, Remember 1st, and Street Mix logos; the Windows 4th and 5th titles are fine.
+- Linux x64: 6th reaches its title, takes coins, enters mode select, and goes on to the Ruby Mix introduction, running until the timeout; closing the window ends the launcher with `ExitProcess(0)`.
+- Linux x86: mode select shows, and it runs until the timeout.
+
+#### 4. Follow-ups
+- Whether the colour noise in the BGA area of 6th's demo is the original's own effect is unconfirmed.
+- Linux x86 Debug drops to 4.5 FPS during the mode-select transition.
+- The first coin key can be lost while focus moves to the window.
+
+#### 5. Validation
+- All 6 Windows x86 CTest tests and all 4 Linux x64/x86 CTest tests pass (5,773 / 5,770 unit checks).
+
+---
+
 ## v0.0.58 (2026-09-30)
 
 ### 한국어

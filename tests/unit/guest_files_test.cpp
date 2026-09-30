@@ -401,6 +401,201 @@ void CheckSerialOnFailedPort(re2dj::test::Context& context)
     call("CloseHandle", {file});
 }
 
+// A host launcher that records what it is asked to start and reports the end
+// the test decides.
+class FakeLauncher final : public hle::HostProcessLauncher
+{
+public:
+    bool Start(const hle::ChildProcessRequest& request, std::uint32_t* child, std::string* error) override
+    {
+        static_cast<void>(error);
+        requests.push_back(request);
+        *child = static_cast<std::uint32_t>(requests.size() - 1);
+        return true;
+    }
+    bool Poll(std::uint32_t child, bool* finished, std::uint32_t* exit_code) override
+    {
+        static_cast<void>(child);
+        *finished = ended;
+        *exit_code = code;
+        return true;
+    }
+
+    std::vector<hle::ChildProcessRequest> requests;
+    bool ended = false;
+    std::uint32_t code = 0;
+};
+
+// CreateProcessA and the calls on its handles, as the 6th launcher makes them
+// and as measured on Windows 11 (task 431).
+void CheckChildProcesses(re2dj::test::Context& context)
+{
+    Fixture fixture;
+    re2dj::test::MemoryServices services;
+    services.SetFiles(&fixture.files);
+    FakeLauncher launcher;
+    services.launcher = &launcher;
+    const auto descriptor = hle::modules::MakeKernel32ModuleDescriptor();
+    const auto call = [&](std::string_view name, std::initializer_list<std::uint32_t> arguments)
+    {
+        return re2dj::test::CallModuleExport(context, services, descriptor, name, arguments);
+    };
+    constexpr std::uint32_t kCommand = re2dj::test::MemoryServices::kBase + 0x10;
+    constexpr std::uint32_t kDirectory = re2dj::test::MemoryServices::kBase + 0x60;
+    constexpr std::uint32_t kStartup = re2dj::test::MemoryServices::kBase + 0x100;
+    constexpr std::uint32_t kReserved = re2dj::test::MemoryServices::kBase + 0x180;
+    constexpr std::uint32_t kInformation = re2dj::test::MemoryServices::kBase + 0x1c0;
+    constexpr std::uint32_t kCode = re2dj::test::MemoryServices::kBase + 0x1e0;
+
+    services.Put(kCommand, ".\\DATA\\SONG.EZ 261");
+    services.Put(kDirectory, "D:\\ez2dj");
+    services.PutU32(kStartup, 68);
+    services.PutU32(kStartup + 0x30, 0x00080000U);  // cbReserved2 = 8 in the high word
+    services.PutU32(kStartup + 0x34, kReserved);
+    services.PutU32(kReserved, 0);
+    services.Put(kReserved + 4, "261");
+    RE2DJ_CHECK_EQ(context, call("CreateProcessA", {0, kCommand, 0, 0, 0, 0, 0, kDirectory, kStartup, kInformation}).eax,
+                   1U);
+    RE2DJ_CHECK_EQ(context, launcher.requests.size(), std::size_t{1});
+    if (launcher.requests.size() != 1)
+    {
+        return;
+    }
+    const hle::ChildProcessRequest& request = launcher.requests[0];
+    RE2DJ_CHECK_EQ(context, request.image_path, std::string("EZ2DJ/DATA/SONG.EZ"));
+    RE2DJ_CHECK_EQ(context, request.command_line, std::string(".\\DATA\\SONG.EZ 261"));
+    RE2DJ_CHECK_EQ(context, request.current_directory, std::string("D:\\ez2dj"));
+    RE2DJ_CHECK_EQ(context, request.startup_reserved.size(), std::size_t{8});
+    RE2DJ_CHECK_EQ(context, request.startup_reserved.size() == 8 ? request.startup_reserved[4] : 0, std::uint8_t{'2'});
+    const std::uint32_t process = services.U32(kInformation);
+    const std::uint32_t thread = services.U32(kInformation + 4);
+    RE2DJ_CHECK(context, process != 0 && thread != 0 && process != thread);
+    RE2DJ_CHECK(context, services.U32(kInformation + 8) != 0);
+
+    // Running: STILL_ACTIVE and a timed-out wait; the priority class is taken.
+    RE2DJ_CHECK_EQ(context, call("GetExitCodeProcess", {process, kCode}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kCode), 259U);
+    RE2DJ_CHECK_EQ(context, call("WaitForSingleObject", {process, 0}).eax, 0x102U);
+    RE2DJ_CHECK_EQ(context, call("SetPriorityClass", {process, 0x80}).eax, 1U);
+    // Ended: the wait returns and the full 32-bit exit code reads back.
+    launcher.ended = true;
+    launcher.code = 0x105;
+    RE2DJ_CHECK_EQ(context, call("WaitForSingleObject", {process, 0xFFFFFFFFU}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, call("GetExitCodeProcess", {process, kCode}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kCode), 0x105U);
+    RE2DJ_CHECK_EQ(context, call("CloseHandle", {process}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, call("CloseHandle", {thread}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, call("GetExitCodeProcess", {process, kCode}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidHandle);
+
+    // A missing executable: FALSE with ERROR_FILE_NOT_FOUND and a zeroed
+    // PROCESS_INFORMATION; a name without an extension gets ".exe".
+    for (const char* command : {".\\NOTHERE.EXE", ".\\DATA\\SONG"})
+    {
+        services.Put(kCommand, command);
+        services.PutU32(kCommand + static_cast<std::uint32_t>(std::strlen(command)), 0);
+        services.PutU32(kInformation, 0xCDCDCDCDU);
+        RE2DJ_CHECK_EQ(context,
+                       call("CreateProcessA", {0, kCommand, 0, 0, 0, 0, 0, kDirectory, kStartup, kInformation}).eax,
+                       0U);
+        RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorFileNotFound);
+        RE2DJ_CHECK_EQ(context, services.U32(kInformation), 0U);
+    }
+    RE2DJ_CHECK_EQ(context, launcher.requests.size(), std::size_t{1});
+}
+
+// What a launched process's GetCommandLineA and GetStartupInfoA give back
+// (task 431).
+void CheckLaunchedStartup(re2dj::test::Context& context)
+{
+    re2dj::test::MemoryServices services;
+    const auto descriptor = hle::modules::MakeKernel32ModuleDescriptor();
+    const auto call = [&](std::string_view name, std::initializer_list<std::uint32_t> arguments)
+    {
+        return re2dj::test::CallModuleExport(context, services, descriptor, name, arguments);
+    };
+    constexpr std::uint32_t kStartup = re2dj::test::MemoryServices::kBase + 0x100;
+    services.Process()->SetMainImage(0x00400000U, "D:\\ez2dj\\EZ2DJ6th.EXE");
+    // Not launched: the quoted module path and no reserved bytes.
+    const std::uint32_t own = call("GetCommandLineA", {}).eax;
+    RE2DJ_CHECK_EQ(context, services.String(own), std::string("\"D:\\ez2dj\\EZ2DJ6th.EXE\""));
+    call("GetStartupInfoA", {kStartup});
+    RE2DJ_CHECK_EQ(context, services.U32(kStartup), 68U);
+    RE2DJ_CHECK_EQ(context, services.U32(kStartup + 0x30), 0U);
+    RE2DJ_CHECK_EQ(context, services.U32(kStartup + 0x34), 0U);
+
+    re2dj::test::MemoryServices launched;
+    launched.Process()->SetMainImage(0x00400000U, "D:\\ez2dj\\EZ2DJ6th.EXE");
+    launched.Process()->SetStartup({".\\EZ2DJ6TH.EXE", {0, 0, 0, 0, '2', '6', '1', 0}});
+    const auto launched_call = [&](std::string_view name, std::initializer_list<std::uint32_t> arguments)
+    {
+        return re2dj::test::CallModuleExport(context, launched, descriptor, name, arguments);
+    };
+    const std::uint32_t line = launched_call("GetCommandLineA", {}).eax;
+    RE2DJ_CHECK_EQ(context, launched.String(line), std::string(".\\EZ2DJ6TH.EXE"));
+    launched_call("GetStartupInfoA", {kStartup});
+    RE2DJ_CHECK_EQ(context, launched.U32(kStartup + 0x30) >> 16, 8U);
+    const std::uint32_t reserved = launched.U32(kStartup + 0x34);
+    RE2DJ_CHECK(context, reserved != 0);
+    RE2DJ_CHECK_EQ(context, launched.String(reserved + 4), std::string("261"));
+    // A second call hands back the same copy.
+    launched_call("GetStartupInfoA", {kStartup});
+    RE2DJ_CHECK_EQ(context, launched.U32(kStartup + 0x34), reserved);
+}
+
+// GetFullPathNameA against the guest's current directory, with the forms
+// measured on Windows 11 (task 431).
+void CheckFullPathName(re2dj::test::Context& context)
+{
+    Fixture fixture;
+    re2dj::test::MemoryServices services;
+    services.SetFiles(&fixture.files);
+    const auto descriptor = hle::modules::MakeKernel32ModuleDescriptor();
+    const auto call = [&](std::string_view name, std::initializer_list<std::uint32_t> arguments)
+    {
+        return re2dj::test::CallModuleExport(context, services, descriptor, name, arguments);
+    };
+    constexpr std::uint32_t kName = re2dj::test::MemoryServices::kBase + 0x10;
+    constexpr std::uint32_t kBuffer = re2dj::test::MemoryServices::kBase + 0x100;
+    constexpr std::uint32_t kPart = re2dj::test::MemoryServices::kBase + 0x80;
+    services.Put(kName, "DATA");
+    services.PutU32(kName + 4, 0);
+    call("SetCurrentDirectoryA", {kName});
+    const auto full = [&](const char* name, std::uint32_t size, std::string* text, std::uint32_t* part) {
+        services.Put(kName, name);
+        services.PutU32(kName + static_cast<std::uint32_t>(std::strlen(name)), 0);
+        services.PutU32(kPart, 0xCDCDCDCDU);
+        services.SetLastError(12345);
+        const std::uint32_t length = call("GetFullPathNameA", {kName, size, kBuffer, kPart}).eax;
+        *text = services.String(kBuffer);
+        *part = services.U32(kPart);
+        return length;
+    };
+    std::string text;
+    std::uint32_t part = 0;
+    RE2DJ_CHECK_EQ(context, full("Title.str", 260, &text, &part), 23U);
+    RE2DJ_CHECK_EQ(context, text, std::string("D:\\ez2dj\\DATA\\Title.str"));
+    RE2DJ_CHECK_EQ(context, services.String(part), std::string("Title.str"));
+    RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
+    RE2DJ_CHECK_EQ(context, full("..\\a/b.abm", 260, &text, &part), 16U);
+    RE2DJ_CHECK_EQ(context, text, std::string("D:\\ez2dj\\a\\b.abm"));
+    RE2DJ_CHECK_EQ(context, full("sub\\", 260, &text, &part), 18U);
+    RE2DJ_CHECK_EQ(context, text, std::string("D:\\ez2dj\\DATA\\sub\\"));
+    RE2DJ_CHECK_EQ(context, part, 0U);
+    RE2DJ_CHECK_EQ(context, full("\\root.txt", 260, &text, &part), 11U);
+    RE2DJ_CHECK_EQ(context, text, std::string("D:\\root.txt"));
+    // A short buffer: the size it needs, buffer and file part untouched.
+    services.Put(kBuffer, "#");
+    services.PutU32(kBuffer + 1, 0);
+    RE2DJ_CHECK_EQ(context, full("Title.str", 23, &text, &part), 24U);
+    RE2DJ_CHECK_EQ(context, text, std::string("#"));
+    RE2DJ_CHECK_EQ(context, part, 0xCDCDCDCDU);
+    RE2DJ_CHECK_EQ(context, full("Title.str", 24, &text, &part), 23U);
+    // An empty name: 0 with ERROR_INVALID_NAME.
+    RE2DJ_CHECK_EQ(context, full("", 260, &text, &part), 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorInvalidName);
+}
+
 // The current directory starts at the guest root, moves as Windows 11 moves
 // it, and is what relative paths resolve against; the kernel32 exports follow
 // the measured buffer and error rules.
@@ -1066,6 +1261,9 @@ void RunGuestFilesTests(re2dj::test::Context& context)
     CheckCopyOnWrite(context);
     CheckKernel32FileExports(context);
     CheckSerialOnFailedPort(context);
+    CheckChildProcesses(context);
+    CheckLaunchedStartup(context);
+    CheckFullPathName(context);
     CheckCurrentDirectory(context);
     CheckFind(context);
     CheckFileAttributes(context);

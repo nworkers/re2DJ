@@ -307,6 +307,7 @@ bool CloseHandle(const ImportCall& call, ImportReturn* result, std::string* erro
     GuestProcess* process = call.services->Process();
     if ((devices != nullptr && devices->Close(call.arguments[0])) ||
         (process != nullptr && (process->CloseProcessHandle(call.arguments[0]) ||
+                                process->CloseChildHandle(call.arguments[0]) ||
                                 process->CloseEvent(call.arguments[0]) ||
                                 process->CloseThreadHandle(call.arguments[0]))) ||
         (call.services->Files() != nullptr && call.services->Files()->Close(call.arguments[0])))
@@ -1813,7 +1814,10 @@ std::uint32_t PlaceOnProcessHeap(const ImportCall& call,
 }
 
 // GetStartupInfoA(lpStartupInfo): as CreateProcess with a zeroed
-// STARTUPINFO leaves it, cb aside.
+// STARTUPINFO leaves it, cb aside. A process a launcher started also gets
+// back the cbReserved2 bytes its launcher passed in lpReserved2, copied into
+// its own memory as Windows 11 copies them into the child (task 431); the
+// copy is placed once on the process heap.
 bool GetStartupInfoA(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     if (!CheckArgumentCount(call, result, 1, "kernel32 GetStartupInfoA argument shape is invalid", error) ||
@@ -1822,9 +1826,101 @@ bool GetStartupInfoA(const ImportCall& call, ImportReturn* result, std::string* 
         return false;
     }
     constexpr std::uint32_t kStartupInfoSize = 68;
+    constexpr std::size_t kReservedSizeOffset = 0x32;
+    constexpr std::size_t kReservedOffset = 0x34;
     std::array<std::uint8_t, kStartupInfoSize> info = {};
     StoreDword(info, 0, kStartupInfoSize);
+    GuestProcess* process = call.services->Process();
+    if (process != nullptr && !process->startup().reserved.empty())
+    {
+        const std::vector<std::uint8_t>& reserved = process->startup().reserved;
+        if (process->startup_reserved_address() == 0)
+        {
+            const std::uint32_t block = PlaceOnProcessHeap(call, process, reserved, error);
+            if (block == 0)
+            {
+                return false;
+            }
+            process->set_startup_reserved_address(block);
+        }
+        info[kReservedSizeOffset] = static_cast<std::uint8_t>(reserved.size());
+        info[kReservedSizeOffset + 1] = static_cast<std::uint8_t>(reserved.size() >> 8);
+        StoreDword(info, kReservedOffset, process->startup_reserved_address());
+    }
     return PutGuestBytes(call, call.arguments[0], info, error);
+}
+
+// GetFullPathNameA(lpFileName, nBufferLength, lpBuffer, lpFilePart), as
+// measured on Windows 11 (task 431): the path resolved against the guest's
+// current directory (GuestFiles::FullPath), whether or not it exists; its
+// length without the terminator, or, for a buffer too short, the size it
+// needs with the buffer and file part left alone; the file part at the last
+// component, or NULL after a trailing separator; the last error left alone.
+// An empty name is 0 with ERROR_INVALID_NAME.
+bool GetFullPathNameA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 4, "kernel32 GetFullPathNameA argument shape is invalid", error) ||
+        call.services == nullptr)
+    {
+        return false;
+    }
+    GuestFiles* files = call.services->Files();
+    if (files == nullptr)
+    {
+        if (error != nullptr) *error = "kernel32 GetFullPathNameA needs the guest files";
+        return false;
+    }
+    std::array<std::uint8_t, 1> first = {};
+    std::string read_error;
+    if (!call.services->ReadGuestBytes(runtime::GuestAddress(call.arguments[0]), first, &read_error))
+    {
+        if (error != nullptr) *error = "kernel32 GetFullPathNameA cannot read the name: " + read_error;
+        return false;
+    }
+    if (first[0] == 0)
+    {
+        call.services->SetLastError(kWin32ErrorInvalidName);
+        return true;
+    }
+    std::string name;
+    if (!call.services->ReadGuestString(runtime::GuestAddress(call.arguments[0]), &name, &read_error))
+    {
+        if (error != nullptr) *error = "kernel32 GetFullPathNameA cannot read the name: " + read_error;
+        return false;
+    }
+    std::string full;
+    if (!files->FullPath(name, &full))
+    {
+        if (error != nullptr) *error = "kernel32 GetFullPathNameA of this path is not modelled: " + name;
+        return false;
+    }
+    const std::uint32_t length = static_cast<std::uint32_t>(full.size());
+    if (call.arguments[2] == 0 || call.arguments[1] <= length)
+    {
+        result->eax = length + 1;
+        return true;
+    }
+    std::vector<std::uint8_t> bytes(full.begin(), full.end());
+    bytes.push_back(0);
+    if (!PutGuestBytes(call, call.arguments[2], bytes, error))
+    {
+        return false;
+    }
+    if (call.arguments[3] != 0)
+    {
+        const std::size_t separator = full.find_last_of('\\');
+        const std::uint32_t part = separator + 1 >= full.size()
+                                       ? 0U
+                                       : call.arguments[2] + static_cast<std::uint32_t>(separator + 1);
+        std::array<std::uint8_t, 4> value = {};
+        StoreDword(value, 0, part);
+        if (!PutGuestBytes(call, call.arguments[3], value, error))
+        {
+            return false;
+        }
+    }
+    result->eax = length;
+    return true;
 }
 
 // GetStdHandle(nStdHandle): a GUI process has no console, so the three
@@ -2383,7 +2479,8 @@ bool TlsSetValue(const ImportCall& call, ImportReturn* result, std::string* erro
     return WriteGuestWords(call, TlsSlotAddress(call, call.arguments[0]), value, error);
 }
 
-// GetCommandLineA(): the quoted module path, placed once on the process heap.
+// GetCommandLineA(): the quoted module path, or the command line a launcher
+// started the process with (task 431), placed once on the process heap.
 bool GetCommandLineA(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     if (!CheckArgumentCount(call, result, 0, "kernel32 GetCommandLineA argument shape is invalid", error))
@@ -2397,7 +2494,9 @@ bool GetCommandLineA(const ImportCall& call, ImportReturn* result, std::string* 
     }
     if (process->command_line() == 0)
     {
-        const std::string text = "\"" + process->module_path() + "\"";
+        const std::string text = !process->startup().command_line.empty()
+                                     ? process->startup().command_line
+                                     : "\"" + process->module_path() + "\"";
         std::vector<std::uint8_t> bytes(text.begin(), text.end());
         bytes.push_back(0);
         const std::uint32_t block = PlaceOnProcessHeap(call, process, bytes, error);
@@ -3075,6 +3174,274 @@ bool Sleep(const ImportCall& call, ImportReturn* result, std::string* error)
 // While another guest thread runs, which could signal the object, the wait
 // goes on in 1 ms steps until it does or the timeout has passed. With none,
 // nothing can signal it: a timeout is waited out, and INFINITE stops.
+// A child's state from the host, while it has not yet been seen to end.
+void PollChildProcess(const ImportCall& call, GuestProcess::ChildProcess* child)
+{
+    HostProcessLauncher* launcher = call.services == nullptr ? nullptr : call.services->ProcessLauncher();
+    if (child->finished || launcher == nullptr)
+    {
+        return;
+    }
+    bool finished = false;
+    std::uint32_t exit_code = 0;
+    if (launcher->Poll(child->host_child, &finished, &exit_code) && finished)
+    {
+        child->finished = true;
+        child->exit_code = exit_code;
+    }
+}
+
+// The first token of a command line, as CreateProcessA takes the executable
+// from it when lpApplicationName is NULL: up to the closing quote when it
+// starts with one, else up to the first space or tab.
+std::string CommandLineExecutable(const std::string& command_line)
+{
+    if (!command_line.empty() && command_line.front() == '"')
+    {
+        const std::size_t end = command_line.find('"', 1);
+        return command_line.substr(1, end == std::string::npos ? std::string::npos : end - 1);
+    }
+    return command_line.substr(0, command_line.find_first_of(" \t"));
+}
+
+// CreateProcessA(lpApplicationName, lpCommandLine, lpProcessAttributes,
+// lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment,
+// lpCurrentDirectory, lpStartupInfo, lpProcessInformation), as a launcher
+// starts another executable of the same image. As measured on Windows 11
+// (task 431): the executable is the command line's first token, resolved
+// against the parent's current directory; the child's command line is the
+// parent's, its current directory lpCurrentDirectory, and its STARTUPINFO
+// carries the cbReserved2 bytes of lpReserved2. The host starts the child as
+// a host process of its own. A missing executable is FALSE with
+// ERROR_FILE_NOT_FOUND and a zeroed PROCESS_INFORMATION. An application name,
+// an environment block, or creation flags are not modelled.
+bool CreateProcessA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 10, "kernel32 CreateProcessA argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = RequireProcess(call, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    if (call.arguments[0] != 0 || call.arguments[6] != 0 || call.arguments[5] != 0 || call.arguments[1] == 0 ||
+        call.arguments[8] == 0 || call.arguments[9] == 0)
+    {
+        if (error != nullptr)
+        {
+            *error = "kernel32 CreateProcessA with an application name, an environment, creation flags, or no "
+                     "command line, startup information or process information is not modelled";
+        }
+        return false;
+    }
+    GuestFiles* files = call.services->Files();
+    HostProcessLauncher* launcher = call.services->ProcessLauncher();
+    if (files == nullptr || launcher == nullptr)
+    {
+        if (error != nullptr) *error = "kernel32 CreateProcessA needs the guest files and a host that starts processes";
+        return false;
+    }
+    ChildProcessRequest request;
+    std::string read_error;
+    if (!call.services->ReadGuestString(runtime::GuestAddress(call.arguments[1]), &request.command_line, &read_error))
+    {
+        if (error != nullptr) *error = "kernel32 CreateProcessA cannot read the command line: " + read_error;
+        return false;
+    }
+    if (call.arguments[7] != 0)
+    {
+        if (!call.services->ReadGuestString(runtime::GuestAddress(call.arguments[7]), &request.current_directory,
+                                            &read_error))
+        {
+            if (error != nullptr) *error = "kernel32 CreateProcessA cannot read the current directory: " + read_error;
+            return false;
+        }
+    }
+    else
+    {
+        request.current_directory = files->CurrentDirectory();
+    }
+    std::array<std::uint8_t, 68> startup = {};
+    std::string memory_error;
+    if (!call.services->ReadGuestBytes(runtime::GuestAddress(call.arguments[8]), startup, &memory_error))
+    {
+        if (error != nullptr) *error = "kernel32 CreateProcessA cannot read the startup information";
+        return false;
+    }
+    const std::uint32_t reserved_size =
+        static_cast<std::uint32_t>(startup[0x32]) | (static_cast<std::uint32_t>(startup[0x33]) << 8);
+    std::uint32_t reserved_address = 0;
+    std::memcpy(&reserved_address, startup.data() + 0x34, sizeof(reserved_address));
+    if (reserved_size != 0 && reserved_address != 0)
+    {
+        request.startup_reserved.resize(reserved_size);
+        if (!call.services->ReadGuestBytes(runtime::GuestAddress(reserved_address), request.startup_reserved,
+                                           &memory_error))
+        {
+            if (error != nullptr) *error = "kernel32 CreateProcessA cannot read lpReserved2";
+            return false;
+        }
+    }
+    std::string executable = CommandLineExecutable(request.command_line);
+    const std::size_t name_start = executable.find_last_of("\\/");
+    if (executable.find('.', name_start == std::string::npos ? 0 : name_start + 1) == std::string::npos)
+    {
+        executable += ".exe";
+    }
+    bool outside_root = false;
+    const std::uint32_t found = files->ImagePath(executable, &request.image_path, &outside_root);
+    if (outside_root)
+    {
+        if (error != nullptr)
+        {
+            *error = "kernel32 CreateProcessA of a path outside the guest root is not modelled: " + executable;
+        }
+        return false;
+    }
+    std::array<std::uint8_t, 16> information = {};
+    if (found != kWin32ErrorSuccess)
+    {
+        if (!PutGuestBytes(call, call.arguments[9], information, error))
+        {
+            return false;
+        }
+        result->eax = 0;
+        call.services->SetLastError(found);
+        return true;
+    }
+    std::uint32_t host_child = 0;
+    std::string start_error;
+    if (!launcher->Start(request, &host_child, &start_error))
+    {
+        if (error != nullptr)
+        {
+            *error = "kernel32 CreateProcessA could not start " + request.image_path + ": " + start_error;
+        }
+        return false;
+    }
+    const GuestProcess::ChildProcess& child = process->AddChildProcess(host_child);
+    StoreDword(information, 0, child.process_handle);
+    StoreDword(information, 4, child.thread_handle);
+    StoreDword(information, 8, child.process_id);
+    StoreDword(information, 12, child.thread_id);
+    if (!PutGuestBytes(call, call.arguments[9], information, error))
+    {
+        return false;
+    }
+    result->eax = 1;
+    return true;
+}
+
+// GetExitCodeProcess(hProcess, lpExitCode): STILL_ACTIVE (259) while a child
+// runs and then its exit code, as measured on Windows 11 (task 431); this
+// process, by its pseudo-handle, is running. Any other handle is FALSE with
+// ERROR_INVALID_HANDLE.
+bool GetExitCodeProcess(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint32_t kStillActive = 259;
+    if (!CheckArgumentCount(call, result, 2, "kernel32 GetExitCodeProcess argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = RequireProcess(call, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    std::uint32_t code = 0;
+    if (GuestProcess::ChildProcess* child = process->FindChildProcess(call.arguments[0]); child != nullptr)
+    {
+        PollChildProcess(call, child);
+        code = child->finished ? child->exit_code : kStillActive;
+    }
+    else if (call.arguments[0] == GuestProcess::kCurrentProcessHandle)
+    {
+        code = kStillActive;
+    }
+    else
+    {
+        call.services->SetLastError(kWin32ErrorInvalidHandle);
+        return true;
+    }
+    const std::uint32_t value[1] = {code};
+    result->eax = 1;
+    return WriteGuestWords(call, call.arguments[1], value, error);
+}
+
+// SetPriorityClass(hProcess, dwPriorityClass): TRUE for a child or this
+// process, as Windows 11 answers for a child (task 431); the host's
+// scheduling does not change. Any other handle is FALSE with
+// ERROR_INVALID_HANDLE.
+bool SetPriorityClass(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (!CheckArgumentCount(call, result, 2, "kernel32 SetPriorityClass argument shape is invalid", error))
+    {
+        return false;
+    }
+    GuestProcess* process = RequireProcess(call, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    if (process->FindChildProcess(call.arguments[0]) == nullptr &&
+        call.arguments[0] != GuestProcess::kCurrentProcessHandle)
+    {
+        call.services->SetLastError(kWin32ErrorInvalidHandle);
+        return true;
+    }
+    result->eax = 1;
+    return true;
+}
+
+// WaitForSingleObject on a child's process handle: WAIT_OBJECT_0 once the
+// host reports its end, WAIT_TIMEOUT when the timeout passes first, as
+// measured on Windows 11 (task 431).
+bool WaitForChildProcess(const ImportCall& call,
+                         GuestProcess* process,
+                         std::uint32_t handle,
+                         std::uint32_t timeout,
+                         ImportReturn* result,
+                         std::string* error)
+{
+    constexpr std::uint32_t kWaitObject0 = 0x00000000U;
+    constexpr std::uint32_t kWaitTimeout = 0x00000102U;
+    constexpr std::uint32_t kWaitFailed = 0xFFFFFFFFU;
+    constexpr std::uint32_t kInfinite = 0xFFFFFFFFU;
+    constexpr std::uint32_t kPollMilliseconds = 10;
+    std::uint32_t waited = 0;
+    for (;;)
+    {
+        GuestProcess::ChildProcess* child = process->FindChildProcess(handle);
+        if (child == nullptr)
+        {
+            result->eax = kWaitFailed;
+            call.services->SetLastError(kWin32ErrorInvalidHandle);
+            return true;
+        }
+        PollChildProcess(call, child);
+        if (child->finished)
+        {
+            result->eax = kWaitObject0;
+            return true;
+        }
+        if (timeout != kInfinite && waited >= timeout)
+        {
+            result->eax = kWaitTimeout;
+            return true;
+        }
+        const std::uint32_t step =
+            timeout == kInfinite ? kPollMilliseconds : (std::min)(kPollMilliseconds, timeout - waited);
+        if (!call.services->WaitMilliseconds(step))
+        {
+            if (error != nullptr) *error = "kernel32 WaitForSingleObject needs a host that can wait";
+            return false;
+        }
+        waited += step;
+    }
+}
+
 bool WaitForSingleObject(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     constexpr std::uint32_t kWaitObject0 = 0x00000000U;
@@ -3092,6 +3459,10 @@ bool WaitForSingleObject(const ImportCall& call, ImportReturn* result, std::stri
     }
     const std::uint32_t handle = call.arguments[0];
     const std::uint32_t timeout = call.arguments[1];
+    if (process->FindChildProcess(handle) != nullptr)
+    {
+        return WaitForChildProcess(call, process, handle, timeout, result, error);
+    }
     if (process->FindEvent(handle) == nullptr && process->FindThreadHandle(handle) == nullptr)
     {
         result->eax = kWaitFailed;
@@ -3580,7 +3951,7 @@ bool GetFileSize(const ImportCall& call, ImportReturn* result, std::string* erro
 // signatures).
 constexpr ResolveOnlyExport kKernel32ResolveOnly[] = {
     {"GetWindowsDirectoryA", 2}, {"DeleteFileA", 1},
-    {"GlobalMemoryStatus", 1}, {"CreateProcessA", 10},
+    {"GlobalMemoryStatus", 1},
     {"TerminateThread", 2},
     {"SetEndOfFile", 1},
     {"SetConsoleCtrlHandler", 2},
@@ -3652,6 +4023,7 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("HeapSize", 3, &HeapSize));
     descriptor.exports.push_back(MakeExport("HeapValidate", 3, &HeapValidate));
     descriptor.exports.push_back(MakeExport("GetStartupInfoA", 1, &GetStartupInfoA));
+    descriptor.exports.push_back(MakeExport("GetFullPathNameA", 4, &GetFullPathNameA));
     descriptor.exports.push_back(MakeExport("GetStdHandle", 1, &GetStdHandle));
     descriptor.exports.push_back(MakeExport("GetFileType", 1, &GetFileType));
     descriptor.exports.push_back(MakeExport("SetHandleCount", 1, &SetHandleCount));
@@ -3680,6 +4052,10 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("SetEvent", 1, &SetEvent));
     descriptor.exports.push_back(MakeExport("ResetEvent", 1, &ResetEvent));
     descriptor.exports.push_back(MakeExport("WaitForSingleObject", 2, &WaitForSingleObject));
+    // A launcher's child processes (task 431).
+    descriptor.exports.push_back(MakeExport("CreateProcessA", 10, &CreateProcessA));
+    descriptor.exports.push_back(MakeExport("GetExitCodeProcess", 2, &GetExitCodeProcess));
+    descriptor.exports.push_back(MakeExport("SetPriorityClass", 2, &SetPriorityClass));
     descriptor.exports.push_back(MakeExport("GetTickCount", 0, &GetTickCount));
     descriptor.exports.push_back(MakeExport("GetSystemTime", 1, &GetSystemTime));
     descriptor.exports.push_back(MakeExport("GetLocalTime", 1, &GetLocalTime));

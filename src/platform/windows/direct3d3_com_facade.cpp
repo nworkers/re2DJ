@@ -2361,7 +2361,10 @@ HRESULT WINAPI D3dCreateDevice(IDirect3D3* self,
     {
         facade->root->presentation_surface = target;
     }
-    facade->state = re2dj::directx::InitialDeviceState();
+    // Only the DirectX 7 facade's root carries its own device table, and a
+    // DirectX 7 device starts with lighting on.
+    facade->state = facade->root->device_vtable != nullptr ? re2dj::directx::InitialDevice7State()
+                                                          : re2dj::directx::InitialDeviceState();
     if (facade->root->device_vtable != nullptr)
     {
         facade->interface_value.lpVtbl =
@@ -4394,6 +4397,36 @@ HRESULT LegacyDeviceGetViewport(IDirect3DDevice3* device, LegacyViewportState* v
     viewport->height = core_viewport.height;
     viewport->min_z = core_viewport.min_z;
     viewport->max_z = core_viewport.max_z;
+    return D3D_OK;
+}
+
+HRESULT LegacyDeviceSetMaterial(IDirect3DDevice3* device, const re2dj::directx::D3dMaterial7& material)
+{
+    if (device == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    DeviceFacade* const facade = DeviceFromInterface(device);
+    if (facade->magic != kDeviceMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    facade->state.material = material;
+    return D3D_OK;
+}
+
+HRESULT LegacyDeviceGetMaterial(IDirect3DDevice3* device, re2dj::directx::D3dMaterial7* material)
+{
+    if (device == nullptr || material == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    DeviceFacade* const facade = DeviceFromInterface(device);
+    if (facade->magic != kDeviceMagic)
+    {
+        return DDERR_INVALIDOBJECT;
+    }
+    *material = facade->state.material;
     return D3D_OK;
 }
 

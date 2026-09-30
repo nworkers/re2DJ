@@ -829,6 +829,30 @@ bool GetAsyncKeyState(const ImportCall& call, ImportReturn* result, std::string*
     return Succeed(error);
 }
 
+// GetKeyState(nVirtKey): the key held as the host keyboard has it, as
+// Windows 11 answers from the thread's key state (task 431): 0x0000FF80 when
+// held and 0 when not, and 0 for a code above 0xFF with the last error left
+// alone. The toggle bit is not modelled.
+bool GetKeyState(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 1)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null"
+                                             : "user32 GetKeyState argument shape is invalid");
+    }
+    *result = {};
+    if (call.arguments[0] > 0xFFU)
+    {
+        return Succeed(error);
+    }
+    const HostPresentation* presentation = call.services->Presentation();
+    if (presentation != nullptr && presentation->Input().virtual_keys.test(call.arguments[0]))
+    {
+        result->eax = 0x0000FF80U;
+    }
+    return Succeed(error);
+}
+
 // The COLORREF a brush fills with, as FillRect finds it: a solid brush of
 // the process, or a stock brush (the null brush fills nothing). False for a
 // handle that is neither.
@@ -1707,6 +1731,7 @@ GuestModuleDescriptor MakeUser32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("SetRect", 5, &SetRect));
     descriptor.exports.push_back(MakeExport("GetWindowLongA", 2, &GetWindowLongA));
     descriptor.exports.push_back(MakeExport("GetAsyncKeyState", 1, &GetAsyncKeyState));
+    descriptor.exports.push_back(MakeExport("GetKeyState", 1, &GetKeyState));
     descriptor.exports.push_back(MakeExport("GetCursorPos", 1, &GetCursorPos));
     descriptor.exports.push_back(MakeExport("ScreenToClient", 2, &ScreenToClient));
     descriptor.exports.push_back(MakeExport("PeekMessageA", 5, &PeekMessageA));

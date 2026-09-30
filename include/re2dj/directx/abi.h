@@ -460,8 +460,12 @@ inline constexpr std::uint32_t kD3dRenderStateAlphaRef = 24;
 inline constexpr std::uint32_t kD3dRenderStateAlphaFunc = 25;
 inline constexpr std::uint32_t kD3dRenderStateAlphaBlendEnable = 27;
 inline constexpr std::uint32_t kD3dRenderStateColorKeyEnable = 41;
+// DirectX 7's D3DRENDERSTATE_LIGHTING and D3DRENDERSTATE_AMBIENT.
+inline constexpr std::uint32_t kD3dRenderStateLighting = 137;
+inline constexpr std::uint32_t kD3dRenderStateAmbient = 139;
 // D3DCMPFUNC, D3DCMP_NEVER (1) through D3DCMP_ALWAYS (8).
 inline constexpr std::uint32_t kD3dCmpNever = 1;
+inline constexpr std::uint32_t kD3dCmpLessEqual = 4;
 inline constexpr std::uint32_t kD3dCmpNotEqual = 6;
 inline constexpr std::uint32_t kD3dCmpAlways = 8;
 // D3DPRIMITIVETYPE members this facade draws.

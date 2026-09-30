@@ -31,6 +31,9 @@ std::uint32_t CheckCreateDevice(const Guid& device_class, std::uint32_t render_t
 DeviceState InitialDeviceState()
 {
     DeviceState device;
+    device.render_states[kD3dRenderStateZWriteEnable] = 1;
+    device.render_states[kD3dRenderStateZFunc] = kD3dCmpLessEqual;
+    device.render_states[kD3dRenderStateAlphaFunc] = kD3dCmpAlways;
     device.render_states[kD3dRenderStateCullMode] = kD3dCullCcw;
     device.render_states[kD3dRenderStateSrcBlend] = kD3dBlendOne;
     device.render_states[kD3dRenderStateDestBlend] = kD3dBlendZero;
@@ -45,6 +48,13 @@ DeviceState InitialDeviceState()
     device.transforms[kD3dTransformWorld] = IdentityMatrix();
     device.transforms[kD3dTransformView] = IdentityMatrix();
     device.transforms[kD3dTransformProjection] = IdentityMatrix();
+    return device;
+}
+
+DeviceState InitialDevice7State()
+{
+    DeviceState device = InitialDeviceState();
+    device.render_states[kD3dRenderStateLighting] = 1;
     return device;
 }
 

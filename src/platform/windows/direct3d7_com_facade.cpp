@@ -519,19 +519,30 @@ HRESULT WINAPI Dev7GetDirect3D(IDirect3DDevice7* self, IDirect3D7** direct3d)
         ReportUnimplementedGraphicsCall("IDirect3DDevice7", &ledger);          \
     } while (false)
 
-HRESULT WINAPI Dev7SetMaterial(IDirect3DDevice7*, D3DMATERIAL7*)
+HRESULT WINAPI Dev7SetMaterial(IDirect3DDevice7* self, D3DMATERIAL7* material)
 {
-    RE2DJ_DEVICE7_UNIMPLEMENTED("SetMaterial");
-    return D3D_OK;
-}
-HRESULT WINAPI Dev7GetMaterial(IDirect3DDevice7*, D3DMATERIAL7* material)
-{
-    RE2DJ_DEVICE7_UNIMPLEMENTED("GetMaterial");
-    if (material != nullptr)
+    // The same answer as the Linux facade for a null material: nothing kept.
+    if (material == nullptr)
     {
-        std::memset(material, 0, sizeof(*material));
+        return D3D_OK;
     }
-    return D3D_OK;
+    re2dj::directx::D3dMaterial7 core;
+    CopyToCore(&core, *material);
+    return LegacyDeviceSetMaterial(LegacyDevice(self), core);
+}
+HRESULT WINAPI Dev7GetMaterial(IDirect3DDevice7* self, D3DMATERIAL7* material)
+{
+    if (material == nullptr)
+    {
+        return DDERR_INVALIDPARAMS;
+    }
+    re2dj::directx::D3dMaterial7 core;
+    const HRESULT result = LegacyDeviceGetMaterial(LegacyDevice(self), &core);
+    if (result == D3D_OK)
+    {
+        CopyFromCore(material, core);
+    }
+    return result;
 }
 HRESULT WINAPI Dev7SetLight(IDirect3DDevice7*, DWORD, D3DLIGHT7*)
 {

@@ -203,6 +203,29 @@ bool BuildFixedFunctionState(const DeviceState& device, graphics::LegacyFixedFun
     return true;
 }
 
+std::uint32_t UntransformedVertexColor(const DeviceState& device)
+{
+    if (device.render_states[kD3dRenderStateLighting] == 0)
+    {
+        return 0xffffffffU;
+    }
+    const std::uint32_t ambient = device.render_states[kD3dRenderStateAmbient];
+    const D3dMaterial7& material = device.material;
+    const auto channel = [](float value) {
+        // NaN clamps to 0 as well.
+        const float clamped = value > 0.0f ? (std::min)(value, 1.0f) : 0.0f;
+        return static_cast<std::uint32_t>(std::lround(clamped * 255.0f));
+    };
+    const auto ambient_of = [ambient](int shift) {
+        return static_cast<float>((ambient >> shift) & 0xffU) / 255.0f;
+    };
+    const std::uint32_t red = channel(material.emissive.r + ambient_of(16) * material.ambient.r);
+    const std::uint32_t green = channel(material.emissive.g + ambient_of(8) * material.ambient.g);
+    const std::uint32_t blue = channel(material.emissive.b + ambient_of(0) * material.ambient.b);
+    const std::uint32_t alpha = channel(material.diffuse.a);
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
+}
+
 bool BuildTransformState(const DeviceState& device, graphics::LegacyTransformState* transform, std::string* error)
 {
     if (!device.has_viewport)
@@ -210,6 +233,7 @@ bool BuildTransformState(const DeviceState& device, graphics::LegacyTransformSta
         *error = "untransformed draw has no current viewport";
         return false;
     }
+    transform->vertex_color = UntransformedVertexColor(device);
     CopyMatrix(device.transforms[kD3dTransformWorld], &transform->world);
     CopyMatrix(device.transforms[kD3dTransformView], &transform->view);
     CopyMatrix(device.transforms[kD3dTransformProjection], &transform->projection);
@@ -233,6 +257,7 @@ bool BuildViewport2TransformState(const DeviceState& device,
                                   graphics::LegacyTransformState* transform,
                                   std::string* error)
 {
+    transform->vertex_color = UntransformedVertexColor(device);
     CopyMatrix(device.transforms[kD3dTransformWorld], &transform->world);
     CopyMatrix(device.transforms[kD3dTransformView], &transform->view);
     CopyMatrix(device.transforms[kD3dTransformProjection], &transform->projection);

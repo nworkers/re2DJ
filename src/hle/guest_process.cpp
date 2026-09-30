@@ -113,6 +113,57 @@ bool GuestProcess::FreeTls(std::uint32_t index)
     return true;
 }
 
+GuestProcess::ChildProcess& GuestProcess::AddChildProcess(std::uint32_t host_child)
+{
+    ChildProcess child;
+    child.host_child = host_child;
+    child.process_id = next_child_id_;
+    child.thread_id = next_child_id_ + 4;
+    next_child_id_ += 8;
+    child.process_handle = handles_.Allocate();
+    child.thread_handle = handles_.Allocate();
+    children_.push_back(child);
+    return children_.back();
+}
+
+GuestProcess::ChildProcess* GuestProcess::FindChildProcess(std::uint32_t process_handle)
+{
+    if (process_handle == 0)
+    {
+        return nullptr;
+    }
+    for (ChildProcess& child : children_)
+    {
+        if (child.process_handle == process_handle)
+        {
+            return &child;
+        }
+    }
+    return nullptr;
+}
+
+bool GuestProcess::CloseChildHandle(std::uint32_t handle)
+{
+    if (handle == 0)
+    {
+        return false;
+    }
+    for (ChildProcess& child : children_)
+    {
+        if (child.process_handle == handle)
+        {
+            child.process_handle = 0;
+            return true;
+        }
+        if (child.thread_handle == handle)
+        {
+            child.thread_handle = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool GuestProcess::CloseProcessHandle(std::uint32_t handle)
 {
     const auto found = std::find(process_handles_.begin(), process_handles_.end(), handle);

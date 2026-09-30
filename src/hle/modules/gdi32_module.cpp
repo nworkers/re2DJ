@@ -218,11 +218,12 @@ constexpr std::uint32_t kSrcCopy = 0x00CC0020U;
 // - destination pixels outside the bitmap are clipped;
 // - the result is ySrc + SrcHeight (2, 1, and 2 for the measured (0, 2),
 //   (0, 1), and (1, 1)), and the last error is untouched.
-// SRCCOPY of 8-bit palettized, 16-bit (5-5-5 or bitfields) and 24-bit DIBs,
-// with positive extents inside the source, is what was measured; anything
-// else stops. An 8-bit DIB's palette (biClrUsed entries, 256 when 0) converts
-// exactly as the same colours in a 24-bit DIB, and an index past the palette
-// gives black (design 426).
+// SRCCOPY of 8-bit palettized, 16-bit (5-5-5 or bitfields), 24-bit and 32-bit
+// DIBs, with positive extents inside the source, is what was measured;
+// anything else stops. An 8-bit DIB's palette (biClrUsed entries, 256 when 0)
+// converts exactly as the same colours in a 24-bit DIB, and an index past the
+// palette gives black (design 426). A 32-bit BI_RGB DIB converts as the
+// 24-bit one does, its top byte ignored (task 431).
 bool StretchDIBits(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     if (result == nullptr || call.arguments.size() != 13)
@@ -299,6 +300,12 @@ bool StretchDIBits(const ImportCall& call, ImportReturn* result, std::string* er
     else if (header.size == sizeof(BitmapInfoHeader) && header.bit_count == 24 && header.compression == kBiRgb)
     {
         source_layout = kGdiBgr888;
+    }
+    else if (header.size == sizeof(BitmapInfoHeader) && header.bit_count == 32 && header.compression == kBiRgb)
+    {
+        // Converted as the 24-bit pixels are, the top byte ignored, as
+        // measured on Windows 11 (task 431).
+        source_layout = kGdiXrgb8888;
     }
     else
     {

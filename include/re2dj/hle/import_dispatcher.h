@@ -18,6 +18,7 @@ class GuestFiles;
 class GuestProcess;
 class HostAudio;
 class HostPresentation;
+class HostProcessLauncher;
 
 // One reading of the host clock as the guest sees it.
 struct GuestClockReading
@@ -110,6 +111,9 @@ public:
     virtual HostPresentation* Presentation() const { return nullptr; }
     // The host's sound output, or null for a host that plays nothing.
     virtual HostAudio* Audio() const { return nullptr; }
+    // Where CreateProcessA starts a child guest process, or null for a host
+    // that starts none.
+    virtual HostProcessLauncher* ProcessLauncher() const { return nullptr; }
     // Blocks the guest thread for about milliseconds of host time; false for
     // a host that cannot wait.
     virtual bool WaitMilliseconds(std::uint32_t milliseconds) const

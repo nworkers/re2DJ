@@ -267,7 +267,13 @@ bool HandleContinuationGate(const NativeImportGateEvent& event,
     call.handled = state->kernel32.Dispatch(event, output);
     --depth;
     call.eax = call.handled ? output->eax : 0;
-    if (logged)
+    // The call a run stops on is recorded past the log's limit too, so its
+    // reason is there to read.
+    if (!logged && !call.handled)
+    {
+        LogApiCallHead(call, depth);
+    }
+    if (logged || !call.handled)
     {
         LogApiCallOutcome(state->kernel32, call, facade_export != nullptr, output, depth);
     }
@@ -356,6 +362,8 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
     context.kernel32.ConfigureDevices(environment.devices);
     context.kernel32.SetPresentation(environment.presentation);
     context.kernel32.SetAudio(environment.audio);
+    context.kernel32.SetProcessLauncher(environment.process_launcher);
+    context.kernel32.SetStartup(environment.startup);
     context.presentation = environment.presentation;
     context.call_limit = environment.call_limit;
     context.api_log_calls = environment.api_log_calls;
@@ -363,6 +371,16 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
     if (!context.kernel32.ConfigureFiles(environment.files, error))
     {
         return false;
+    }
+    if (!environment.current_directory.empty() && context.kernel32.Files() != nullptr)
+    {
+        bool outside_root = false;
+        if (context.kernel32.Files()->SetCurrentDirectory(environment.current_directory, &outside_root) != 0 ||
+            outside_root)
+        {
+            *error = "the launcher's current directory is not a guest directory: " + environment.current_directory;
+            return false;
+        }
     }
     if (!context.kernel32.PrepareStopStub(error))
     {

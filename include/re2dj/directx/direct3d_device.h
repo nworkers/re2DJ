@@ -42,10 +42,18 @@ D3dMatrix IdentityMatrix();
 bool IsEnumeratedDevice(const Guid& device_class);
 std::uint32_t CheckCreateDevice(const Guid& device_class, std::uint32_t render_target_caps);
 
-// A new device's state: counter-clockwise culling, ONE/ZERO blending, stage 0
-// modulating the texture by the diffuse colour with point filtering and
-// wrapping, identity world, view, and projection, and no viewport.
+// A new device's state: depth writes on with LESSEQUAL comparison, ALWAYS as
+// the alpha test's comparison, counter-clockwise culling, ONE/ZERO blending,
+// stage 0 modulating the texture by the diffuse colour with point filtering
+// and wrapping, identity world, view, and projection, a zero material, and no
+// viewport. The render states are those a new Direct3D 3 and Direct3D 7 HAL
+// device report on Windows 11 alike (task 430).
 DeviceState InitialDeviceState();
+
+// A new Direct3D 7 device's state: InitialDeviceState with
+// D3DRENDERSTATE_LIGHTING on, as Windows 11 reports it; DirectX 6 has no such
+// state.
+DeviceState InitialDevice7State();
 
 // The state methods. An index outside its table is DDERR_INVALIDPARAMS; the
 // facade checks the guest's pointers before calling these.

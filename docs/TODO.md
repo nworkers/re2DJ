@@ -205,6 +205,20 @@
 
 ## 다음 작업 / Next work
 
+- [ ] EZ2DJ 6th 실행(2026-09-30 시작)
+  - [x] Win32: 데모, 코인, 모드 선택, 곡 선택, 플레이까지 진행(작업 430 전에도 진행됨)
+  - [x] [작업 430 — DX7 조명과 깊이 기본값](work-logs/20260930-430-d3d7-lighting-defaults.md). 모드 선택 화면의 모드별 3D 그림이 그려지지 않던 문제. 새 장치의 render state 기본값(`ZWRITEENABLE` 1, `ZFUNC` LESSEQUAL, `ALPHAFUNC` ALWAYS, DX7 `LIGHTING` 1)과 광원 없는 조명 색(emissive + AMBIENT × material ambient, alpha는 diffuse alpha)을 측정해 공용 core로. Windows DX7 `SetMaterial`·`GetMaterial`, Linux `GetMaterial`
+  - [ ] 데모 플레이의 BGA 자리에 보이는 색 노이즈가 원본 연출인지 확인
+  - [x] [작업 431 — Linux 6th와 자식 프로세스](work-logs/20260930-431-linux-6th-child-process.md). launcher의 `CreateProcessA`를 별도 host 프로세스로 실행(측정: 명령줄·현재 디렉터리·`lpReserved2` 전달, 32비트 종료 코드), `GetExitCodeProcess`·`SetPriorityClass`·자식 핸들 대기, `GetStartupInfoA` reserved, `GetKeyState`, `GetFullPathNameA`, 32비트 `StretchDIBits`(모두 측정). Linux 두 폭에서 타이틀·코인·모드 선택까지 확인, 시간 제한까지 멈추지 않음
+  - [ ] Remember 1st 모드: 6th이 0x100으로 끝나면 launcher가 `EZ2DJ1ST\EZ2DJ.EXE`를 실행함. 두 host 모두 아직 확인하지 않음. Linux 자식 run은 6th 프로필의 guest root·Hardlock 설정을 쓰므로 1st 자식에 맞는지 확인 필요
+  - [ ] Linux 6th 성능: x64 Debug에서 타이틀 약 40 FPS, x86 Debug에서 모드 선택 전환 중 4.5 FPS
+  - [ ] 광원(`SetLight`·`LightEnable`): 6th는 쓰지 않음. 쓰는 게임이 나오면 측정해 모델
+
+  *EZ2DJ 6th, started 2026-09-30.*
+  - *Win32 gets through the demo, coins, mode select, music select, and play (it already did before task 430).*
+  - *Task 430 fixes the per-mode 3D pictures in mode select, which were not drawn. The measured new-device render-state defaults (`ZWRITEENABLE` 1, `ZFUNC` LESSEQUAL, `ALPHAFUNC` ALWAYS, and DX7 `LIGHTING` 1) and the colour lighting gives with no light (emissive + AMBIENT × material ambient, alpha from the diffuse alpha) move into the shared core, with Windows DX7 `SetMaterial` and `GetMaterial` and Linux `GetMaterial`.*
+  - *Still to do: check whether the colour noise in the demo's BGA area is the original's own effect; Linux 6th (the child-process `EZ2DJ6th.EXE` structure); and lights (`SetLight`, `LightEnable`), which 6th does not use, to be measured and modelled when a game does.*
+
 - [x] [작업 345 — 플랫폼 비트 폭 재배치](work-orders/20260922-345-linux-platform-width-split.md)
   - [x] Linux — i386 전용 구현을 `linux/x86/`로 이동. 루트에는 두 폭 공용 코드만 남음
   - [x] Windows — 현 상태 유지(2026-09-23 사용자 결정). Windows x64 host가 아직 없어 폭별 분리의 기준이 될 두 번째 폭이 없음. x64 host를 도입할 때 파일 단위로 다시 판단

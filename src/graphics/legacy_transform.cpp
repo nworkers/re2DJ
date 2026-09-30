@@ -123,7 +123,7 @@ bool DecodeUntransformedVertices(std::span<const std::byte> source,
         const std::size_t color_offset = fvf == kFvfLitVertex ? 16 : 0;
         const std::uint32_t diffuse =
             fvf == kFvfLitVertex ? ReadValue<std::uint32_t>(packed + color_offset)
-                                 : 0xffffffff;
+                                 : transform.vertex_color;
         const std::uint32_t specular =
             fvf == kFvfLitVertex ? ReadValue<std::uint32_t>(packed + color_offset + 4) : 0;
         const float texture_u = ReadValue<float>(packed + 24);

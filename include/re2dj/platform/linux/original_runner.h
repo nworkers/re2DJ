@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "re2dj/exe/pe_image.h"
+#include "re2dj/hle/guest_child_process.h"
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/guest_files.h"
 #include "re2dj/hle/host_audio.h"
@@ -249,6 +250,14 @@ struct OriginalRunEnvironment
     std::uint32_t call_limit = 0;
     // How many calls the API log records in full; 0 records every call.
     std::uint32_t api_log_calls = kOriginalApiLogFullCalls;
+    // How a launcher started this guest process, when one did, and the
+    // first current directory it gave (a guest path; empty keeps the guest
+    // root).
+    hle::GuestStartup startup;
+    std::string current_directory;
+    // Where the guest's CreateProcessA starts its children, or null to start
+    // none; the caller owns it.
+    hle::HostProcessLauncher* process_launcher = nullptr;
 };
 
 bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_path,

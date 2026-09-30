@@ -39,6 +39,7 @@
 #include "re2dj/hle/hardlock/device_material.h"
 #include "re2dj/platform/linux/host_audio.h"
 #include "re2dj/platform/linux/host_presentation.h"
+#include "re2dj/platform/linux/host_process_launcher.h"
 #include "re2dj/platform/linux/original_runner.h"
 #elif defined(_WIN32)
 #include "re2dj/platform/windows/original_process_backend.h"
@@ -135,6 +136,14 @@ struct Options
     bool linux_in_process_createfile_call = false;
     bool linux_in_process_continue = false;
     bool hold_window = false;
+    // A CHD path that replaces the profile's executable, as a launcher's
+    // child process names it, and the rest of what the launcher gave the
+    // child (task 431).
+    std::string guest_executable;
+    std::string guest_command_line;
+    std::string guest_current_directory;
+    std::vector<std::uint8_t> guest_startup_reserved;
+    int guest_exit_code_fd = -1;
     // 0 runs until the guest exits or its window is closed.
     std::uint32_t call_limit = 0;
     // Calls the API log records in full; 0 for all.
@@ -335,7 +344,10 @@ void PrintUsage()
         "  --run               Start the selected guest executable.\n"
         "  --hold-window       Linux: keep the guest's window open after the run stops,\n"
         "                      until it is closed.\n"
-        "  --call-limit <n>    Linux: stop the run after n guest API calls, for\n"
+        "  --guest-executable <path>\n"
+        "                      Linux: run this CHD executable instead of the\n"
+        "                      profile's own (for example EZ2DJ/EZ2DJ6th.EXE).\n"
+        "  --call-limit <n>   Linux: stop the run after n guest API calls, for\n"
         "                      diagnostics and regression runs. By default the run\n"
         "                      goes on until the guest exits or its window is closed.\n"
         "  --api-log-calls <n> Linux: record the first n guest API calls in the API\n"
@@ -748,6 +760,10 @@ std::unique_ptr<re2dj::platform::linux::LinuxHostPresentation> g_linux_presentat
 // Where a Linux run's sound plays, kept for the process's life like the
 // window.
 std::unique_ptr<re2dj::platform::linux::LinuxHostAudio> g_linux_audio;
+// Starts the guest's child processes, as other runs of this program with
+// this run's own options.
+std::unique_ptr<re2dj::platform::linux::LinuxHostProcessLauncher> g_linux_process_launcher;
+std::vector<std::string> g_child_base_arguments;
 #endif
 
 // Keeps a Linux run's window on screen after everything else is reported,
@@ -785,6 +801,16 @@ bool RunLinuxOriginal(const Options& options,
             return false;
         }
         environment.module_path = re2dj::target::GuestExecutablePath(profile);
+        // What a launcher gave this run as its child, and where the guest's
+        // own CreateProcessA starts children: another run of this program.
+        environment.startup.command_line = options.guest_command_line;
+        environment.startup.reserved = options.guest_startup_reserved;
+        environment.current_directory = options.guest_current_directory;
+        if (g_linux_process_launcher == nullptr)
+        {
+            g_linux_process_launcher = std::make_unique<linux_platform::LinuxHostProcessLauncher>(g_child_base_arguments);
+        }
+        environment.process_launcher = g_linux_process_launcher.get();
         // The profile's I/O board contract, as the Windows runtime applies it
         // by default.
         const re2dj::target::TargetLptdiPolicy& lptdi = profile.run_defaults.lptdi;
@@ -848,8 +874,25 @@ bool RunLinuxOriginal(const Options& options,
             environment.files.guest_root = re2dj::target::GuestRootPath(profile);
             environment.files.overlay_root = std::filesystem::current_path() / "overlays" / profile.id;
         }
-        return linux_platform::RunOriginalInProcessContinuation(
+        const bool ran = linux_platform::RunOriginalInProcessContinuation(
             executable_path, image_info, environment, result, error);
+        // A child run reports its guest's exit code to the launcher that
+        // started it: the ExitProcess code, 0 when the host window was closed,
+        // and 0xFFFFFFFF for a run that stopped.
+        if (options.guest_exit_code_fd >= 0)
+        {
+            std::uint32_t code = 0xFFFFFFFFU;
+            if (ran && result->boundary == linux_platform::OriginalRunBoundary::kProcessExit)
+            {
+                code = static_cast<std::uint32_t>(result->status_code);
+            }
+            else if (ran && result->boundary == linux_platform::OriginalRunBoundary::kContinuationHostClosed)
+            {
+                code = 0;
+            }
+            linux_platform::WriteGuestExitCode(options.guest_exit_code_fd, code);
+        }
+        return ran;
     }
     if (options.linux_in_process_createfile_call)
     {
@@ -926,6 +969,49 @@ bool ParseOptions(int argc, char** argv, Options* options)
         else if (argument == "--hold-window")
         {
             options->hold_window = true;
+        }
+        else if (argument == "--guest-executable")
+        {
+            if (!TakeValue(argc, argv, &index, argument, &options->guest_executable))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--guest-command-line")
+        {
+            if (!TakeValue(argc, argv, &index, argument, &options->guest_command_line))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--guest-current-directory")
+        {
+            if (!TakeValue(argc, argv, &index, argument, &options->guest_current_directory))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--guest-startup-reserved" || argument == "--guest-exit-code-fd")
+        {
+            std::string value;
+            if (!TakeValue(argc, argv, &index, argument, &value))
+            {
+                return false;
+            }
+#if defined(__linux__)
+            if (argument == "--guest-startup-reserved")
+            {
+                if (!re2dj::platform::linux::DecodeHex(value, &options->guest_startup_reserved))
+                {
+                    LogError("--guest-startup-reserved takes whole bytes in hex");
+                    return false;
+                }
+            }
+            else
+            {
+                options->guest_exit_code_fd = std::atoi(value.c_str());
+            }
+#endif
         }
         else if (argument == "--api-log-calls")
         {
@@ -1216,7 +1302,9 @@ int RunChdTarget(const Options& options,
         LogError("%s", error.c_str());
         return kExitHddError;
     }
-    const std::string_view executable_path = built_in.profile.executable_relative_path;
+    const std::string_view executable_path = options.guest_executable.empty()
+                                                 ? std::string_view(built_in.profile.executable_relative_path)
+                                                 : std::string_view(options.guest_executable);
     if (executable_path.empty())
     {
         LogError("CHD profile has no executable path");
@@ -1253,6 +1341,7 @@ int RunChdTarget(const Options& options,
     }
 
     re2dj::target::TargetProfile profile = built_in.profile;
+    profile.executable_relative_path = std::string(executable_path);
     profile.working_directory_relative_path =
         std::filesystem::path(profile.executable_relative_path).parent_path().generic_string();
     profile.detected = false;
@@ -1518,6 +1607,22 @@ int main(int argc, char** argv)
     {
         return kExitUsage;
     }
+#if defined(__linux__)
+    // A child run gets this run's options; the child options (each with its
+    // value) are its own.
+    for (int index = 0; index < argc; ++index)
+    {
+        const std::string_view argument = argv[index];
+        if (argument == "--guest-executable" || argument == "--guest-command-line" ||
+            argument == "--guest-current-directory" || argument == "--guest-startup-reserved" ||
+            argument == "--guest-exit-code-fd")
+        {
+            ++index;
+            continue;
+        }
+        g_child_base_arguments.emplace_back(argument);
+    }
+#endif
 #if defined(__linux__)
     LinuxWindowHold window_hold;
     window_hold.armed = options.hold_window;

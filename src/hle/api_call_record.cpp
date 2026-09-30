@@ -213,6 +213,11 @@ HostAudio* RecordingImportCallServices::Audio() const
     return inner_.Audio();
 }
 
+HostProcessLauncher* RecordingImportCallServices::ProcessLauncher() const
+{
+    return inner_.ProcessLauncher();
+}
+
 runtime::GuestAddress RecordingImportCallServices::ThreadEnvironmentBlock() const
 {
     return inner_.ThreadEnvironmentBlock();

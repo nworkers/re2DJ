@@ -36,8 +36,17 @@ DrawPlan PlanDrawPrimitive(std::uint32_t primitive, std::uint32_t fvf, std::uint
 // address mode).
 bool BuildFixedFunctionState(const DeviceState& device, graphics::LegacyFixedFunctionState* state, std::string* error);
 
+// The colour an untransformed D3DVERTEX, which carries none of its own, is
+// drawn with. With D3DRENDERSTATE_LIGHTING off it is opaque white. With it on
+// and no light, as measured on a Windows 11 Direct3D 7 HAL device (task 430):
+// each of red, green and blue is emissive + ambient render state x material
+// ambient, and alpha the material's diffuse alpha, each clamped to 0..1 and
+// rounded to 8 bits. Lights are not modelled.
+std::uint32_t UntransformedVertexColor(const DeviceState& device);
+
 // The transform of untransformed vertices from the device's matrices and its
-// DirectX 7 viewport; false with error when no viewport has been set.
+// DirectX 7 viewport, with UntransformedVertexColor; false with error when no
+// viewport has been set.
 bool BuildTransformState(const DeviceState& device, graphics::LegacyTransformState* transform, std::string* error);
 
 // The same from a DirectX 6 viewport object's D3DVIEWPORT2, whose clip

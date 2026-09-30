@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "re2dj/hle/guest_child_process.h"
 #include "re2dj/hle/guest_com.h"
 #include "re2dj/hle/guest_gdi.h"
 #include "re2dj/hle/guest_mixer.h"
@@ -123,6 +124,35 @@ public:
     // GetCommandLineA places it on the process heap.
     std::uint32_t command_line() const { return command_line_; }
     void set_command_line(std::uint32_t address) { command_line_ = address; }
+
+    // How this process was launched: the command line and STARTUPINFO
+    // reserved bytes its launcher passed, if any.
+    void SetStartup(GuestStartup startup) { startup_ = std::move(startup); }
+    const GuestStartup& startup() const { return startup_; }
+    // The guest address of the reserved bytes, 0 until the first
+    // GetStartupInfoA places them on the process heap.
+    std::uint32_t startup_reserved_address() const { return startup_reserved_address_; }
+    void set_startup_reserved_address(std::uint32_t address) { startup_reserved_address_ = address; }
+
+    // A child CreateProcessA started through the host: its IDs, the process
+    // and thread handles CreateProcessA returned (0 once closed), and, once
+    // the host reports its end, its exit code.
+    struct ChildProcess
+    {
+        std::uint32_t host_child = 0;
+        std::uint32_t process_id = 0;
+        std::uint32_t thread_id = 0;
+        std::uint32_t process_handle = 0;
+        std::uint32_t thread_handle = 0;
+        bool finished = false;
+        std::uint32_t exit_code = 0;
+    };
+    // Records a child the host started, giving it IDs and both handles.
+    ChildProcess& AddChildProcess(std::uint32_t host_child);
+    // The child an open process handle names, or null.
+    ChildProcess* FindChildProcess(std::uint32_t process_handle);
+    // Closes a child's process or thread handle; false for any other handle.
+    bool CloseChildHandle(std::uint32_t handle);
 
     // The single handle space devices and processes share.
     GuestHandleAllocator& handles() { return handles_; }
@@ -274,6 +304,11 @@ private:
     std::uint32_t image_base_ = 0;
     std::string module_path_;
     std::uint32_t command_line_ = 0;
+    GuestStartup startup_;
+    std::uint32_t startup_reserved_address_ = 0;
+    std::vector<ChildProcess> children_;
+    // Child IDs, multiples of four above this process's own.
+    std::uint32_t next_child_id_ = 0x00001000U;
     std::vector<std::uint32_t> process_handles_;
     std::array<bool, kTlsSlots> tls_allocated_ = {true};
     GuestHeap process_heap_;

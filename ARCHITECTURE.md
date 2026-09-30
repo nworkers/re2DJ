@@ -287,6 +287,21 @@ Task 251은 독자적인 클린룸 C++20 `HardlockEngine`(`re2dj::hle::hardlock:
 
 *From Task 422 DX6 surfaces on Linux give `IDirect3DTexture2` as the Windows DX6 facade does. A Linux COM block has one vtable, so the texture is a separate block the surface owns (`ddraw_texture2.cpp`), whose references count on the surface. `IDirect3DDevice3::SetTexture` turns the texture into its surface and uses the DX7 state. A DX6 vertex buffer is a DX7 buffer with `IDirect3DVertexBuffer`'s vtable (its first eight methods). Surface `Blt` (color fill and equal-size copy) and `BltFast` share one surface-copy rule, and a copy onto a back buffer is also drawn on the host as a textured quad. With these, the 1st SE CHD runs on Linux until its window is closed.*
 
+작업 431부터 Linux의 guest `CreateProcessA`는 자식 guest 프로그램을 **별도 host 프로세스**로 실행합니다. 모든 guest 이미지가 같은 기준 주소(0x400000)에 올라가므로, 부모와 자식이 한 주소 공간을 함께 쓸 수는 없습니다.
+
+- **자식 실행**: 공용 `hle::HostProcessLauncher`의 Linux 구현(`LinuxHostProcessLauncher`)이 `/proc/self/exe`를 부모 run의 옵션 그대로 다시 실행합니다. 그 뒤에 자식 요청을 붙여 넘깁니다. 요청은 이미지 안의 실행 파일, 명령줄, 첫 현재 디렉터리, `STARTUPINFO` reserved 바이트입니다.
+- **자식이 받는 값**: 자식 run은 그 값을 `hle::GuestStartup`으로 받습니다. 자식의 `GetCommandLineA`와 `GetStartupInfoA`가 그 값을 돌려줍니다.
+- **종료 코드**: host 종료 상태에는 8비트만 담기므로, 자식은 32비트 guest 종료 코드를 pipe로 써서 돌려줍니다.
+- **부모 쪽 HLE**: 부모의 HLE는 자식의 프로세스 핸들로 기다리고(`WaitForSingleObject`), 종료 코드를 읽습니다(`GetExitCodeProcess`).
+- **적용 예**: 6th의 launcher(`EZ2DJ.EXE`)가 이 방식으로 `EZ2DJ6th.EXE`를 실행합니다.
+
+*From Task 431 a guest `CreateProcessA` on Linux runs the child guest program as a **separate host process**. Every guest image loads at the same base (0x400000), so a parent and a child cannot share one address space.*
+- ***Starting the child**: the Linux implementation of the shared `hle::HostProcessLauncher` (`LinuxHostProcessLauncher`) runs `/proc/self/exe` again with the parent run's own options, followed by the child's request: the executable in the image, its command line, its first current directory, and the `STARTUPINFO` reserved bytes.*
+- ***What the child receives**: the child run takes these as `hle::GuestStartup`, and its `GetCommandLineA` and `GetStartupInfoA` return them.*
+- ***Exit code**: a host exit status holds only 8 bits, so the child writes its 32-bit guest exit code back over a pipe.*
+- ***The parent's HLE**: it waits on the child's process handle (`WaitForSingleObject`) and reads the exit code (`GetExitCodeProcess`).*
+- ***Example**: 6th's launcher (`EZ2DJ.EXE`) starts `EZ2DJ6th.EXE` this way.*
+
 
 Task 137은 그 후보를 기계적으로 판정하는 측정기를 추가했습니다. 플랫폼 중립 `re2dj::analysis::ScoreCodeRegion`이 바이트 span 하나에서 Shannon 엔트로피, `55 8b ec` prologue 수, `cc` padding run 수, zero byte 비율을 계산하고 `ciphertext-like` / `code-like` / `indeterminate` 3상태로 보고합니다. 임계값은 확인된 측정치 사이에 둔 휴리스틱임을 코드와 문서에 표기합니다. `re2dj_code_score`가 파일·HDD·CHD 입력을 섹션 또는 청크 단위로 이 함수에 넣습니다. 이 함수는 파일도 프로세스도 모르므로 이후 게스트 memory dump를 같은 경로로 판정할 수 있습니다.
 

@@ -48,6 +48,65 @@ void CheckInitialState(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, device.transforms[0].values[0], 0.0f);
     RE2DJ_CHECK(context, !device.has_viewport);
     RE2DJ_CHECK(context, !device.scene_active);
+    // The render states a new Direct3D 3 and Direct3D 7 HAL device report on
+    // Windows 11 (task 430): depth writes on, LESSEQUAL, and ALWAYS for the
+    // alpha test; lighting only on a Direct3D 7 device; a zero material.
+    RE2DJ_CHECK_EQ(context, device.render_states[dx::kD3dRenderStateZEnable], 0U);
+    RE2DJ_CHECK_EQ(context, device.render_states[dx::kD3dRenderStateZWriteEnable], 1U);
+    RE2DJ_CHECK_EQ(context, device.render_states[dx::kD3dRenderStateZFunc], dx::kD3dCmpLessEqual);
+    RE2DJ_CHECK_EQ(context, device.render_states[dx::kD3dRenderStateAlphaFunc], dx::kD3dCmpAlways);
+    RE2DJ_CHECK_EQ(context, device.render_states[dx::kD3dRenderStateLighting], 0U);
+    RE2DJ_CHECK_EQ(context, device.material.diffuse.a, 0.0f);
+    const dx::DeviceState device7 = dx::InitialDevice7State();
+    RE2DJ_CHECK_EQ(context, device7.render_states[dx::kD3dRenderStateLighting], 1U);
+    RE2DJ_CHECK_EQ(context, device7.render_states[dx::kD3dRenderStateZFunc], dx::kD3dCmpLessEqual);
+    RE2DJ_CHECK_EQ(context, device7.render_states[dx::kD3dRenderStateAmbient], 0U);
+}
+
+// The colour a D3DVERTEX is drawn with, against the pixels a Windows 11
+// Direct3D 7 HAL device drew for the same material and ambient (task 430).
+void CheckUntransformedVertexColor(re2dj::test::Context& context)
+{
+    dx::DeviceState device = dx::InitialDevice7State();
+    const auto material = [&](float ar, float ag, float ab, float aa, float da, float er, float eg, float eb) {
+        device.material = {};
+        device.material.ambient = {ar, ag, ab, aa};
+        device.material.diffuse = {0.9f, 0.9f, 0.9f, da};
+        device.material.emissive = {er, eg, eb, 1.0f};
+    };
+    // No material: black and fully transparent, whatever the ambient.
+    device.render_states[dx::kD3dRenderStateAmbient] = 0xffffffffU;
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0x00000000U);
+    // Lighting off: opaque white.
+    device.render_states[dx::kD3dRenderStateLighting] = 0;
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0xffffffffU);
+    device.render_states[dx::kD3dRenderStateLighting] = 1;
+    material(0.5f, 0.25f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f);
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0xff8040ffU);
+    device.render_states[dx::kD3dRenderStateAmbient] = 0x00808080U;
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0xff402080U);
+    device.render_states[dx::kD3dRenderStateAmbient] = 0x00ff0000U;
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0xff800000U);
+    device.render_states[dx::kD3dRenderStateAmbient] = 0xffffffffU;
+    material(0.5f, 0.25f, 1.0f, 1.0f, 1.0f, 0.25f, 0.5f, 0.0f);
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0xffbfbfffU);
+    // The sum clamps at 1, and so does a diffuse alpha outside 0..1.
+    material(1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0xffffffffU);
+    material(-0.5f, 2.0f, 0.5f, 1.0f, 1.5f, 0.0f, 0.0f, 0.0f);
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device), 0xff00ff80U);
+    // Alpha is the diffuse alpha; the ambient alpha plays no part.
+    material(1.0f, 1.0f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f, 0.0f);
+    RE2DJ_CHECK_EQ(context, dx::UntransformedVertexColor(device) >> 24, 0x80U);
+    // The transform carries it to a D3DVERTEX draw.
+    dx::D3dViewport7 viewport;
+    viewport.width = 640;
+    viewport.height = 480;
+    RE2DJ_CHECK_EQ(context, dx::SetViewport(device, viewport), dx::kDdOk);
+    re2dj::graphics::LegacyTransformState transform;
+    std::string error;
+    RE2DJ_CHECK(context, dx::BuildTransformState(device, &transform, &error));
+    RE2DJ_CHECK_EQ(context, transform.vertex_color, dx::UntransformedVertexColor(device));
 }
 
 // Index limits, scenes, and the viewport.
@@ -319,6 +378,9 @@ void CheckDirectX6Descriptions(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, transform.viewport.clip_x, -1.0f);
     RE2DJ_CHECK_EQ(context, transform.viewport.clip_width, 2.0f);
     RE2DJ_CHECK_EQ(context, transform.viewport.max_z, 1.0f);
+    // A DirectX 6 device has no lighting render state, so its D3DVERTEX stays
+    // white.
+    RE2DJ_CHECK_EQ(context, transform.vertex_color, 0xffffffffU);
 }
 
 void RunDirectXDeviceTests(re2dj::test::Context& context)
@@ -327,6 +389,7 @@ void RunDirectXDeviceTests(re2dj::test::Context& context)
     CheckDirectX6Descriptions(context);
     CheckCreateDeviceRules(context);
     CheckInitialState(context);
+    CheckUntransformedVertexColor(context);
     CheckStateRules(context);
     CheckDrawPlan(context);
     CheckFixedFunctionState(context);

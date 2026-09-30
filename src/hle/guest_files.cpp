@@ -283,6 +283,26 @@ bool GuestFiles::RelativeToRoot(std::string_view guest_path, std::string* relati
     return true;
 }
 
+std::uint32_t GuestFiles::ImagePath(std::string_view guest_path, std::string* image_path, bool* outside_root) const
+{
+    *outside_root = false;
+    std::string relative;
+    if (!RelativeToRoot(guest_path, &relative))
+    {
+        *outside_root = true;
+        return kWin32ErrorFileNotFound;
+    }
+    const std::string chd_relative = config_.chd_root.empty() ? relative : config_.chd_root + "/" + relative;
+    bool directory = false;
+    std::uint64_t size = 0;
+    if (source_ == nullptr || !source_->Find(chd_relative, &directory, &size) || directory)
+    {
+        return kWin32ErrorFileNotFound;
+    }
+    *image_path = chd_relative;
+    return kWin32ErrorSuccess;
+}
+
 GuestFiles::Entry GuestFiles::Lookup(const std::string& relative) const
 {
     if (!config_.overlay_root.empty())
@@ -405,6 +425,24 @@ bool GuestFiles::FindClose(std::uint32_t handle)
 std::string GuestFiles::CurrentDirectory() const
 {
     return storage::GuestPathToString(current_);
+}
+
+bool GuestFiles::FullPath(std::string_view guest_path, std::string* full) const
+{
+    storage::GuestPath parsed;
+    storage::GuestPath combined;
+    if (guest_path.empty() || !storage::ParseGuestPath(guest_path, &parsed) ||
+        parsed.kind == storage::GuestPathKind::kUnc || !storage::CombineGuestPath(current_, parsed, &combined))
+    {
+        return false;
+    }
+    *full = storage::GuestPathToString(combined);
+    const char last = guest_path.back();
+    if ((last == '\\' || last == '/') && !full->empty() && full->back() != '\\')
+    {
+        full->push_back('\\');
+    }
+    return true;
 }
 
 std::uint32_t GuestFiles::SetCurrentDirectory(std::string_view guest_path, bool* outside_root)

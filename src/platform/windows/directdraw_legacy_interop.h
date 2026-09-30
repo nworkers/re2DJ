@@ -27,6 +27,7 @@
 #include <ddraw.h>
 #include <d3d.h>
 
+#include "re2dj/directx/abi.h"
 #include "re2dj/directx/directdraw_display.h"
 
 namespace re2dj::platform::windows
@@ -97,6 +98,12 @@ HRESULT LegacyDeviceSetViewport(IDirect3DDevice3* device,
                                 const LegacyViewportState& viewport);
 HRESULT LegacyDeviceGetViewport(IDirect3DDevice3* device,
                                 LegacyViewportState* viewport);
+
+// DirectX 7's material, kept on the shared device state where it colours lit
+// D3DVERTEX draws. It travels as the core structure because the DirectX 6
+// facade is built without the DirectX 7 SDK types.
+HRESULT LegacyDeviceSetMaterial(IDirect3DDevice3* device, const re2dj::directx::D3dMaterial7& material);
+HRESULT LegacyDeviceGetMaterial(IDirect3DDevice3* device, re2dj::directx::D3dMaterial7* material);
 
 // Clears the device's render target. DirectX 6 reaches the same work through
 // IDirect3DViewport3::Clear2, which the 1st SE guest does not use, so this is

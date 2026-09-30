@@ -91,12 +91,24 @@ public:
     bool configured() const { return source_ != nullptr; }
     void SetHandleAllocator(GuestHandleAllocator* allocator) { handles_ = allocator; }
 
+    // The image path of a guest file, as the host starts a child process's
+    // executable from it: chd_root joined with the path below the root, for
+    // example "EZ2DJ/EZ2DJ6th.EXE". Relative paths resolve against the
+    // current directory. ERROR_FILE_NOT_FOUND when the image holds no such
+    // file; outside_root marks a path this model does not serve.
+    std::uint32_t ImagePath(std::string_view guest_path, std::string* image_path, bool* outside_root) const;
+
     // Relative paths resolve against the current directory.
     OpenResult Open(std::string_view guest_path, bool read, bool write, std::uint32_t disposition);
 
     // The guest's current directory as GetCurrentDirectoryA renders it: the
     // components as the guest wrote them, with no trailing separator.
     std::string CurrentDirectory() const;
+    // GetFullPathNameA's path: guest_path resolved against the current
+    // directory, "." and ".." applied and '/' written as '\\', keeping a
+    // trailing separator. It is a string operation: the file need not exist.
+    // False for a path that does not parse or climbs above its drive's root.
+    bool FullPath(std::string_view guest_path, std::string* full) const;
     // SetCurrentDirectoryA's rules, as Windows 11 applies them: the path
     // resolves against the current directory ('/' separates too, "." and
     // ".." apply); ERROR_INVALID_NAME for an empty or malformed path,
