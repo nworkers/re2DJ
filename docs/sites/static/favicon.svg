@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">
+  <!-- re2DJ: pixel single-player gear - red turntable, white/blue keys, green pedal (Task 432). -->
+  <rect width="32" height="32" fill="#02020a"/>
+  <!-- turntable: pixel disc -->
+  <rect x="4" y="8" width="8" height="12" fill="#ff3355"/>
+  <rect x="2" y="10" width="2" height="8" fill="#ff3355"/>
+  <rect x="12" y="10" width="2" height="8" fill="#ff3355"/>
+  <rect x="7" y="13" width="2" height="2" fill="#02020a"/>
+  <!-- five keys: white / blue / white / blue / white -->
+  <rect x="17" y="6" width="2" height="16" fill="#ffffff"/>
+  <rect x="20" y="6" width="2" height="16" fill="#3366ff"/>
+  <rect x="23" y="6" width="2" height="16" fill="#ffffff"/>
+  <rect x="26" y="6" width="2" height="16" fill="#3366ff"/>
+  <rect x="29" y="6" width="2" height="16" fill="#ffffff"/>
+  <!-- pedal -->
+  <rect x="17" y="24" width="14" height="3" fill="#33ff88"/>
+</svg>

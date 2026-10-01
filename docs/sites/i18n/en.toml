@@ -1,0 +1,139 @@
+# English strings for the re2DJ site (Task 432).
+# Values may contain short inline HTML (<code>, <a>, <strong>); templates print them as-is.
+
+[meta]
+html_lang = "en"
+label = "English"
+short = "EN"
+description = "re2DJ is an experimental runtime that natively executes the original EZ2DJ executable's 32-bit x86 code on Linux and 64-bit Windows, without an emulator or a virtual machine."
+skip_to_content = "Skip to content"
+
+[nav]
+about = "About"
+wip = "Progress"
+download = "Download"
+github = "GitHub"
+menu_label = "Main menu"
+lang_label = "Language"
+
+[hero]
+command = "re2dj.exe ez2dj1st"
+tagline = "Original EZ2DJ game code, as-is, on a modern PC."
+lead = "re2DJ is an experimental runtime that executes the original EZ2DJ executable's 32-bit x86 code natively on Linux and 64-bit Windows, without an emulator or a virtual machine. Game logic stays in the original code; only the surrounding Win32 API, DirectX and hardware boundaries are replaced with High Level Emulation (HLE)."
+latest = "Latest version"
+cta_download = "Download"
+cta_wip = "View progress"
+warning = "This is research-stage software, not a finished game launcher. Some targets run until their window is closed; others may still stop at a boundary not yet modelled."
+
+[about]
+title = "Principles"
+items = [
+  "<strong>Preserve original logic</strong> — gameplay is not rewritten in C++; the original x86 code remains the primary execution path.",
+  "<strong>Selective HLE</strong> — the boundary is the Win32 import thunk. Only APIs the game actually calls are implemented, narrowly.",
+  "<strong>Multiplatform from the start</strong> — the shared core includes no host OS headers; Windows/Linux specifics live in platform layers.",
+  "<strong>HDD and CHD input boundary</strong> — extracted HDDs arrive as a user-supplied directory; MAME CHDs are read through a read-only FAT32 layer.",
+  "<strong>Originals stay untouched</strong> — guest file writes go to an overlay directory, so the original dump is never modified.",
+  "<strong>Reproducible records</strong> — designs, work orders, analysis and work logs accumulate as repository documents.",
+]
+
+[how]
+title = "How it works"
+body = [
+  "The launcher maps the original PE32 executable into memory, and the original code then runs directly on the host CPU. On Windows the original PE32 starts as the main image; on Linux it executes inside the same process (x86-64 uses CPU compatibility mode).",
+  "Only when the code touches a Win32 API, DirectX, a hardware port or the Hardlock dongle does the HLE layer intercept, answer with the virtual file system, the graphics and sound facades or a device model, and return to the original code.",
+]
+
+[targets]
+title = "Built-in targets"
+lead = "The built-in catalog from src/target/target_profile.cpp; entries are added only after inspecting a real dump. Each target needs an HDD dump or a MAME CHD you legally own. Per-title compatibility is still under development."
+col_id = "Set"
+col_title = "Title"
+col_input = "Input"
+input_hdd = "HDD directory"
+input_chd = "MAME CHD"
+count = "profiles"
+
+[platforms]
+title = "Platforms"
+
+[platforms.windows]
+name = "Windows (Win32 x86)"
+detail = "The primary host, running on 64-bit Windows. Each release ships a built executable."
+
+[platforms.linux]
+name = "Linux x86 / x86-64"
+detail = "Port in progress. Built from source; several targets run until their window is closed."
+
+[states]
+release = "Released"
+wip = "In progress"
+hold = "On hold"
+
+[links]
+title = "More"
+repo = "Source repository"
+readme = "README — building and running"
+architecture = "ARCHITECTURE — code structure"
+docs = "docs — design and analysis documents"
+
+[wip]
+title = "Progress"
+lead = "Posts about problems met and solved during development, and what changed in each release."
+posts_title = "Dev log"
+posts_empty = "No posts published yet."
+read_more = "Read"
+timeline_title = "Release timeline"
+full_notes = "Full release notes"
+no_notes = "This release has no written notes."
+on_github = "View on GitHub"
+latest_badge = "Latest"
+
+[post]
+back = "Back to progress"
+source = "Source Markdown"
+published = "Published"
+
+[download]
+title = "Download"
+lead = "Windows builds are distributed as GitHub releases. When a tag is pushed, CI publishes only results that pass the Release build and tests."
+latest = "Latest release"
+released = "Released"
+primary = "Download for Windows"
+package = "Executable package"
+checksum = "Checksum"
+checksum_desc = "SHA-256 checksum file for the package zip."
+size = "Size"
+sha256 = "SHA-256"
+notes = "Changes in this version"
+all_releases = "All releases on GitHub"
+none = "No published release could be loaded yet. Please check the GitHub releases page."
+steps_title = "Getting started"
+steps = [
+  "Extract the zip into a folder of your choice.",
+  "Prepare assets you legally own. Built-in sets look under that folder's <code>roms\\&lt;set&gt;</code> path by default, e.g. a MAME CHD in <code>roms\\ez2dj4th</code>; point at an extracted HDD with <code>--hdd &lt;path&gt;</code>.",
+  "Run <code>re2dj.exe &lt;set&gt;</code>, e.g. <code>re2dj.exe ez2dj4th</code>. Giving a set name selects run mode automatically.",
+  "Press backtick (<code>`</code>) while running to open the OSD. See the README for all options.",
+]
+requirements_title = "Requirements"
+requirements = [
+  "Windows 10/11 (runs as a 32-bit x86 program on a 64-bit OS)",
+  "A legally owned EZ2DJ HDD dump or MAME CHD",
+]
+older_title = "Older releases"
+col_version = "Version"
+col_date = "Date"
+col_files = "Files"
+source_title = "Build from source"
+source_body = "For Linux x86/x86-64 and development builds, follow <a href=\"{repo_url}#시작하기--getting-started\">Getting started in the README</a>."
+legal_title = "Notice"
+legal_body = "re2DJ is an unofficial project with no affiliation to the rights holders of the original games. This site and its releases contain and distribute no original game binaries, HDD dumps or CHDs."
+
+[footer]
+disclaimer = "Unofficial project · not affiliated with rights holders · no original game assets"
+built = "Built"
+font = "Font: <a href=\"https://galmuri.quiple.dev/\">Galmuri</a> (SIL OFL 1.1)"
+
+[notfound]
+title = "404 — Page not found"
+body = "The requested page does not exist."
+home = "Back to start"

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="{{ t.meta.html_lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ page_title }}{% endblock %}</title>
+  <meta name="description" content="{{ description }}">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#02020a">
+  {% if canonical %}<link rel="canonical" href="{{ canonical }}">{% endif %}
+  {% for alt in alternates %}
+  <link rel="alternate" hreflang="{{ alt.hreflang }}" href="{{ alt.href }}">
+  {% endfor %}
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ page_title }}">
+  <meta property="og:description" content="{{ description }}">
+  {% if canonical %}<meta property="og:url" content="{{ canonical }}">{% endif %}
+  <link rel="icon" href="{{ static }}favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="{{ static }}fonts/Galmuri14.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{ static }}css/site.css">
+  {% if first_visit_redirect %}
+  <script>
+    // First visit to a Korean page from a non-Korean browser: go to the English page.
+    (function () {
+      var stored = null;
+      try { stored = window.localStorage.getItem("re2dj-lang"); } catch (error) {}
+      if (stored) { return; }
+      var langs = navigator.languages || [navigator.language || ""];
+      for (var i = 0; i < langs.length; i++) {
+        if (String(langs[i]).toLowerCase().indexOf("ko") === 0) { return; }
+      }
+      window.location.replace({{ first_visit_redirect | tojson }} + window.location.hash);
+    })();
+  </script>
+  {% endif %}
+  <script src="{{ static }}js/site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">{{ t.meta.skip_to_content }}</a>
+
+  <header class="menubar">
+    <div class="wrap">
+      <a class="brand" href="{{ home }}index.html">re<span class="brand-2">2</span>DJ</a>
+      <nav aria-label="{{ t.nav.menu_label }}">
+        <ul class="menu">
+          <li><a href="{{ home }}index.html"{% if page == "index" %} aria-current="page"{% endif %}><kbd>F1</kbd>{{ t.nav.about }}</a></li>
+          <li><a href="{{ home }}wip.html"{% if page in ("wip", "post") %} aria-current="page"{% endif %}><kbd>F2</kbd>{{ t.nav.wip }}</a></li>
+          <li><a href="{{ home }}download.html"{% if page == "download" %} aria-current="page"{% endif %}><kbd>F3</kbd>{{ t.nav.download }}</a></li>
+          <li><a href="{{ repo_url }}"><kbd>F4</kbd>{{ t.nav.github }}</a></li>
+        </ul>
+      </nav>
+      <p class="lang" aria-label="{{ t.nav.lang_label }}">
+        {% for alt in lang_links %}
+          {% if alt.current %}
+          <span aria-current="true" lang="{{ alt.lang }}">{{ alt.short }}</span>
+          {% else %}
+          <a href="{{ alt.href }}" hreflang="{{ alt.lang }}" lang="{{ alt.lang }}" title="{{ alt.label }}" data-lang-switch="{{ alt.lang }}">{{ alt.short }}</a>
+          {% endif %}
+        {% endfor %}
+      </p>
+    </div>
+  </header>
+  {# Single-player gear strip: red turntable, white/blue keys, green pedal. #}
+  <div class="lanebar" aria-hidden="true"></div>
+
+  <main id="main">
+    {% block main %}{% endblock %}
+  </main>
+
+  <footer class="statusbar">
+    <div class="wrap">
+      <span>{{ t.footer.disclaimer }}</span>
+      <span>{{ t.footer.font | safe }} · {{ t.footer.built }} {{ build_date }}{% if latest_version %} · v{{ latest_version }}{% endif %}</span>
+    </div>
+  </footer>
+
+  {% if has_mermaid %}
+  <script type="module">
+    import mermaid from {{ mermaid_url | tojson }};
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "base",
+      fontFamily: "Galmuri14, sans-serif",
+      themeVariables: {
+        darkMode: true,
+        background: "#02020a",
+        fontFamily: "Galmuri14, sans-serif",
+        fontSize: "15px",
+        primaryColor: "#02020a",
+        primaryTextColor: "#b8c4d8",
+        primaryBorderColor: "#33e0ff",
+        secondaryColor: "#0a1033",
+        secondaryTextColor: "#ffffff",
+        secondaryBorderColor: "#3366ff",
+        tertiaryColor: "#02020a",
+        tertiaryTextColor: "#b8c4d8",
+        tertiaryBorderColor: "#2a3350",
+        lineColor: "#b8c4d8",
+        textColor: "#b8c4d8",
+        mainBkg: "#02020a",
+        nodeBorder: "#33e0ff",
+        clusterBkg: "#02020a",
+        clusterBorder: "#2a3350",
+        titleColor: "#33e0ff",
+        edgeLabelBackground: "#02020a",
+        actorBkg: "#02020a",
+        actorBorder: "#33e0ff",
+        actorTextColor: "#ffffff",
+        actorLineColor: "#2a3350",
+        signalColor: "#b8c4d8",
+        signalTextColor: "#b8c4d8",
+        labelBoxBkgColor: "#02020a",
+        labelBoxBorderColor: "#33e0ff",
+        labelTextColor: "#ffffff",
+        loopTextColor: "#b8c4d8",
+        noteBkgColor: "#0a1033",
+        noteTextColor: "#ffffff",
+        noteBorderColor: "#3366ff",
+        activationBkgColor: "#2a3350",
+        activationBorderColor: "#b8c4d8",
+        sequenceNumberColor: "#02020a",
+        xyChart: {
+          backgroundColor: "#02020a",
+          titleColor: "#33e0ff",
+          xAxisLabelColor: "#b8c4d8",
+          xAxisTitleColor: "#b8c4d8",
+          xAxisTickColor: "#2a3350",
+          xAxisLineColor: "#2a3350",
+          yAxisLabelColor: "#b8c4d8",
+          yAxisTitleColor: "#b8c4d8",
+          yAxisTickColor: "#2a3350",
+          yAxisLineColor: "#2a3350",
+          plotColorPalette: "#33ff88, #ffcc33, #33e0ff, #ff3355, #3366ff, #ffffff"
+        }
+      }
+    });
+  </script>
+  {% endif %}
+</body>
+</html>

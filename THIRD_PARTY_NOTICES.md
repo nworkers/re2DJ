@@ -18,3 +18,9 @@
 | Zstandard decoder (libchdr dependency) | 1.5.7 | BSD-3-Clause terms selected from the upstream dual-license notice | [`third_party/libchdr/deps/zstd-1.5.7/zstddeclib.c`](third_party/libchdr/deps/zstd-1.5.7/zstddeclib.c) |
 | GNU Unifont (ASCII glyphs) | 15.1.05 | SIL OFL 1.1 terms selected from the upstream OFL-1.1 / GPL-2.0+ dual license; glyph data only | [`third_party/unifont/`](third_party/unifont/README.md) |
 | dr_flac (libchdr dependency) | 0.13.3 | Public domain / MIT-0 terms in source | [`third_party/libchdr/include/dr_libs/dr_flac.h`](third_party/libchdr/include/dr_libs/dr_flac.h) |
+| Galmuri (Galmuri14, Galmuri11 Bold, GalmuriMono11; project site font) | 2.40.3 woff2 files | SIL OFL 1.1, Reserved Font Name "Galmuri" | [`docs/sites/static/fonts/OFL.txt`](docs/sites/static/fonts/OFL.txt) |
+| markdown-it-py (site build only) | 4.2.0 | MIT | [upstream license](https://github.com/executablebooks/markdown-it-py/blob/v4.2.0/LICENSE) |
+| mdit-py-plugins (site build only) | 0.6.1 | MIT | [upstream license](https://github.com/executablebooks/mdit-py-plugins/blob/v0.6.1/LICENSE) |
+| mdurl (site build only) | 0.1.2 | MIT | [upstream license](https://github.com/executablebooks/mdurl/blob/master/LICENSE) |
+| Jinja2 (site build only) | 3.1.6 | BSD-3-Clause | [upstream license](https://github.com/pallets/jinja/blob/3.1.6/LICENSE.txt) |
+| MarkupSafe (site build only) | 3.0.3 | BSD-3-Clause | [upstream license](https://github.com/pallets/markupsafe/blob/3.0.3/LICENSE.txt) |

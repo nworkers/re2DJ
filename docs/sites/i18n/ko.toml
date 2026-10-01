@@ -1,0 +1,139 @@
+# re2DJ 사이트 한국어 문자열 (Task 432).
+# 값에는 짧은 인라인 HTML(<code>, <a>, <strong>)을 쓸 수 있다. 템플릿이 그대로 출력한다.
+
+[meta]
+html_lang = "ko"
+label = "한국어"
+short = "KO"
+description = "re2DJ는 에뮬레이터나 가상 머신 없이 원본 EZ2DJ 실행 파일의 32비트 x86 코드를 Linux와 64비트 Windows에서 네이티브로 실행하는 실험적 런타임입니다."
+skip_to_content = "본문으로 건너뛰기"
+
+[nav]
+about = "소개"
+wip = "진행 상황"
+download = "다운로드"
+github = "GitHub"
+menu_label = "주 메뉴"
+lang_label = "언어"
+
+[hero]
+command = "re2dj.exe ez2dj1st"
+tagline = "원본 EZ2DJ 게임 코드를, 그대로, 현대 PC에서."
+lead = "re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, 원본 EZ2DJ 실행 파일의 32비트 x86 코드를 Linux와 64비트 Windows에서 네이티브로 실행하는 실험적 런타임입니다. 게임 로직은 원본 코드에 그대로 두고, 그 주변의 Win32 API·DirectX·하드웨어 경계만 High Level Emulation(HLE)으로 대신합니다."
+latest = "최신 버전"
+cta_download = "다운로드"
+cta_wip = "진행 상황 보기"
+warning = "연구·개발 단계의 소프트웨어이며 완성된 게임 런처가 아닙니다. 일부 타깃은 창을 닫을 때까지 실행되고, 다른 타깃은 아직 모형이 없는 경계에서 멈출 수 있습니다."
+
+[about]
+title = "원칙"
+items = [
+  "<strong>원본 로직 보존</strong> — 게임플레이를 C++로 다시 쓰지 않고 원본 x86 코드를 주 실행 경로로 유지합니다.",
+  "<strong>선별적 HLE</strong> — 경계는 Win32 import thunk입니다. 게임이 실제로 호출하는 API만 좁은 범위로 구현합니다.",
+  "<strong>처음부터 멀티플랫폼</strong> — 공용 코어는 호스트 OS 헤더를 포함하지 않고, Windows/Linux 세부 구현은 플랫폼 계층에 분리합니다.",
+  "<strong>HDD·CHD 입력 경계</strong> — 추출 HDD는 사용자가 지정한 디렉터리로 받고, MAME CHD는 read-only FAT32 계층으로 읽습니다.",
+  "<strong>원본 무변경 보장</strong> — 게스트의 파일 쓰기는 overlay 디렉터리로 향하므로 원본 덤프는 그대로 유지됩니다.",
+  "<strong>재현 가능한 기록</strong> — 설계, 작업 지시, 분석과 작업 로그를 저장소 문서로 누적합니다.",
+]
+
+[how]
+title = "동작 방식"
+body = [
+  "런처가 원본 PE32 실행 파일을 메모리에 배치하면, 원본 코드는 호스트 CPU에서 그대로 실행됩니다. Windows에서는 원본 PE32가 main image로 시작되고, Linux에서는 같은 프로세스 안에서 실행됩니다(x86-64는 CPU compatibility mode).",
+  "코드가 Win32 API나 DirectX, 하드웨어 port, Hardlock 동글에 닿는 순간에만 HLE 계층이 가로채 가상 파일 시스템, 그래픽·사운드 facade, 장치 모형으로 응답한 뒤 원본 코드로 돌려보냅니다.",
+]
+
+[targets]
+title = "내장 타깃"
+lead = "src/target/target_profile.cpp의 내장 카탈로그로, 실제 덤프 분석으로 확인된 항목만 올라갑니다. 각 타깃은 사용자가 합법적으로 보유한 HDD 덤프나 MAME CHD가 있어야 실행됩니다. 타이틀별 호환성은 계속 개발 중입니다."
+col_id = "세트"
+col_title = "타이틀"
+col_input = "입력"
+input_hdd = "HDD 디렉터리"
+input_chd = "MAME CHD"
+count = "개 프로파일"
+
+[platforms]
+title = "플랫폼"
+
+[platforms.windows]
+name = "Windows (Win32 x86)"
+detail = "64비트 Windows에서 실행되는 기본 호스트입니다. 릴리스마다 빌드된 실행 파일을 제공합니다."
+
+[platforms.linux]
+name = "Linux x86 / x86-64"
+detail = "이식 진행 중입니다. 소스에서 빌드해 실행하며, 여러 타깃이 창을 닫을 때까지 실행됩니다."
+
+[states]
+release = "배포"
+wip = "진행 중"
+hold = "보류"
+
+[links]
+title = "더 보기"
+repo = "소스 저장소"
+readme = "README — 빌드와 실행 방법"
+architecture = "ARCHITECTURE — 코드 구조"
+docs = "docs — 설계와 분석 문서"
+
+[wip]
+title = "진행 상황"
+lead = "개발 과정에서 부딪힌 문제와 해결을 기록한 글, 그리고 릴리스마다 바뀐 내용입니다."
+posts_title = "개발 기록"
+posts_empty = "아직 게시된 글이 없습니다."
+read_more = "읽기"
+timeline_title = "릴리스 타임라인"
+full_notes = "전체 릴리스 노트"
+no_notes = "이 릴리스에는 작성된 노트가 없습니다."
+on_github = "GitHub에서 보기"
+latest_badge = "최신"
+
+[post]
+back = "진행 상황으로"
+source = "원문 Markdown"
+published = "게시"
+
+[download]
+title = "다운로드"
+lead = "Windows용 빌드는 GitHub 릴리스로 배포합니다. 태그가 올라가면 CI가 Release 빌드와 테스트를 통과한 결과만 게시합니다."
+latest = "최신 릴리스"
+released = "게시일"
+primary = "Windows용 다운로드"
+package = "실행 파일 패키지"
+checksum = "체크섬"
+checksum_desc = "패키지 zip의 SHA-256 체크섬 파일입니다."
+size = "크기"
+sha256 = "SHA-256"
+notes = "이 버전의 변경 내용"
+all_releases = "GitHub의 모든 릴리스"
+none = "아직 게시된 릴리스를 불러오지 못했습니다. GitHub 릴리스 페이지를 확인해 주세요."
+steps_title = "시작하기"
+steps = [
+  "zip을 원하는 폴더에 풉니다.",
+  "합법적으로 보유한 자산을 준비합니다. 내장 세트는 그 폴더의 <code>roms\\&lt;세트&gt;</code> 경로를 기본으로 찾습니다. 예: <code>roms\\ez2dj4th</code>에 MAME CHD, 추출 HDD는 <code>--hdd &lt;경로&gt;</code>로 지정.",
+  "<code>re2dj.exe &lt;세트&gt;</code>로 실행합니다. 예: <code>re2dj.exe ez2dj4th</code>. 세트 이름을 주면 자동으로 실행 모드가 선택됩니다.",
+  "실행 중 백틱(<code>`</code>) 키로 OSD를 열 수 있습니다. 전체 옵션은 README를 참고하세요.",
+]
+requirements_title = "요구 사항"
+requirements = [
+  "Windows 10/11 (64비트 OS에서 32비트 x86 프로그램으로 실행)",
+  "합법적으로 보유한 EZ2DJ HDD 덤프 또는 MAME CHD",
+]
+older_title = "이전 릴리스"
+col_version = "버전"
+col_date = "날짜"
+col_files = "파일"
+source_title = "소스에서 빌드"
+source_body = "Linux x86·x86-64 빌드와 개발용 빌드는 <a href=\"{repo_url}#시작하기--getting-started\">README의 시작하기</a>를 따릅니다."
+legal_title = "알림"
+legal_body = "re2DJ는 비공식 프로젝트이며 원작의 권리자와 관계가 없습니다. 이 사이트와 릴리스는 원본 게임 바이너리, HDD 덤프, CHD를 포함하거나 배포하지 않습니다."
+
+[footer]
+disclaimer = "비공식 프로젝트 · 권리자와 무관 · 원본 게임 자산 미포함"
+built = "빌드"
+font = "글꼴: <a href=\"https://galmuri.quiple.dev/\">Galmuri</a> (SIL OFL 1.1)"
+
+[notfound]
+title = "404 — 페이지를 찾을 수 없음"
+body = "요청한 페이지가 없습니다."
+home = "처음으로"
