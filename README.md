@@ -385,8 +385,8 @@ HLE/Hardlock boundary remains a runtime observation item.
 
 ## 라이선스 / License
 
-프로젝트 코드는 [BSD 3-Clause License](LICENSE)를 따릅니다. 서드파티 의존성은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 기록합니다.
+프로젝트 코드는 [BSD 3-Clause License](LICENSE)를 따릅니다. 서드파티 구성 요소의 출처와 라이선스는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에, 프로젝트가 기대어 선 게임·프로젝트·사람들에 대한 감사는 [CREDITS.md](CREDITS.md)에 있습니다.
 
 원본 EZ2DJ 실행 파일과 자산은 re2DJ에 포함되지 않으며 각 권리자의 조건을 따릅니다.
 
-*Project code is under the [BSD 3-Clause License](LICENSE). Original EZ2DJ binaries and assets are not part of re2DJ and remain subject to their owners' terms.*
+*Project code is under the [BSD 3-Clause License](LICENSE). Third-party component origins and licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and acknowledgements in [CREDITS.md](CREDITS.md). Original EZ2DJ binaries and assets are not part of re2DJ and remain subject to their owners' terms.*

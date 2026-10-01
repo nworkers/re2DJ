@@ -37,6 +37,9 @@ flowchart LR
 * **내장 타깃 목록:** `src/target/target_profile.cpp`의 내장 카탈로그에서 읽습니다. 직접 대입과
   `MakeChdCompatibilityProfile(...)` 두 선언 형태를 모두 인식하고, HDD/CHD 입력 형식도 함께 표시합니다.
 * **플랫폼 상태와 소개 문구:** `site.toml`의 `[[platforms]]`와 `i18n/*.toml`을 직접 고칩니다.
+* **크레딧 페이지:** 언어 중립 사실(이름·버전·라이선스·링크)은 `site.toml`의 `[[credits]]`에,
+  그룹 제목과 항목 설명은 `i18n/*.toml`의 `[credits]`에 둡니다. 전체 문서는 저장소의
+  `LICENSE`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`입니다.
 
 ## 로컬 빌드
 
@@ -92,6 +95,9 @@ names.
 * **Built-in target list:** read from the catalog in `src/target/target_profile.cpp`; both the direct
   assignment form and `MakeChdCompatibilityProfile(...)` calls are recognised, with the HDD/CHD input kind.
 * **Platform status and introduction copy:** edit `[[platforms]]` in `site.toml` and `i18n/*.toml`.
+* **Credits page:** language-neutral facts (name, version, licence, link) live in `[[credits]]` in
+  `site.toml`; group titles and item descriptions in `[credits]` of `i18n/*.toml`. The full documents
+  are the repository's `LICENSE`, `THIRD_PARTY_NOTICES.md` and `CREDITS.md`.
 
 ## Local build
 
