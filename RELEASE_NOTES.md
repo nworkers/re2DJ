@@ -1,5 +1,41 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.61 (2026-10-03)
+
+### 한국어
+
+Linux에서 Remember 1st를 마치고 6th로 돌아올 때 re2dj가 끝날 수 있던 문제를 고쳤습니다(작업 443).
+
+#### 1. 자식 run은 실행 중인 그 실행 파일로 (작업 443)
+- Linux launcher는 자식마다 `readlink("/proc/self/exe")`로 얻은 경로를 실행했습니다. 실행 도중 실행 파일이 다시 빌드되어 교체되자 그 경로가 `(deleted)`가 되어, 1st 뒤 6th를 다시 띄우는 `CreateProcessA`가 실패했습니다.
+- 이제 `/proc/self/exe` 자체를 실행합니다. 파일이 교체되거나 지워져도 자식이 뜨고, 부모와 자식은 같은 빌드입니다.
+
+#### 2. 확인된 동작
+- v0.0.60 태그의 Release workflow가 성공해, 처음으로 Windows x86·Linux x64·Linux x86 패키지가 게시됐습니다.
+- Linux에서 6th → Remember 1st → 게임 한 판 → 6th 복귀를 사용자가 확인했습니다.
+
+#### 3. 검증
+- 실행 파일을 지운 재현에서 6th 자식이 뜹니다. Linux x64 CTest 4개가 통과합니다.
+
+---
+
+### English
+
+Fixed re2dj sometimes ending on Linux when returning to 6th after Remember 1st (task 443).
+
+#### 1. A child run from the very executable running (task 443)
+- The Linux launcher ran each child from the path `readlink("/proc/self/exe")` gave. When the executable was rebuilt and replaced mid-run that path read `(deleted)`, and the `CreateProcessA` starting 6th again after 1st failed.
+- It now runs `/proc/self/exe` itself, so a child starts even after the file is replaced or removed, and parent and child are the same build.
+
+#### 2. Observed behaviour
+- The Release workflow on the v0.0.60 tag succeeded and published the Windows x86, Linux x64 and Linux x86 packages for the first time.
+- The user confirmed 6th → Remember 1st → one game → back to 6th on Linux.
+
+#### 3. Validation
+- With the executable deleted, the reproduction starts the 6th child; all 4 Linux x64 CTest tests pass.
+
+---
+
 ## v0.0.60 (2026-10-03)
 
 ### 한국어

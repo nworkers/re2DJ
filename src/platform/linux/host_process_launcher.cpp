@@ -3,7 +3,6 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
-#include <limits.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -36,13 +35,10 @@ bool LinuxHostProcessLauncher::Start(const hle::ChildProcessRequest& request,
                                      std::uint32_t* child,
                                      std::string* error)
 {
-    char executable[PATH_MAX] = {};
-    const ssize_t length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
-    if (length <= 0)
-    {
-        *error = std::string("cannot find this program: ") + std::strerror(errno);
-        return false;
-    }
+    // The running executable itself rather than the path it was started
+    // from: a rebuild replaces that file while the launcher waits, and its
+    // path then names nothing (task 443). Parent and child stay one build.
+    static constexpr char kExecutable[] = "/proc/self/exe";
     int pipe_fds[2] = {-1, -1};
     if (pipe2(pipe_fds, O_CLOEXEC) != 0)
     {
@@ -71,7 +67,7 @@ bool LinuxHostProcessLauncher::Start(const hle::ChildProcessRequest& request,
     argv.push_back(nullptr);
 
     pid_t pid = -1;
-    const int spawned = posix_spawn(&pid, executable, nullptr, nullptr, argv.data(), environ);
+    const int spawned = posix_spawn(&pid, kExecutable, nullptr, nullptr, argv.data(), environ);
     close(pipe_fds[1]);
     if (spawned != 0)
     {
