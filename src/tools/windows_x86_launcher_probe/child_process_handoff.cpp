@@ -401,6 +401,30 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                result->runtime_base + rva,
                                options.runtime_log_path.string(),
                                error);
+    // What the child's OSD shows and offers, as for the main debuggee: the
+    // target and the child's own executable, and autoplay only when the
+    // child's build is the one a control was confirmed in (task 436). The
+    // runtime buffers hold 32 and 64 bytes.
+    prepared = prepared && find_export("g_re2dj_target_id", &rva) &&
+               WriteRemoteAnsi(result->process,
+                               result->runtime_base + rva,
+                               options.profile_id.substr(0, 31),
+                               error) &&
+               find_export("g_re2dj_executable_name", &rva) &&
+               WriteRemoteAnsi(result->process,
+                               result->runtime_base + rva,
+                               executable.filename().string().substr(0, 63),
+                               error);
+    result->autoplay_flag_rva =
+        re2dj::target::ArmedAutoplayFlagRva(options.game_controls, result->image_info.timestamp);
+    if (result->autoplay_flag_rva != 0)
+    {
+        prepared = prepared && find_export("g_re2dj_autoplay_flag_address", &rva) &&
+                   WriteRemoteU32(result->process,
+                                  result->runtime_base + rva,
+                                  static_cast<std::uint32_t>(result->image_base + result->autoplay_flag_rva),
+                                  error);
+    }
     const char* const vfs_exports[] = {"_Re2djVfsCreateFileA@28",
                                        "_Re2djVfsReadFile@20",
                                        "_Re2djVfsWriteFile@20",
@@ -414,7 +438,13 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                        "_Re2djVfsFindFirstFileA@8",
                                        "_Re2djVfsFindNextFileA@8",
                                        "_Re2djVfsFindClose@4",
-                                       "_Re2djVfsGetFileAttributesA@4"};
+                                       "_Re2djVfsGetFileAttributesA@4",
+                                       // The child's INI files live in the image, and its
+                                       // bookkeeping goes to the overlay (task 434).
+                                       "_Re2djVfsGetPrivateProfileIntA@16",
+                                       "_Re2djVfsGetPrivateProfileStringA@24",
+                                       "_Re2djVfsGetPrivateProfileSectionNamesA@12",
+                                       "_Re2djVfsWritePrivateProfileStringA@16"};
     const char* const vfs_imports[] = {"CreateFileA",
                                        "ReadFile",
                                        "WriteFile",
@@ -428,7 +458,11 @@ bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,
                                        "FindFirstFileA",
                                        "FindNextFileA",
                                        "FindClose",
-                                       "GetFileAttributesA"};
+                                       "GetFileAttributesA",
+                                       "GetPrivateProfileIntA",
+                                       "GetPrivateProfileStringA",
+                                       "GetPrivateProfileSectionNamesA",
+                                       "WritePrivateProfileStringA"};
     for (std::size_t index = 0; prepared && index < std::size(vfs_exports); ++index)
     {
         std::uint32_t slot = 0;

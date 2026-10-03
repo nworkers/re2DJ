@@ -19,9 +19,11 @@
       <span class="version">{{ latest.tag }}</span>
       {% if latest.date %}<span class="meta">{{ t.download.released }} <strong>{{ latest.date }}</strong></span>{% endif %}
     </div>
-    {% if latest.package %}
+    {% if latest.packages %}
     <div class="actions">
-      <a class="btn" href="{{ latest.package.url }}">{{ t.download.primary }} <small>{{ size(latest.package.size) }}</small></a>
+      {% for item in latest.packages %}
+      <a class="btn" href="{{ item.asset.url }}">{{ t.download.buttons[item.asset.platform] }} <small>{{ size(item.asset.size) }}</small></a>
+      {% endfor %}
     </div>
     {% endif %}
     {% if latest.assets %}
@@ -30,7 +32,7 @@
       <li>
         <a href="{{ asset.url }}">{{ asset.name }}</a>
         <span class="asset-meta">
-          {% if asset.kind == "package" %}{{ t.download.package }}{% elif asset.kind == "checksum" %}{{ t.download.checksum }} — {{ t.download.checksum_desc }}{% endif %}
+          {% if asset.kind == "package" %}{{ t.download.package }} — {{ t.download.platforms[asset.platform] }}{% elif asset.kind == "checksum" %}{{ t.download.checksum }} — {{ t.download.checksum_desc }}{% endif %}
           · {{ t.download.size }} {{ size(asset.size) }}
           {% if asset.sha256 %}<br><span class="hash">{{ t.download.sha256 }} {{ asset.sha256 }}</span>{% endif %}
         </span>
@@ -57,6 +59,12 @@
       <li>{{ step | safe }}</li>
       {% endfor %}
     </ol>
+    <h3>{{ t.download.linux_steps_title }}</h3>
+    <ol class="steps">
+      {% for step in t.download.linux_steps %}
+      <li>{{ step | safe }}</li>
+      {% endfor %}
+    </ol>
     <h3>{{ t.download.requirements_title }}</h3>
     <ul>
       {% for item in t.download.requirements %}
@@ -79,9 +87,10 @@
             <td><a href="{{ home }}wip.html#{{ release.tag }}">{{ release.tag }}</a></td>
             <td class="date">{{ release.date or "—" }}</td>
             <td>
-              {% if release.package %}<a href="{{ release.package.url }}">windows-x86</a>{% endif %}
-              {% if release.checksum %} · <a href="{{ release.checksum.url }}">{{ t.download.sha256 }}</a>{% endif %}
-              {% if not release.package and not release.checksum %}<a href="{{ release.url }}">GitHub</a>{% endif %}
+              {% for item in release.packages %}
+              {% if not loop.first %}<br>{% endif %}<a href="{{ item.asset.url }}">{{ item.asset.platform }}</a>{% if item.checksum %} · <a href="{{ item.checksum.url }}">{{ t.download.sha256 }}</a>{% endif %}
+              {% endfor %}
+              {% if not release.packages %}<a href="{{ release.url }}">GitHub</a>{% endif %}
             </td>
           </tr>
           {% endfor %}

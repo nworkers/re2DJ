@@ -33,7 +33,8 @@ description: Find a game-state variable (autoplay, demo play, and similar switch
 | `paired_writes.py DUMP ADDR` | 함수가 켰다가 끄는 전역(PAIRED)을 직접 쓰기와 one-line setter 양쪽에서 수집 |
 | `register_calls.py DUMP FUNC_VA [--args N]` | 등록 함수 호출마다 넘긴 인자 표. 장면 엔진의 장면 이름·콜백·핸들 목록 |
 | `callers.py DUMP VA [--context N]` | link thunk를 거친 호출까지 포함한 호출처 |
-| `guest_memory.py read/poll/write` | 실행 중 게스트 메모리 읽기·폴링, `--yes`가 있어야 쓰기 |
+| `guest_memory.py read/poll/write` | 실행 중 게스트 메모리 읽기·폴링, `--yes`가 있어야 쓰기. Windows와 Linux |
+| `file_image.py EXE OUT.bin` | 보호 없는 실행 파일을 덤프와 같은 메모리 배치 이미지와 sidecar로 펼침 |
 
 ## 절차
 
@@ -45,7 +46,15 @@ description: Find a game-state variable (autoplay, demo play, and similar switch
 
 `logs\windows_x86_launcher_probe\<target>\<stamp>.resumed.image.bin`과 `.json`을 쓴다. **`entry` 덤프는 보호 빌드에서 아직 복호화 전이라 쓰지 않는다.** sidecar의 `gaps`가 비어 있는지, `timestamp`가 무엇인지 기록한다.
 
-`run_detached = false`인 프로파일(현재 `ez2dj6th`)은 `resumed` 지점이 동작하지 않는다. 그 경우는 이 스킬의 범위 밖이므로 사용자에게 알린다.
+`run_detached = false`인 프로파일(현재 `ez2dj6th`)은 `resumed` 지점이 동작하지 않는다.
+
+**보호 섹션이 없는 빌드는 덤프가 필요 없다.** 섹션이 `.text`·`.rdata`·`.data`뿐이면 파일을 그대로 펼쳐 쓴다. CHD 안의 파일은 Linux 실행이 `/tmp/re2dj/chd/<profile>/` 아래에 꺼내 둔다. 6th의 `EZ2DJ6th.EXE`와 동봉 1st가 이 경우였다(작업 436).
+
+```text
+python file_image.py /tmp/re2dj/chd/ez2dj6th/EZ2DJ/EZ2DJ6th.EXE logs/hunt/6th.image.bin
+```
+
+보호 빌드는 파일의 섹션이 암호화되어 있으므로 이 방법을 쓰지 않는다.
 
 ### 2. autoplay가 저장 설정인지 먼저 배제한다
 
@@ -127,6 +136,14 @@ python guest_memory.py poll --process EZ2DJ.EXE --seconds 150 demo=<VA> candidat
 
 **판정:** 데모가 도는 구간에만 둘이 함께 1이 되고 끝나면 0으로 돌아와야 한다. 3rd는 약 22~25초 데모마다 그랬다. 실행 파일 이름이 다르면 `--process`를 맞춘다.
 
+**Linux에서는** 게스트가 `re2dj` host 프로세스 안에서 자기 주소 그대로 돌므로 `/proc/<pid>/mem`으로 읽는다. `--process`는 명령줄의 부분 문자열이다(launcher의 자식 run은 `--guest-executable EZ2DJ/EZ2DJ6TH.EXE`를 가진다). Yama `ptrace_scope` 1에서는 조상만 읽을 수 있으므로 `--launch`로 실행을 스크립트의 자식으로 띄운다. 끝나면 띄운 프로세스 트리를 정리한다.
+
+```text
+python guest_memory.py poll --process EZ2DJ6TH.EXE --seconds 180 \
+    --launch "build/linux-x64-debug/bin/re2dj --hdd roms/ez2dj6th --target ez2dj6th --run" \
+    demo=0x008895f8 autoplay=0x008896ac
+```
+
 ### 8. 쓰기 시험 — 사용자 동의 후
 
 게임 입력이 필요하므로 io-config를 붙여 실행한다.
@@ -147,11 +164,10 @@ python guest_memory.py poll --process EZ2DJ.EXE --seconds 150 demo=<VA> candidat
 `src/target/target_profile.cpp`의 해당 프로파일에 선언한다. RVA는 `VA - image_base`, timestamp는 sidecar 값이다.
 
 ```cpp
-entry.profile.game_controls.autoplay_flag_rva = 0x00629508;   // 3rd 예시
-entry.profile.game_controls.build_timestamp = 0x3bca98a3;
+entry.profile.game_controls.push_back({0x00629508, 0x3bca98a3});   // 3rd 예시: RVA, timestamp
 ```
 
-런처가 실행 파일 timestamp가 같을 때만 주소를 넘기므로 OSD에 토글이 자동으로 나타난다. `tests/unit/target_profile_test.cpp`의 "3rd 외에는 선언이 없다" 목록에서 해당 id를 빼고 값 검사를 추가한다. 빌드·단위 테스트 후 OSD(백틱)에서 토글이 보이는지 사용자와 확인한다. 실행 로그 `osd_controls` 줄의 `autoplay_armed`로도 확인할 수 있다.
+`game_controls`는 빌드별 목록이다. launcher가 여러 실행 파일을 띄우는 프로파일(6th)은 실행 파일마다 항목을 두며, 각 프로세스는 자기 실행 파일 timestamp와 같은 항목만 무장한다(작업 436). Windows는 주 debuggee와 launcher의 자식 모두, Linux는 각 run이 무장하므로 OSD에 토글이 자동으로 나타난다. Linux 실행 로그의 `game controls` 줄로 무장 여부를 볼 수 있다. `tests/unit/target_profile_test.cpp`의 "3rd 외에는 선언이 없다" 목록에서 해당 id를 빼고 값 검사를 추가한다. 빌드·단위 테스트 후 OSD(백틱)에서 토글이 보이는지 사용자와 확인한다. 실행 로그 `osd_controls` 줄의 `autoplay_armed`로도 확인할 수 있다.
 
 ### 10. 기록한다
 
@@ -177,5 +193,7 @@ entry.profile.game_controls.build_timestamp = 0x3bca98a3;
 | `ez2dj1stse` (CHD) | `0x3862df27` | 장면 `DemoGame`·`ClubMixDemoGame`·`HowToPlayGame` | `0x01c3f3a4` (`0x0183f3a4`) | 302 |
 | `ez2dj1st` | `0x3862fd9d` | 전용 장면 `DemoPlayer`·`ClubMixDemoPlayer` | **없음** — 재생기 인자 저장 `[0x0055bc4c]`는 쓰기 시험에서 효과 없음 | 304 |
 | `ez2d2m` | `0x3a5f074c` | 클래스 `DemoGame`(플래그 대신 상수 사용) | `0x007fa424` (`0x003fa424`) | 305 |
+| `ez2dj6th` — `EZ2DJ6th.EXE` | `0x411f6d44` | `0x008895f8` | `0x008896ac` (`0x004896ac`) — setter 인라인 | 436 |
+| `ez2dj6th` — Remember 1st `EZ2DJ1ST/Ez2DJ.exe` | `0x411bbf5c` | 전용 장면 `DemoPlayer` | **없음**(추정) — 재생기 인자 저장 `[0x0055795c]`, 1st Tracks와 같은 구조 | 436 |
 
-3rd·4th·5th는 모두 같은 구조였다. getter 호출처의 노트 데이터 필드 오프셋은 빌드마다 다를 수 있다(5th 첫 계열은 `+0x1d8`).
+3rd·4th·5th·6th는 모두 같은 구조였다. 6th는 최적화 빌드라 setter·getter가 인라인되어, 데모 시작 루틴이 두 전역을 직접 함께 쓰고 `paired_writes.py` 대신 `xrefs.py`와 구간 역어셈블로 짝이 보였다. getter 호출처의 노트 데이터 필드 오프셋은 빌드마다 다를 수 있다(5th 첫 계열은 `+0x1d8`).

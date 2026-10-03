@@ -37,6 +37,7 @@ jobs:
           libwayland-dev libwayland-egl-backend-dev libxkbcommon-dev
           libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev
           libdrm-dev libgbm-dev
+          libasound2-dev libpulse-dev libpipewire-0.3-dev
       - name: Configure
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
@@ -46,3 +47,31 @@ jobs:
         run: cmake --build --preset linux-x64-debug
       - name: Test
         run: ctest --preset linux-x64-debug
+
+  # The i386 product host, built natively in the Debian 12 container the
+  # release uses. JavaScript actions cannot run inside a 32-bit container, so
+  # only the build goes into it; Docker's default seccomp profile refuses the
+  # modify_ldt the guest runtime needs.
+  linux-x86:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test in an i386 container
+        run: >-
+          docker run --rm --security-opt seccomp=unconfined
+          -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
+          setarch i686 bash -c '
+          set -euo pipefail;
+          apt-get update;
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends
+          ca-certificates git cmake ninja-build g++ make pkg-config
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev
+          libxi-dev libxss-dev libxtst-dev
+          libwayland-dev libwayland-egl-backend-dev libxkbcommon-dev
+          libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev
+          libdrm-dev libgbm-dev
+          libasound2-dev libpulse-dev libpipewire-0.3-dev;
+          git config --global --add safe.directory "*";
+          cmake --preset linux-x86-debug -DRE2DJ_WARNINGS_AS_ERRORS=ON;
+          cmake --build --preset linux-x86-debug;
+          SDL_AUDIODRIVER=dummy ctest --preset linux-x86-debug'

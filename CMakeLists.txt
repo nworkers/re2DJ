@@ -112,6 +112,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/linux/native_kernel32_diagnostic.cpp
         src/platform/linux/native_legacy_io.cpp
         src/platform/linux/native_pe_image.cpp
+        src/platform/linux/game_controls.cpp
         src/platform/linux/host_presentation.cpp
         src/platform/linux/host_keyboard.cpp
         src/platform/linux/host_process_launcher.cpp
@@ -180,6 +181,19 @@ if(MSVC)
     target_compile_definitions(re2dj_warnings INTERFACE _CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(re2dj_warnings INTERFACE -Wall -Wextra -Wpedantic)
+    # GCC 12's middle-end warnings misfire inside libstdc++ when optimising:
+    # -Wrestrict on "#" + std::to_string(n)
+    # (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105651) and -Warray-bounds
+    # on std::vector::insert (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=107852),
+    # with the stringop warnings of the same family. They stay warnings there
+    # rather than errors. The Linux release builds with Debian 12's GCC 12
+    # (task 442).
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12
+       AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
+        target_compile_options(re2dj_warnings INTERFACE
+            -Wno-error=restrict -Wno-error=array-bounds
+            -Wno-error=stringop-overflow -Wno-error=stringop-overread)
+    endif()
     if(RE2DJ_WARNINGS_AS_ERRORS)
         target_compile_options(re2dj_warnings INTERFACE -Werror)
     endif()
@@ -359,6 +373,7 @@ add_library(re2dj_core STATIC
     src/hle/api_call_record.cpp
     src/hle/guest_devices.cpp
     src/hle/guest_files.cpp
+    src/hle/hex_bytes.cpp
     src/hle/private_profile.cpp
     src/hle/wsprintf.cpp
     src/hle/guest_heap.cpp
@@ -391,6 +406,7 @@ add_library(re2dj_core STATIC
     src/hle/modules/facade_com.cpp
     src/hle/modules/gdi32_module.cpp
     src/hle/modules/gdi_bitmaps.cpp
+    src/hle/modules/gdi_text.cpp
     src/hle/modules/user32_module.cpp
     src/hle/modules/winmm_module.cpp
     src/hle/modules/wtsapi32_module.cpp

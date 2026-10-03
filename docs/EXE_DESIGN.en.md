@@ -193,6 +193,14 @@ Analysis: [EZ2Dancer 2nd MOVE demo and the autoplay flag](analysis/ez2d2m-demo-p
 
 **Confirmed — the autoplay flag is `[0x007fa424]`.** `NormalGame::OnCreateGame` puts channels 3-`0x12` in automatic mode only when it is 1, where the demo writes the same values as constants, and a toggle built into the game flips it from input slot `0xc`. Because the demo does not use the flag, attract polling cannot confirm it; the OSD toggle did.
 
+## 2026-10-03 Autoplay in 6th and Remember 1st (task 436)
+
+Analysis: [demo play in 6th and Remember 1st](analysis/ez2dj6th-demo-play.md)
+
+**Confirmed — 6th shares the 3rd-5th structure.** `EZ2DJ6th.EXE` at TimeDateStamp `0x411f6d44` (no protection section) gates `DEMOPLAY.bmp` on the demo flag `[0x008895f8]`, and the demo start routine `0x0044c020` sets that flag and the autoplay flag `[0x008896ac]` to 1 together and back to 0 at its end. 5th's setter and getter are inlined, so the flag is written and read at its absolute address. The `1 - value` flip on input slot `0x1b` and the read right after storing note data match 5th. A read-only attract poll on Linux saw both at 1 only during the demo.
+
+**Inferred — Remember 1st has no switchable autoplay variable.** The 1st rebuild bundled in the 6th CHD, TimeDateStamp `0x411bbf5c`, keeps 1st Tracks' dedicated demo scene `DemoPlayer` and passes the auto choice to the chart player `0x00411a40` as a constant (1 only from the two demo scenes). Its store `[0x0055795c]` is read only by the chart module. No write test was done.
+
 ### 2.5 Linux resolver-continuation trace — confirmed
 
 The Linux i386 minimum diagnostic traced 37 frames after return 0x00af0b99 from GetProcAddress(kernel32, GetVersion). The intermediate second GetProcAddress request is for CreateFileA, and it returned EAX=0 at 0x00af09f6. That value remained zero through MOV CL, byte ptr [EAX] at 0x00af0c22, producing the null read. This confirms that the dynamic CreateFileA resolver is the next implementation and verification boundary for the current minimum diagnostic; it does not establish that CreateFileA alone completes all protection initialization.

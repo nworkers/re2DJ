@@ -20,6 +20,10 @@ bool CreateCompatibleDC(const ImportCall& call, ImportReturn* result, std::strin
 bool SelectObject(const ImportCall& call, ImportReturn* result, std::string* error);
 bool StretchBlt(const ImportCall& call, ImportReturn* result, std::string* error);
 bool DeleteDC(const ImportCall& call, ImportReturn* result, std::string* error);
+// Bitmaps the guest builds in memory (task 434): a DIB section of its own,
+// and a device-dependent bitmap made from a DIB.
+bool CreateDIBSection(const ImportCall& call, ImportReturn* result, std::string* error);
+bool CreateDIBitmap(const ImportCall& call, ImportReturn* result, std::string* error);
 
 // DeleteObject of a DC or bitmap: true when handle was one. A DC goes and its
 // bitmap is deselected; a bitmap a DC still holds goes once deselected, and

@@ -1,6 +1,7 @@
 #include "re2dj/target/target_profile.h"
 
 #include <algorithm>
+#include <cctype>
 #include <unordered_map>
 #include <utility>
 
@@ -284,8 +285,7 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // clear it in their destroy callback, and the player scenes read it.
             // Confirmed in this build's resumed dump and by read-only polling
             // during attract (task 302).
-            entry.profile.game_controls.autoplay_flag_rva = 0x0183f3a4;
-            entry.profile.game_controls.build_timestamp = 0x3862df27;
+            entry.profile.game_controls.push_back({0x0183f3a4, 0x3862df27});
             // Confirmed by the device trace: this build opens \\.\NTICE, fails,
             // then opens \\.\FEnteDev. It never opens the \\.\LPTDI device the
             // extracted .gtide build used, so the LPTDI target-state probe has
@@ -355,8 +355,7 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // song play itself, with no demo side effects; the value is latched
             // at song start. Confirmed by reading and writing it in this build
             // (tasks 295 and 296), so it is bound to this build's timestamp.
-            entry.profile.game_controls.autoplay_flag_rva = 0x00629508;
-            entry.profile.game_controls.build_timestamp = 0x3bca98a3;
+            entry.profile.game_controls.push_back({0x00629508, 0x3bca98a3});
             entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             // This zero-state probe is separate from 1st SE and is not a
@@ -408,8 +407,7 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // start routine sets it paired with the demo flag, and the note
             // path reads it through a getter. Confirmed in this build's
             // resumed dump and by read-only polling during attract (task 300).
-            entry.profile.game_controls.autoplay_flag_rva = 0x006c29b0;
-            entry.profile.game_controls.build_timestamp = 0x3d369bfd;
+            entry.profile.game_controls.push_back({0x006c29b0, 0x3d369bfd});
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix =
                 "\\\\.\\FEnteDev";
@@ -459,8 +457,7 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // start routine and read on note arrival and note end, as in 3rd and
             // 4th. Confirmed in this build's resumed dump and by read-only polling
             // during attract (task 301).
-            entry.profile.game_controls.autoplay_flag_rva = 0x006ee238;
-            entry.profile.game_controls.build_timestamp = 0x3f53377b;
+            entry.profile.game_controls.push_back({0x006ee238, 0x3f53377b});
             table.push_back(std::move(entry));
         }
 
@@ -477,6 +474,14 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "responses are not confirmed.");
             entry.profile.run_defaults.follow_child_process = true;
             entry.profile.run_defaults.run_detached = false;
+            // The launcher's children (task 434): the game, and the bundled
+            // 1st Tracks it starts in place of the game when the game ends
+            // with 0x100 (Remember 1st).
+            entry.profile.run_defaults.child_executable_paths = {"EZ2DJ/EZ2DJ6th.EXE",
+                                                                 "EZ2DJ/EZ2DJ1ST/Ez2DJ.exe"};
+            // Autoplay in the 6th game only (task 436); Remember 1st plays its
+            // demo in a scene of its own and has no flag to switch.
+            entry.profile.game_controls.push_back({0x004896ac, 0x411f6d44});
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             entry.profile.run_defaults.lptdi.legacy_io_port_range_fallback = true;
@@ -554,8 +559,7 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // flag is 1, so it takes effect when the next song starts. Confirmed in
             // this build's resumed dump and by a write test in a normal song
             // (task 305).
-            entry.profile.game_controls.autoplay_flag_rva = 0x003fa424;
-            entry.profile.game_controls.build_timestamp = 0x3a5f074c;
+            entry.profile.game_controls.push_back({0x003fa424, 0x3a5f074c});
             entry.profile.run_defaults.run_detached = true;
             // The image is a Windows 98 SE boot disk whose MSDOS.SYS reads
             // HostWinBootDrv=C, and the game sits at that volume's root.
@@ -771,6 +775,20 @@ std::uint32_t ArmedAutoplayFlagRva(const GameControls& controls,
     return controls.autoplay_flag_rva;
 }
 
+std::uint32_t ArmedAutoplayFlagRva(const std::vector<GameControls>& controls,
+                                   std::uint32_t executable_timestamp)
+{
+    for (const GameControls& build : controls)
+    {
+        const std::uint32_t rva = ArmedAutoplayFlagRva(build, executable_timestamp);
+        if (rva != 0)
+        {
+            return rva;
+        }
+    }
+    return 0;
+}
+
 std::string_view ExecutableFormatHintName(ExecutableFormatHint format_hint)
 {
     switch (format_hint)
@@ -790,12 +808,71 @@ std::string GuestRootPath(const TargetProfile& profile)
     return std::string(1, profile.guest_drive_letter) + ":" + profile.guest_directory;
 }
 
+namespace
+{
+
+bool EqualsWithoutCase(std::string_view left, std::string_view right)
+{
+    if (left.size() != right.size())
+    {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.size(); ++index)
+    {
+        if (std::toupper(static_cast<unsigned char>(left[index])) !=
+            std::toupper(static_cast<unsigned char>(right[index])))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The '/'-separated path's directory part, empty for a bare name.
+std::string_view PathDirectory(std::string_view path)
+{
+    const std::size_t slash = path.find_last_of("/\\");
+    return slash == std::string_view::npos ? std::string_view() : path.substr(0, slash);
+}
+
+// Whether path lies below directory (a non-empty '/'-separated path),
+// compared without case as the image's names are.
+bool LiesBelow(std::string_view path, std::string_view directory)
+{
+    return !directory.empty() && path.size() > directory.size() + 1 &&
+           (path[directory.size()] == '/' || path[directory.size()] == '\\') &&
+           EqualsWithoutCase(path.substr(0, directory.size()), directory);
+}
+
+}  // namespace
+
 std::string GuestExecutablePath(const TargetProfile& profile)
 {
     const std::string& relative = profile.executable_relative_path;
-    const std::size_t slash = relative.find_last_of("/\\");
-    return GuestRootPath(profile) + "\\" +
-           (slash == std::string::npos ? relative : relative.substr(slash + 1));
+    std::string below;
+    if (LiesBelow(relative, profile.working_directory_relative_path))
+    {
+        below = relative.substr(profile.working_directory_relative_path.size() + 1);
+    }
+    else
+    {
+        const std::size_t slash = relative.find_last_of("/\\");
+        below = slash == std::string::npos ? relative : relative.substr(slash + 1);
+    }
+    for (char& character : below)
+    {
+        if (character == '/')
+        {
+            character = '\\';
+        }
+    }
+    return GuestRootPath(profile) + "\\" + below;
+}
+
+std::string ExecutableWorkingDirectory(std::string_view profile_executable, std::string_view executable)
+{
+    const std::string_view root = PathDirectory(profile_executable);
+    return std::string(LiesBelow(executable, root) ? root : PathDirectory(executable));
 }
 
 }  // namespace re2dj::target

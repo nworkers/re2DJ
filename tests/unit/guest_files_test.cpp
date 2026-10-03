@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "re2dj/hle/guest_gdi.h"
+#include "re2dj/hle/hex_bytes.h"
 #include "re2dj/hle/modules/gdi32_module.h"
 #include "re2dj/hle/modules/kernel32_module.h"
 #include "re2dj/hle/modules/user32_module.h"
@@ -151,6 +153,11 @@ struct Fixture
                   ("re2dj-guest-files-" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
         std::error_code code;
         std::filesystem::remove_all(overlay, code);
+        configured = Configure(&files);
+    }
+    // Another run over the same image and overlay, as a later guest process.
+    bool Configure(hle::GuestFiles* run) const
+    {
         auto source = std::make_unique<MemorySource>();
         source->AddFile("EZ2DJ/EZ2DJ.ini", "[General]\r\nDemoVolume=3\r\n");
         source->AddFile("EZ2DJ/DATA/SONG.EZ", "0123456789");
@@ -160,7 +167,7 @@ struct Fixture
         config.guest_root = "D:\\ez2dj";
         config.overlay_root = overlay;
         std::string error;
-        configured = files.Configure(config, std::move(source), &error);
+        return run->Configure(config, std::move(source), &error);
     }
     ~Fixture()
     {
@@ -254,6 +261,118 @@ void CheckCopyOnWrite(re2dj::test::Context& context)
     // A write-only handle cannot read.
     std::vector<std::uint8_t> bytes;
     RE2DJ_CHECK_EQ(context, files.Read(created.handle, 1, &bytes), hle::kWin32ErrorAccessDenied);
+}
+
+// Overlay paths ignore case, and deleting an image file lists it as deleted
+// for this run and later ones (task 437), as 6th does to Remember 1st's
+// bookkeeping.ini before handing its credits over.
+void CheckDeleteFile(re2dj::test::Context& context)
+{
+    Fixture fixture;
+    auto& files = fixture.files;
+    RE2DJ_CHECK(context, fixture.configured);
+
+    // One overlay file whatever the spelling, as on NTFS.
+    const auto made = files.Open("Save\\Score.dat", false, true, hle::kCreateNew);
+    RE2DJ_CHECK_EQ(context, made.error, hle::kWin32ErrorSuccess);
+    files.Close(made.handle);
+    const auto again = files.Open("SAVE\\SCORE.DAT", true, false, hle::kOpenExisting);
+    RE2DJ_CHECK_EQ(context, again.error, hle::kWin32ErrorSuccess);
+    files.Close(again.handle);
+    std::size_t entries = 0;
+    for (const auto& item : std::filesystem::directory_iterator(fixture.overlay))
+    {
+        entries += item.path().filename() == "Save" ? 1 : 0;
+    }
+    // Counted by name: a host that ignores case finds "SAVE" either way.
+    RE2DJ_CHECK_EQ(context, entries, std::size_t{1});
+
+    // Missing files, a missing directory, a directory, an open file.
+    bool outside = false;
+    RE2DJ_CHECK_EQ(context, files.Delete("missing.ini", &outside), hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK_EQ(context, files.Delete("nodir\\x.ini", &outside), hle::kWin32ErrorPathNotFound);
+    RE2DJ_CHECK_EQ(context, files.Delete("DATA", &outside), hle::kWin32ErrorAccessDenied);
+    const auto open = files.Open("EZ2DJ.ini", true, false, hle::kOpenExisting);
+    RE2DJ_CHECK_EQ(context, files.Delete("EZ2DJ.ini", &outside), hle::kWin32ErrorSharingViolation);
+    files.Close(open.handle);
+    RE2DJ_CHECK_EQ(context, files.Delete("C:\\x.ini", &outside), hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK(context, outside);
+
+    // An overlay copy of an image file: both go.
+    const auto copy = files.Open("EZ2DJ.ini", true, true, hle::kOpenExisting);
+    files.Close(copy.handle);
+    RE2DJ_CHECK(context, std::filesystem::is_regular_file(fixture.overlay / "EZ2DJ.ini"));
+    RE2DJ_CHECK_EQ(context, files.Delete(".\\ez2dj.INI", &outside), hle::kWin32ErrorSuccess);
+    RE2DJ_CHECK(context, !outside);
+    RE2DJ_CHECK(context, !std::filesystem::exists(fixture.overlay / "EZ2DJ.ini"));
+    RE2DJ_CHECK_EQ(context, files.Open("EZ2DJ.ini", true, false, hle::kOpenExisting).error,
+                   hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK_EQ(context, files.Attributes("EZ2DJ.ini", &outside).error, hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK_EQ(context, files.FindFirst("*.ini").error, hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK_EQ(context, files.Delete("EZ2DJ.ini", &outside), hle::kWin32ErrorFileNotFound);
+    // An image file never copied; its directory stays.
+    RE2DJ_CHECK_EQ(context, files.Delete("DATA\\song.ez", &outside), hle::kWin32ErrorSuccess);
+    RE2DJ_CHECK_EQ(context, files.FindFirst("DATA\\*").error, hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK(context, files.Attributes("DATA", &outside).error == hle::kWin32ErrorSuccess);
+
+    // A later run sees the same deletions.
+    hle::GuestFiles later;
+    RE2DJ_CHECK(context, fixture.Configure(&later));
+    RE2DJ_CHECK_EQ(context, later.Attributes("EZ2DJ.ini", &outside).error, hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK_EQ(context, later.Attributes("DATA\\SONG.EZ", &outside).error, hle::kWin32ErrorFileNotFound);
+
+    // Made again, the file starts empty rather than from the image.
+    const auto fresh = later.Open("EZ2DJ.ini", true, true, hle::kOpenAlways);
+    RE2DJ_CHECK_EQ(context, fresh.error, hle::kWin32ErrorSuccess);
+    std::uint64_t size = 1;
+    later.Size(fresh.handle, &size);
+    RE2DJ_CHECK_EQ(context, size, std::uint64_t{0});
+    later.Close(fresh.handle);
+    RE2DJ_CHECK(context, later.Attributes("EZ2DJ.ini", &outside).error == hle::kWin32ErrorSuccess);
+}
+
+// DeleteFileA over the guest's files, and an INI written after it starting
+// from nothing, as 6th's hand-over to Remember 1st does.
+void CheckDeleteFileExport(re2dj::test::Context& context)
+{
+    Fixture fixture;
+    re2dj::test::MemoryServices services;
+    services.SetFiles(&fixture.files);
+    const auto descriptor = hle::modules::MakeKernel32ModuleDescriptor();
+    constexpr std::uint32_t kFile = re2dj::test::MemoryServices::kBase + 0x10;
+    constexpr std::uint32_t kSection = re2dj::test::MemoryServices::kBase + 0x40;
+    constexpr std::uint32_t kKey = re2dj::test::MemoryServices::kBase + 0x60;
+    constexpr std::uint32_t kValue = re2dj::test::MemoryServices::kBase + 0x80;
+    const auto remove = [&](bool* handled = nullptr) {
+        services.SetLastError(1234);
+        return re2dj::test::CallModuleExport(context, services, descriptor, "DeleteFileA", {kFile}, handled).eax;
+    };
+    services.Put(kFile, ".\\EZ2DJ.ini");
+    services.Put(kSection, "GAMEASSIGNMENTS");
+    services.Put(kKey, "Coins");
+    services.Put(kValue, "4");
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::test::CallModuleExport(context, services, descriptor, "WritePrivateProfileStringA",
+                                                 {kSection, kKey, kValue, kFile})
+                       .eax,
+                   1U);
+    RE2DJ_CHECK_EQ(context, remove(), 1U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    RE2DJ_CHECK_EQ(context, remove(), 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorFileNotFound);
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::test::CallModuleExport(context, services, descriptor, "WritePrivateProfileStringA",
+                                                 {kSection, kKey, kValue, kFile})
+                       .eax,
+                   1U);
+    std::ifstream in(fixture.overlay / "EZ2DJ.ini", std::ios::binary);
+    RE2DJ_CHECK_EQ(context, std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=4\r\n"));
+    // Outside the guest root, or a null name, stops.
+    bool handled = true;
+    services.Put(kFile, "C:\\x.ini");
+    remove(&handled);
+    RE2DJ_CHECK(context, !handled);
 }
 
 // The kernel32 file exports over the same fixture.
@@ -879,6 +998,167 @@ void CheckPrivateProfile(re2dj::test::Context& context)
     RE2DJ_CHECK(context, !hle::PrivateProfileIntOverride("GAMEASSIGNMENTS", "PlayCoins", 3).has_value());
 }
 
+// WritePrivateProfileStringA's rewrite, as measured on Windows 11 (design
+// 434): where a key or section goes, what stays of a rewritten line, what a
+// deletion removes, and the line endings.
+void CheckPrivateProfileUpdate(re2dj::test::Context& context)
+{
+    using re2dj::hle::UpdatePrivateProfile;
+    constexpr std::string_view kBase =
+        "[GAMEASSIGNMENTS]\r\nCoins=0\r\nPlayCoins=0\r\n\r\n[STATISTICS]\r\nTOTALCOIN=0\r\n";
+    // A missing or empty file, and a missing directory is the caller's.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("", "S", "k", "v"), std::string("[S]\r\nk=v\r\n"));
+    // An existing key: only its line, keeping the file's spelling.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "GAMEASSIGNMENTS", "Coins", "5"),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=5\r\nPlayCoins=0\r\n\r\n[STATISTICS]\r\nTOTALCOIN=0\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "gameassignments", " COINS ", "7"),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=7\r\nPlayCoins=0\r\n\r\n[STATISTICS]\r\nTOTALCOIN=0\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, " STATISTICS ", "TOTALCOIN", "12"),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=0\r\nPlayCoins=0\r\n\r\n[STATISTICS]\r\nTOTALCOIN=12\r\n"));
+    // The text up to '=' and the blanks after the old value stay.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey = old value \r\nother=1\r\n", "S", "key", "x"),
+                   std::string("[S]\r\nkey =x \r\nother=1\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey\t=\told\t\r\n", "S", "key", "x"),
+                   std::string("[S]\r\nkey\t=x\t\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey=   \r\n", "S", "key", "x"),
+                   std::string("[S]\r\nkey=x   \r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey= old\r\n", "S", "key", "x"),
+                   std::string("[S]\r\nkey=x\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\n key = old\r\n", "S", "key", "x"),
+                   std::string("[S]\r\n key =x\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\n\tk=1\r\n", "S", "k", "new"),
+                   std::string("[S]\r\n\tk=new\r\n"));
+    // Values are written as they are.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey=old\r\n", "S", "key", " x "),
+                   std::string("[S]\r\nkey= x \r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey=old\r\n", "S", "key", "\"q\""),
+                   std::string("[S]\r\nkey=\"q\"\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey=old\r\n", "S", "key", ""),
+                   std::string("[S]\r\nkey=\r\n"));
+    // A last line without an ending gets CRLF; LF lines stay LF.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey=old", "S", "key", "x"),
+                   std::string("[S]\r\nkey=x\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\nk1=v1\nk2=v2\n", "S", "k1", "new"),
+                   std::string("[S]\nk1=new\nk2=v2\n"));
+    // A new key after the section's last key line, before its blank and
+    // comment lines; after the header when it has none.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "GAMEASSIGNMENTS", "NewKey", "1"),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=0\r\nPlayCoins=0\r\nNewKey=1\r\n\r\n[STATISTICS]\r\nTOTALCOIN=0\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "STATISTICS", "NewKey", "1"),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=0\r\nPlayCoins=0\r\n\r\n[STATISTICS]\r\nTOTALCOIN=0\r\nNewKey=1\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nkey=old\r\n;c\r\n\r\n[T]\r\n", "S", "k2", "x"),
+                   std::string("[S]\r\nkey=old\r\nk2=x\r\n;c\r\n\r\n[T]\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nk\r\nz=1\r\n", "S", "k", "v"),
+                   std::string("[S]\r\nk\r\nz=1\r\nk=v\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nk1=v1", "S", "k2", "v2"),
+                   std::string("[S]\r\nk1=v1\r\nk2=v2\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[T]\r\nx=1\r\n[S]", "S", "k", "v"),
+                   std::string("[T]\r\nx=1\r\n[S]\r\nk=v\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S] ;c\r\nkey=old\r\n", "S", "k2", "x"),
+                   std::string("[S] ;c\r\nkey=old\r\nk2=x\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\nk1=v1\nk2=v2\n", "S", "k3", "v3"),
+                   std::string("[S]\nk1=v1\nk2=v2\nk3=v3\r\n"));
+    // A new section at the end, after CRLF when the file does not end with
+    // a newline.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "new", "a", "b"),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=0\r\nPlayCoins=0\r\n\r\n[STATISTICS]\r\nTOTALCOIN=0\r\n[new]\r\na=b\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nk1=v1", "T", "k", "v"),
+                   std::string("[S]\r\nk1=v1\r\n[T]\r\nk=v\r\n"));
+    // Only the first section and the first key of a name count.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(";c1\r\n[S]\r\n;c2\r\nk=1\r\n[T]\r\nx=1\r\n[S]\r\nk=2\r\n", "S", "k", "new"),
+                   std::string(";c1\r\n[S]\r\n;c2\r\nk=new\r\n[T]\r\nx=1\r\n[S]\r\nk=2\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\nk=1\r\nk=2\r\n", "S", "k", "new"),
+                   std::string("[S]\r\nk=new\r\nk=2\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[ S ]\r\nkey=old\r\n", "S", "key", "new"),
+                   std::string("[ S ]\r\nkey=new\r\n"));
+    // A null value removes the key from the key to the line ending; a null
+    // key removes the header through the last key line.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "GAMEASSIGNMENTS", "Coins", std::nullopt),
+                   std::string("[GAMEASSIGNMENTS]\r\nPlayCoins=0\r\n\r\n[STATISTICS]\r\nTOTALCOIN=0\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile("[S]\r\n key = old \r\nz=1\r\n", "S", "key", std::nullopt),
+                   std::string("[S]\r\n z=1\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "GAMEASSIGNMENTS", std::nullopt, std::nullopt),
+                   std::string("\r\n[STATISTICS]\r\nTOTALCOIN=0\r\n"));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "STATISTICS", std::nullopt, std::nullopt),
+                   std::string("[GAMEASSIGNMENTS]\r\nCoins=0\r\nPlayCoins=0\r\n\r\n"));
+    // Deleting what is not there changes nothing.
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "NONE", "k", std::nullopt), std::string(kBase));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "NONE", std::nullopt, std::nullopt), std::string(kBase));
+    RE2DJ_CHECK_EQ(context, UpdatePrivateProfile(kBase, "STATISTICS", "none", std::nullopt), std::string(kBase));
+    // The reader finds what was written.
+    const std::string written = UpdatePrivateProfile(kBase, "GAMEASSIGNMENTS", "Coins", "5");
+    RE2DJ_CHECK(context, re2dj::hle::FindPrivateProfileValue(written, "GAMEASSIGNMENTS", "Coins") == std::optional<std::string>("5"));
+}
+
+// The hex form STARTUPINFO reserved bytes travel in between host processes.
+void CheckHexBytes(re2dj::test::Context& context)
+{
+    const std::vector<std::uint8_t> bytes = {0x00, 0x32, 0x35, 0x36, 0xff};
+    RE2DJ_CHECK_EQ(context, re2dj::hle::EncodeHexBytes(bytes), std::string("00323536ff"));
+    std::vector<std::uint8_t> decoded;
+    RE2DJ_CHECK(context, re2dj::hle::DecodeHexBytes("00323536FF", &decoded));
+    RE2DJ_CHECK(context, decoded == bytes);
+    RE2DJ_CHECK(context, re2dj::hle::DecodeHexBytes("", &decoded) && decoded.empty());
+    RE2DJ_CHECK(context, !re2dj::hle::DecodeHexBytes("abc", &decoded));
+    RE2DJ_CHECK(context, !re2dj::hle::DecodeHexBytes("zz", &decoded));
+}
+
+// WritePrivateProfileStringA over the guest's files: the file is rewritten
+// into the overlay (from the image's copy, or from nothing), a missing
+// directory is FALSE with its error, and the unmeasured shapes stop.
+void CheckProfileWriteExport(re2dj::test::Context& context)
+{
+    Fixture fixture;
+    re2dj::test::MemoryServices services;
+    services.SetFiles(&fixture.files);
+    const auto descriptor = hle::modules::MakeKernel32ModuleDescriptor();
+    constexpr std::uint32_t kSection = re2dj::test::MemoryServices::kBase + 0x10;
+    constexpr std::uint32_t kKey = re2dj::test::MemoryServices::kBase + 0x30;
+    constexpr std::uint32_t kValue = re2dj::test::MemoryServices::kBase + 0x50;
+    constexpr std::uint32_t kFile = re2dj::test::MemoryServices::kBase + 0x70;
+    const auto call = [&](std::uint32_t section, std::uint32_t key, std::uint32_t value, std::uint32_t file, bool* handled = nullptr) {
+        services.SetLastError(1234);
+        return re2dj::test::CallModuleExport(context, services, descriptor, "WritePrivateProfileStringA",
+                                             {section, key, value, file}, handled)
+            .eax;
+    };
+    const auto read_overlay = [&](const char* name) {
+        std::ifstream in(fixture.overlay / name, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+    services.Put(kSection, "General");
+    services.Put(kKey, "DemoVolume");
+    services.Put(kValue, "1");
+    services.Put(kFile, ".\\EZ2DJ.ini");
+    // The image's file, rewritten into the overlay.
+    RE2DJ_CHECK_EQ(context, call(kSection, kKey, kValue, kFile), 1U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    RE2DJ_CHECK_EQ(context, read_overlay("EZ2DJ.ini"), std::string("[General]\r\nDemoVolume=1\r\n"));
+    // Then the overlay's copy.
+    services.Put(kKey, "Coins");
+    services.Put(kValue, "2");
+    RE2DJ_CHECK_EQ(context, call(kSection, kKey, kValue, kFile), 1U);
+    RE2DJ_CHECK_EQ(context, read_overlay("EZ2DJ.ini"), std::string("[General]\r\nDemoVolume=1\r\nCoins=2\r\n"));
+    RE2DJ_CHECK_EQ(context, call(kSection, kKey, 0, kFile), 1U);
+    RE2DJ_CHECK_EQ(context, read_overlay("EZ2DJ.ini"), std::string("[General]\r\nDemoVolume=1\r\n"));
+    // A missing file is made; a missing directory is not.
+    services.Put(kFile, ".\\bookkeeping.ini");
+    RE2DJ_CHECK_EQ(context, call(kSection, kKey, kValue, kFile), 1U);
+    RE2DJ_CHECK_EQ(context, read_overlay("bookkeeping.ini"), std::string("[General]\r\nCoins=2\r\n"));
+    services.Put(kFile, "nodir\\x.ini");
+    RE2DJ_CHECK_EQ(context, call(kSection, kKey, kValue, kFile), 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), hle::kWin32ErrorPathNotFound);
+    // Not modelled: a null section, and a bare name in the Windows directory.
+    bool handled = true;
+    services.Put(kFile, ".\\EZ2DJ.ini");
+    call(0, kKey, kValue, kFile, &handled);
+    RE2DJ_CHECK(context, !handled);
+    handled = true;
+    services.Put(kFile, "EZ2DJ.ini");
+    call(kSection, kKey, kValue, kFile, &handled);
+    RE2DJ_CHECK(context, !handled);
+}
+
 // GetPrivateProfileIntA over the guest's files: relative to the current
 // directory, with the measured last errors.
 void CheckProfileIntExport(re2dj::test::Context& context)
@@ -1254,11 +1534,16 @@ void RunGuestFilesTests(re2dj::test::Context& context)
 {
     CheckBitmapFiles(context);
     CheckPrivateProfile(context);
+    CheckPrivateProfileUpdate(context);
+    CheckHexBytes(context);
     CheckProfileIntExport(context);
     CheckProfileStringExport(context);
+    CheckProfileWriteExport(context);
     CheckDirectorySource(context);
     CheckPathsAndReads(context);
     CheckCopyOnWrite(context);
+    CheckDeleteFile(context);
+    CheckDeleteFileExport(context);
     CheckKernel32FileExports(context);
     CheckSerialOnFailedPort(context);
     CheckChildProcesses(context);

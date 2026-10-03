@@ -15,6 +15,8 @@
 | `test_linux_native_helper_probe.sh` | Linux x86/x86-64 + i386 multilib | 두 product host가 production i386 helper를 실행하는 synthetic PE32 IPC integration 검증 |
 | `build.sh` | Linux x86/x86-64 | configure + build (preset 선택) |
 | `test_all.sh` | Linux x86/x86-64 | 경고를 오류로 하여 build + ctest |
+| `build_release_linux.sh <linux-x64\|linux-x86> [version]` | Linux x86/x86-64 | Release preset build + ctest + `package_release.sh`, 경고를 오류로 처리 |
+| `package_release.sh <linux-x64\|linux-x86> [version]` | Linux x86/x86-64 | Release `re2dj`를 tar.gz와 SHA256 파일로 묶음, 이식성 검사 포함 |
 
 `test_all` 계열은 `RE2DJ_WARNINGS_AS_ERRORS=ON`으로 configure합니다. CI에서만 걸리는 경고는 이미 기본 브랜치에 들어간 경고이기 때문입니다.
 
@@ -41,10 +43,38 @@ powershell -ExecutionPolicy Bypass -File scripts/build_release.ps1 -SkipTests
 
 ## GitHub Release package
 
-`package_release.ps1` collects the Release `re2dj.exe`, injected runtime DLL, example `config/`, and user-facing repository documents into a Windows x86 zip and writes a SHA256 sidecar file. It does not include original HDD or CHD assets. `package_release.bat` is the command-prompt wrapper.
+GitHub Actions의 `release.yml`은 Windows x86, Linux x86-64, Linux x86 패키지를 각각 만들고, 태그 실행에서 세 플랫폼이 모두 성공하면 한 release에 올립니다. 패키지에는 원본 HDD·CHD 자산과 사용자의 `cfg/` Hardlock 자료가 들어가지 않습니다. release notes는 `docs/release-notes/v<version>.md`가 있으면 그것을 씁니다. 설계는 [작업 442](../docs/design/20261003-442-linux-release-artifacts.md)에 있습니다.
+
+*`release.yml` in GitHub Actions builds the Windows x86, Linux x86-64 and Linux x86 packages, and on a tag run puts them in one release once all three succeed. No package carries original HDD or CHD assets or the user's `cfg/` Hardlock material. Release notes come from `docs/release-notes/v<version>.md` when present. See the [task 442 design](../docs/design/20261003-442-linux-release-artifacts.md).*
+
+### Windows x86
+
+`package_release.ps1`은 Release `re2dj.exe`, 주입 런타임 DLL, 예제 `config/`, 사용자용 저장소 문서(`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`)를 Windows x86 zip으로 묶고 SHA256 파일을 씁니다. `package_release.bat`는 command prompt용 wrapper입니다.
+
+*`package_release.ps1` collects the Release `re2dj.exe`, the injected runtime DLL, the example `config/` and the user-facing repository documents (`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`) into a Windows x86 zip and writes a SHA256 file. `package_release.bat` is the command-prompt wrapper.*
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Configuration Release -Version 0.0.40
 ```
 
-*`package_release.ps1` collects the Release `re2dj.exe`, injected runtime DLL, example `config/`, and user-facing repository documents into a Windows x86 zip and writes a SHA256 sidecar file. It never includes original HDD or CHD assets. `package_release.bat` is the command-prompt wrapper. The GitHub Actions workflow uses this package and reads optional notes from `docs/release-notes/v<version>.md`.*
+### Linux x86-64 / x86
+
+`build_release_linux.sh`가 `linux-x64-release` 또는 `linux-x86-release` preset을 경고를 오류로 하여 빌드하고, CTest를 돌린 뒤 `package_release.sh`를 부릅니다. release preset은 libstdc++와 libgcc를 정적으로 링크합니다. `package_release.sh`는 strip한 `re2dj`와 Windows와 같은 문서·`config/`를 `build/package/re2dj-v<version>-linux-<arch>.tar.gz`로 묶고 `.sha256`을 씁니다. tar.gz는 실행 권한을 보존하고, 같은 이름의 최상위 디렉터리를 담습니다.
+
+*`build_release_linux.sh` builds the `linux-x64-release` or `linux-x86-release` preset with warnings as errors, runs CTest, then calls `package_release.sh`; the release presets link libstdc++ and libgcc statically. `package_release.sh` bundles the stripped `re2dj` with the Windows package's documents and `config/` into `build/package/re2dj-v<version>-linux-<arch>.tar.gz` and writes `.sha256`; the tar.gz keeps the executable bit and holds a top-level directory of the same name.*
+
+패키징 전에 이식성을 검사하고, 어긋나면 실패합니다.
+
+- `file`: ELF 폭(x86-64 / Intel 80386)
+- `readelf -d`: NEEDED가 `libc`, `libm`, `libdl`, `libpthread`, `librt`, `ld-linux*`뿐인지. SDL은 X11·Wayland·GL·오디오 라이브러리를 실행 시점에 `dlopen`합니다.
+- `objdump -T`: 가장 높은 `GLIBC_` 심볼 버전이 `RE2DJ_MAX_GLIBC`(기본 2.36, Debian 12) 이하인지
+
+*Before packaging it checks portability and fails on a mismatch: the ELF width with `file` (x86-64 / Intel 80386); that `readelf -d`'s NEEDED holds only `libc`, `libm`, `libdl`, `libpthread`, `librt` and `ld-linux*`, since SDL `dlopen`s the X11, Wayland, GL and audio libraries at run time; and that `objdump -T`'s highest `GLIBC_` symbol version is at most `RE2DJ_MAX_GLIBC` (2.36 by default, Debian 12).*
+
+workflow는 이것을 Debian 12 컨테이너(`debian:bookworm`, `i386/debian:bookworm`)에서 실행합니다. 개발 머신의 glibc가 더 새로우면 GLIBC 검사에 걸리므로, 로컬 시험에서는 한도를 올립니다.
+
+*The workflow runs this in Debian 12 containers (`debian:bookworm`, `i386/debian:bookworm`). A development machine with a newer glibc fails the GLIBC check, so a local trial raises the limit:*
+
+```bash
+RE2DJ_MAX_GLIBC=2.99 bash scripts/build_release_linux.sh linux-x64
+```

@@ -1978,6 +1978,38 @@ bool EnsureChdMounted()
 // change. The host process directory stays where the launcher put it: only this
 // mapping moves, which keeps unrelated host APIs unaffected.
 std::vector<std::string> g_guest_directory_components;
+bool g_guest_directory_started = false;
+std::vector<std::string> SplitGuestRelative(const std::string& relative);
+
+// The guest's first current directory: where the host process was started,
+// when that lies under the HDD root, as a launcher's child starts in the
+// subdirectory the launcher named (task 434). Taken once, at the first use of
+// the mapping, since the root is written into this module after it loads.
+void EnsureGuestDirectoryStarted()
+{
+    if (g_guest_directory_started)
+    {
+        return;
+    }
+    g_guest_directory_started = true;
+    char current[MAX_PATH] = {};
+    const DWORD length = GetCurrentDirectoryA(MAX_PATH, current);
+    const char* suffix = nullptr;
+    if (length == 0 || length >= MAX_PATH || g_re2dj_vfs_hdd_root[0] == '\0' ||
+        !FindPathSuffixUnderRoot(current, g_re2dj_vfs_hdd_root, &suffix) || *suffix == '\0')
+    {
+        return;
+    }
+    std::string relative(suffix);
+    for (char& value : relative)
+    {
+        if (value == '\\')
+        {
+            value = '/';
+        }
+    }
+    g_guest_directory_components = SplitGuestRelative(relative);
+}
 
 // Builds a path inside the image-internal product directory. The launcher
 // selects this root from the target profile, while the default keeps the
@@ -2027,6 +2059,7 @@ bool ResolveGuestRelativePath(const char* name, std::string* relative)
     {
         return false;
     }
+    EnsureGuestDirectoryStarted();
     const char* suffix = nullptr;
     const bool rooted = StripGuestRoot(name, &suffix);
     if (!rooted)
@@ -2367,6 +2400,7 @@ std::vector<std::string> SplitGuestRelative(const std::string& relative)
 // is an absolute path it built from what we returned.
 bool GuestDirectoryNativePath(char path[MAX_PATH])
 {
+    EnsureGuestDirectoryStarted();
     std::string native;
     for (const std::string& component : g_guest_directory_components)
     {
@@ -2805,6 +2839,34 @@ extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetPrivateProfileSectionNa
     ReportProfileRead(
         "GetPrivateProfileSectionNamesA", nullptr, nullptr, filename, resolved, copied);
     return copied;
+}
+
+// WritePrivateProfileStringA into the overlay (task 434): the file's overlay
+// copy, made from the image's when it has one, takes the write, so the
+// reads above see it and the image stays untouched. A name the VFS does not
+// map goes to Windows as it is.
+extern "C" __declspec(dllexport) BOOL WINAPI Re2djVfsWritePrivateProfileStringA(LPCSTR section,
+                                                                               LPCSTR key,
+                                                                               LPCSTR value,
+                                                                               LPCSTR filename)
+{
+    char path[MAX_PATH] = {};
+    char source[MAX_PATH] = {};
+    if (filename == nullptr || !MapVfsPath(filename, true, path, source))
+    {
+        const BOOL written = WritePrivateProfileStringA(section, key, value, filename);
+        ReportProfileRead("WritePrivateProfileStringA", section, key, filename, filename, written);
+        return written;
+    }
+    if (!IsRegularFile(path))
+    {
+        // Copy on write; a file the image lacks starts from nothing.
+        EnsureParentDirectories(path);
+        MaterializeChdFile(filename, path);
+    }
+    const BOOL written = WritePrivateProfileStringA(section, key, value, path);
+    ReportProfileRead("WritePrivateProfileStringA", section, key, filename, path, written);
+    return written;
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI Re2djVfsGetPrivateProfileSectionA(
@@ -3866,6 +3928,14 @@ extern "C" __declspec(dllexport) FARPROC WINAPI Re2djHleGetProcAddress(
             {
                 const FARPROC result =
                     reinterpret_cast<FARPROC>(&Re2djVfsGetPrivateProfileSectionA);
+                ReportDynamicResolverName(
+                    name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
+                return result;
+            }
+            if (_stricmp(name, "WritePrivateProfileStringA") == 0)
+            {
+                const FARPROC result =
+                    reinterpret_cast<FARPROC>(&Re2djVfsWritePrivateProfileStringA);
                 ReportDynamicResolverName(
                     name, "hle", reinterpret_cast<std::uintptr_t>(result), caller);
                 return result;

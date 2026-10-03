@@ -99,6 +99,11 @@ struct TargetRunDefaults
     // Starts a known bootstrap executable and follows its version-specific
     // game child before applying the HLE boundary.
     bool follow_child_process = false;
+    // The executables in the image that the profile's launcher starts, as
+    // '/'-separated image paths (for example "EZ2DJ/EZ2DJ6th.EXE"). They are
+    // staged with the launcher, and each one a followed launcher creates is
+    // prepared as its child.
+    std::vector<std::string> child_executable_paths;
     bool run_detached = false;
     // When a present returns. No profile overrides this yet: the default is
     // the behavior every profile had before the policy became explicit, and a
@@ -164,6 +169,10 @@ struct GameControls
 // confirmed in.
 std::uint32_t ArmedAutoplayFlagRva(const GameControls& controls,
                                    std::uint32_t executable_timestamp);
+// The same over a profile's declarations, one per build: the first whose
+// build matches. A launcher's children each pick by their own executable.
+std::uint32_t ArmedAutoplayFlagRva(const std::vector<GameControls>& controls,
+                                   std::uint32_t executable_timestamp);
 
 struct TargetProfile
 {
@@ -189,7 +198,9 @@ struct TargetProfile
     // profiles exist.
     std::string hle_profile_id;
     TargetRunDefaults run_defaults;
-    GameControls game_controls;
+    // One entry per build the profile runs that offers controls; a launcher
+    // profile may cover several builds (task 436).
+    std::vector<GameControls> game_controls;
     ExecutableFormatHint format_hint = ExecutableFormatHint::kWin32Pe32;
 
     // True when the profile came from a scan rather than the built-in table.
@@ -245,9 +256,18 @@ std::string_view ExecutableFormatHintName(ExecutableFormatHint format_hint);
 // Windows launcher has always given the VFS.
 std::string GuestRootPath(const TargetProfile& profile);
 
-// The guest's full path of the profile executable under GuestRootPath, for
-// example "D:\\ez2dj\\EZ2DJ.EXE".
+// The guest's full path of the profile executable under GuestRootPath: the
+// executable's path below the profile's working directory, for example
+// "D:\\ez2dj\\EZ2DJ.EXE", or "D:\\ez2dj\\EZ2DJ1ST\\Ez2DJ.exe" for a
+// launcher's child in a subdirectory. Only the file name follows the root
+// when the executable does not lie below the working directory.
 std::string GuestExecutablePath(const TargetProfile& profile);
+
+// The working directory of a run of executable (a '/'-separated image path)
+// on a profile whose own executable is profile_executable: the profile
+// executable's directory when executable lies below it, so that a launcher's
+// child keeps the launcher's root, and otherwise executable's own directory.
+std::string ExecutableWorkingDirectory(std::string_view profile_executable, std::string_view executable);
 
 }  // namespace re2dj::target
 

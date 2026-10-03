@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "gdi_bitmaps.h"
+#include "gdi_text.h"
 #include "re2dj/hle/gdi_raster.h"
 #include "re2dj/hle/guest_font.h"
 #include "re2dj/hle/guest_gdi.h"
@@ -264,6 +265,7 @@ bool RegisterClassA(const ImportCall& call, ImportReturn* result, std::string* e
 
 // winuser.h window messages the window model sends or answers.
 constexpr std::uint32_t kWmCreate = 0x0001;
+constexpr std::uint32_t kWmDestroy = 0x0002;
 constexpr std::uint32_t kWmMove = 0x0003;
 constexpr std::uint32_t kWmSize = 0x0005;
 constexpr std::uint32_t kWmActivate = 0x0006;
@@ -722,6 +724,10 @@ bool DefWindowProcA(const ImportCall& call, ImportReturn* result, std::string* e
     case kWmNcActivate:
         result->eax = 1;
         return Succeed(error);
+    case kWmDestroy:
+        // Nothing to do for a window on its way out: 0, as an application
+        // that handles it returns (Remember 1st passes it on, task 439).
+        return Succeed(error);
     case kWmEraseBackground:
     {
         // Filling with the class brush reports the background erased.
@@ -927,7 +933,7 @@ bool FillRect(const ImportCall& call, ImportReturn* result, std::string* error)
         return Fail(error, "user32 FillRect with a palette color is not modelled");
     }
     const GuestBitmap* bitmap = process->gdi().FindBitmap(dc->bitmap);
-    if (bitmap == nullptr || bitmap->bits_per_pixel != 16)
+    if (bitmap == nullptr || (bitmap->bits_per_pixel != 16 && bitmap->bits_per_pixel != 24))
     {
         return Fail(error, "user32 FillRect has no model of this DC's bitmap");
     }
@@ -940,21 +946,27 @@ bool FillRect(const ImportCall& call, ImportReturn* result, std::string* error)
     GdiRect rect;
     std::memcpy(&rect, rect_bytes.data(), sizeof(rect_bytes));
     const GdiRect area = FillArea(rect, bitmap->width, bitmap->height);
+    // 16 bits by the bitmap's masks (RGB555 without them), 24 bits as BGR
+    // bytes (measured).
     const bool has_masks = bitmap->masks[0] != 0 || bitmap->masks[1] != 0 || bitmap->masks[2] != 0;
-    const GdiPixelLayout layout = has_masks ? GdiPixelLayout{16, bitmap->masks} : kGdiRgb555;
+    const GdiPixelLayout layout = bitmap->bits_per_pixel == 24 ? kGdiBgr888
+                                  : has_masks                  ? GdiPixelLayout{16, bitmap->masks}
+                                                               : kGdiRgb555;
+    const std::uint32_t bytes_per_pixel = layout.bits_per_pixel / 8;
     const std::uint32_t pixel = ConvertGdiPixel(*color, kGdiColorref, layout);
     if (!area.empty())
     {
-        std::vector<std::uint8_t> row(static_cast<std::size_t>(area.right - area.left) * 2);
-        for (std::size_t offset = 0; offset < row.size(); offset += 2)
+        std::vector<std::uint8_t> row(static_cast<std::size_t>(area.right - area.left) * bytes_per_pixel);
+        for (std::size_t offset = 0; offset < row.size(); offset += bytes_per_pixel)
         {
-            WriteGdiPixel(std::span<std::uint8_t>(row).subspan(offset), 16, pixel);
+            WriteGdiPixel(std::span<std::uint8_t>(row).subspan(offset), layout.bits_per_pixel, pixel);
         }
         for (std::int32_t y = area.top; y < area.bottom; ++y)
         {
             const std::uint32_t line =
                 bitmap->top_down ? static_cast<std::uint32_t>(y) : bitmap->height - 1 - static_cast<std::uint32_t>(y);
-            const std::uint32_t address = bitmap->bits + line * bitmap->pitch + static_cast<std::uint32_t>(area.left) * 2;
+            const std::uint32_t address =
+                bitmap->bits + line * bitmap->pitch + static_cast<std::uint32_t>(area.left) * bytes_per_pixel;
             std::string write_error;
             if (!call.services->WriteGuestBytes(runtime::GuestAddress(address), row, &write_error))
             {
@@ -971,122 +983,6 @@ bool FillRect(const ImportCall& call, ImportReturn* result, std::string* error)
     }
     result->eax = 1;
     return Succeed(error);
-}
-
-// Division rounding down, as DrawTextA halves the room around its text.
-std::int32_t HalfDown(std::int32_t value)
-{
-    return value >= 0 ? value / 2 : -((-value + 1) / 2);
-}
-
-// Draws one line of text into a DC's 16-bit bitmap for DrawTextA: the cell
-// placed by the format, painted in the background color when OPAQUE, then
-// the glyphs' set pixels in the text color, all clipped.
-bool DrawTextPixels(const ImportCall& call,
-                    GuestProcess& process,
-                    std::uint32_t dc_handle,
-                    std::string_view text,
-                    const GdiRect& rect,
-                    std::uint32_t format,
-                    std::string* error)
-{
-    constexpr std::uint32_t kDtCenter = 0x01;
-    constexpr std::uint32_t kDtRight = 0x02;
-    constexpr std::uint32_t kDtVCenter = 0x04;
-    constexpr std::uint32_t kDtBottom = 0x08;
-    constexpr std::uint32_t kDtNoClip = 0x100;
-    constexpr std::uint32_t kOpaque = 2;
-    const GuestDc* dc = process.gdi().FindDc(dc_handle);
-    const GuestBitmap* bitmap = dc == nullptr ? nullptr : process.gdi().FindBitmap(dc->bitmap);
-    if (bitmap == nullptr || bitmap->bits_per_pixel != 16)
-    {
-        return Fail(error, "user32 DrawTextA has no model of this DC's bitmap");
-    }
-    const bool opaque = dc->background_mode == kOpaque;
-    if ((dc->text_color >> 24) != 0 || (opaque && (dc->background_color >> 24) != 0))
-    {
-        return Fail(error, "user32 DrawTextA with a palette color is not modelled");
-    }
-    const auto text_width = static_cast<std::int32_t>(text.size()) * kGuestFontCharWidth;
-    std::int32_t x = rect.left;
-    if ((format & kDtCenter) != 0)
-    {
-        x = rect.left + HalfDown(rect.right - rect.left - text_width);
-    }
-    else if ((format & kDtRight) != 0)
-    {
-        x = rect.right - text_width;
-    }
-    std::int32_t y = rect.top;
-    if ((format & kDtVCenter) != 0)
-    {
-        y = rect.top + HalfDown(rect.bottom - rect.top - kGuestFontHeight);
-    }
-    else if ((format & kDtBottom) != 0)
-    {
-        y = rect.bottom - kGuestFontHeight;
-    }
-    GdiRect clip = FillArea((format & kDtNoClip) != 0 ? GdiRect{0, 0, static_cast<std::int32_t>(bitmap->width),
-                                                                  static_cast<std::int32_t>(bitmap->height)}
-                                                         : rect,
-                            bitmap->width, bitmap->height);
-    clip.left = std::max(clip.left, x);
-    clip.top = std::max(clip.top, y);
-    clip.right = std::min(clip.right, x + text_width);
-    clip.bottom = std::min(clip.bottom, y + kGuestFontHeight);
-    if (clip.empty())
-    {
-        return true;
-    }
-    const bool has_masks = bitmap->masks[0] != 0 || bitmap->masks[1] != 0 || bitmap->masks[2] != 0;
-    const GdiPixelLayout layout = has_masks ? GdiPixelLayout{16, bitmap->masks} : kGdiRgb555;
-    const std::uint32_t text_pixel = ConvertGdiPixel(dc->text_color, kGdiColorref, layout);
-    const std::uint32_t background_pixel = ConvertGdiPixel(dc->background_color, kGdiColorref, layout);
-    // A surface's true-color plane takes both colours at 24 bits.
-    const std::uint32_t text_true_color = ConvertGdiPixel(dc->text_color, kGdiColorref, kGdiXrgb8888);
-    const std::uint32_t background_true_color = ConvertGdiPixel(dc->background_color, kGdiColorref, kGdiXrgb8888);
-    std::vector<std::uint8_t> row(static_cast<std::size_t>(clip.right - clip.left) * 2);
-    for (std::int32_t py = clip.top; py < clip.bottom; ++py)
-    {
-        std::uint32_t* const plane_row =
-            bitmap->true_color == nullptr ? nullptr : bitmap->true_color->Row(static_cast<std::uint32_t>(py));
-        const std::uint32_t line =
-            bitmap->top_down ? static_cast<std::uint32_t>(py) : bitmap->height - 1 - static_cast<std::uint32_t>(py);
-        const std::uint32_t address = bitmap->bits + line * bitmap->pitch + static_cast<std::uint32_t>(clip.left) * 2;
-        std::string access_error;
-        if (!call.services->ReadGuestBytes(runtime::GuestAddress(address), row, &access_error))
-        {
-            return Fail(error, "user32 DrawTextA cannot read the bitmap: " + access_error);
-        }
-        for (std::int32_t px = clip.left; px < clip.right; ++px)
-        {
-            const std::int32_t column = px - x;
-            const auto* glyph = GuestFontGlyph(static_cast<unsigned char>(text[static_cast<std::size_t>(column / kGuestFontCharWidth)]));
-            const bool set = ((*glyph)[static_cast<std::size_t>(py - y)] & (0x80U >> (column % kGuestFontCharWidth))) != 0;
-            const auto span = std::span<std::uint8_t>(row).subspan(static_cast<std::size_t>(px - clip.left) * 2);
-            if (set)
-            {
-                WriteGdiPixel(span, 16, text_pixel);
-                if (plane_row != nullptr)
-                {
-                    plane_row[px] = text_true_color;
-                }
-            }
-            else if (opaque)
-            {
-                WriteGdiPixel(span, 16, background_pixel);
-                if (plane_row != nullptr)
-                {
-                    plane_row[px] = background_true_color;
-                }
-            }
-        }
-        if (!call.services->WriteGuestBytes(runtime::GuestAddress(address), row, &access_error))
-        {
-            return Fail(error, "user32 DrawTextA cannot write the bitmap: " + access_error);
-        }
-    }
-    return true;
 }
 
 // DrawTextA(hDC, lpchText, cchText, lprc, format) for one line in a DC's
@@ -1281,11 +1177,13 @@ bool ScreenToClient(const ImportCall& call, ImportReturn* result, std::string* e
 }
 
 constexpr std::uint32_t kWmTimer = 0x0113;
+constexpr std::uint32_t kWmQuit = 0x0012;
 constexpr std::uint32_t kPmRemove = 0x0001;
 
 // PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg) for the
 // whole thread, as measured on Windows 11. The queue is looked at in
-// Windows' order: posted messages (none are posted yet), WM_PAINT for a
+// Windows' order: posted messages (none are posted yet), WM_QUIT once
+// PostQuitMessage has set the quit flag (taking it clears the flag), WM_PAINT for a
 // window with an update region (left in place), then WM_TIMER for a thread
 // timer whose interval has passed; taking a WM_TIMER restarts the interval
 // from now, so late timers coalesce. The MSG's time is now and its point the
@@ -1317,8 +1215,21 @@ bool PeekMessageA(const ImportCall& call, ImportReturn* result, std::string* err
     const bool remove = (call.arguments[4] & kPmRemove) != 0;
     std::array<std::uint32_t, 7> message{};
     bool found = false;
+    if (process->user().quit_posted())
+    {
+        message = {0, kWmQuit, process->user().quit_code(), 0, 0, 0, 0};
+        if (remove)
+        {
+            process->user().ClearQuit();
+        }
+        found = true;
+    }
     for (const auto& [handle, window] : process->user().windows())
     {
+        if (found)
+        {
+            break;
+        }
         if (window.needs_paint)
         {
             message = {window.handle, kWmPaint, 0, 0, 0, 0, 0};
@@ -1353,6 +1264,28 @@ bool PeekMessageA(const ImportCall& call, ImportReturn* result, std::string* err
         return Fail(error, "user32 PeekMessageA cannot write the MSG: " + write_error);
     }
     result->eax = 1;
+    return Succeed(error);
+}
+
+// PostQuitMessage(nExitCode): sets the thread's quit flag, so the message loop
+// gets WM_QUIT with nExitCode once nothing is posted before it (Microsoft's
+// documentation, design 439). Returns nothing; the last error is left alone.
+// Remember 1st's window procedure calls it on WM_DESTROY on its way back to
+// 6th.
+bool PostQuitMessage(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 1)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null"
+                                             : "user32 PostQuitMessage argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "user32 PostQuitMessage needs the guest process");
+    }
+    process->user().PostQuit(call.arguments[0]);
     return Succeed(error);
 }
 
@@ -1448,6 +1381,91 @@ bool DispatchMessageA(const ImportCall& call, ImportReturn* result, std::string*
     }
     const GuestWindow target = *window;
     return SendToWindow(call, target, message[1], message[2], message[3], nullptr, &result->eax, error) &&
+           Succeed(error);
+}
+
+// GetDC(hWnd): the window's display DC, the same handle each time, as
+// measured on Windows 11 (task 434); the last error stays. Drawing through
+// it is not modelled: a window DC holds no bitmap. The screen DC (a null
+// window) and an unknown window stop.
+bool GetDC(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 1)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null" : "user32 GetDC argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "user32 GetDC needs the guest process");
+    }
+    const GuestWindow* window = call.arguments[0] == 0 ? nullptr : process->user().LookupWindow(call.arguments[0]);
+    if (window == nullptr)
+    {
+        return Fail(error, call.arguments[0] == 0 ? "user32 GetDC of the screen is not modelled"
+                                                  : "user32 GetDC of an unknown window is not modelled");
+    }
+    GuestDc* dc = process->gdi().FindDc(window->device_context);
+    if (dc == nullptr)
+    {
+        GuestDc window_dc;
+        window_dc.window = window->handle;
+        process->gdi().PutDc(window->device_context, window_dc);
+        dc = process->gdi().FindDc(window->device_context);
+    }
+    dc->held = true;
+    result->eax = window->device_context;
+    return Succeed(error);
+}
+
+// ReleaseDC(hWnd, hDC), as measured on Windows 11 (task 434): 1 for a window
+// DC GetDC gave out, whatever hWnd says, and 0 once it is released or for a
+// memory DC, which stays usable; the last error stays.
+bool ReleaseDC(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 2)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null" : "user32 ReleaseDC argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "user32 ReleaseDC needs the guest process");
+    }
+    GuestDc* dc = process->gdi().FindDc(call.arguments[1]);
+    if (dc != nullptr && dc->window != 0 && dc->held)
+    {
+        dc->held = false;
+        result->eax = 1;
+    }
+    return Succeed(error);
+}
+
+// SendMessageA(hWnd, Msg, wParam, lParam): the window procedure called with
+// the message, its result returned, as measured on Windows 11 for WM_DESTROY
+// (task 434); the last error stays. An unknown window stops.
+bool SendMessageA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 4)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null" : "user32 SendMessageA argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "user32 SendMessageA needs the guest process");
+    }
+    const GuestWindow* window = process->user().LookupWindow(call.arguments[0]);
+    if (window == nullptr)
+    {
+        return Fail(error, "user32 SendMessageA to an unknown window is not modelled");
+    }
+    const GuestWindow target = *window;
+    return SendToWindow(call, target, call.arguments[1], call.arguments[2], call.arguments[3], nullptr, &result->eax,
+                        error) &&
            Succeed(error);
 }
 
@@ -1669,12 +1687,9 @@ bool WsprintfA(const ImportCall& call, ImportReturn* result, std::string* error)
 // rebuilding the original program's import table (winuser.h signatures).
 constexpr ResolveOnlyExport kUser32ResolveOnly[] = {
     {"CreateCursor", 7}, {"DestroyCursor", 1}, {"SetCursor", 1}, {"KillTimer", 2},
-    {"ExitWindowsEx", 2}, {"PostQuitMessage", 1}, {"DestroyWindow", 1},
+    {"ExitWindowsEx", 2}, {"DestroyWindow", 1},
     {"ClientToScreen", 2}, {"DrawMenuBar", 1}, {"GetClientRect", 2}, {"RedrawWindow", 4},
-    {"ReleaseDC", 2},
     {"GetDesktopWindow", 0},
-    // EZ2DJ 1st's imports (Task 405).
-    {"SendMessageA", 4},
 };
 
 GuestExportDescriptor MakeExport(std::string name,
@@ -1737,9 +1752,14 @@ GuestModuleDescriptor MakeUser32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("PeekMessageA", 5, &PeekMessageA));
     descriptor.exports.push_back(MakeExport("TranslateMessage", 1, &TranslateMessage));
     descriptor.exports.push_back(MakeExport("DispatchMessageA", 1, &DispatchMessageA));
+    descriptor.exports.push_back(MakeExport("PostQuitMessage", 1, &PostQuitMessage));
     descriptor.exports.push_back(MakeExport("FillRect", 3, &FillRect));
     descriptor.exports.push_back(MakeExport("LoadImageA", 6, &LoadImageA));
     descriptor.exports.push_back(MakeExport("DrawTextA", 5, &DrawTextA));
+    // A window's DC and a message sent straight to its procedure (Task 434).
+    descriptor.exports.push_back(MakeExport("GetDC", 1, &GetDC));
+    descriptor.exports.push_back(MakeExport("ReleaseDC", 2, &ReleaseDC));
+    descriptor.exports.push_back(MakeExport("SendMessageA", 4, &SendMessageA));
     descriptor.exports.push_back(MakeExport("ShowWindow", 2, &ShowWindow));
     descriptor.exports.push_back(MakeExport("EnumDisplaySettingsA", 3, &EnumDisplaySettingsA));
     descriptor.exports.push_back(MakeExport("ChangeDisplaySettingsExA", 5, &ChangeDisplaySettingsExA));

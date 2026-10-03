@@ -28,6 +28,7 @@
 | [ez2d2m-demo-play.md](ez2d2m-demo-play.md) | EZ2Dancer 2nd MOVE의 클래스 쌍 구조, 채널 모드 설정 함수, autoplay 플래그와 내장 토글 | 덤프 정적 해석과 OSD 동작으로 확인됨. 입력 슬롯 `0xc`의 바인딩과 채널 값의 의미는 미확정 |
 | [ez2dj1st-demo-play.md](ez2dj1st-demo-play.md) | 1st Tracks 장면 엔진, 데모 전용 플레이어 장면, 곡 재생기의 상수 자동 인자와 autoplay 변수 부재 | 덤프 정적 해석, 런타임 읽기, 쓰기 시험으로 확인됨. 자동 연주가 데모 장면 코드에 있다는 결론은 추정 |
 | [ez2dj1stse-demo-play.md](ez2dj1stse-demo-play.md) | 1st SE 장면 엔진, 자동 플레이 장면(`DemoGame`·`ClubMixDemoGame`·`HowToPlayGame`)과 autoplay 플래그, 효과음 스트리밍 분류 문제 | 덤프 정적 해석, 런타임 읽기, OSD 동작으로 확인됨. 효과음 반복은 작업 303에서 해결 |
+| [ez2dj6th-demo-play.md](ez2dj6th-demo-play.md) | 6th 데모 플래그와 autoplay 플래그, 동봉 Remember 1st의 데모 전용 장면과 autoplay 변수 부재 | 6th는 파일 정적 해석과 Linux 런타임 읽기로 확인됨. Remember 1st의 변수 부재는 추정 |
 | [ez2dj5th-demo-play.md](ez2dj5th-demo-play.md) | 5th 설정 레지스트리(`AutoScratch`·`AutoPedal` 포함), 데모 플래그, autoplay 플래그와 4th 구조 대조 | 덤프 정적 해석, 런타임 읽기, OSD 동작으로 확인됨. 보조 자동 설정의 동작은 미확정 |
 | [ez2dj4th-demo-play.md](ez2dj4th-demo-play.md) | 4th 설정 레지스트리, 데모 플래그, autoplay 플래그와 3rd 구조 대조 | 덤프 정적 해석, 런타임 읽기, OSD 동작으로 확인됨. 곡 시작 고정 여부와 판정 계열 두 벌의 의미는 미확정 |
 | [ez2dj3rd-demo-play.md](ez2dj3rd-demo-play.md) | 3rd 설정 키-주소 레지스트리, 데모 플레이 플래그와 시작 루틴, 입력 매니저 바인딩 | 덤프 정적 해석과 런타임 읽기로 확인됨. 노트 자동 판정 지점은 미확정 |

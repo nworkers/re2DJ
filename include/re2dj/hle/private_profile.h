@@ -59,6 +59,24 @@ struct PrivateProfileCopy
 PrivateProfileCopy CopyPrivateProfileString(std::string_view text, std::uint32_t size);
 PrivateProfileCopy CopyPrivateProfileList(const std::vector<std::string>& names, std::uint32_t size);
 
+// WritePrivateProfileStringA's rewrite of text, as measured on Windows 11
+// (design 434). Section and key names compare as the readers above do, with
+// the blanks around the names passed ignored; only a name's first occurrence
+// counts. Lines keep their own endings, and every line written is CRLF.
+// - Without key, the first section's header through its last key line (a
+//   line holding '=' that does not start with ';') is removed.
+// - Without value, the key's line is removed from the key to the line ending.
+// - An existing key keeps its line up to '=' and the blanks that followed
+//   its old value; the new value goes between them.
+// - A new key goes as "key=value" after the section's last key line, or
+//   after the header when it has none.
+// - A new section is appended as "[section]" and "key=value".
+// A line that lacked an ending gets one before anything follows it.
+std::string UpdatePrivateProfile(std::string_view text,
+                                 std::string_view section,
+                                 std::optional<std::string_view> key,
+                                 std::optional<std::string_view> value);
+
 // The DemoVolume setting both products answer from their own configuration
 // (Task 086) instead of the guest's file, and its default.
 inline constexpr std::uint32_t kDefaultDemoVolume = 3;

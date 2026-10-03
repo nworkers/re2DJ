@@ -258,6 +258,9 @@ struct OriginalRunEnvironment
     // Where the guest's CreateProcessA starts its children, or null to start
     // none; the caller owns it.
     hle::HostProcessLauncher* process_launcher = nullptr;
+    // RVA of the guest's autoplay flag in the main image, armed for this
+    // build by target::ArmedAutoplayFlagRva; 0 offers no autoplay control.
+    std::uint32_t autoplay_flag_rva = 0;
 };
 
 bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_path,

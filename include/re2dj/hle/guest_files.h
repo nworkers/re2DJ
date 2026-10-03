@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -56,6 +57,9 @@ public:
     virtual bool ListDirectory(std::string_view relative_path, std::vector<storage::Fat32Entry>* entries) const = 0;
 };
 
+// The overlay file listing the image files the guest deleted.
+inline constexpr const char* kDeletedListName = ".re2dj-deleted";
+
 // CreateFile dispositions (fileapi.h).
 inline constexpr std::uint32_t kCreateNew = 1;
 inline constexpr std::uint32_t kCreateAlways = 2;
@@ -67,6 +71,12 @@ inline constexpr std::uint32_t kTruncateExisting = 5;
 // otherwise from the CHD; opening for write first copies the CHD file into
 // the overlay. Handles come from the guest's shared handle space. Results are
 // Win32 error codes, 0 for success.
+//
+// Overlay paths ignore case as NTFS does: each component takes its exact
+// spelling when present, else an existing entry matching without case. An
+// image file the guest deletes is listed in the overlay's kDeletedListName
+// and counts as missing from then on, for this run and the runs after it
+// (task 437).
 class GuestFiles
 {
 public:
@@ -117,6 +127,11 @@ public:
     // it names a file. 0 moves the current directory. A directory outside the
     // guest root is not served: outside_root is set and nothing changes.
     std::uint32_t SetCurrentDirectory(std::string_view guest_path, bool* outside_root);
+    // DeleteFile: removes the overlay copy and lists an image file as
+    // deleted. ERROR_FILE_NOT_FOUND or ERROR_PATH_NOT_FOUND for a missing
+    // file, ERROR_ACCESS_DENIED for a directory, ERROR_SHARING_VIOLATION while
+    // this process holds it open (share modes are not modelled).
+    std::uint32_t Delete(std::string_view guest_path, bool* outside_root);
 
     // GetFileAttributesA: the path resolves like any other, then
     // storage::DescribeGuestFileAttributes walks it through the overlay and
@@ -156,6 +171,8 @@ public:
 private:
     struct File
     {
+        // The path below the root, upper-cased, to refuse deleting it.
+        std::string relative_key;
         // CHD files are read in place; overlay files are host FILE streams.
         std::string chd_relative;
         std::FILE* host = nullptr;
@@ -180,6 +197,14 @@ private:
         kDirectory,
     };
     Entry Lookup(const std::string& relative) const;
+    // The overlay's host path for a path below the root, matching existing
+    // components without case.
+    std::filesystem::path OverlayPath(const std::string& relative) const;
+    // Whether the image holds the path and it is not listed as deleted.
+    bool InImage(const std::string& relative, bool* directory, std::uint64_t* size) const;
+    bool ListedDeleted(const std::string& relative) const;
+    void LoadDeletedList();
+    bool SaveDeletedList() const;
     std::uint32_t OpenHost(const std::filesystem::path& path, bool write, bool truncate, File* file) const;
 
     GuestFileConfig config_;
@@ -189,6 +214,8 @@ private:
     GuestHandleAllocator own_handles_;
     GuestHandleAllocator* handles_ = nullptr;
     std::map<std::uint32_t, File> files_;
+    // Image files the guest deleted: paths below the root, upper-cased.
+    std::set<std::string> deleted_;
     struct Search
     {
         std::vector<storage::Fat32Entry> matches;

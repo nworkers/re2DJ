@@ -13,25 +13,15 @@ namespace re2dj::hle
 namespace
 {
 
-std::filesystem::path HostPath(const std::filesystem::path& root, std::string_view relative)
+// A path below the root as the deleted list keys it: case does not count.
+std::string DeletedKey(std::string_view relative)
 {
-    std::filesystem::path path = root;
-    std::size_t start = 0;
-    while (start <= relative.size())
+    std::string key(relative);
+    for (char& c : key)
     {
-        const std::size_t slash = relative.find('/', start);
-        const std::size_t end = slash == std::string_view::npos ? relative.size() : slash;
-        if (end > start)
-        {
-            path /= std::string(relative.substr(start, end - start));
-        }
-        if (slash == std::string_view::npos)
-        {
-            break;
-        }
-        start = slash + 1;
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     }
-    return path;
+    return key;
 }
 
 // The CHD's FAT32 volume as a file source.
@@ -245,7 +235,95 @@ bool GuestFiles::Configure(GuestFileConfig config,
     }
     current_ = root_;
     source_ = std::move(source);
+    LoadDeletedList();
     return true;
+}
+
+std::filesystem::path GuestFiles::OverlayPath(const std::string& relative) const
+{
+    std::filesystem::path path = config_.overlay_root;
+    bool resolving = true;
+    std::size_t start = 0;
+    while (start <= relative.size())
+    {
+        const std::size_t slash = relative.find('/', start);
+        const std::size_t end = slash == std::string::npos ? relative.size() : slash;
+        const std::string component = relative.substr(start, end - start);
+        if (!component.empty())
+        {
+            std::error_code code;
+            std::filesystem::path exact = path / component;
+            if (resolving && !std::filesystem::exists(exact, code))
+            {
+                // NTFS ignores case: an existing entry of another spelling is
+                // the same one. Past the first missing component everything
+                // takes the spelling given.
+                resolving = false;
+                for (const auto& item : std::filesystem::directory_iterator(path, code))
+                {
+                    if (storage::EqualsIgnoreAsciiCase(item.path().filename().string(), component))
+                    {
+                        exact = item.path();
+                        resolving = true;
+                        break;
+                    }
+                }
+            }
+            path = std::move(exact);
+        }
+        if (slash == std::string::npos)
+        {
+            break;
+        }
+        start = slash + 1;
+    }
+    return path;
+}
+
+bool GuestFiles::ListedDeleted(const std::string& relative) const
+{
+    return !deleted_.empty() && deleted_.count(DeletedKey(relative)) == 1;
+}
+
+bool GuestFiles::InImage(const std::string& relative, bool* directory, std::uint64_t* size) const
+{
+    const std::string chd_relative = config_.chd_root.empty() ? relative : config_.chd_root + "/" + relative;
+    return source_ != nullptr && source_->Find(chd_relative, directory, size) &&
+           (*directory || !ListedDeleted(relative));
+}
+
+void GuestFiles::LoadDeletedList()
+{
+    deleted_.clear();
+    if (config_.overlay_root.empty())
+    {
+        return;
+    }
+    std::ifstream stream(config_.overlay_root / kDeletedListName);
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        if (!line.empty())
+        {
+            deleted_.insert(DeletedKey(line));
+        }
+    }
+}
+
+bool GuestFiles::SaveDeletedList() const
+{
+    std::error_code code;
+    std::filesystem::create_directories(config_.overlay_root, code);
+    std::ofstream stream(config_.overlay_root / kDeletedListName, std::ios::binary | std::ios::trunc);
+    for (const std::string& key : deleted_)
+    {
+        stream << key << '\n';
+    }
+    return static_cast<bool>(stream);
 }
 
 bool GuestFiles::BelowRoot(const storage::GuestPath& combined,
@@ -295,7 +373,7 @@ std::uint32_t GuestFiles::ImagePath(std::string_view guest_path, std::string* im
     const std::string chd_relative = config_.chd_root.empty() ? relative : config_.chd_root + "/" + relative;
     bool directory = false;
     std::uint64_t size = 0;
-    if (source_ == nullptr || !source_->Find(chd_relative, &directory, &size) || directory)
+    if (!InImage(relative, &directory, &size) || directory)
     {
         return kWin32ErrorFileNotFound;
     }
@@ -308,7 +386,7 @@ GuestFiles::Entry GuestFiles::Lookup(const std::string& relative) const
     if (!config_.overlay_root.empty())
     {
         std::error_code code;
-        const std::filesystem::path overlay = HostPath(config_.overlay_root, relative);
+        const std::filesystem::path overlay = OverlayPath(relative);
         if (std::filesystem::is_directory(overlay, code))
         {
             return Entry::kDirectory;
@@ -320,8 +398,7 @@ GuestFiles::Entry GuestFiles::Lookup(const std::string& relative) const
     }
     bool directory = false;
     std::uint64_t size = 0;
-    const std::string chd_relative = config_.chd_root.empty() ? relative : config_.chd_root + "/" + relative;
-    if (source_ == nullptr || !source_->Find(chd_relative, &directory, &size))
+    if (!InImage(relative, &directory, &size))
     {
         return Entry::kMissing;
     }
@@ -383,7 +460,9 @@ GuestFiles::FindResult GuestFiles::FindFirst(std::string_view guest_pattern)
     Search search;
     for (storage::Fat32Entry& entry : entries)
     {
-        if (storage::MatchesFindPattern(pattern, entry.name))
+        // An image file the guest deleted is gone from listings too.
+        if (storage::MatchesFindPattern(pattern, entry.name) &&
+            (entry.directory || !ListedDeleted(below_root.empty() ? entry.name : below_root + "/" + entry.name)))
         {
             search.matches.push_back(std::move(entry));
         }
@@ -481,6 +560,57 @@ std::uint32_t GuestFiles::SetCurrentDirectory(std::string_view guest_path, bool*
     return kWin32ErrorSuccess;
 }
 
+std::uint32_t GuestFiles::Delete(std::string_view guest_path, bool* outside_root)
+{
+    *outside_root = false;
+    std::string relative;
+    if (source_ == nullptr || !RelativeToRoot(guest_path, &relative))
+    {
+        *outside_root = true;
+        return kWin32ErrorFileNotFound;
+    }
+    switch (Lookup(relative))
+    {
+    case Entry::kDirectory:
+        return kWin32ErrorAccessDenied;
+    case Entry::kMissing:
+    {
+        const std::size_t slash = relative.rfind('/');
+        const bool parent_missing = slash != std::string::npos && Lookup(relative.substr(0, slash)) != Entry::kDirectory;
+        return parent_missing ? kWin32ErrorPathNotFound : kWin32ErrorFileNotFound;
+    }
+    case Entry::kFile:
+        break;
+    }
+    const std::string key = DeletedKey(relative);
+    for (const auto& [handle, file] : files_)
+    {
+        if (file.relative_key == key)
+        {
+            return kWin32ErrorSharingViolation;
+        }
+    }
+    std::error_code code;
+    const std::filesystem::path overlay = OverlayPath(relative);
+    if (std::filesystem::is_regular_file(overlay, code) && !std::filesystem::remove(overlay, code))
+    {
+        return kWin32ErrorAccessDenied;
+    }
+    // The image is never changed: its copy is listed as deleted instead.
+    bool directory = false;
+    std::uint64_t size = 0;
+    if (InImage(relative, &directory, &size))
+    {
+        deleted_.insert(key);
+        if (!SaveDeletedList())
+        {
+            deleted_.erase(key);
+            return kWin32ErrorAccessDenied;
+        }
+    }
+    return kWin32ErrorSuccess;
+}
+
 storage::GuestFileAttributes GuestFiles::Attributes(std::string_view guest_path, bool* outside_root) const
 {
     *outside_root = false;
@@ -551,8 +681,8 @@ GuestFiles::OpenResult GuestFiles::Open(std::string_view guest_path,
     const std::string chd_relative = config_.chd_root.empty() ? relative : config_.chd_root + "/" + relative;
     bool chd_directory = false;
     std::uint64_t chd_size = 0;
-    const bool in_chd = source_->Find(chd_relative, &chd_directory, &chd_size);
-    const std::filesystem::path overlay = HostPath(config_.overlay_root, relative);
+    const bool in_chd = InImage(relative, &chd_directory, &chd_size);
+    const std::filesystem::path overlay = OverlayPath(relative);
     std::error_code code;
     const bool in_overlay = std::filesystem::is_regular_file(overlay, code);
     if ((in_chd && chd_directory) || std::filesystem::is_directory(overlay, code))
@@ -581,6 +711,7 @@ GuestFiles::OpenResult GuestFiles::Open(std::string_view guest_path,
     }
 
     File file;
+    file.relative_key = DeletedKey(relative);
     file.read = read;
     file.write = write;
     const bool truncate = disposition == kCreateAlways || disposition == kTruncateExisting;

@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "re2dj/graphics/present_sync.h"
+#include "re2dj/hle/hex_bytes.h"
 
 
 namespace re2dj::platform::windows
@@ -240,6 +241,13 @@ bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,
     {
         arguments->push_back("--io-config");
         arguments->push_back(options.io_config.string());
+    }
+    // The reserved bytes a launcher hands its child, for a run of that child
+    // on its own (task 434).
+    if (!options.startup_reserved.empty())
+    {
+        arguments->push_back("--startup-reserved");
+        arguments->push_back(re2dj::hle::EncodeHexBytes(options.startup_reserved));
     }
     error->clear();
     return true;

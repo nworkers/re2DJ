@@ -105,6 +105,16 @@ public:
     // it stays at the screen origin until one does.
     std::int32_t cursor_x() const { return cursor_x_; }
     std::int32_t cursor_y() const { return cursor_y_; }
+    // PostQuitMessage: the thread's quit flag and the WM_QUIT wParam it
+    // carries. Taking WM_QUIT from the queue clears it.
+    void PostQuit(std::uint32_t exit_code)
+    {
+        quit_posted_ = true;
+        quit_code_ = exit_code;
+    }
+    bool quit_posted() const { return quit_posted_; }
+    std::uint32_t quit_code() const { return quit_code_; }
+    void ClearQuit() { quit_posted_ = false; }
 
 private:
     std::uint32_t AllocateHandle();
@@ -121,6 +131,8 @@ private:
     std::int32_t cursor_x_ = 0;
     std::int32_t cursor_y_ = 0;
     std::int32_t cursor_count_ = 0;
+    bool quit_posted_ = false;
+    std::uint32_t quit_code_ = 0;
 };
 
 }  // namespace re2dj::hle

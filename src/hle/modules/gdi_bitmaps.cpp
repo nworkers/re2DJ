@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -141,9 +142,61 @@ std::uint32_t SourcePixel(const GuestBitmap& source, std::span<const std::uint8_
     {
         return ReadGdiPixel(row.subspan(static_cast<std::size_t>(x) * 3), 24);
     }
+    if (source.bits_per_pixel == 32)
+    {
+        // A device-dependent bitmap's 0x00RRGGBB, the same value.
+        return ReadGdiPixel(row.subspan(static_cast<std::size_t>(x) * 4), 32) & 0x00FFFFFFU;
+    }
     const std::uint8_t index = row[x];
     return index < source.color_table.size() ? source.color_table[index] : 0;
 }
+
+// Fresh zeroed RW pages of guest memory for a bitmap's bits, as Windows
+// gives a DIB section's; false stops the call.
+bool AllocateBitmapBits(const ImportCall& call,
+                        GuestProcess& process,
+                        std::uint32_t size,
+                        std::uint32_t* bits,
+                        std::string* error)
+{
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> committed;
+    if (process.VirtualAlloc(0, size, kMemCommit | kMemReserve, kPageReadWrite, bits, &committed) !=
+        GuestMemoryResult::kOk)
+    {
+        return com::Fail(error, com::CallName(call) + " has no guest memory for the bitmap");
+    }
+    for (const auto& [address, length] : committed)
+    {
+        const std::vector<std::uint8_t> zeros(length, 0);
+        if (!com::WriteBytes(call, address, zeros, error))
+        {
+            process.VirtualFree(*bits, 0, kMemRelease);
+            return false;
+        }
+    }
+    return true;
+}
+
+// BITMAPINFOHEADER (wingdi.h), 40 bytes.
+struct BitmapInfoHeader
+{
+    std::uint32_t size = 0;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+    std::uint16_t planes = 0;
+    std::uint16_t bits_per_pixel = 0;
+    std::uint32_t compression = 0;
+    std::uint32_t size_image = 0;
+    std::int32_t x_pixels_per_meter = 0;
+    std::int32_t y_pixels_per_meter = 0;
+    std::uint32_t colors_used = 0;
+    std::uint32_t colors_important = 0;
+};
+static_assert(sizeof(BitmapInfoHeader) == 40);
+
+constexpr std::uint32_t kBiRgb = 0;
+constexpr std::uint32_t kCbmInit = 4;
+constexpr std::uint32_t kDibRgbColors = 0;
 
 }  // namespace
 
@@ -196,20 +249,9 @@ bool LoadImageA(const ImportCall& call, ImportReturn* result, std::string* error
     }
 
     std::uint32_t bits = 0;
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> committed;
-    if (process->VirtualAlloc(0, static_cast<std::uint32_t>(image.rows.size()), kMemCommit | kMemReserve,
-                              kPageReadWrite, &bits, &committed) != GuestMemoryResult::kOk)
+    if (!AllocateBitmapBits(call, *process, static_cast<std::uint32_t>(image.rows.size()), &bits, error))
     {
-        return com::Fail(error, com::CallName(call) + " has no guest memory for " + name);
-    }
-    for (const auto& [address, length] : committed)
-    {
-        const std::vector<std::uint8_t> zeros(length, 0);
-        if (!com::WriteBytes(call, address, zeros, error))
-        {
-            process->VirtualFree(bits, 0, kMemRelease);
-            return false;
-        }
+        return false;
     }
     if (!com::WriteBytes(call, bits, image.rows, error))
     {
@@ -257,7 +299,8 @@ bool GetObjectA(const ImportCall& call, ImportReturn* result, std::string* error
         bitmap.height = static_cast<std::int32_t>(found->height);
         bitmap.width_bytes = static_cast<std::int32_t>(found->pitch);
         bitmap.bits_per_pixel = static_cast<std::uint16_t>(found->bits_per_pixel);
-        bitmap.bits = found->bits;
+        // A device-dependent bitmap shows no bits (measured).
+        bitmap.bits = found->device_dependent ? 0 : found->bits;
     }
     else
     {
@@ -386,7 +429,7 @@ bool StretchBlt(const ImportCall& call, ImportReturn* result, std::string* error
     const GuestBitmap* source = gdi.FindBitmap(source_dc->bitmap);
     const GuestBitmap* target = gdi.FindBitmap(target_dc->bitmap);
     if (source == nullptr || target == nullptr || target->bits_per_pixel != 16 ||
-        (source->bits_per_pixel != 24 && source->bits_per_pixel != 8))
+        (source->bits_per_pixel != 24 && source->bits_per_pixel != 8 && source->bits_per_pixel != 32))
     {
         return com::Fail(error, com::CallName(call) + " has no model of these bitmaps");
     }
@@ -439,6 +482,164 @@ bool StretchBlt(const ImportCall& call, ImportReturn* result, std::string* error
         }
     }
     result->eax = 1;
+    return Done(error);
+}
+
+// CreateDIBSection(hdc, pbmi, usage, ppvBits, hSection, dwOffset) for a
+// 24-bit bottom-up BI_RGB section with no DC, file mapping, or palette
+// usage, as measured on Windows 11 (task 434): the bits are fresh zeroed
+// pages, ppvBits receives them, GetObjectA reports the bitmap with its bits
+// and DWORD-aligned rows, and the last error stays. Other shapes stop.
+bool CreateDIBSection(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = Require(call, result, 6, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    if (call.arguments[0] != 0 || call.arguments[1] == 0 || call.arguments[2] != kDibRgbColors ||
+        call.arguments[4] != 0 || call.arguments[5] != 0)
+    {
+        return com::Fail(error, com::CallName(call) + " is modelled only for a DIB_RGB_COLORS section with no DC or file mapping");
+    }
+    BitmapInfoHeader header;
+    if (!com::ReadStruct(call, call.arguments[1], &header, error))
+    {
+        return false;
+    }
+    if (header.size != sizeof(header) || header.planes != 1 || header.compression != kBiRgb ||
+        header.bits_per_pixel != 24 || header.width <= 0 || header.height <= 0)
+    {
+        return com::Fail(error, com::CallName(call) + " has no model of this BITMAPINFO: " +
+                                    std::to_string(header.width) + "x" + std::to_string(header.height) + "x" +
+                                    std::to_string(header.bits_per_pixel));
+    }
+    const auto width = static_cast<std::uint32_t>(header.width);
+    const auto height = static_cast<std::uint32_t>(header.height);
+    const std::uint32_t pitch = DibRowBytes(width, 24);
+    std::uint32_t bits = 0;
+    if (!AllocateBitmapBits(call, *process, pitch * height, &bits, error))
+    {
+        return false;
+    }
+    if (call.arguments[3] != 0 && !com::WriteWord(call, call.arguments[3], bits, error))
+    {
+        process->VirtualFree(bits, 0, kMemRelease);
+        return false;
+    }
+    GuestBitmap bitmap;
+    bitmap.width = width;
+    bitmap.height = height;
+    bitmap.bits_per_pixel = 24;
+    bitmap.pitch = pitch;
+    bitmap.bits = bits;
+    bitmap.top_down = false;
+    bitmap.owns_bits = true;
+    result->eax = process->gdi().AddBitmap(std::move(bitmap));
+    return Done(error);
+}
+
+// CreateDIBitmap(hdc, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage) of a window's
+// DC with CBM_INIT and DIB_RGB_COLORS, as measured on Windows 11 (task 434):
+// a device-dependent bitmap in the display's 32-bit format, rows in screen
+// order, GetObjectA reporting 32 bits, width * 4 bytes per row and no bits,
+// with the pixels of a 24-bit or 8-bit bottom-up BI_RGB DIB. The last error
+// stays. A memory DC (whose bitmap's format would be the DDB's), no
+// initialisation, another usage, and other DIB shapes stop.
+bool CreateDIBitmap(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = Require(call, result, 6, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    if (call.arguments[1] == 0 || call.arguments[2] != kCbmInit || call.arguments[3] == 0 ||
+        call.arguments[4] == 0 || call.arguments[5] != kDibRgbColors)
+    {
+        return com::Fail(error, com::CallName(call) + " is modelled only with CBM_INIT and DIB_RGB_COLORS");
+    }
+    const GuestDc* dc = process->gdi().FindDc(call.arguments[0]);
+    if (dc == nullptr || dc->window == 0)
+    {
+        return com::Fail(error, com::CallName(call) + " is modelled only for a window's DC");
+    }
+    BitmapInfoHeader header;
+    if (!com::ReadStruct(call, call.arguments[1], &header, error))
+    {
+        return false;
+    }
+    if (header.size != sizeof(header) || header.planes != 1 || header.compression != kBiRgb ||
+        (header.bits_per_pixel != 24 && header.bits_per_pixel != 8) || header.width <= 0 || header.height <= 0)
+    {
+        return com::Fail(error, com::CallName(call) + " has no model of this DIB: " + std::to_string(header.width) +
+                                    "x" + std::to_string(header.height) + "x" + std::to_string(header.bits_per_pixel));
+    }
+    const auto width = static_cast<std::uint32_t>(header.width);
+    const auto height = static_cast<std::uint32_t>(header.height);
+    const std::uint32_t source_pitch = DibRowBytes(width, header.bits_per_pixel);
+    std::vector<std::uint32_t> color_table;
+    if (header.bits_per_pixel == 8)
+    {
+        const std::uint32_t entries = header.colors_used == 0 ? 256 : header.colors_used;
+        std::vector<std::uint8_t> table_bytes(static_cast<std::size_t>(entries) * 4);
+        if (!com::ReadBytes(call, call.arguments[4] + sizeof(header), table_bytes, error))
+        {
+            return false;
+        }
+        for (std::uint32_t index = 0; index < entries; ++index)
+        {
+            // RGBQUAD's B, G, R, 0 read little-endian is 0x00RRGGBB.
+            color_table.push_back(ReadGdiPixel(std::span<const std::uint8_t>(table_bytes).subspan(index * 4), 32) &
+                                  0x00FFFFFFU);
+        }
+    }
+    const std::uint32_t pitch = width * 4;
+    std::uint32_t bits = 0;
+    if (!AllocateBitmapBits(call, *process, pitch * height, &bits, error))
+    {
+        return false;
+    }
+    std::vector<std::uint8_t> source_row(source_pitch);
+    std::vector<std::uint8_t> target_row(pitch);
+    for (std::uint32_t y = 0; y < height; ++y)
+    {
+        // The DIB's rows run bottom-up; the DDB keeps screen order.
+        if (!com::ReadBytes(call, call.arguments[3] + (height - 1 - y) * source_pitch, source_row, error))
+        {
+            process->VirtualFree(bits, 0, kMemRelease);
+            return false;
+        }
+        for (std::uint32_t x = 0; x < width; ++x)
+        {
+            std::uint32_t pixel = 0;
+            if (header.bits_per_pixel == 24)
+            {
+                pixel = ReadGdiPixel(std::span<const std::uint8_t>(source_row).subspan(static_cast<std::size_t>(x) * 3), 24);
+            }
+            else
+            {
+                const std::uint8_t index = source_row[x];
+                pixel = index < color_table.size() ? color_table[index] : 0;
+            }
+            WriteGdiPixel(std::span<std::uint8_t>(target_row).subspan(static_cast<std::size_t>(x) * 4), 32, pixel);
+        }
+        if (!com::WriteBytes(call, bits + y * pitch, target_row, error))
+        {
+            process->VirtualFree(bits, 0, kMemRelease);
+            return false;
+        }
+    }
+    GuestBitmap bitmap;
+    bitmap.width = width;
+    bitmap.height = height;
+    bitmap.bits_per_pixel = 32;
+    bitmap.pitch = pitch;
+    bitmap.bits = bits;
+    bitmap.top_down = true;
+    bitmap.masks = kGdiXrgb8888.masks;
+    bitmap.owns_bits = true;
+    bitmap.device_dependent = true;
+    result->eax = process->gdi().AddBitmap(std::move(bitmap));
     return Done(error);
 }
 

@@ -1,5 +1,81 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.60 (2026-10-03)
+
+### 한국어
+
+Linux x86-64·x86 패키지를 릴리스마다 배포합니다(작업 442). EZ2DJ 6th의 Remember 1st가 Linux에서 처음부터 끝까지 동작하고(작업 434, 437~440), 6th에서 Autoplay를 쓸 수 있습니다(작업 436). v0.0.59 이후 main에 들어간 프로젝트 사이트와 CREDITS(작업 432·433)도 이 버전에 포함됩니다.
+
+#### 1. Linux 릴리스 패키지 (작업 442)
+- Release workflow를 version, Windows x86, Linux matrix, publish job으로 나눴습니다. 세 플랫폼이 모두 성공해야 태그 release를 한 번 게시합니다.
+- Linux는 Debian 12 컨테이너(x86은 `i386/debian`)에서 libstdc++와 libgcc를 정적 링크해 빌드합니다. `scripts/package_release.sh`가 실행 파일 폭, C 런타임만 링크하는지, glibc 2.36 한도를 검사하고 tar.gz를 만듭니다.
+- 처음으로 workflow 전체가 통과하기까지 다음을 고쳤습니다.
+  - GCC 12의 libstdc++ 오탐 경고는 GCC 12에서만 오류로 보지 않습니다.
+  - Windows job은 runner에 없는 `Visual Studio 18 2026` preset 대신 기본 생성기로 configure합니다.
+  - Windows VFS probe가 열린 trace 파일을 지우다 예외로 죽던 정리 순서를 고쳤습니다.
+- CI에 linux-x86 job과 오디오 헤더를 더했습니다. 사이트 다운로드 페이지는 플랫폼별 패키지를 보여 줍니다. Windows zip에도 `THIRD_PARTY_NOTICES.md`와 `CREDITS.md`를 넣었습니다.
+
+#### 2. 6th의 Remember 1st (작업 434, 437~440)
+- 프로필이 launcher의 자식 실행 파일 목록을 갖습니다. 자식 run은 launcher의 guest root를 그대로 씁니다. Windows launcher probe는 자식을 차례로 따라갑니다.
+- 6th는 0x100으로 끝나기 전에 1st의 `bookkeeping.ini`에 크레딧을 써서 넘깁니다(`FreePlay` 쓰기, `DeleteFileA`, `Coins`·`PlayCoins`·`ContinueCoins`·`GameLevel` 쓰기).
+  - Linux에 `DeleteFileA`를 더했습니다. 원본 이미지 파일을 지우면 overlay의 `.re2dj-deleted`에 표시합니다.
+  - overlay 경로는 NTFS처럼 대소문자를 구분하지 않습니다.
+- 1st는 게임 한 판 뒤 다음 순서로 끝나고, launcher가 6th를 다시 실행합니다: 정리 → `IDirectDraw4::RestoreDisplayMode` → `WM_DESTROY` → `PostQuitMessage` → `WM_QUIT` → 종료 코드 0x105. 이 경로에 필요한 `RestoreDisplayMode`, `PostQuitMessage`, `PeekMessageA`의 `WM_QUIT`, `DefWindowProcA(WM_DESTROY)`를 더했습니다.
+- 게스트 스레드를 남긴 Linux run이 끝날 때 정적 소멸 중 SIGSEGV로 죽던 문제를 고쳤습니다. host 서비스를 `main` 안에서 해제합니다.
+
+#### 3. 6th Autoplay (작업 436)
+- `EZ2DJ6th.EXE`(`0x411f6d44`)의 autoplay 플래그는 `[0x008896ac]`입니다. 5th와 같은 구조입니다.
+- 동봉 1st(`0x411bbf5c`)는 데모 전용 장면을 써서, 켜고 끌 변수가 없습니다.
+- 프로필의 `game_controls`는 빌드별 목록이 되어, 실행 중인 실행 파일의 선언만 무장합니다. Linux OSD에 Autoplay 토글을 더했고, Windows launcher 자식에도 OSD 정보와 주소를 넘깁니다.
+
+#### 4. 그 밖에
+- Wayland가 창 위치 지정을 거절해도 Linux 실행이 멈추지 않습니다(작업 435).
+- EZ2DJ 턴테이블 `step` 기본값이 예제 INI와 같은 2입니다(작업 441).
+- 프로젝트 사이트와 CREDITS 페이지를 추가했습니다(작업 432·433).
+
+#### 5. 검증
+- Release workflow에서 Windows x86, Linux x86-64, Linux x86의 Release 빌드·테스트·패키징이 통과합니다. 단위 테스트 5,934건(Linux x64)이 통과합니다.
+- CI가 만든 Linux 두 패키지로 6th를 실행했습니다. 사용자가 Linux에서 6th → Remember 1st → 6th 복귀와 6th Autoplay를 확인했습니다.
+
+---
+
+### English
+
+Linux x86-64 and x86 packages ship with each release (task 442). EZ2DJ 6th's Remember 1st works end to end on Linux (tasks 434, 437 to 440), and 6th has Autoplay (task 436). The project site and CREDITS that reached main after v0.0.59 (tasks 432, 433) are part of this version.
+
+#### 1. Linux release packages (task 442)
+- The Release workflow splits into version, Windows x86, a Linux matrix and publish jobs, publishing a tag's release once all three platforms succeed.
+- Linux builds in Debian 12 containers (`i386/debian` for x86) with libstdc++ and libgcc linked statically. `scripts/package_release.sh` checks the executable's width, that it links only the C runtime and the glibc 2.36 limit, then makes the tar.gz.
+- Getting the whole workflow to pass for the first time also fixed the following:
+  - GCC 12's libstdc++ false-positive warnings are not errors on GCC 12.
+  - The Windows job configures with the default generator rather than the `Visual Studio 18 2026` preset the runner lacks.
+  - The Windows VFS probe's cleanup no longer dies on an exception while removing an open trace file.
+- CI gains a linux-x86 job and the audio headers, the site's download page lists per-platform packages, and the Windows zip carries `THIRD_PARTY_NOTICES.md` and `CREDITS.md`.
+
+#### 2. 6th's Remember 1st (tasks 434, 437 to 440)
+- A profile lists its launcher's child executables, a child run keeps the launcher's guest root, and the Windows launcher probe follows the children in turn.
+- Before ending with 0x100, 6th hands its credits to 1st's `bookkeeping.ini`: it writes `FreePlay`, calls `DeleteFileA`, then writes `Coins`, `PlayCoins`, `ContinueCoins` and `GameLevel`.
+  - Linux gains `DeleteFileA`; an original image file it deletes is marked in the overlay's `.re2dj-deleted`.
+  - Overlay paths ignore case as NTFS does.
+- After one game 1st ends in this order, and the launcher runs 6th again: clean-up → `IDirectDraw4::RestoreDisplayMode` → `WM_DESTROY` → `PostQuitMessage` → `WM_QUIT` → exit code 0x105. `RestoreDisplayMode`, `PostQuitMessage`, `WM_QUIT` from `PeekMessageA` and `DefWindowProcA(WM_DESTROY)` were added for it.
+- A Linux run that left a guest thread behind no longer dies with SIGSEGV during static destruction; the host services are released inside `main`.
+
+#### 3. 6th Autoplay (task 436)
+- `EZ2DJ6th.EXE` (`0x411f6d44`) keeps its autoplay flag at `[0x008896ac]`, with 5th's structure.
+- The bundled 1st (`0x411bbf5c`) plays its demo in dedicated scenes and has no switchable variable.
+- A profile's `game_controls` became a per-build list, so only the running executable's declaration is armed. The Linux OSD gains the Autoplay toggle, and Windows launcher children receive the OSD information and address.
+
+#### 4. Also
+- A Linux run no longer stops when Wayland refuses to place the window (task 435).
+- The EZ2DJ turntable `step` defaults to 2, as in the example INI (task 441).
+- The project site and its credits page were added (tasks 432, 433).
+
+#### 5. Validation
+- The Release workflow passes the Release build, tests and packaging for Windows x86, Linux x86-64 and Linux x86, and all 5,934 unit checks pass (Linux x64).
+- Both CI-built Linux packages ran 6th, and the user confirmed on Linux 6th → Remember 1st → back to 6th, and 6th's Autoplay.
+
+---
+
 ## v0.0.59 (2026-09-30)
 
 ### 한국어

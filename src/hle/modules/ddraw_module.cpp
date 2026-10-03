@@ -383,6 +383,17 @@ bool DirectDraw7EnumSurfaces(const ImportCall& call, ImportReturn* result, std::
     return Succeed(result, dx::kDdOk, error);
 }
 
+// IDirectDraw7::RestoreDisplayMode(this): DD_OK. re2DJ never changes the
+// host's display mode, so there is nothing to restore (task 438).
+bool DirectDraw7RestoreDisplayMode(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (MethodProcess(call, result, 1, kDirectDrawObject, error) == nullptr)
+    {
+        return false;
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
 // IDirectDraw7::RestoreAllSurfaces(this): no surface of the facade is ever
 // lost, and with nothing lost Windows 11 answers DD_OK and leaves the last
 // error alone.
@@ -540,7 +551,7 @@ constexpr com::Method kDirectDraw7Methods[] = {
     {"GetScanLine", 2, &UnimplementedExport},
     {"GetVerticalBlankStatus", 2, &UnimplementedExport},
     {"Initialize", 2, &UnimplementedExport},
-    {"RestoreDisplayMode", 1, &UnimplementedExport},
+    {"RestoreDisplayMode", 1, &DirectDraw7RestoreDisplayMode},
     {"SetCooperativeLevel", 3, &DirectDraw7SetCooperativeLevel},
     {"SetDisplayMode", 6, &DirectDraw7SetDisplayMode},
     {"WaitForVerticalBlank", 3, &UnimplementedExport},

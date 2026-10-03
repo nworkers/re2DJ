@@ -41,7 +41,7 @@ struct ButtonBinding
 };
 ```
 
-턴테이블 네 항목과 `step`(기본 4)도 같은 방식으로 기본값을 갖는다. 값은 `config/ez2dj-io.example.ini`와 `config/ez2dancer-io.example.ini`의 현재 내용을 그대로 옮긴다.
+턴테이블 네 항목과 `step`(기본 4, 작업 441에서 2)도 같은 방식으로 기본값을 갖는다. 값은 `config/ez2dj-io.example.ini`와 `config/ez2dancer-io.example.ini`의 현재 내용을 그대로 옮긴다.
 
 #### 2. `Initialize`는 경로를 선택 인자로 받는다
 
@@ -119,7 +119,7 @@ The CLI normalizes `--io-config` to an absolute path and ignores it, with a note
 
 ### Design
 
-**1. Defaults live in the binding table.** Each binding entry gains a default key *name* rather than a value, so defaults pass through `ParseKey` exactly as INI values do and there is one interpretation path. The turntable entries and `step` (default 4) gain defaults the same way, copied from today's `config/ez2dj-io.example.ini` and `config/ez2dancer-io.example.ini`.
+**1. Defaults live in the binding table.** Each binding entry gains a default key *name* rather than a value, so defaults pass through `ParseKey` exactly as INI values do and there is one interpretation path. The turntable entries and `step` (default 4, 2 from task 441) gain defaults the same way, copied from today's `config/ez2dj-io.example.ini` and `config/ez2dancer-io.example.ini`.
 
 **2. `Initialize` takes the path as optional.** With no path every entry is its default and initialization succeeds. With a path, each entry is looked up: **an entry missing from the INI keeps its default** instead of falling back to `NONE`, an entry written as `NONE` unbinds that one key, and an unknown key name is still an error. "Missing" is distinguished by passing a marker no key name can produce as `GetPrivateProfileStringA`'s default, decided in one place inside `ReadKeyboardKeyBinding`, which gains a `bool* present` output.
 

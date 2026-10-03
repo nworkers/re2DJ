@@ -80,6 +80,11 @@ void CheckDefaults(re2dj::test::Context& context)
         const auto found = example.find("turntables." + std::string(binding.name));
         RE2DJ_CHECK(context, found != example.end() && found->second == binding.default_key);
     }
+    // The step too, which the Linux host takes from the default alone.
+    const auto step = example.find("turntables.step");
+    RE2DJ_CHECK(context, step != example.end() &&
+                             step->second == std::to_string(input::kEz2DjDefaultTurntableStep));
+    RE2DJ_CHECK_EQ(context, input::kEz2DjDefaultTurntableStep, std::uint8_t{2});
 }
 
 // The EZ2Dancer bindings, shared by both hosts, match its example

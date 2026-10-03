@@ -10,6 +10,7 @@
 
 #include "facade_com.h"
 #include "gdi_bitmaps.h"
+#include "gdi_text.h"
 #include "re2dj/hle/gdi_raster.h"
 #include "re2dj/hle/guest_gdi.h"
 #include "re2dj/hle/guest_process.h"
@@ -401,9 +402,6 @@ GuestExportDescriptor MakeExport(std::string name, std::uint32_t argument_count,
 constexpr ResolveOnlyExport kGdi32ResolveOnly[] = {
     {"SelectPalette", 3}, {"CreatePalette", 1},
     {"BitBlt", 9},
-    {"CreateDIBSection", 6},
-    // EZ2DJ 1st's imports (Task 405).
-    {"ExtTextOutA", 8},
 };
 
 }  // namespace
@@ -439,6 +437,10 @@ GuestModuleDescriptor MakeGdi32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("SelectObject", 2, &SelectObject));
     descriptor.exports.push_back(MakeExport("StretchBlt", 11, &StretchBlt));
     descriptor.exports.push_back(MakeExport("DeleteDC", 1, &DeleteDC));
+    // Bitmaps the guest builds in memory, and text at a point (Task 434).
+    descriptor.exports.push_back(MakeExport("CreateDIBSection", 6, &CreateDIBSection));
+    descriptor.exports.push_back(MakeExport("CreateDIBitmap", 6, &CreateDIBitmap));
+    descriptor.exports.push_back(MakeExport("ExtTextOutA", 8, &ExtTextOutA));
     AddResolveOnlyExports(&descriptor, kGdi32ResolveOnly);
     return descriptor;
 }

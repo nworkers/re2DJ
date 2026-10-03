@@ -36,6 +36,9 @@ struct GuestBitmap
     // DeleteObject came while a DC had the bitmap selected: it goes when
     // deselected, as on Windows.
     bool delete_pending = false;
+    // A device-dependent bitmap (CreateDIBitmap): its pixels are the
+    // facade's own, and GetObjectA reports no bits, as Windows does.
+    bool device_dependent = false;
     // A DirectDraw surface's true-color plane, shared with the surface, when
     // it has one: GDI drawing writes the same pixels there at 8 bits per
     // channel, so what reaches the surface at 24 bits keeps them (see
@@ -54,6 +57,11 @@ struct GuestDc
     std::uint32_t background_color = 0x00FFFFFFU;
     // TRANSPARENT (1) or OPAQUE (2).
     std::uint32_t background_mode = 2;
+    // The window this is the display DC of (GetDC), or 0 for a memory DC.
+    // A window DC has no bitmap: drawing through it is not modelled.
+    std::uint32_t window = 0;
+    // GetDC gave the window DC out and ReleaseDC has not taken it back.
+    bool held = false;
 };
 
 class GuestGdi
@@ -67,6 +75,9 @@ public:
     static constexpr std::uint32_t kDefaultBitmap = 0x0085000FU;
 
     std::uint32_t AddDc(GuestDc dc = {});
+    // Keeps a DC under a handle given elsewhere: a window's display DC,
+    // whose handle USER allotted with the window.
+    void PutDc(std::uint32_t handle, GuestDc dc);
     GuestDc* FindDc(std::uint32_t handle);
     std::uint32_t AddBitmap(GuestBitmap bitmap);
     GuestBitmap* FindBitmap(std::uint32_t handle);

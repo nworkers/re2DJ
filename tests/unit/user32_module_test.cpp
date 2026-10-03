@@ -39,10 +39,10 @@ void CheckDescriptor(re2dj::test::Context& context)
     {
         RE2DJ_CHECK_EQ(context, descriptor.aliases[0], std::string("user32"));
     }
-    // Nineteen implemented exports from GetActiveWindow to DispatchMessageA,
-    // then 18 resolve-only exports.
-    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{41});
-    if (descriptor.exports.size() != 41)
+    // The implemented exports from GetActiveWindow to wsprintfA, then 15
+    // resolve-only exports.
+    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{42});
+    if (descriptor.exports.size() != 42)
     {
         return;
     }
@@ -231,6 +231,20 @@ void CheckThreadTimer(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, services.U32(kMsg + 8), first);
     RE2DJ_CHECK_EQ(context, call("TranslateMessage", {kMsg}), 0U);
 
+    // PostQuitMessage: WM_QUIT with the exit code comes before a due timer,
+    // stays with PM_NOREMOVE, and goes once taken (design 439).
+    services.SetLastError(1234);
+    RE2DJ_CHECK_EQ(context, call("PostQuitMessage", {0x105}), 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 0}), 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg), 0U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 4), 0x0012U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 8), 0x105U);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 1}), 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 4), 0x0012U);
+    RE2DJ_CHECK_EQ(context, call("PeekMessageA", {kMsg, 0, 0, 0, 0}), 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kMsg + 4), 0x0113U);
+
     services.guest_function = [](const std::vector<std::uint32_t>&) { return 7U; };
     services.guest_calls.clear();
     clock.tick_ms = 1060;
@@ -354,6 +368,11 @@ void CheckShowWindow(re2dj::test::Context& context)
     }
     RE2DJ_CHECK(context, messages == expected);
     RE2DJ_CHECK_EQ(context, services.Process()->user().active_window(), hidden);
+    // WM_DESTROY passed on by a window procedure does nothing and gives 0.
+    services.SetLastError(12345);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "DefWindowProcA", {hidden, 2, 0, 0}).eax,
+                   0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 12345U);
     RE2DJ_CHECK_EQ(context, services.Process()->user().focus_window(), hidden);
     services.SetLastError(12345);
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ShowWindow", {hidden + 4, 5}).eax, 0U);
@@ -666,7 +685,7 @@ void CheckStockObjects(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetStockObject", {0}).eax, 0x00900010U);
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetStockObject", {9}).eax, 0U);
     RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetStockObject", {20}).eax, 0U);
-    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{17});
+    RE2DJ_CHECK_EQ(context, descriptor.exports.size(), std::size_t{18});
 }
 
 // ShowCursor counts from 0 as Windows 11 does with a mouse installed.

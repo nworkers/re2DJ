@@ -634,6 +634,8 @@ void CheckDirectX6Device(re2dj::test::Context& context)
 
     // No facade surface is ever lost.
     RE2DJ_CHECK_EQ(context, call("IDirectDraw4::RestoreAllSurfaces", {direct_draw}), dx::kDdOk);
+    // Nothing to restore: the host's display mode is never changed.
+    RE2DJ_CHECK_EQ(context, call("IDirectDraw4::RestoreDisplayMode", {direct_draw}), dx::kDdOk);
 
     // DirectX 6 vertex buffers: IDirect3D3::CreateVertexBuffer's aggregation
     // check, then DirectX 7's buffer with IDirect3DVertexBuffer's vtable.
@@ -1440,6 +1442,7 @@ void CheckEnumSurfaces(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, seen.size(), std::size_t{2});
 
     RE2DJ_CHECK_EQ(context, call("IDirectDraw7::RestoreAllSurfaces", {direct_draw}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, call("IDirectDraw7::RestoreDisplayMode", {direct_draw}), dx::kDdOk);
 }
 
 // Drawing: a whole-target clear of the presented surface fills its pixels

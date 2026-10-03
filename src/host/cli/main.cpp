@@ -29,6 +29,7 @@
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/present_sync.h"
+#include "re2dj/hle/hex_bytes.h"
 #include "re2dj/logging/logging.h"
 #include "re2dj/target/target_profile.h"
 #include "re2dj/version.h"
@@ -239,9 +240,13 @@ bool FindChdImage(const std::filesystem::path& input,
     return true;
 }
 
+// Stages the profile's executable and its launcher's children out of the CHD
+// into the temporary directory a run starts them from: the Windows product's
+// real CreateProcessA finds a child, and its current directory, on disk.
 bool PrepareChdStaging(const re2dj::storage::Fat32Volume& volume,
                        std::string_view profile_id,
                        const std::string& executable_relative_path,
+                       const std::vector<std::string>& child_executable_paths,
                        std::filesystem::path* staging_root,
                        std::string* error)
 {
@@ -281,13 +286,24 @@ bool PrepareChdStaging(const re2dj::storage::Fat32Volume& volume,
         *error = executable_relative_path + ": " + materialize_error;
         return false;
     }
-    if (profile_id == "ez2dj6th")
+    for (const std::string& child_relative : child_executable_paths)
     {
-        const std::string child_rel = "EZ2DJ/EZ2DJ6th.EXE";
-        const std::filesystem::path child_output = root / "EZ2DJ" / "EZ2DJ6th.EXE";
-        if (!volume.MaterializeFile(child_rel, child_output, &materialize_error))
+        re2dj::storage::GuestPath child_parsed;
+        if (!re2dj::storage::ParseGuestPath(child_relative, &child_parsed) ||
+            child_parsed.kind != re2dj::storage::GuestPathKind::kRelative ||
+            !re2dj::storage::NormalizeGuestPath(&child_parsed) || child_parsed.components.empty())
         {
-            *error = child_rel + ": " + materialize_error;
+            *error = "invalid CHD child executable path: " + child_relative;
+            return false;
+        }
+        std::filesystem::path child_output = root;
+        for (const std::string& component : child_parsed.components)
+        {
+            child_output /= component;
+        }
+        if (!volume.MaterializeFile(child_relative, child_output, &materialize_error))
+        {
+            *error = child_relative + ": " + materialize_error;
             return false;
         }
     }
@@ -345,8 +361,15 @@ void PrintUsage()
         "  --hold-window       Linux: keep the guest's window open after the run stops,\n"
         "                      until it is closed.\n"
         "  --guest-executable <path>\n"
-        "                      Linux: run this CHD executable instead of the\n"
-        "                      profile's own (for example EZ2DJ/EZ2DJ6th.EXE).\n"
+        "                      Run this CHD executable instead of the profile's\n"
+        "                      own (for example EZ2DJ/EZ2DJ6th.EXE). One below the\n"
+        "                      profile executable's directory keeps that\n"
+        "                      directory as its root, as a launcher's child does.\n"
+        "  --guest-startup-reserved <hex>\n"
+        "                      The STARTUPINFO reserved bytes the executable\n"
+        "                      starts with, as a launcher gives its child.\n"
+        "  --guest-current-directory <path>\n"
+        "                      Linux: the guest path the executable starts in.\n"
         "  --call-limit <n>   Linux: stop the run after n guest API calls, for\n"
         "                      diagnostics and regression runs. By default the run\n"
         "                      goes on until the guest exits or its window is closed.\n"
@@ -766,18 +789,27 @@ std::unique_ptr<re2dj::platform::linux::LinuxHostProcessLauncher> g_linux_proces
 std::vector<std::string> g_child_base_arguments;
 #endif
 
-// Keeps a Linux run's window on screen after everything else is reported,
-// whichever way main returns, when --hold-window asked for it.
-struct LinuxWindowHold
+// Ends a Linux run's host services whichever way main returns: keeps the
+// window on screen after everything else is reported when --hold-window asked
+// for it, then releases the services before main returns. Left to static
+// destruction they went after state of other translation units they still
+// use, and a run whose guest left a thread behind (Remember 1st's sound
+// thread) ended with SIGSEGV after ExitProcess (task 440).
+struct LinuxHostLifetime
 {
-    bool armed = false;
-    ~LinuxWindowHold()
+    bool hold_window = false;
+    ~LinuxHostLifetime()
     {
-        if (armed && g_linux_presentation != nullptr && g_linux_presentation->opened())
+        if (hold_window && g_linux_presentation != nullptr && g_linux_presentation->opened())
         {
             LogInfo("host window     : kept open until it is closed (--hold-window)");
             g_linux_presentation->HoldUntilClosed();
         }
+#if defined(RE2DJ_LINUX_HOST_AUDIO)
+        g_linux_process_launcher.reset();
+        g_linux_audio.reset();
+#endif
+        g_linux_presentation.reset();
     }
 };
 
@@ -832,6 +864,14 @@ bool RunLinuxOriginal(const Options& options,
              "Target Profile : " + profile.id,
              "Executable : " + std::filesystem::path(profile.executable_relative_path).filename().string()});
         environment.presentation = g_linux_presentation.get();
+        // Autoplay only for the exact build it was confirmed in; a launcher's
+        // child picks by its own executable (task 436).
+        environment.autoplay_flag_rva = re2dj::target::ArmedAutoplayFlagRva(profile.game_controls, image_info.timestamp);
+        LogInfo("game controls   : autoplay %s (build 0x%08x)",
+                environment.autoplay_flag_rva != 0 ? "armed"
+                : profile.game_controls.empty()    ? "not declared"
+                                                   : "declared for another build",
+                static_cast<unsigned>(image_info.timestamp));
         // The colour depth: --color-depth, or the profile's default. The OSD
         // may change it while the guest runs.
         const re2dj::graphics::ColorDepth color_depth =
@@ -869,8 +909,12 @@ bool RunLinuxOriginal(const Options& options,
         {
             environment.files.chd_image = chd_image;
             environment.files.hdd_directory = hdd_directory;
+            // The product's directory: a launcher's child keeps the
+            // launcher's (task 434).
             environment.files.chd_root =
-                std::filesystem::path(profile.executable_relative_path).parent_path().generic_string();
+                profile.working_directory_relative_path.empty()
+                    ? std::filesystem::path(profile.executable_relative_path).parent_path().generic_string()
+                    : profile.working_directory_relative_path;
             environment.files.guest_root = re2dj::target::GuestRootPath(profile);
             environment.files.overlay_root = std::filesystem::current_path() / "overlays" / profile.id;
         }
@@ -998,15 +1042,15 @@ bool ParseOptions(int argc, char** argv, Options* options)
             {
                 return false;
             }
-#if defined(__linux__)
             if (argument == "--guest-startup-reserved")
             {
-                if (!re2dj::platform::linux::DecodeHex(value, &options->guest_startup_reserved))
+                if (!re2dj::hle::DecodeHexBytes(value, &options->guest_startup_reserved))
                 {
                     LogError("--guest-startup-reserved takes whole bytes in hex");
                     return false;
                 }
             }
+#if defined(__linux__)
             else
             {
                 options->guest_exit_code_fd = std::atoi(value.c_str());
@@ -1342,8 +1386,10 @@ int RunChdTarget(const Options& options,
 
     re2dj::target::TargetProfile profile = built_in.profile;
     profile.executable_relative_path = std::string(executable_path);
-    profile.working_directory_relative_path =
-        std::filesystem::path(profile.executable_relative_path).parent_path().generic_string();
+    // A launcher's child below the profile executable's directory keeps that
+    // directory as its root (task 434).
+    profile.working_directory_relative_path = re2dj::target::ExecutableWorkingDirectory(
+        built_in.profile.executable_relative_path, profile.executable_relative_path);
     profile.detected = false;
 
     LogInfo("chd image   : %s", chd_path.string().c_str());
@@ -1400,8 +1446,12 @@ int RunChdTarget(const Options& options,
 
 #if defined(_WIN32)
     std::filesystem::path staging_root;
-    if (!PrepareChdStaging(
-            *volume, profile.id, profile.executable_relative_path, &staging_root, &error))
+    if (!PrepareChdStaging(*volume,
+                           profile.id,
+                           profile.executable_relative_path,
+                           profile.run_defaults.child_executable_paths,
+                           &staging_root,
+                           &error))
     {
         LogError("cannot stage CHD executable: %s", error.c_str());
         return kExitHddError;
@@ -1445,6 +1495,16 @@ int RunChdTarget(const Options& options,
     run_options.audio_volume_trace = options.audio_volume_trace;
     run_options.io_config = NormalizeIoConfigForProfile(
         options.io_config, run_options.profile_defaults, profile.id);
+    // A launcher's child started on its own (task 434): it gets the reserved
+    // bytes the launcher would give it, and runs detached rather than
+    // followed, since it starts no child of the profile's.
+    run_options.startup_reserved = options.guest_startup_reserved;
+    if (!options.guest_executable.empty() &&
+        profile.executable_relative_path != built_in.profile.executable_relative_path)
+    {
+        run_options.profile_defaults.follow_child_process = false;
+        run_options.profile_defaults.run_detached = true;
+    }
     const int result = re2dj::platform::windows::RunOriginalProcess(run_options, &error);
     if (result < 0)
     {
@@ -1455,8 +1515,12 @@ int RunChdTarget(const Options& options,
 #else
 #if defined(__linux__)
     std::filesystem::path staging_root;
-    if (!PrepareChdStaging(
-            *volume, profile.id, profile.executable_relative_path, &staging_root, &error))
+    if (!PrepareChdStaging(*volume,
+                           profile.id,
+                           profile.executable_relative_path,
+                           profile.run_defaults.child_executable_paths,
+                           &staging_root,
+                           &error))
     {
         LogError("cannot stage CHD executable: %s", error.c_str());
         return kExitHddError;
@@ -1624,8 +1688,8 @@ int main(int argc, char** argv)
     }
 #endif
 #if defined(__linux__)
-    LinuxWindowHold window_hold;
-    window_hold.armed = options.hold_window;
+    LinuxHostLifetime host_lifetime;
+    host_lifetime.hold_window = options.hold_window;
 #endif
     if (options.show_version)
     {

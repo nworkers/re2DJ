@@ -17,6 +17,7 @@
 
 #include <spdlog/logger.h>
 
+#include "game_controls.h"
 #include "native_in_process_runner.h"
 #include "native_kernel32_diagnostic.h"
 #include "native_legacy_io.h"
@@ -391,6 +392,8 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
     *result = {};
     input::LegacyIoTrapPolicy legacy_io = environment.legacy_io;
     legacy_io.image_base = context.kernel32.image_base();
+    ArmAutoplayFlag(environment.autoplay_flag_rva == 0 ? 0
+                                                       : context.kernel32.image_base() + environment.autoplay_flag_rva);
     SetNativeLegacyIo(legacy_io, environment.presentation == nullptr ? nullptr : &environment.presentation->Input());
     const bool completed = RunConfiguredNativePeInProcess(file_bytes,
                                                           image_info,

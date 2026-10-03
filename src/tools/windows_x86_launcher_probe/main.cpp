@@ -28,6 +28,7 @@
 #include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/present_sync.h"
 #include "re2dj/hle/hardlock/device.h"
+#include "re2dj/hle/hex_bytes.h"
 #include "re2dj/logging/logging.h"
 #include "re2dj/hle/hardlock/device_material.h"
 #include "re2dj/hle/hardlock/handshake_response.h"
@@ -182,7 +183,7 @@ void PrintDiagnosticError(const std::string& error)
 
 void PrintUsage()
 {
-    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics] [--present-sync <vsync|immediate|adaptive>] [--color-depth <16|32>] [--guest-wait-trace]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--image-dump [path]] [--image-dump-delay <milliseconds>] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
+    std::printf("Usage: re2dj_windows_x86_launcher_probe --hdd <directory> [--chd <image>] [--target <id>] [--target-executable <relative-path>] [--startup-reserved <hex>] [--follow-child] [--software-breakpoint] [--instruction-trace <max-steps>] [--inject-runtime [path]] [--probe-handoff|--hle-command-line|--hle-windows-directory|--hle-vfs [--hle-dynamic-vfs]|--hle-display-mode|--hle-d3d3 [--fullscreen] [--graphics-draw-diagnostics] [--present-sync <vsync|immediate|adaptive>] [--color-depth <16|32>] [--guest-wait-trace]|--hle-directsound [--audio-gain-db <-24..18>] [--demo-volume <0..3>] [--audio-volume-trace]|--hle-io-ports [--hle-io-port-range] [--io-config <path>]|--hle-message-box|--run-detached|--d3d-init-trace|--ksnd-load-trace|--device-mock-lptdi [--device-mock-lptdi-path-prefix <path>] [--device-mock-wts-console-session] [--device-mock-hardlock-450-response <12-hex-digits>] [--device-mock-hardlock-44c-tail <4-hex-digits>] [--hardlock-device] [--hardlock-transform-map <path>] [--hardlock-transform-inputs] [--hardlock-transform-input-dump <path>] [--hardlock-reject-function <hex>] [--hardlock-descriptor-dump <path>]|--device-mock-lptdi-ioctl-success|--device-mock-lptdi-ioctl-full-success|--device-mock-lptdi-response-profile <path>|--device-mock-lptdi-target-state <16-hex-digits>|--lptdi-post-ioctl-trace <max-steps> [--lptdi-post-ioctl-code <code>]|--probe-exit-process|--break-exit-process|--scan-fault-references|--field-reference-scan <hex-constant>|--field-write-watch <hex-address>|--code-window <hex-address>[:<hex-length>]|--slot-writer-trace|--null-context-object-source-trace|--null-context-field-writer-early-trace|--null-context-field-writer-trace|--null-context-field-access-trace|--null-context-field-reference-execution-trace|--null-context-object-state-trace|--null-context-object-reference-scan|--null-context-entry-trace|--null-context-allocation-trace|--api-trace] [--image-dump [path]] [--image-dump-delay <milliseconds>] [--diagnostic-idle-timeout <milliseconds>] [--trace]\n");
 }
 
 bool WriteRemoteU32(HANDLE process, std::uintptr_t address, std::uint32_t value, std::string* error)
@@ -8504,9 +8505,36 @@ bool IsExecutableNamed(const std::filesystem::path& path, const char* name)
     return _stricmp(path.filename().string().c_str(), name) == 0;
 }
 
+// Whether the process a debug event reports is one of the launcher's children
+// staged under root, by file identity so that the observed path's form
+// (a "\\?\" path, or a differently cased one) does not matter.
+bool IsStagedChildExecutable(const std::filesystem::path& observed_path,
+                             const std::filesystem::path& root,
+                             const std::vector<std::string>& child_executable_paths,
+                             std::filesystem::path* staged_path)
+{
+    for (const std::string& child_relative : child_executable_paths)
+    {
+        const std::filesystem::path candidate = root / std::filesystem::path(child_relative);
+        std::error_code code;
+        if (std::filesystem::equivalent(observed_path, candidate, code) && !code)
+        {
+            *staged_path = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Follows the launcher's children in turn (task 434): each process it creates
+// from child_executable_paths is prepared with options and resumed, and its
+// exit recorded; the run ends when the launcher itself ends with no child
+// running. child holds the last child prepared, its handles closed by the
+// system with its exit event.
 bool WaitForBootstrapChild(HANDLE parent_process,
                            DWORD parent_process_id,
-                           const std::filesystem::path& child_executable,
+                           const std::filesystem::path& root,
+                           const std::vector<std::string>& child_executable_paths,
                            const re2dj::tools::windows_x86_launcher_probe::BootstrapChildHandoffOptions& options,
                            std::uint32_t idle_timeout_ms,
                            re2dj::tools::windows_x86_launcher_probe::BootstrapChildHandoffResult* child,
@@ -8520,8 +8548,10 @@ bool WaitForBootstrapChild(HANDLE parent_process,
         }
         return false;
     }
-    const std::uint64_t start_tick = GetTickCount64();
+    std::uint64_t start_tick = GetTickCount64();
     bool child_prepared = false;
+    bool any_child_prepared = false;
+    bool parent_exited = false;
     for (;;)
     {
         DEBUG_EVENT event = {};
@@ -8534,7 +8564,8 @@ bool WaitForBootstrapChild(HANDLE parent_process,
             {
                 if (GetTickCount64() - start_tick >= wait_ms)
                 {
-                    *error = "bootstrap did not create EZ2DJ6th.EXE before timeout";
+                    *error = any_child_prepared ? "bootstrap did not end or create another child before timeout"
+                                                : "bootstrap did not create a child before timeout";
                     return false;
                 }
                 continue;
@@ -8546,10 +8577,11 @@ bool WaitForBootstrapChild(HANDLE parent_process,
         if (event.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT)
         {
             std::filesystem::path observed_path;
+            std::filesystem::path staged_path;
             const bool path_known = QueryDebugProcessImagePath(event, &observed_path);
-            const bool is_target_child = path_known &&
-                                         IsExecutableNamed(observed_path,
-                                                           "EZ2DJ6TH.EXE");
+            const bool is_target_child =
+                path_known &&
+                IsStagedChildExecutable(observed_path, root, child_executable_paths, &staged_path);
             RecordDiagnostic(
                 "{\"event\":\"child_process_created\",\"pid\":%u,\"path\":\"%s\",\"target\":%s}",
                 static_cast<unsigned>(event.dwProcessId),
@@ -8557,8 +8589,9 @@ bool WaitForBootstrapChild(HANDLE parent_process,
                 is_target_child ? "true" : "false");
             if (is_target_child && !child_prepared)
             {
+                *child = {};
                 if (!re2dj::tools::windows_x86_launcher_probe::PrepareBootstrapChildProcess(
-                        event, child_executable, options, child, error))
+                        event, staged_path, options, child, error))
                 {
                     if (event.u.CreateProcessInfo.hFile != nullptr)
                     {
@@ -8576,11 +8609,16 @@ bool WaitForBootstrapChild(HANDLE parent_process,
                     return false;
                 }
                 child_prepared = true;
+                any_child_prepared = true;
                 RecordDiagnostic(
-                    "{\"event\":\"child_runtime_prepared\",\"pid\":%u,\"image_base\":\"0x%08x\",\"runtime_base\":\"0x%08x\"}",
+                    "{\"event\":\"child_runtime_prepared\",\"pid\":%u,\"path\":\"%s\",\"image_base\":\"0x%08x\",\"runtime_base\":\"0x%08x\""
+                    ",\"executable_timestamp\":\"0x%08x\",\"autoplay_armed\":%s}",
                     static_cast<unsigned>(child->process_id),
+                    staged_path.generic_string().c_str(),
                     static_cast<unsigned>(child->image_base),
-                    static_cast<unsigned>(child->runtime_base));
+                    static_cast<unsigned>(child->runtime_base),
+                    static_cast<unsigned>(child->image_info.timestamp),
+                    child->autoplay_flag_rva != 0 ? "true" : "false");
                 continue;
             }
             if (event.u.CreateProcessInfo.hFile != nullptr)
@@ -8612,12 +8650,43 @@ bool WaitForBootstrapChild(HANDLE parent_process,
                     *error = "cannot continue bootstrap child exit event";
                     return false;
                 }
-                return true;
+                // The system closes the child's process and thread handles
+                // with this continue; the launcher now ends or starts its
+                // next child, and the idle timeout counts from here.
+                child->process = nullptr;
+                child->primary_thread = nullptr;
+                child_prepared = false;
+                start_tick = GetTickCount64();
+                if (parent_exited)
+                {
+                    return true;
+                }
+                continue;
             }
-            if (event.dwProcessId == parent_process_id && !child_prepared)
+            if (event.dwProcessId == parent_process_id)
             {
-                *error = "bootstrap exited without creating EZ2DJ6TH.EXE";
-                return false;
+                if (!any_child_prepared)
+                {
+                    *error = "bootstrap exited without creating a child";
+                    return false;
+                }
+                RecordDiagnostic(
+                    "{\"event\":\"bootstrap_process_boundary\",\"reason\":\"exit\",\"pid\":%u,\"code\":\"0x%08x\"}",
+                    static_cast<unsigned>(event.dwProcessId),
+                    static_cast<unsigned>(event.u.ExitProcess.dwExitCode));
+                if (ContinueDebugEvent(event.dwProcessId,
+                                       event.dwThreadId,
+                                       DBG_CONTINUE) == FALSE)
+                {
+                    *error = "cannot continue bootstrap exit event";
+                    return false;
+                }
+                parent_exited = true;
+                if (!child_prepared)
+                {
+                    return true;
+                }
+                continue;
             }
         }
         if (event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT &&
@@ -8645,6 +8714,9 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     std::filesystem::path chd_path;
     std::string target_id = "ez2dj1stse";
     std::string target_executable_path;
+    // STARTUPINFO reserved bytes for the original process, as a launcher
+    // gives its child (task 434).
+    std::vector<std::uint8_t> startup_reserved;
     bool trace = false;
     bool software_breakpoint = false;
     bool follow_child_process = false;
@@ -8758,6 +8830,14 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         else if (option == "--target-executable" && index + 1 < argc)
         {
             target_executable_path = argv[++index];
+        }
+        else if (option == "--startup-reserved" && index + 1 < argc)
+        {
+            if (!re2dj::hle::DecodeHexBytes(argv[++index], &startup_reserved))
+            {
+                LogLauncherError("{\"error\":\"--startup-reserved takes whole bytes in hex\"}\n");
+                return 2;
+            }
         }
         else if (option == "--follow-child")
         {
@@ -9629,8 +9709,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         }
         explicit_target = built_in->profile;
         explicit_target.executable_relative_path = target_executable_path;
-        explicit_target.working_directory_relative_path =
-            std::filesystem::path(target_executable_path).parent_path().generic_string();
+        // A launcher's child below the profile executable's directory keeps
+        // that directory as its root (task 434).
+        explicit_target.working_directory_relative_path = re2dj::target::ExecutableWorkingDirectory(
+            built_in->profile.executable_relative_path, target_executable_path);
         explicit_target.detected = false;
         target = &explicit_target;
     }
@@ -9942,6 +10024,11 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
     command.push_back(L'\0');
     STARTUPINFOW startup = {};
     startup.cb = sizeof(startup);
+    if (!startup_reserved.empty())
+    {
+        startup.cbReserved2 = static_cast<WORD>(startup_reserved.size());
+        startup.lpReserved2 = startup_reserved.data();
+    }
     PROCESS_INFORMATION child = {};
     const DWORD debug_flags = follow_child_process ? DEBUG_PROCESS : DEBUG_ONLY_THIS_PROCESS;
     if (CreateProcessW(executable.c_str(),
@@ -10138,11 +10225,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         }
         RecordDiagnostic(
             "{\"event\":\"osd_controls\",\"target_id_written\":%s,\"autoplay_declared\":%s"
-            ",\"build_timestamp\":\"0x%08x\",\"executable_timestamp\":\"0x%08x\""
+            ",\"executable_timestamp\":\"0x%08x\""
             ",\"autoplay_armed\":%s,\"autoplay_written\":%s,\"error\":\"%s\"}",
             target_id_written ? "true" : "false",
-            target->game_controls.autoplay_flag_rva != 0 ? "true" : "false",
-            static_cast<unsigned>(target->game_controls.build_timestamp),
+            target->game_controls.empty() ? "false" : "true",
             static_cast<unsigned>(info.timestamp),
             autoplay_rva != 0 ? "true" : "false",
             autoplay_written ? "true" : "false",
@@ -11965,6 +12051,7 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         child_follow_options.runtime_log_path.replace_extension(".child.runtime.log");
         child_follow_options.guest_root = profile_guest_root;
         child_follow_options.profile_id = target->id;
+        child_follow_options.game_controls = target->game_controls;
         child_follow_options.device_path_prefix = profile_device_mock_path_prefix;
         child_follow_options.dynamic_vfs_resolver = child_dynamic_vfs_resolver;
         child_follow_options.device_mock_lptdi = child_device_mock_lptdi;
@@ -12012,11 +12099,10 @@ int re2dj::platform::windows::RunOriginalProcessLauncherCommand(int argc, char**
         {
             return false;
         }
-        const std::filesystem::path child_executable =
-            executable.parent_path() / L"EZ2DJ6th.EXE";
         return WaitForBootstrapChild(child.hProcess,
                                      child.dwProcessId,
-                                     child_executable,
+                                     root.root(),
+                                     target->run_defaults.child_executable_paths,
                                      child_follow_options,
                                      diagnostic_idle_timeout_ms,
                                      &child_follow_result,

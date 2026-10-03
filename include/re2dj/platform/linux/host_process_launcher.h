@@ -21,10 +21,6 @@ inline constexpr const char* kGuestCurrentDirectoryOption = "--guest-current-dir
 inline constexpr const char* kGuestStartupReservedOption = "--guest-startup-reserved";
 inline constexpr const char* kGuestExitCodeFdOption = "--guest-exit-code-fd";
 
-// Bytes as lowercase hex, and back; false for text that is not whole bytes.
-std::string EncodeHex(const std::vector<std::uint8_t>& bytes);
-bool DecodeHex(const std::string& text, std::vector<std::uint8_t>* bytes);
-
 // Starts each child guest process as another run of this program, with the
 // parent's own options and the child's request after them. The child writes
 // its exit code to a pipe, since a host exit status holds only 8 bits.

@@ -1,5 +1,6 @@
 #include "re2dj/target/target_profile.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -413,6 +414,27 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         0,
         true,
         false);
+    // 6th's launcher starts the game and, for Remember 1st, the bundled 1st
+    // Tracks (task 434); no other profile has a launcher.
+    {
+        const auto* sixth = re2dj::target::FindBuiltInTargetProfileById("ez2dj6th");
+        RE2DJ_CHECK(context, sixth != nullptr);
+        if (sixth != nullptr)
+        {
+            const std::vector<std::string> expected = {"EZ2DJ/EZ2DJ6th.EXE", "EZ2DJ/EZ2DJ1ST/Ez2DJ.exe"};
+            RE2DJ_CHECK(context, sixth->profile.run_defaults.child_executable_paths == expected);
+        }
+        for (const char* id : {"ez2dj1st", "ez2dj1stse", "ez2dj3rd", "ez2dj4th", "ez2dj5th", "ez2d2m"})
+        {
+            const auto* other = re2dj::target::FindBuiltInTargetProfileById(id);
+            RE2DJ_CHECK(context, other != nullptr);
+            if (other != nullptr)
+            {
+                RE2DJ_CHECK(context, other->profile.run_defaults.child_executable_paths.empty());
+                RE2DJ_CHECK(context, !other->profile.run_defaults.follow_child_process);
+            }
+        }
+    }
     RE2DJ_CHECK(context,
                 re2dj::target::FindBuiltInTargetProfileById("ez2dj1stse_unpacked") ==
                     nullptr);
@@ -757,7 +779,8 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, third != nullptr);
         if (third != nullptr)
         {
-            const re2dj::target::GameControls& controls = third->profile.game_controls;
+            RE2DJ_CHECK_EQ(context, third->profile.game_controls.size(), std::size_t{1});
+            const re2dj::target::GameControls& controls = third->profile.game_controls.front();
             RE2DJ_CHECK_EQ(context, controls.autoplay_flag_rva, std::uint32_t{0x00629508});
             RE2DJ_CHECK_EQ(context, controls.build_timestamp, std::uint32_t{0x3bca98a3});
             RE2DJ_CHECK_EQ(context,
@@ -772,7 +795,8 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, fourth != nullptr);
         if (fourth != nullptr)
         {
-            const re2dj::target::GameControls& controls = fourth->profile.game_controls;
+            RE2DJ_CHECK_EQ(context, fourth->profile.game_controls.size(), std::size_t{1});
+            const re2dj::target::GameControls& controls = fourth->profile.game_controls.front();
             RE2DJ_CHECK_EQ(context, controls.autoplay_flag_rva, std::uint32_t{0x006c29b0});
             RE2DJ_CHECK_EQ(context, controls.build_timestamp, std::uint32_t{0x3d369bfd});
             // The 3rd build's timestamp must not arm the 4th address, and the
@@ -785,7 +809,8 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, fifth != nullptr);
         if (fifth != nullptr)
         {
-            const re2dj::target::GameControls& controls = fifth->profile.game_controls;
+            RE2DJ_CHECK_EQ(context, fifth->profile.game_controls.size(), std::size_t{1});
+            const re2dj::target::GameControls& controls = fifth->profile.game_controls.front();
             RE2DJ_CHECK_EQ(context, controls.autoplay_flag_rva, std::uint32_t{0x006ee238});
             RE2DJ_CHECK_EQ(context, controls.build_timestamp, std::uint32_t{0x3f53377b});
             RE2DJ_CHECK_EQ(context,
@@ -796,7 +821,8 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, first_se != nullptr);
         if (first_se != nullptr)
         {
-            const re2dj::target::GameControls& controls = first_se->profile.game_controls;
+            RE2DJ_CHECK_EQ(context, first_se->profile.game_controls.size(), std::size_t{1});
+            const re2dj::target::GameControls& controls = first_se->profile.game_controls.front();
             RE2DJ_CHECK_EQ(context, controls.autoplay_flag_rva, std::uint32_t{0x0183f3a4});
             RE2DJ_CHECK_EQ(context, controls.build_timestamp, std::uint32_t{0x3862df27});
         }
@@ -804,24 +830,49 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         RE2DJ_CHECK(context, dancer != nullptr);
         if (dancer != nullptr)
         {
-            const re2dj::target::GameControls& controls = dancer->profile.game_controls;
+            RE2DJ_CHECK_EQ(context, dancer->profile.game_controls.size(), std::size_t{1});
+            const re2dj::target::GameControls& controls = dancer->profile.game_controls.front();
             RE2DJ_CHECK_EQ(context, controls.autoplay_flag_rva, std::uint32_t{0x003fa424});
             RE2DJ_CHECK_EQ(context, controls.build_timestamp, std::uint32_t{0x3a5f074c});
             RE2DJ_CHECK_EQ(context,
                            re2dj::target::ArmedAutoplayFlagRva(controls, 0x3862df27),
                            std::uint32_t{0});
         }
+        // The 6th profile runs three builds (task 436): only the 6th game
+        // arms, never its launcher or the bundled Remember 1st.
+        const auto* sixth = re2dj::target::FindBuiltInTargetProfileById("ez2dj6th");
+        RE2DJ_CHECK(context, sixth != nullptr);
+        if (sixth != nullptr)
+        {
+            const std::vector<re2dj::target::GameControls>& controls = sixth->profile.game_controls;
+            RE2DJ_CHECK_EQ(context, controls.size(), std::size_t{1});
+            RE2DJ_CHECK_EQ(context,
+                           re2dj::target::ArmedAutoplayFlagRva(controls, 0x411f6d44),
+                           std::uint32_t{0x004896ac});
+            RE2DJ_CHECK_EQ(context,
+                           re2dj::target::ArmedAutoplayFlagRva(controls, 0x411646a8),
+                           std::uint32_t{0});
+            RE2DJ_CHECK_EQ(context,
+                           re2dj::target::ArmedAutoplayFlagRva(controls, 0x411bbf5c),
+                           std::uint32_t{0});
+        }
         // 1st Tracks has no switchable autoplay variable (task 304).
-        for (const char* id : {"ez2dj1st", "ez2dj2nd", "ez2dj6th"})
+        for (const char* id : {"ez2dj1st", "ez2dj2nd"})
         {
             const auto* other = re2dj::target::FindBuiltInTargetProfileById(id);
             RE2DJ_CHECK(context, other != nullptr);
             if (other != nullptr)
             {
-                RE2DJ_CHECK_EQ(context, other->profile.game_controls.autoplay_flag_rva,
-                               std::uint32_t{0});
+                RE2DJ_CHECK(context, other->profile.game_controls.empty());
             }
         }
+        // A list picks the build that matches, whichever its position.
+        const std::vector<re2dj::target::GameControls> builds = {{0x00629508, 0x3bca98a3},
+                                                                 {0x006c29b0, 0x3d369bfd}};
+        RE2DJ_CHECK_EQ(context, re2dj::target::ArmedAutoplayFlagRva(builds, 0x3d369bfd),
+                       std::uint32_t{0x006c29b0});
+        RE2DJ_CHECK_EQ(context, re2dj::target::ArmedAutoplayFlagRva(builds, 0x3f53377b),
+                       std::uint32_t{0});
         // A declaration missing either half arms nothing.
         re2dj::target::GameControls no_timestamp;
         no_timestamp.autoplay_flag_rva = 0x00629508;

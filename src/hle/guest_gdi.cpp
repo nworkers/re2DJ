@@ -13,6 +13,11 @@ std::uint32_t GuestGdi::AddDc(GuestDc dc)
     return handle;
 }
 
+void GuestGdi::PutDc(std::uint32_t handle, GuestDc dc)
+{
+    dcs_[handle] = dc;
+}
+
 GuestDc* GuestGdi::FindDc(std::uint32_t handle)
 {
     const auto found = dcs_.find(handle);

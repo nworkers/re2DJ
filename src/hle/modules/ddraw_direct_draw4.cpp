@@ -414,6 +414,15 @@ bool DirectDraw4RestoreAllSurfaces(const ImportCall& call, ImportReturn* result,
            Succeed(result, dx::kDdOk, error);
 }
 
+// IDirectDraw4::RestoreDisplayMode(this): DD_OK, as the Windows DX6 facade
+// answers. re2DJ never changes the host's display mode, so there is nothing
+// to restore; Remember 1st calls it on its way back to 6th (task 438).
+bool DirectDraw4RestoreDisplayMode(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return MethodProcess(call, result, 1, kDirectDraw4Object, error) != nullptr &&
+           Succeed(result, dx::kDdOk, error);
+}
+
 // IDirectDraw4 in vtable order (ddraw.h).
 constexpr com::Method kDirectDraw4Methods[] = {
     {"QueryInterface", 3, &DirectDraw4QueryInterface},
@@ -435,7 +444,7 @@ constexpr com::Method kDirectDraw4Methods[] = {
     {"GetScanLine", 2, &UnimplementedExport},
     {"GetVerticalBlankStatus", 2, &UnimplementedExport},
     {"Initialize", 2, &UnimplementedExport},
-    {"RestoreDisplayMode", 1, &UnimplementedExport},
+    {"RestoreDisplayMode", 1, &DirectDraw4RestoreDisplayMode},
     {"SetCooperativeLevel", 3, &DirectDraw4SetCooperativeLevel},
     {"SetDisplayMode", 6, &DirectDraw4SetDisplayMode},
     {"WaitForVerticalBlank", 3, &UnimplementedExport},

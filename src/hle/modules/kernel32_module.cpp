@@ -1453,6 +1453,88 @@ bool GetPrivateProfileStringA(const ImportCall& call, ImportReturn* result, std:
     return true;
 }
 
+// WritePrivateProfileStringA(lpAppName, lpKeyName, lpString, lpFileName)
+// over the guest's files, with the rewrite rules in private_profile.h as
+// measured on Windows 11 (design 434): the file is read, rewritten and
+// written back whole, into the overlay; a missing file starts empty; TRUE
+// with the last error left alone. A missing directory is FALSE with the
+// open's error. A null section or file name stops, as does anything
+// ReadProfileFile stops on.
+bool WritePrivateProfileStringA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 4)
+    {
+        if (error != nullptr) *error = "kernel32 WritePrivateProfileStringA argument shape is invalid";
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 WritePrivateProfileStringA needs the guest file model";
+        return false;
+    }
+    std::string section;
+    std::string key;
+    std::string value;
+    std::string file_name;
+    bool section_present = false;
+    bool key_present = false;
+    bool value_present = false;
+    bool file_present = false;
+    if (!ReadOptionalString(call, call.arguments[0], &section, &section_present, error) ||
+        !ReadOptionalString(call, call.arguments[1], &key, &key_present, error) ||
+        !ReadOptionalString(call, call.arguments[2], &value, &value_present, error) ||
+        !ReadOptionalString(call, call.arguments[3], &file_name, &file_present, error))
+    {
+        return false;
+    }
+    if (!section_present || !file_present)
+    {
+        if (error != nullptr) *error = "kernel32 WritePrivateProfileStringA of a null section or file name is not modelled";
+        return false;
+    }
+    std::string text;
+    std::uint32_t open_error = 0;
+    const ProfileFile read = ReadProfileFile(call, files, file_name, &text, &open_error, error);
+    if (read == ProfileFile::kStop)
+    {
+        return false;
+    }
+    if (read == ProfileFile::kOpenFailed && open_error != kWin32ErrorFileNotFound)
+    {
+        result->eax = 0;
+        call.services->SetLastError(open_error);
+        return true;
+    }
+    const std::string updated =
+        UpdatePrivateProfile(text,
+                             section,
+                             key_present ? std::optional<std::string_view>(key) : std::nullopt,
+                             value_present ? std::optional<std::string_view>(value) : std::nullopt);
+    const GuestFiles::OpenResult opened = files->Open(file_name, false, true, kCreateAlways);
+    if (opened.outside_root)
+    {
+        if (error != nullptr) *error = "kernel32 WritePrivateProfileStringA outside the guest root is not modelled: " + file_name;
+        return false;
+    }
+    if (opened.handle == 0)
+    {
+        result->eax = 0;
+        call.services->SetLastError(opened.error);
+        return true;
+    }
+    const std::vector<std::uint8_t> bytes(updated.begin(), updated.end());
+    const std::uint32_t written = files->Write(opened.handle, bytes);
+    files->Close(opened.handle);
+    if (written != kWin32ErrorSuccess)
+    {
+        if (error != nullptr) *error = "kernel32 WritePrivateProfileStringA cannot write " + file_name;
+        return false;
+    }
+    result->eax = 1;
+    return true;
+}
+
 // GetPrivateProfileSectionNamesA(lpReturnBuffer, nSize, lpFileName), as
 // measured on Windows 11: the section names as GetPrivateProfileStringA
 // lists them (every occurrence, NUL after each and one more, cut to
@@ -1513,6 +1595,49 @@ bool GetPrivateProfileSectionNamesA(const ImportCall& call, ImportReturn* result
     }
     result->eax = copy.length;
     call.services->SetLastError(copy.truncated ? kErrorMoreData : kWin32ErrorSuccess);
+    return true;
+}
+
+// DeleteFileA(lpFileName) under GuestFiles, with the errors Microsoft
+// documents (design 437): TRUE with the last error left alone, as the measured
+// file APIs do; otherwise FALSE with GuestFiles::Delete's error. 6th deletes
+// Remember 1st's bookkeeping.ini before handing its credits over. A null
+// name or a path outside the guest root stops.
+bool DeleteFileA(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 1)
+    {
+        if (error != nullptr) *error = "kernel32 DeleteFileA argument shape is invalid";
+        return false;
+    }
+    GuestFiles* files = call.services == nullptr ? nullptr : call.services->Files();
+    if (files == nullptr || !files->configured())
+    {
+        if (error != nullptr) *error = "kernel32 DeleteFileA needs the guest file model";
+        return false;
+    }
+    if (call.arguments[0] == 0)
+    {
+        if (error != nullptr) *error = "kernel32 DeleteFileA of a null name is not modelled";
+        return false;
+    }
+    std::string path;
+    if (!call.services->ReadGuestString(runtime::GuestAddress(call.arguments[0]), &path, error))
+    {
+        return false;
+    }
+    bool outside_root = false;
+    const std::uint32_t deleted = files->Delete(path, &outside_root);
+    if (outside_root)
+    {
+        if (error != nullptr) *error = "kernel32 DeleteFileA of a path outside the guest root is not modelled: " + path;
+        return false;
+    }
+    result->eax = deleted == kWin32ErrorSuccess ? 1 : 0;
+    if (deleted != kWin32ErrorSuccess)
+    {
+        call.services->SetLastError(deleted);
+    }
     return true;
 }
 
@@ -3616,6 +3741,35 @@ bool GetTickCount(const ImportCall& call, ImportReturn* result, std::string* err
     return true;
 }
 
+// QueryPerformanceFrequency(lpFrequency): TRUE with the 10 MHz counter
+// frequency of Windows 11, as measured (task 434), the last error left
+// alone. The 6th's 1st child asks for the frequency alone; the counter
+// itself waits for a guest that reads it. A null pointer stops.
+bool QueryPerformanceFrequency(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    constexpr std::uint64_t kFrequency = 10000000;
+    if (!CheckArgumentCount(call, result, 1, "kernel32 QueryPerformanceFrequency argument shape is invalid", error))
+    {
+        return false;
+    }
+    if (call.arguments[0] == 0)
+    {
+        if (error != nullptr) *error = "kernel32 QueryPerformanceFrequency with a null pointer is not modelled";
+        return false;
+    }
+    std::array<std::uint8_t, 8> bytes = {};
+    for (std::size_t index = 0; index < bytes.size(); ++index)
+    {
+        bytes[index] = static_cast<std::uint8_t>(kFrequency >> (index * 8));
+    }
+    if (!PutGuestBytes(call, call.arguments[0], bytes, error))
+    {
+        return false;
+    }
+    result->eax = 1;
+    return true;
+}
+
 // GetTimeZoneInformation(lpTimeZoneInformation): the host's current offset
 // as the standard bias, with no daylight rule (TIME_ZONE_ID_UNKNOWN) and
 // empty zone names. A Korean Windows names its zone in Hangul, which the
@@ -3950,7 +4104,7 @@ bool GetFileSize(const ImportCall& call, ImportReturn* result, std::string* erro
 // program's import table, without calling them yet (kernel32 Win32
 // signatures).
 constexpr ResolveOnlyExport kKernel32ResolveOnly[] = {
-    {"GetWindowsDirectoryA", 2}, {"DeleteFileA", 1},
+    {"GetWindowsDirectoryA", 2},
     {"GlobalMemoryStatus", 1},
     {"TerminateThread", 2},
     {"SetEndOfFile", 1},
@@ -3967,7 +4121,6 @@ constexpr ResolveOnlyExport kKernel32ResolveOnly[] = {
     {"DebugBreak", 0}, {"OutputDebugStringA", 1},
     {"GetUserDefaultLCID", 0}, {"IsValidLocale", 2}, {"IsValidCodePage", 1}, {"EnumSystemLocalesA", 2},
     {"GetLocaleInfoA", 4}, {"GetLocaleInfoW", 4},
- {"WritePrivateProfileStringA", 4},
     {"FatalAppExitA", 2},
 };
 
@@ -4057,6 +4210,7 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("GetExitCodeProcess", 2, &GetExitCodeProcess));
     descriptor.exports.push_back(MakeExport("SetPriorityClass", 2, &SetPriorityClass));
     descriptor.exports.push_back(MakeExport("GetTickCount", 0, &GetTickCount));
+    descriptor.exports.push_back(MakeExport("QueryPerformanceFrequency", 1, &QueryPerformanceFrequency));
     descriptor.exports.push_back(MakeExport("GetSystemTime", 1, &GetSystemTime));
     descriptor.exports.push_back(MakeExport("GetLocalTime", 1, &GetLocalTime));
     descriptor.exports.push_back(MakeExport("SystemTimeToFileTime", 2, &SystemTimeToFileTime));
@@ -4082,6 +4236,7 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("FindNextFileA", 2, &FindNextFileA));
     descriptor.exports.push_back(MakeExport("FindClose", 1, &FindClose));
     descriptor.exports.push_back(MakeExport("GetFileAttributesA", 1, &GetFileAttributesA));
+    descriptor.exports.push_back(MakeExport("DeleteFileA", 1, &DeleteFileA));
     descriptor.exports.push_back(MakeExport("RtlUnwind", 4, &RtlUnwind));
     descriptor.exports.push_back(MakeExport("GetPrivateProfileIntA", 4, &GetPrivateProfileIntA));
     descriptor.exports.push_back(MakeExport("GetCurrentThread", 0, &GetCurrentThread));
@@ -4103,6 +4258,7 @@ GuestModuleDescriptor MakeKernel32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("Sleep", 1, &Sleep));
     descriptor.exports.push_back(MakeExport("GetPrivateProfileStringA", 6, &GetPrivateProfileStringA));
     descriptor.exports.push_back(MakeExport("GetPrivateProfileSectionNamesA", 3, &GetPrivateProfileSectionNamesA));
+    descriptor.exports.push_back(MakeExport("WritePrivateProfileStringA", 4, &WritePrivateProfileStringA));
     AddResolveOnlyExports(&descriptor, kKernel32ResolveOnly);
     // The protection probes for DOS extenders (Phar Lap TNT, Borland 32-bit)
     // with these names; no Windows kernel32 exports them.

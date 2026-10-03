@@ -91,7 +91,7 @@ bool Check(bool condition, const char* message)
 {
     if (!condition)
     {
-        std::fprintf(stderr, "%s (error %lu)\\n", message, static_cast<unsigned long>(GetLastError()));
+        std::fprintf(stderr, "%s (error %lu)\n", message, static_cast<unsigned long>(GetLastError()));
     }
     return condition;
 }
@@ -447,7 +447,8 @@ int main()
                    std::strcmp(g_re2dj_io_config_path, "synthetic-io.ini") == 0,
                "cannot configure I/O mapping path"))
     {
-        std::filesystem::remove_all(root);
+        std::error_code cleanup_error;
+        std::filesystem::remove_all(root, cleanup_error);
         return 1;
     }
 
@@ -596,7 +597,14 @@ int main()
 
     if (enumeration_only)
     {
-        std::filesystem::remove_all(root);
+        // As at the end of the full run: the runtime still holds vfs.log
+        // open, and removing it threw on Windows, which ended the probe with
+        // an unhandled exception after every check had passed (task 442).
+        g_re2dj_audio_trace_path[0] = '\0';
+        g_re2dj_vfs_trace_path[0] = '\0';
+        Re2djCloseRuntimeLogs();
+        std::error_code cleanup_error;
+        std::filesystem::remove_all(root, cleanup_error);
         return passed ? 0 : 1;
     }
 

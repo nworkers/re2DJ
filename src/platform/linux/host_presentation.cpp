@@ -6,6 +6,7 @@
 #include <SDL3/SDL.h>
 #include <spdlog/logger.h>
 
+#include "game_controls.h"
 #include "host_keyboard.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 #include "re2dj/input/virtual_keys.h"
@@ -95,6 +96,9 @@ bool LinuxHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
     {
         osd_ = std::make_unique<ui::Osd>();
         osd_->SetInfoLines(osd_info_lines_);
+        // In the Windows host's order: the game's own controls, then the
+        // colour depth every run offers.
+        AddGameControls(osd_.get());
         ui::AddColorDepthToggle(osd_.get());
     }
     backend_->SetPresentOverlay(osd_.get());

@@ -1,6 +1,7 @@
 #ifndef RE2DJ_PLATFORM_WINDOWS_ORIGINAL_PROCESS_BACKEND_H_
 #define RE2DJ_PLATFORM_WINDOWS_ORIGINAL_PROCESS_BACKEND_H_
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -25,6 +26,9 @@ struct OriginalProcessOptions
     std::string hle_profile_id;
     re2dj::target::TargetRunDefaults profile_defaults;
     bool audio_volume_trace = false;
+    // STARTUPINFO reserved bytes the original process starts with, as a
+    // launcher gives its child (task 434). Empty for none.
+    std::vector<std::uint8_t> startup_reserved;
 };
 
 bool BuildOriginalProcessArguments(const OriginalProcessOptions& options,

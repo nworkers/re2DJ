@@ -58,7 +58,7 @@ flowchart LR
 
 ### Windows keyboard 설정
 
-INI는 `[buttons]`에 `test`, `service`, `coin`, `effector1..4`, `p1_start`, `p2_start`, `p1_1..5`, `p1_pedal`, `p2_1..5`, `p2_pedal`을 둔다. `[turntables]`에는 `p1_negative`, `p1_positive`, `p2_negative`, `p2_positive`, `step`을 둔다. 값은 한 글자 `A..Z`, `0..9`, `F1..F24`, `ENTER`, `SPACE`, `LSHIFT`, `RSHIFT`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `NUMPAD0..9`, `DECIMAL`, 또는 `NONE`이다. 누락 항목은 unbound다. `step`은 1..32, 기본 4다.
+INI는 `[buttons]`에 `test`, `service`, `coin`, `effector1..4`, `p1_start`, `p2_start`, `p1_1..5`, `p1_pedal`, `p2_1..5`, `p2_pedal`을 둔다. `[turntables]`에는 `p1_negative`, `p1_positive`, `p2_negative`, `p2_positive`, `step`을 둔다. 값은 한 글자 `A..Z`, `0..9`, `F1..F24`, `ENTER`, `SPACE`, `LSHIFT`, `RSHIFT`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `NUMPAD0..9`, `DECIMAL`, 또는 `NONE`이다. 누락 항목은 unbound다. `step`은 1..32, 기본 4다(작업 441부터 2).
 
 설정 파일은 host 입력이며 HDD/VFS 자산이 아니다. launcher가 process 생성 전에 regular file 여부를 검증하고 absolute path를 injected runtime에 전달한다. runtime parsing 실패는 I/O를 idle로 유지하고 debugger message를 남기며 guest instruction은 계속 처리한다.
 

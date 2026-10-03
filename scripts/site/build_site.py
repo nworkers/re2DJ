@@ -162,6 +162,8 @@ class Site:
             "assets": release.assets,
             "package": release.package,
             "checksum": release.checksum,
+            "packages": [{"asset": package, "checksum": release.checksum_for(package)}
+                         for package in release.packages],
             "summary_html": part.summary_html.replace(SITE_ROOT_MARKER, root) if part else "",
             "body_html": part.body_html.replace(SITE_ROOT_MARKER, root) if part else "",
             "has_mermaid": part.has_mermaid if part else False,

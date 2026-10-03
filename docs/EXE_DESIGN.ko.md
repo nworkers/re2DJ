@@ -192,6 +192,14 @@ EZ2DJ The 1st Tracks Special Edition, 2nd Trax, 3rd Trax, 4th Trax, 5th, 6th 덤
 
 **확인됨 — autoplay 플래그는 `[0x007fa424]`다.** `NormalGame::OnCreateGame`이 이 값이 1일 때만 채널 3~`0x12`를 자동으로 설정하고, 데모는 같은 값을 상수로 쓴다. 게임에 내장된 토글이 입력 슬롯 `0xc`로 이 값을 뒤집는다. 데모가 이 플래그를 쓰지 않으므로 어트랙트 폴링으로는 확인할 수 없고, OSD 토글로 자동 연주를 확인했다.
 
+## 2026-10-03 6th와 Remember 1st의 autoplay (작업 436)
+
+근거 분석: [6th와 Remember 1st의 데모 플레이](analysis/ez2dj6th-demo-play.md)
+
+**확인됨 — 6th는 3rd~5th와 같은 구조다.** TimeDateStamp `0x411f6d44`의 `EZ2DJ6th.EXE`(보호 섹션 없음)는 `DEMOPLAY.bmp` 로드를 데모 플래그 `[0x008895f8]`로 막고, 데모 시작 루틴 `0x0044c020`이 이 플래그와 autoplay 플래그 `[0x008896ac]`를 함께 1로 세웠다가 끝에서 0으로 되돌린다. 5th의 setter·getter는 인라인되어 절대 주소로 바로 쓰고 읽는다. 입력 슬롯 `0x1b`로 `1 - 값` 뒤집기와 노트 데이터 저장 직후의 읽기도 5th와 같다. Linux 어트랙트 읽기 폴링에서 두 값이 데모 구간에만 함께 1이었다.
+
+**추정 — Remember 1st에는 전환할 autoplay 변수가 없다.** 6th CHD에 동봉된 TimeDateStamp `0x411bbf5c`의 1st 재빌드는 1st Tracks와 같이 데모 전용 장면 `DemoPlayer`를 두고, 곡 재생기 `0x00411a40`에 자동 여부를 상수(데모 장면 두 곳만 1)로 넘긴다. 저장 전역 `[0x0055795c]`는 곡 진행 모듈만 읽는다. 쓰기 시험은 하지 않았다.
+
 ### 2.5 Linux resolver-continuation trace — 확인됨
 
 Linux i386 최소 진단에서 GetProcAddress(kernel32, GetVersion)의 return 0x00af0b99 뒤를 37 frame 추적했습니다. 중간의 두 번째 GetProcAddress 요청은 CreateFileA이고 return 0x00af09f6에서 EAX=0을 반환했습니다. 그 값은 0x00af0c22의 MOV CL, byte ptr [EAX]까지 0으로 유지되어 null read가 발생했습니다. 이는 현재 최소 진단에서 CreateFileA 동적 resolver가 다음 구현·검증 경계임을 확인하지만, CreateFileA만으로 전체 보호 초기화가 성공한다는 근거는 아닙니다.

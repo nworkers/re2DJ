@@ -63,7 +63,7 @@ detail = "64비트 Windows에서 실행되는 기본 호스트입니다. 릴리�
 
 [platforms.linux]
 name = "Linux x86 / x86-64"
-detail = "이식 진행 중입니다. 소스에서 빌드해 실행하며, 여러 타깃이 창을 닫을 때까지 실행됩니다."
+detail = "이식 진행 중입니다. 릴리스마다 x86-64와 x86 실행 파일을 함께 배포하며, 여러 타깃이 창을 닫을 때까지 실행됩니다."
 
 [states]
 release = "배포"
@@ -96,13 +96,12 @@ published = "게시"
 
 [download]
 title = "다운로드"
-lead = "Windows용 빌드는 GitHub 릴리스로 배포합니다. 태그가 올라가면 CI가 Release 빌드와 테스트를 통과한 결과만 게시합니다."
+lead = "Windows x86, Linux x86-64, Linux x86용 빌드를 GitHub 릴리스로 배포합니다. 태그가 올라가면 CI가 세 플랫폼의 Release 빌드와 테스트를 모두 통과한 결과만 게시합니다."
 latest = "최신 릴리스"
 released = "게시일"
-primary = "Windows용 다운로드"
 package = "실행 파일 패키지"
 checksum = "체크섬"
-checksum_desc = "패키지 zip의 SHA-256 체크섬 파일입니다."
+checksum_desc = "패키지의 SHA-256 체크섬 파일입니다."
 size = "크기"
 sha256 = "SHA-256"
 notes = "이 버전의 변경 내용"
@@ -115,9 +114,16 @@ steps = [
   "<code>re2dj.exe &lt;세트&gt;</code>로 실행합니다. 예: <code>re2dj.exe ez2dj4th</code>. 세트 이름을 주면 자동으로 실행 모드가 선택됩니다.",
   "실행 중 백틱(<code>`</code>) 키로 OSD를 열 수 있습니다. 전체 옵션은 README를 참고하세요.",
 ]
+linux_steps_title = "Linux에서 시작하기"
+linux_steps = [
+  "<code>tar -xzf re2dj-v&lt;버전&gt;-linux-x64.tar.gz</code>로 풉니다(32비트 Linux는 <code>linux-x86</code>).",
+  "풀린 디렉터리에서 <code>roms/&lt;세트&gt;</code>에 자산을 둡니다. 예: <code>roms/ez2dj4th</code>에 MAME CHD.",
+  "그 디렉터리에서 <code>./re2dj &lt;세트&gt;</code>로 실행합니다. 예: <code>./re2dj ez2dj4th</code>.",
+]
 requirements_title = "요구 사항"
 requirements = [
   "Windows 10/11 (64비트 OS에서 32비트 x86 프로그램으로 실행)",
+  "Linux: glibc 2.36 이상(Debian 12, Ubuntu 23.04 이후), X11 또는 Wayland와 OpenGL, 소리는 PipeWire·PulseAudio·ALSA 중 하나. x86 패키지는 32비트 x86 Linux용입니다.",
   "합법적으로 보유한 EZ2DJ HDD 덤프 또는 MAME CHD",
 ]
 older_title = "이전 릴리스"
@@ -128,6 +134,16 @@ source_title = "소스에서 빌드"
 source_body = "Linux x86·x86-64 빌드와 개발용 빌드는 <a href=\"{repo_url}#시작하기--getting-started\">README의 시작하기</a>를 따릅니다."
 legal_title = "알림"
 legal_body = "re2DJ는 비공식 프로젝트이며 원작의 권리자와 관계가 없습니다. 이 사이트와 릴리스는 원본 게임 바이너리, HDD 덤프, CHD를 포함하거나 배포하지 않습니다."
+
+[download.buttons]
+"windows-x86" = "Windows용 다운로드"
+"linux-x64" = "Linux x86-64용 다운로드"
+"linux-x86" = "Linux x86용 다운로드"
+
+[download.platforms]
+"windows-x86" = "Windows x86"
+"linux-x64" = "Linux x86-64"
+"linux-x86" = "Linux x86"
 
 [credits]
 title = "크레딧"

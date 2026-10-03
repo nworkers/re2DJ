@@ -436,6 +436,18 @@ void CheckClockExports(re2dj::test::Context& context)
     const std::uint64_t utc = hle::kFileTimeUnixEpoch + 1790292600ULL * hle::kFileTimeTicksPerSecond;
     services.SetClock({utc, 540, 123456});
     RE2DJ_CHECK_EQ(context, Call(context, services, "GetTickCount", {}).eax, 123456U);
+    // QueryPerformanceFrequency: the measured 10 MHz, the last error left
+    // alone; a null pointer stops.
+    services.PutU32(kFileTime, 0xCCCCCCCCU);
+    services.PutU32(kFileTime + 4, 0xCCCCCCCCU);
+    services.SetLastError(1234);
+    RE2DJ_CHECK_EQ(context, Call(context, services, "QueryPerformanceFrequency", {kFileTime}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kFileTime), 10000000U);
+    RE2DJ_CHECK_EQ(context, services.U32(kFileTime + 4), 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), 1234U);
+    handled = true;
+    Call(context, services, "QueryPerformanceFrequency", {0}, &handled);
+    RE2DJ_CHECK(context, !handled);
     Call(context, services, "GetSystemTime", {kTime});
     RE2DJ_CHECK_EQ(context, services.U32(kTime), 0x00090000U | 2026U);
     RE2DJ_CHECK_EQ(context, services.Byte(kTime + 6), std::uint8_t{24});
@@ -475,6 +487,30 @@ void CheckGuestPaths(re2dj::test::Context& context)
     profile.guest_directory = "\\game";
     RE2DJ_CHECK_EQ(context, re2dj::target::GuestExecutablePath(profile),
                    std::string("C:\\game\\EZ2DJ.EXE"));
+    // A launcher's child below the working directory keeps the launcher's
+    // root, its own path below it (task 434); one elsewhere keeps the name.
+    profile.working_directory_relative_path = "EZ2DJ";
+    RE2DJ_CHECK_EQ(context, re2dj::target::GuestExecutablePath(profile),
+                   std::string("C:\\game\\EZ2DJ.EXE"));
+    profile.executable_relative_path = "EZ2DJ/EZ2DJ1ST/Ez2DJ.exe";
+    RE2DJ_CHECK_EQ(context, re2dj::target::GuestExecutablePath(profile),
+                   std::string("C:\\game\\EZ2DJ1ST\\Ez2DJ.exe"));
+    profile.executable_relative_path = "OTHER/Ez2DJ.exe";
+    RE2DJ_CHECK_EQ(context, re2dj::target::GuestExecutablePath(profile),
+                   std::string("C:\\game\\Ez2DJ.exe"));
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::target::ExecutableWorkingDirectory("EZ2DJ/EZ2DJ.EXE", "EZ2DJ/EZ2DJ1ST/Ez2DJ.exe"),
+                   std::string("EZ2DJ"));
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::target::ExecutableWorkingDirectory("EZ2DJ/EZ2DJ.EXE", "ez2dj/EZ2DJ6th.EXE"),
+                   std::string("EZ2DJ"));
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::target::ExecutableWorkingDirectory("EZ2DJ/EZ2DJ.EXE", "EZ2DJ/EZ2DJ.EXE"),
+                   std::string("EZ2DJ"));
+    RE2DJ_CHECK_EQ(context,
+                   re2dj::target::ExecutableWorkingDirectory("EZ2DJ/EZ2DJ.EXE", "OTHER/SUB/Ez2DJ.exe"),
+                   std::string("OTHER/SUB"));
+    RE2DJ_CHECK_EQ(context, re2dj::target::ExecutableWorkingDirectory("Ez2DJ.exe", "Ez2DJ.exe"), std::string());
 }
 
 // RtlUnwind as measured on Windows 11: the frames above the target are

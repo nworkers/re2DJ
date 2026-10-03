@@ -1457,12 +1457,14 @@ bool Sdl3OpenGlBackend::ResizeWindow(std::uint32_t width, std::uint32_t height, 
         *error = "no SDL3 window to resize";
         return false;
     }
-    if (!SDL_SetWindowSize(impl_->window, static_cast<int>(width), static_cast<int>(height)) ||
-        !SDL_SetWindowPosition(impl_->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED))
+    if (!SDL_SetWindowSize(impl_->window, static_cast<int>(width), static_cast<int>(height)))
     {
         *error = std::string("cannot resize the SDL3 window: ") + SDL_GetError();
         return false;
     }
+    // Centring is a request, as at creation: Wayland refuses to place a
+    // top-level window, leaving it to the compositor.
+    SDL_SetWindowPosition(impl_->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     return true;
 }
 

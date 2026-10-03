@@ -751,14 +751,9 @@ bool Fat32Volume::ReadFile(std::string_view relative_path,
         }
         return false;
     }
-    if (file.size > (std::numeric_limits<std::size_t>::max)())
-    {
-        if (error != nullptr)
-        {
-            *error = "FAT32 file is too large for the host address space";
-        }
-        return false;
-    }
+    // A FAT32 size is 32 bits, so it always fits the host's size_t; a runtime
+    // comparison is always false, which clang rejects as a warning.
+    static_assert(sizeof(file.size) <= sizeof(std::size_t), "a FAT32 file size must fit size_t");
     bytes->assign(file.size, 0);
     return ReadFileRangeLocked(relative_path, 0, bytes->data(), bytes->size(), error);
 }

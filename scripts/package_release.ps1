@@ -54,7 +54,7 @@ foreach ($binary in $requiredBinaries) {
     Copy-Item (Join-Path $buildOutput $binary) (Join-Path $stagingRoot $binary)
 }
 
-foreach ($document in @("README.md", "LICENSE", "VERSION", "RELEASE_NOTES.md")) {
+foreach ($document in @("README.md", "LICENSE", "VERSION", "RELEASE_NOTES.md", "THIRD_PARTY_NOTICES.md", "CREDITS.md")) {
     $source = Join-Path $repository $document
     if (Test-Path $source -PathType Leaf) {
         Copy-Item $source (Join-Path $stagingRoot $document)

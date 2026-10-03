@@ -16,6 +16,7 @@
 #include "re2dj/hle/hardlock/device.h"
 #include "re2dj/hle/hardlock/handshake_response.h"
 #include "re2dj/hle/hardlock/transform_responses.h"
+#include "re2dj/target/target_profile.h"
 
 namespace re2dj::tools::windows_x86_launcher_probe
 {
@@ -34,6 +35,9 @@ struct BootstrapChildHandoffOptions
     // letter and directory. Empty leaves the runtime's own default in place.
     std::string guest_root;
     std::string profile_id;
+    // The profile's per-build controls; a child arms the one its own build
+    // matches (task 436).
+    std::vector<re2dj::target::GameControls> game_controls;
     std::string device_path_prefix;
     bool dynamic_vfs_resolver = false;
     bool device_mock_lptdi = false;
@@ -75,6 +79,8 @@ struct BootstrapChildHandoffResult
     std::uint32_t runtime_base = 0;
     re2dj::exe::PeImageInfo image_info = {};
     std::vector<std::uint8_t> image_file;
+    // The autoplay flag RVA armed for this child's build, or 0.
+    std::uint32_t autoplay_flag_rva = 0;
 };
 
 bool PrepareBootstrapChildProcess(const DEBUG_EVENT& create_event,

@@ -275,6 +275,14 @@ Task 251은 독자적인 클린룸 C++20 `HardlockEngine`(`re2dj::hle::hardlock:
 
 *From Task 380 a Linux run opens a host window: the HLE asks the platform-neutral `HostPresentation` service to show the guest window from ddraw `SetCooperativeLevel`'s host policy, and Linux's `LinuxHostPresentation` makes a 640×480 window with the shared SDL3/OpenGL backend, titled by the `WindowTitle` every host uses. It stays black until drawing arrives, and with `--hold-window` it remains after the run stops.*
 
+작업 435부터 Linux 창의 배율을 바꾼 뒤 다시 가운데로 옮기는 것은 요청입니다. Wayland처럼 window system이 창 위치 지정을 거절하면 위치는 compositor에 맡기고, 창 모드 변경은 크기 변경이 실패할 때만 실패합니다.
+
+*From Task 435 centring the Linux window again after a scale change is a request: when the window system refuses to place the window, as Wayland does, placement is left to the compositor, and a window-mode change fails only when the resize does.*
+
+작업 437부터 Linux `GuestFiles`의 overlay 경로는 NTFS처럼 대소문자를 구분하지 않습니다. 각 구성요소는 정확한 철자가 있으면 그것을, 없으면 대소문자 없이 일치하는 기존 항목을 씁니다. 6th가 `EZ2DJ1st\bookkeeping.ini`에 쓴 것을 1st가 `EZ2DJ1ST`에서 읽기 때문입니다. 게스트가 이미지 파일을 지우면(`DeleteFileA`) 원본을 바꾸지 않고 overlay 루트의 `.re2dj-deleted`에 그 경로를 남깁니다. 그 뒤로 이 run과 이후 run(launcher의 다음 자식)에서 그 파일은 없는 것으로 보입니다.
+
+*From Task 437 the Linux `GuestFiles` overlay paths ignore case as NTFS does: each component takes its exact spelling when present, else an existing entry matching without case, since 6th writes `EZ2DJ1st\bookkeeping.ini` that 1st reads in `EZ2DJ1ST`. When the guest deletes an image file (`DeleteFileA`), the image stays untouched and the path is listed in `.re2dj-deleted` at the overlay root; from then on that file is missing for this run and later ones, such as the launcher's next child.*
+
 작업 417부터 Linux 실행은 게스트 스레드를 여럿 가질 수 있습니다. `CreateThread`가 만든 게스트 스레드는 host 스레드 하나에서 돕니다. 스레드마다 게스트 스택, TEB, FS 선택자, alternate signal stack이 따로 있고, PEB는 공유합니다. 게스트 코드와 import 처리(HLE)는 게스트 잠금(`native_guest_threads.h`)을 가진 스레드 하나만 실행합니다. 잠금은 import 안에서만 넘어갑니다. 스레드가 기다릴 때(`Sleep`, 막히는 대기) 넘기고, 다른 스레드가 잠금을 기다리는 중이면 import가 시작될 때도 넘깁니다. 그래서 facade 상태는 스레드 안전할 필요가 없습니다. x64는 공유 transition page의 host 상태를 잠금을 넘길 때 저장하고 복원합니다. 메인이 아닌 스레드의 fault·정지·`ExitProcess`는 프로세스를 끝냅니다. 메인 스레드의 실행이 그 결과로 끝납니다. import 없이 도는 게스트 코드가 다른 스레드를 막는 점은 Windows의 선점형 스케줄링과 다릅니다.
 
 *From Task 417 a Linux run can have several guest threads. Each guest thread `CreateThread` makes runs on a host thread of its own, with its own guest stack, TEB, FS selector, and alternate signal stack, sharing the PEB. Only the thread holding the guest lock (`native_guest_threads.h`) runs guest code or import handling (the HLE), so the facade's state need not be thread-safe. The lock changes hands only inside an import: when a thread waits (`Sleep`, a blocking wait), and as an import starts while another thread waits for the lock. On x64 the shared transition page's host state is saved and restored at each hand-over. A fault, stop, or `ExitProcess` in a thread other than the main one ends the process, and the main thread's run ends with it. Guest code spinning without imports keeps the other threads out, unlike Windows' preemptive scheduling.*
@@ -301,6 +309,21 @@ Task 251은 독자적인 클린룸 C++20 `HardlockEngine`(`re2dj::hle::hardlock:
 - ***Exit code**: a host exit status holds only 8 bits, so the child writes its 32-bit guest exit code back over a pipe.*
 - ***The parent's HLE**: it waits on the child's process handle (`WaitForSingleObject`) and reads the exit code (`GetExitCodeProcess`).*
 - ***Example**: 6th's launcher (`EZ2DJ.EXE`) starts `EZ2DJ6th.EXE` this way.*
+
+작업 434부터 launcher의 자식이 둘 이상일 수 있습니다. 6th에서 Remember 1st를 고르면 launcher가 동봉된 1st(`EZ2DJ1ST\EZ2DJ.EXE`)를 실행합니다.
+
+- **자식 목록**: 프로필의 `child_executable_paths`가 launcher가 실행하는 이미지 안의 실행 파일들입니다. CLI는 CHD staging에 이 파일들을 모두 꺼냅니다.
+- **자식 run의 root**: 자식은 launcher의 guest root를 그대로 씁니다. 공용 `target::ExecutableWorkingDirectory`와 `GuestExecutablePath`가 프로필 실행 파일의 디렉터리 아래 경로를 붙여(`D:\ez2dj\EZ2DJ1ST\Ez2DJ.exe`) launcher가 준 현재 디렉터리가 root 안에 있게 합니다. Linux CLI와 Windows probe가 같은 규칙을 씁니다.
+- **INI 쓰기**: 공용 `hle/private_profile.h`의 `UpdatePrivateProfile`이 Windows 11에서 측정한 `WritePrivateProfileStringA` 규칙으로 새 본문을 만들고, Linux kernel32가 `GuestFiles`로 overlay에 씁니다. Windows 제품은 자식의 INI import를 VFS로 이어 overlay 사본에 실제 API로 씁니다.
+- **GDI**: 텍스트 그리기는 `src/hle/modules/gdi_text.cpp`로 옮겨 user32와 gdi32가 함께 씁니다. `gdi_bitmaps.cpp`가 `CreateDIBSection`, `CreateDIBitmap`(창 DC의 32비트 DDB), 24비트 비트맵을 받습니다. user32는 창 DC(`GetDC`·`ReleaseDC`)와 `SendMessageA`를 줍니다.
+- **Windows launcher probe**: launcher가 만드는 프로세스 중 `child_executable_paths`의 것을 차례로 준비하고, launcher가 끝나면 run을 끝냅니다. 자식의 첫 guest 디렉터리는 host 프로세스의 실제 현재 디렉터리입니다. 진단용 `--startup-reserved <hex>`(CLI `--guest-startup-reserved`, `hle/hex_bytes.h`)로 자식을 단독 실행할 수 있습니다.
+
+*From Task 434 a launcher may have more than one child: choosing Remember 1st in 6th makes the launcher run the bundled 1st (`EZ2DJ1ST\EZ2DJ.EXE`).*
+- ***Child list**: a profile's `child_executable_paths` are the executables in the image its launcher starts; the CLI stages them all out of the CHD.*
+- ***A child run's root**: a child keeps the launcher's guest root. The shared `target::ExecutableWorkingDirectory` and `GuestExecutablePath` append the path below the profile executable's directory (`D:\ez2dj\EZ2DJ1ST\Ez2DJ.exe`), so the current directory the launcher gives lies inside the root. The Linux CLI and the Windows probe share the rule.*
+- ***INI writes**: the shared `UpdatePrivateProfile` in `hle/private_profile.h` builds the new text by the `WritePrivateProfileStringA` rules measured on Windows 11, and the Linux kernel32 writes it into the overlay through `GuestFiles`. The Windows product routes the child's INI imports through the VFS, writing the overlay copy with the real API.*
+- ***GDI**: text drawing moves into `src/hle/modules/gdi_text.cpp`, shared by user32 and gdi32; `gdi_bitmaps.cpp` takes `CreateDIBSection`, `CreateDIBitmap` (a window DC's 32-bit DDB) and 24-bit bitmaps; user32 gives window DCs (`GetDC`, `ReleaseDC`) and `SendMessageA`.*
+- ***Windows launcher probe**: it prepares each process the launcher makes that is in `child_executable_paths`, in turn, and ends the run with the launcher. A child's first guest directory is the host process's real current directory. The diagnostic `--startup-reserved <hex>` (the CLI's `--guest-startup-reserved`, `hle/hex_bytes.h`) runs a child on its own.*
 
 
 Task 137은 그 후보를 기계적으로 판정하는 측정기를 추가했습니다. 플랫폼 중립 `re2dj::analysis::ScoreCodeRegion`이 바이트 span 하나에서 Shannon 엔트로피, `55 8b ec` prologue 수, `cc` padding run 수, zero byte 비율을 계산하고 `ciphertext-like` / `code-like` / `indeterminate` 3상태로 보고합니다. 임계값은 확인된 측정치 사이에 둔 휴리스틱임을 코드와 문서에 표기합니다. `re2dj_code_score`가 파일·HDD·CHD 입력을 섹션 또는 청크 단위로 이 함수에 넣습니다. 이 함수는 파일도 프로세스도 모르므로 이후 게스트 memory dump를 같은 경로로 판정할 수 있습니다.
@@ -1208,6 +1231,10 @@ Windows 쪽 `src/platform/windows/osd_host.*`는 프로세스당 하나인 OSD�
 
 게임 제어 주소는 `TargetProfile::game_controls`에 빌드 timestamp와 함께 선언되고, 런처가 `ArmedAutoplayFlagRva`로 실행 파일 timestamp와 대조해 일치할 때만 런타임에 넘긴다. 다른 빌드에서는 토글이 나타나지 않는다.
 
+작업 436부터 `TargetProfile::game_controls`는 빌드별 선언 목록이다. launcher가 여러 실행 파일을 띄우는 프로필(6th)은 실행 파일마다 항목을 두고, 각 프로세스는 자기 실행 파일 timestamp와 같은 항목만 무장한다. Windows launcher probe는 bootstrap 자식(`PrepareBootstrapChildProcess`)에도 대상 id·실행 파일 이름·autoplay 주소를 쓴다. Linux는 CLI가 run마다 `OriginalRunEnvironment::autoplay_flag_rva`를 고르고, 실행기가 주 이미지 base에 더해 `src/platform/linux/game_controls.*`에 무장하며, `LinuxHostPresentation`이 OSD에 Autoplay 토글을 더한다. Linux 게스트는 host 프로세스 안에서 자기 주소 그대로 돌므로 토글은 그 주소를 직접 읽고 쓴다.
+
+*From Task 436 `TargetProfile::game_controls` is a per-build list of declarations. A profile whose launcher starts several executables (6th) has an entry per executable, and each process arms only the entry matching its own executable's timestamp. The Windows launcher probe also writes the target id, executable name and autoplay address into bootstrap children (`PrepareBootstrapChildProcess`). On Linux the CLI picks `OriginalRunEnvironment::autoplay_flag_rva` per run, the runner adds it to the main image base and arms it in `src/platform/linux/game_controls.*`, and `LinuxHostPresentation` adds the Autoplay toggle to the OSD; a Linux guest runs at its own addresses inside the host process, so the toggle reads and writes the address directly.*
+
 *`PresentOverlay` in `include/re2dj/graphics/present_overlay.h` is what the backend calls after compositing the guest image to the window and before swapping; the backend knows nothing of ImGui. The shared `ui::Osd` (`include/re2dj/ui/osd.h`, `src/ui/osd.cpp`) implements it and takes its own input queue instead of an ImGui platform backend, keeping window APIs out of the shared core, and builds no UI frame while hidden. On Windows, `src/platform/windows/osd_host.*` installs the process's single OSD when the backend is created and routes window messages: keyboard focus stays on the top-level host window, so backtick arrives in `HostWindowProcedure`, while mouse input arrives in the child guest window's `GuestWindowProcedure`. `src/platform/windows/game_controls.*` registers the information lines and toggle from the target id, executable name and autoplay address the launcher wrote. Game-control addresses are declared in `TargetProfile::game_controls` with a build timestamp, and the launcher passes one to the runtime only when `ArmedAutoplayFlagRva` matches it against the executable's timestamp, so a different build shows no toggle.*
 
 ## 2026-09-29 32비트 트루컬러 표면 / 32-bit true-color surfaces
@@ -1333,3 +1360,16 @@ Linux i386의 내부 `NativeGuestModuleSet`은 descriptor export의 staged `Impo
 **[구현됨]** 공용 `user32_module.cpp`는 `user32.dll`(별칭 `user32`)을 `GuestModuleDescriptor`로 선언한다. export는 실제 4th 실행에서 동적 요청이 확인된 `GetActiveWindow`(stdcall, 인자 0) 하나뿐이다. 창을 만드는 export가 아직 없으므로 게스트 창은 존재할 수 없고, handler는 NULL을 반환한다. 창 생성 export를 추가하는 작업은 이 handler를 window service 조회로 바꿔야 한다. Linux i386 진단 문맥 `NativeKernel32Diagnostic`은 `kernel32` 다음에 `user32` facade를 등록한다. 따라서 `GetModuleHandleA("user32")`는 registry base를 받고, `GetProcAddress`는 두 module에서 export를 찾는다. `user32`의 정적 import(`MessageBoxA`, `UpdateWindow`)는 facade에 없으므로 기존 import gate에 남는다. 자세한 내용은 [작업 352 설계](docs/design/20260923-352-user32-facade-module.md)에 있다.
 
 ***[Implemented]** Shared `user32_module.cpp` declares `user32.dll` (alias `user32`) as a `GuestModuleDescriptor` whose only export is `GetActiveWindow` (stdcall, no arguments), the one whose dynamic request a real 4th run confirmed. No window-creating export exists yet, so no guest window can exist and the handler returns NULL; the task that adds a window-creating export must turn it into a window-service query. The Linux i386 diagnostic context `NativeKernel32Diagnostic` registers the `user32` facade after `kernel32`, so `GetModuleHandleA("user32")` receives the registry base and `GetProcAddress` finds exports in both modules. `user32`'s static imports (`MessageBoxA`, `UpdateWindow`) are not in the facade and keep their existing import gates. See the [Task 352 design](docs/design/20260923-352-user32-facade-module.md).*
+
+## 2026-10-03 릴리스 산출물 / Release artifacts
+
+작업 442부터 GitHub Actions `release.yml`은 네 job으로 나뉩니다.
+
+- `version`: VERSION과 태그를 검사합니다.
+- `windows-x86`: 지금까지의 Windows 빌드·테스트·zip입니다.
+- `linux` matrix(x64, x86): Debian 12 컨테이너에서 `scripts/build_release_linux.sh`로 빌드·테스트·tar.gz를 만듭니다. x86은 `i386/debian:bookworm`의 네이티브 i386 툴체인을 씁니다.
+- `publish`: 태그 실행에서 세 플랫폼이 모두 성공하면 산출물을 모아 release를 한 번 만듭니다.
+
+Linux release preset은 libstdc++와 libgcc를 정적으로 링크합니다. `scripts/package_release.sh`는 실행 파일이 C 런타임 라이브러리만 직접 링크하고 glibc 2.36보다 새 심볼을 쓰지 않는지 검사합니다. SDL의 X11·Wayland·GL·오디오 backend는 실행 시점에 `dlopen`되므로 배포 대상에는 그 런타임 라이브러리만 있으면 됩니다. 컨테이너는 게스트 런타임의 `modify_ldt` 때문에 `seccomp=unconfined`로 돕니다. JavaScript action은 32비트 컨테이너 안에서 돌지 못하므로, job은 runner에서 돌고 빌드만 `docker run`으로 컨테이너에 들어갑니다.
+
+*From Task 442 `release.yml` in GitHub Actions has four jobs: `version` checks VERSION against the tag; `windows-x86` is the Windows build, tests and zip as before; a `linux` matrix (x64, x86) builds, tests and makes a tar.gz with `scripts/build_release_linux.sh` in a Debian 12 container, x86 with `i386/debian:bookworm`'s native i386 toolchain; and on a tag run `publish` gathers the artifacts and creates the release once all three platforms succeed. The Linux release presets link libstdc++ and libgcc statically, and `scripts/package_release.sh` checks that the executable links only the C runtime's libraries and uses no glibc symbol newer than 2.36. SDL's X11, Wayland, GL and audio backends are `dlopen`ed at run time, so a target needs only those runtime libraries. The containers run with `seccomp=unconfined` for the guest runtime's `modify_ldt`. JavaScript actions cannot run inside a 32-bit container, so the jobs run on the runner and only the build goes into the container through `docker run`.*

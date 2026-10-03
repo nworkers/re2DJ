@@ -21,6 +21,14 @@ VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 NEXT_LINK_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
+# The platforms release.yml builds, by package suffix, in display order.
+PACKAGE_PLATFORMS = (
+    ("-windows-x86.zip", "windows-x86"),
+    ("-linux-x64.tar.gz", "linux-x64"),
+    ("-linux-x86.tar.gz", "linux-x86"),
+)
+
+
 @dataclass
 class Asset:
     name: str
@@ -28,6 +36,7 @@ class Asset:
     size: int
     sha256: str | None
     kind: str  # package | checksum | other
+    platform: str = ""  # windows-x86 | linux-x64 | linux-x86 for a package or its checksum
 
 
 @dataclass
@@ -43,11 +52,23 @@ class Release:
 
     @property
     def package(self) -> Asset | None:
-        return next((asset for asset in self.assets if asset.kind == "package"), None)
+        # The Windows package first, as the site's main download.
+        return next((asset for asset in self.packages if asset.platform == "windows-x86"),
+                    next(iter(self.packages), None))
+
+    @property
+    def packages(self) -> list[Asset]:
+        return [asset for asset in self.assets if asset.kind == "package"]
+
+    def checksum_for(self, package: Asset) -> Asset | None:
+        return next((asset for asset in self.assets
+                     if asset.kind == "checksum" and asset.name == package.name + ".sha256"), None)
 
     @property
     def checksum(self) -> Asset | None:
-        return next((asset for asset in self.assets if asset.kind == "checksum"), None)
+        # The main package's checksum.
+        package = self.package
+        return self.checksum_for(package) if package else None
 
 
 def version_key(tag: str) -> tuple[int, int, int]:
@@ -55,13 +76,19 @@ def version_key(tag: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups()) if match else (0, 0, 0)
 
 
+def asset_platform(name: str) -> str:
+    # scripts/package_release.ps1 produces re2dj-v<version>-windows-x86.zip and
+    # scripts/package_release.sh the -linux-x64.tar.gz and -linux-x86.tar.gz,
+    # each with a matching .sha256 file (Task 442).
+    base = name.removesuffix(".sha256")
+    return next((platform for suffix, platform in PACKAGE_PLATFORMS if base.endswith(suffix)), "")
+
+
 def asset_kind(name: str) -> str:
-    # scripts/package_release.ps1 produces re2dj-v<version>-windows-x86.zip and a
-    # matching .sha256 file; release.yml uploads both.
-    if name.endswith("-windows-x86.zip"):
-        return "package"
     if name.endswith(".sha256"):
         return "checksum"
+    if asset_platform(name):
+        return "package"
     return "other"
 
 
@@ -130,12 +157,16 @@ def load_releases(renderer: Renderer, repo_root: Path, repo: str, notes_dir: str
                     size=int(asset.get("size") or 0),
                     sha256=(asset.get("digest") or "").removeprefix("sha256:") or None,
                     kind=asset_kind(asset["name"]),
+                    platform=asset_platform(asset["name"]),
                 )
                 for asset in item.get("assets", [])
             ]
-            # Package first, then the checksum, then anything else.
+            # By platform, each package before its checksum, then anything else.
+            platforms = [platform for _, platform in PACKAGE_PLATFORMS]
             order = {"package": 0, "checksum": 1, "other": 2}
-            assets.sort(key=lambda asset: (order[asset.kind], asset.name))
+            assets.sort(key=lambda asset: (
+                platforms.index(asset.platform) if asset.platform in platforms else len(platforms),
+                order[asset.kind], asset.name))
             release = Release(
                 tag=item["tag_name"],
                 date=(item.get("published_at") or item.get("created_at") or "")[:10],

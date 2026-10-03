@@ -272,6 +272,196 @@ PrivateProfileCopy CopyPrivateProfileList(const std::vector<std::string>& names,
     return copy;
 }
 
+namespace
+{
+
+// One line of a profile file: its content and, separately, its ending.
+struct ProfileLine
+{
+    std::size_t begin = 0;
+    // Where the ending ("\r\n" or "\n") starts; the content ends here.
+    std::size_t end = 0;
+    // Just past the ending, or end when the line has none.
+    std::size_t next = 0;
+};
+
+std::vector<ProfileLine> SplitProfileLines(std::string_view text)
+{
+    std::vector<ProfileLine> lines;
+    std::size_t start = 0;
+    while (start < text.size())
+    {
+        ProfileLine line;
+        line.begin = start;
+        const std::size_t newline = text.find('\n', start);
+        if (newline == std::string_view::npos)
+        {
+            line.end = text.size();
+            line.next = text.size();
+        }
+        else
+        {
+            line.end = newline > start && text[newline - 1] == '\r' ? newline - 1 : newline;
+            line.next = newline + 1;
+        }
+        lines.push_back(line);
+        start = line.next;
+    }
+    return lines;
+}
+
+bool IsBlank(char value)
+{
+    return value == ' ' || value == '\t';
+}
+
+// The header's trimmed name, or nothing for a line that is not one.
+std::optional<std::string_view> ProfileHeaderName(std::string_view content)
+{
+    const std::string_view line = Trim(content);
+    if (line.empty() || line.front() != '[')
+    {
+        return std::nullopt;
+    }
+    const std::size_t close = line.find(']');
+    return Trim(line.substr(1, close == std::string_view::npos ? line.size() - 1 : close - 1));
+}
+
+// A key line's key and the offset of its '=' in content.
+bool ProfileKeyLine(std::string_view content, std::string_view* key, std::size_t* equals)
+{
+    const std::string_view line = Trim(content);
+    if (line.empty() || line.front() == ';' || line.front() == '[')
+    {
+        return false;
+    }
+    const std::size_t at = content.find('=');
+    if (at == std::string_view::npos)
+    {
+        return false;
+    }
+    *key = Trim(content.substr(0, at));
+    *equals = at;
+    return true;
+}
+
+}  // namespace
+
+std::string UpdatePrivateProfile(std::string_view text,
+                                 std::string_view section,
+                                 std::optional<std::string_view> key,
+                                 std::optional<std::string_view> value)
+{
+    section = Trim(section);
+    const std::string_view key_name = key.has_value() ? Trim(*key) : std::string_view();
+    const std::vector<ProfileLine> lines = SplitProfileLines(text);
+    const auto content = [&](const ProfileLine& line) { return text.substr(line.begin, line.end - line.begin); };
+
+    std::size_t header = lines.size();
+    for (std::size_t index = 0; index < lines.size(); ++index)
+    {
+        const std::optional<std::string_view> name = ProfileHeaderName(content(lines[index]));
+        if (name.has_value() && EqualsWithoutCase(*name, section))
+        {
+            header = index;
+            break;
+        }
+    }
+    std::string result(text);
+    if (header == lines.size())
+    {
+        if (!key.has_value() || !value.has_value())
+        {
+            return result;
+        }
+        if (!result.empty() && result.back() != '\n')
+        {
+            result += "\r\n";
+        }
+        result += "[";
+        result += section;
+        result += "]\r\n";
+        result += key_name;
+        result += "=";
+        result += *value;
+        result += "\r\n";
+        return result;
+    }
+
+    // The section's key lines: the first one matching the key, and the last.
+    std::size_t last_key = header;
+    std::size_t match = lines.size();
+    std::size_t match_equals = 0;
+    for (std::size_t index = header + 1; index < lines.size(); ++index)
+    {
+        const std::string_view line = content(lines[index]);
+        if (ProfileHeaderName(line).has_value())
+        {
+            break;
+        }
+        std::string_view line_key;
+        std::size_t equals = 0;
+        if (!ProfileKeyLine(line, &line_key, &equals))
+        {
+            continue;
+        }
+        last_key = index;
+        if (match == lines.size() && key.has_value() && EqualsWithoutCase(line_key, key_name))
+        {
+            match = index;
+            match_equals = equals;
+        }
+    }
+
+    if (!key.has_value())
+    {
+        result.erase(lines[header].begin, lines[last_key].next - lines[header].begin);
+        return result;
+    }
+    if (match != lines.size())
+    {
+        const ProfileLine& line = lines[match];
+        if (!value.has_value())
+        {
+            std::size_t start = line.begin;
+            while (start < line.end && IsBlank(text[start]))
+            {
+                ++start;
+            }
+            result.erase(start, line.next - start);
+            return result;
+        }
+        const std::size_t value_begin = line.begin + match_equals + 1;
+        std::size_t trailing = line.end;
+        while (trailing > value_begin && IsBlank(text[trailing - 1]))
+        {
+            --trailing;
+        }
+        std::string rewritten(text.substr(line.begin, value_begin - line.begin));
+        rewritten += *value;
+        rewritten.append(text.substr(trailing, line.end - trailing));
+        rewritten.append(line.next > line.end ? text.substr(line.end, line.next - line.end) : std::string_view("\r\n"));
+        result.replace(line.begin, line.next - line.begin, rewritten);
+        return result;
+    }
+    if (!value.has_value())
+    {
+        return result;
+    }
+    const ProfileLine& anchor = lines[last_key];
+    std::string inserted;
+    if (anchor.next == anchor.end)
+    {
+        inserted += "\r\n";
+    }
+    inserted += key_name;
+    inserted += "=";
+    inserted += *value;
+    inserted += "\r\n";
+    result.insert(anchor.next, inserted);
+    return result;
+}
+
 std::optional<std::uint32_t> PrivateProfileIntOverride(std::string_view section,
                                                        std::string_view key,
                                                        std::uint32_t demo_volume)

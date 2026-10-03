@@ -99,7 +99,8 @@ public:
     // host has its own window procedure. The argument is an SDL_Event.
     void SetEventObserver(std::function<void(const void* sdl_event)> observer);
     // Window controls for a window this backend made: its size in window
-    // coordinates, centred again on its display; monitor-sized borderless
+    // coordinates, centred again on its display where the window system lets
+    // a client place its window (Wayland does not); monitor-sized borderless
     // fullscreen on or off; and its title.
     bool ResizeWindow(std::uint32_t width, std::uint32_t height, std::string* error);
     bool SetFullscreen(bool fullscreen, std::string* error);

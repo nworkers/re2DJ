@@ -63,7 +63,7 @@ detail = "The primary host, running on 64-bit Windows. Each release ships a buil
 
 [platforms.linux]
 name = "Linux x86 / x86-64"
-detail = "Port in progress. Built from source; several targets run until their window is closed."
+detail = "Port in progress. Each release ships x86-64 and x86 executables; several targets run until their window is closed."
 
 [states]
 release = "Released"
@@ -96,13 +96,12 @@ published = "Published"
 
 [download]
 title = "Download"
-lead = "Windows builds are distributed as GitHub releases. When a tag is pushed, CI publishes only results that pass the Release build and tests."
+lead = "Windows x86, Linux x86-64 and Linux x86 builds are distributed as GitHub releases. When a tag is pushed, CI publishes only results that pass the Release build and tests on all three platforms."
 latest = "Latest release"
 released = "Released"
-primary = "Download for Windows"
 package = "Executable package"
 checksum = "Checksum"
-checksum_desc = "SHA-256 checksum file for the package zip."
+checksum_desc = "SHA-256 checksum file for the package."
 size = "Size"
 sha256 = "SHA-256"
 notes = "Changes in this version"
@@ -115,9 +114,16 @@ steps = [
   "Run <code>re2dj.exe &lt;set&gt;</code>, e.g. <code>re2dj.exe ez2dj4th</code>. Giving a set name selects run mode automatically.",
   "Press backtick (<code>`</code>) while running to open the OSD. See the README for all options.",
 ]
+linux_steps_title = "Getting started on Linux"
+linux_steps = [
+  "Extract with <code>tar -xzf re2dj-v&lt;version&gt;-linux-x64.tar.gz</code> (<code>linux-x86</code> for 32-bit Linux).",
+  "Put the assets under <code>roms/&lt;set&gt;</code> in the extracted directory, e.g. a MAME CHD in <code>roms/ez2dj4th</code>.",
+  "Run <code>./re2dj &lt;set&gt;</code> from that directory, e.g. <code>./re2dj ez2dj4th</code>.",
+]
 requirements_title = "Requirements"
 requirements = [
   "Windows 10/11 (runs as a 32-bit x86 program on a 64-bit OS)",
+  "Linux: glibc 2.36 or later (Debian 12, Ubuntu 23.04 onward), X11 or Wayland with OpenGL, and PipeWire, PulseAudio or ALSA for sound. The x86 package is for 32-bit x86 Linux.",
   "A legally owned EZ2DJ HDD dump or MAME CHD",
 ]
 older_title = "Older releases"
@@ -128,6 +134,16 @@ source_title = "Build from source"
 source_body = "For Linux x86/x86-64 and development builds, follow <a href=\"{repo_url}#시작하기--getting-started\">Getting started in the README</a>."
 legal_title = "Notice"
 legal_body = "re2DJ is an unofficial project with no affiliation to the rights holders of the original games. This site and its releases contain and distribute no original game binaries, HDD dumps or CHDs."
+
+[download.buttons]
+"windows-x86" = "Download for Windows"
+"linux-x64" = "Download for Linux x86-64"
+"linux-x86" = "Download for Linux x86"
+
+[download.platforms]
+"windows-x86" = "Windows x86"
+"linux-x64" = "Linux x86-64"
+"linux-x86" = "Linux x86"
 
 [credits]
 title = "Credits"

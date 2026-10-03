@@ -56,6 +56,8 @@ python3 -m http.server -d build/site 8000     # http://localhost:8000/
 시간당 60회 제한). 빌드는 모든 페이지의 내부 링크가 산출물 안의 파일을 가리키는지 검사하고, 깨진 링크가
 있으면 실패합니다.
 
+다운로드 페이지는 릴리스 산출물 중 `-windows-x86.zip`, `-linux-x64.tar.gz`, `-linux-x86.tar.gz`를 플랫폼별 패키지로, 각각의 `.sha256`을 그 체크섬으로 묶어 보입니다(`scripts/site/releases.py`, 작업 442).
+
 ## 배포
 
 `.github/workflows/pages.yml`이 main의 관련 경로 변경, Release 워크플로 성공, 수동 실행 때 빌드해
@@ -103,6 +105,8 @@ names.
 
 Python 3.11 or later; see the commands in the Korean section. `GITHUB_TOKEN`/`GH_TOKEN` are used when
 set. The build fails on any broken internal link.
+
+The download page groups the release assets `-windows-x86.zip`, `-linux-x64.tar.gz` and `-linux-x86.tar.gz` as per-platform packages, each with its `.sha256` as the checksum (`scripts/site/releases.py`, Task 442).
 
 ## Deployment
 

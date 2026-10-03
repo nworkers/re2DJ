@@ -33,7 +33,8 @@ struct Ez2DjTurntableBinding
 };
 std::span<const Ez2DjTurntableBinding> Ez2DjTurntableBindings();
 
-inline constexpr std::uint8_t kEz2DjDefaultTurntableStep = 4;
+// The step config/ez2dj-io.example.ini lists (task 441).
+inline constexpr std::uint8_t kEz2DjDefaultTurntableStep = 2;
 
 // The turntables' positions: each starts centred at 0x80 and, at most every
 // 8 ms, moves by the step toward the held direction key (both or neither

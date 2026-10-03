@@ -8,50 +8,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "re2dj/hle/hex_bytes.h"
+
 extern char** environ;
 
 namespace re2dj::platform::linux
 {
-
-std::string EncodeHex(const std::vector<std::uint8_t>& bytes)
-{
-    constexpr char kDigits[] = "0123456789abcdef";
-    std::string text;
-    text.reserve(bytes.size() * 2);
-    for (const std::uint8_t byte : bytes)
-    {
-        text.push_back(kDigits[byte >> 4]);
-        text.push_back(kDigits[byte & 0x0f]);
-    }
-    return text;
-}
-
-bool DecodeHex(const std::string& text, std::vector<std::uint8_t>* bytes)
-{
-    const auto digit = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    };
-    if (text.size() % 2 != 0)
-    {
-        return false;
-    }
-    bytes->clear();
-    bytes->reserve(text.size() / 2);
-    for (std::size_t index = 0; index < text.size(); index += 2)
-    {
-        const int high = digit(text[index]);
-        const int low = digit(text[index + 1]);
-        if (high < 0 || low < 0)
-        {
-            return false;
-        }
-        bytes->push_back(static_cast<std::uint8_t>((high << 4) | low));
-    }
-    return true;
-}
 
 LinuxHostProcessLauncher::LinuxHostProcessLauncher(std::vector<std::string> base_arguments)
     : base_arguments_(std::move(base_arguments))
@@ -97,7 +59,8 @@ bool LinuxHostProcessLauncher::Start(const hle::ChildProcessRequest& request,
                       std::to_string(pipe_fds[1])});
     if (!request.startup_reserved.empty())
     {
-        arguments.insert(arguments.end(), {kGuestStartupReservedOption, EncodeHex(request.startup_reserved)});
+        arguments.insert(arguments.end(),
+                         {kGuestStartupReservedOption, hle::EncodeHexBytes(request.startup_reserved)});
     }
     std::vector<char*> argv;
     argv.reserve(arguments.size() + 1);

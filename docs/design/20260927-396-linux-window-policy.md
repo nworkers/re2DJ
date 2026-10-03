@@ -24,13 +24,13 @@
    ***Shared policy.** `re2dj/graphics/window_policy.h` holds the scale constants (default 2, range 1 to 3), `IsWindowScale`, and `FrameRateMeter` for the title's FPS. Windows' `window_mode.cpp` uses the constants for its default scale and range check. Windows' own FPS computation, tied to its present interval statistics, is left as it is for now.*
 2. **backend 창 조작.** `Sdl3OpenGlBackend`에 다음을 더한다. 모두 backend가 직접 만든 창에만 쓴다. Windows는 자기 HWND를 감싸므로 해당하지 않는다.
    - 생성 옵션 `resizable`, `centered`. 구조체 끝에 두어, 필드를 순서대로 나열해 초기화하는 Windows facade가 깨지지 않게 한다.
-   - `ResizeWindow`: 크기를 바꾸고 다시 가운데로 옮긴다.
+   - `ResizeWindow`: 크기를 바꾸고 다시 가운데로 옮긴다. 가운데 정렬은 요청이며, Wayland처럼 window system이 거절해도 실패로 보지 않는다([작업 435](20261003-435-wayland-window-position.md)).
    - `SetFullscreen`: SDL3의 desktop fullscreen을 쓴다. 테두리 없이 데스크톱 해상도 그대로다.
    - `SetTitle`.
 
    ***Backend window controls.** `Sdl3OpenGlBackend` gains the following, for a window the backend makes itself; Windows wraps its own HWND and is unaffected:*
    - *The creation options `resizable` and `centered`, placed last so the Windows facade, which lists the fields in order, keeps its meaning.*
-   - *`ResizeWindow`, which resizes and centres the window again.*
+   - *`ResizeWindow`, which resizes and centres the window again; centring is a request, and a window system refusing it, as Wayland does, is not a failure ([task 435](20261003-435-wayland-window-position.md)).*
    - *`SetFullscreen`, using SDL3's desktop fullscreen: borderless, at the desktop's resolution.*
    - *`SetTitle`.*
 3. **Linux 창.** `LinuxHostPresentation`이 정책을 적용한다.

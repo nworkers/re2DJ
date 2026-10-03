@@ -19,6 +19,7 @@ inline constexpr std::uint32_t kWin32ErrorInvalidData = 13;
 inline constexpr std::uint32_t kWin32ErrorNoMoreFiles = 18;
 inline constexpr std::uint32_t kWin32ErrorWriteFault = 29;
 inline constexpr std::uint32_t kWin32ErrorReadFault = 30;
+inline constexpr std::uint32_t kWin32ErrorSharingViolation = 32;
 inline constexpr std::uint32_t kWin32ErrorFileExists = 80;
 inline constexpr std::uint32_t kWin32ErrorInvalidParameter = 87;
 inline constexpr std::uint32_t kWin32ErrorInsufficientBuffer = 122;
