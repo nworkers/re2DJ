@@ -32,6 +32,7 @@
 | [win32-cursor-and-child-window-input.md](win32-cursor-and-child-window-input.md) | 자식 창과 키보드 포커스, `GetAsyncKeyState`, `WM_SETCURSOR`와 커서 표시 카운트, 플랫폼 backend 없는 Dear ImGui |
 | [windows-timer-resolution.md](windows-timer-resolution.md) | `Sleep`·`timeGetTime` 해상도, Win9x와 NT 계열 기본값 차이, Windows 10 2004의 프로세스 단위 규칙, `timeGetTime`과 `Sleep`의 분리, SDL3의 기본 요청 |
 | [spdlog-runtime-logging.md](spdlog-runtime-logging.md) | spdlog multi-sink, immediate flush, `critical`과 프로젝트 `FATAL` 의미의 분리 |
+| [sdl3-gamepad-input.md](sdl3-gamepad-input.md) | SDL3 joystick/gamepad 두 층, 가상 조이스틱으로 하는 테스트, Linux의 evdev·HIDAPI 경로 |
 
 새 문서를 추가하거나 이름을 바꾸면 같은 작업에서 이 표를 갱신한다.
 

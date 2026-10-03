@@ -61,6 +61,7 @@ int main()
     RunPresentSyncTests(context);
     RunWindowPolicyTests(context);
     RunEz2DjKeyboardMapTests(context);
+    RunGamepadBindingsTests(context);
     RunGuestFindTests(context);
     RunLegacyTextureTests(context);
     RunTrueColorTests(context);

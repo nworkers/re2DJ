@@ -111,6 +111,7 @@ void RunPresentIntervalHistogramTests(re2dj::test::Context& context);
 void RunPresentSyncTests(re2dj::test::Context& context);
 void RunWindowPolicyTests(re2dj::test::Context& context);
 void RunEz2DjKeyboardMapTests(re2dj::test::Context& context);
+void RunGamepadBindingsTests(re2dj::test::Context& context);
 void RunGuestFindTests(re2dj::test::Context& context);
 void RunLegacyTextureTests(re2dj::test::Context& context);
 void RunTrueColorTests(re2dj::test::Context& context);

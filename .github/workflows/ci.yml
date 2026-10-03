@@ -37,7 +37,7 @@ jobs:
           libwayland-dev libwayland-egl-backend-dev libxkbcommon-dev
           libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev
           libdrm-dev libgbm-dev
-          libasound2-dev libpulse-dev libpipewire-0.3-dev
+          libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev
       - name: Configure
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
@@ -70,7 +70,7 @@ jobs:
           libwayland-dev libwayland-egl-backend-dev libxkbcommon-dev
           libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev
           libdrm-dev libgbm-dev
-          libasound2-dev libpulse-dev libpipewire-0.3-dev;
+          libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev;
           git config --global --add safe.directory "*";
           cmake --preset linux-x86-debug -DRE2DJ_WARNINGS_AS_ERRORS=ON;
           cmake --build --preset linux-x86-debug;

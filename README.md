@@ -237,7 +237,7 @@ re2dj --hdd <directory> [options]
                       16비트 화면(기본값), 32는 24비트 이미지와 블렌드를 채널당
                       8비트로 유지합니다. 게임은 계속 16비트 화면을 봅니다.
                       실행 중에는 OSD의 "32-bit color"로 바꿀 수 있습니다.
-  --io-config <path>  선택한 타깃용 Windows 키보드 I/O mapping INI. 적힌 항목만
+  --io-config <path>  선택한 타깃용 키보드·게임패드 I/O mapping INI. 적힌 항목만
                       내장 기본 매핑을 덮어씁니다.
   --version           버전 출력.
   --help              도움말 출력.
@@ -304,6 +304,10 @@ HLE/Hardlock boundary remains a runtime observation item.
 키보드 입력은 옵션 없이도 동작한다. 기본 매핑이 실행 파일에 내장되어 있으며 EZ2DJ는 `config/ez2dj-io.example.ini`, EZ2Dancer 2nd MOVE는 `config/ez2dancer-io.example.ini`와 같은 값이다. 바꾸고 싶은 항목만 INI에 적어 `--io-config <path>`로 주면 그 항목만 덮어쓰고, 나머지는 기본값을 유지한다. 키를 끄려면 그 항목에 `NONE`을 적는다. EZ2Dancer의 `coin=F5`는 원본 배선이 확정되지 않은 호환 입력이며, 키를 누를 때마다 `0x304` counter를 1 증가시킨다.
 
 *Keyboard input works with no option: the default mapping is built into the executable and matches `config/ez2dj-io.example.ini` for EZ2DJ and `config/ez2dancer-io.example.ini` for EZ2Dancer 2nd MOVE. Passing `--io-config <path>` overrides only the entries the file lists and leaves the rest at their defaults; write `NONE` for an entry to unbind that key. EZ2Dancer's `coin=F5` is a compatibility mapping because the original cabinet wiring is not confirmed; each press increments the `0x304` counter.*
+
+Linux에서는 게임패드도 옵션 없이 동작한다(작업 444). SDL3가 인식하는 패드는 모두 같은 매핑으로 1P를 치며, 기본값은 예제 INI의 `[gamepad]` 섹션과 같다: EZ2DJ는 `X` `Y` `B` `A` `RB`가 1~5번 키, `LB`가 페달, 왼쪽 스틱 좌우가 턴테이블, `START`가 시작, `BACK`이 코인, 십자키가 이펙터 1~4다. 같은 `--io-config` INI의 `[gamepad]` 섹션에 적어 바꾼다. 이름은 `A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `PADDLE1`~`4` `LSTICK_LEFT` `LSTICK_RIGHT` `LSTICK_UP` `LSTICK_DOWN` `RSTICK_*`와 `NONE`이다. 스틱과 트리거는 절반 이상 기울이거나 당겼을 때 눌린 것으로 본다. Windows host는 아직 키보드만 받는다.
+
+*On Linux a gamepad works with no option too (task 444): every pad SDL3 recognises plays player 1 under the same mapping, whose defaults are the example INIs' `[gamepad]` section. For EZ2DJ, `X` `Y` `B` `A` `RB` are keys 1 to 5, `LB` the pedal, the left stick's left and right the turntable, `START` start, `BACK` coin and the d-pad effectors 1 to 4. Change them in the `[gamepad]` section of the same `--io-config` INI; the names are `A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `PADDLE1` to `4`, `LSTICK_LEFT` `LSTICK_RIGHT` `LSTICK_UP` `LSTICK_DOWN`, `RSTICK_*` and `NONE`. A stick or trigger counts as pressed past half its travel. The Windows host still takes the keyboard only.*
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe ez2d2m --io-config .\config\ez2dancer-io.example.ini

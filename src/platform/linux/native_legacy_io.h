@@ -5,6 +5,7 @@
 
 #include "native_guest_fault.h"
 #include "re2dj/hle/host_input.h"
+#include "re2dj/input/io_bindings.h"
 #include "re2dj/input/legacy_io_trap.h"
 
 namespace re2dj::platform::linux
@@ -23,12 +24,16 @@ struct NativeLegacyIoActivity
 };
 
 // Arms the trap for a run: the guest's `in`/`out` faults that the policy
-// claims are answered by the EZ2DJ board's port bus, starting from its power-on
-// state. A disabled policy, or a word-wide one (EZ2Dancer, not modelled on
-// Linux yet), leaves every such fault a fault. Before every read, as the
-// Windows host does, the board's buttons and turntables follow the keys the
-// host holds under the built-in EZ2DJ key map; input may be null for none.
-void SetNativeLegacyIo(const input::LegacyIoTrapPolicy& policy, const hle::HostInputState* host_input);
+// claims are answered by the EZ2DJ board's port bus, or the EZ2Dancer
+// board's for a word-wide policy, starting from its power-on state. A
+// disabled policy leaves every such fault a fault. Before every read, as the
+// Windows host does, the board's buttons and turntables follow the keys and
+// gamepad controls the host holds under the resolved bindings (the built-in
+// defaults, or an --io-config INI's over them; task 444); input may be null
+// for none.
+void SetNativeLegacyIo(const input::LegacyIoTrapPolicy& policy,
+                       const hle::HostInputState* host_input,
+                       const input::IoBindings& bindings);
 void ClearNativeLegacyIo();
 
 // Called from a width's guest signal handler for a SIGSEGV: answers a board

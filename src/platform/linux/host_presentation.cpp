@@ -108,6 +108,21 @@ bool LinuxHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
         return false;
     }
     ReportColorDepth();
+    // The gamepads, from here on read after every frame; a refusal keeps the
+    // keyboard working.
+    std::string gamepad_error;
+    const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+    if (!gamepads_.Initialize(&gamepad_error))
+    {
+        if (logger != nullptr)
+        {
+            logger->warn("input: no gamepads: {}", gamepad_error);
+        }
+    }
+    else if (logger != nullptr)
+    {
+        logger->info("input: gamepads ready, {} connected", gamepads_.open_count());
+    }
     error->clear();
     return true;
 }
@@ -222,6 +237,21 @@ void LinuxHostPresentation::ChangeWindowMode(std::uint32_t scale, bool fullscree
 
 void LinuxHostPresentation::HandleEvent(const void* sdl_event)
 {
+    // A pad coming or going is the reader's, and worth a line in the log.
+    std::string gamepad_name;
+    bool gamepad_added = false;
+    if (gamepads_.HandleEvent(sdl_event, &gamepad_name, &gamepad_added))
+    {
+        const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+        if (logger != nullptr)
+        {
+            logger->info("input: gamepad {}: {} ({} connected)",
+                         gamepad_added ? "added" : "removed",
+                         gamepad_name.empty() ? "unnamed" : gamepad_name,
+                         gamepads_.open_count());
+        }
+        return;
+    }
     if (HandleOsdEvent(sdl_event))
     {
         return;
@@ -415,6 +445,8 @@ bool LinuxHostPresentation::Present(std::string* error)
     {
         return false;
     }
+    // The pump inside Present brought SDL's pad state up to date.
+    input_.gamepad = gamepads_.Read();
     ReportColorDepth();
     if (!pacing_reported_ && backend_->software_pacing_engaged())
     {

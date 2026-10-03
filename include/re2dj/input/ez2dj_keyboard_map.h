@@ -9,9 +9,10 @@
 #include "re2dj/input/ez2dj_io_board.h"
 #include "re2dj/input/legacy_io_port_bus.h"
 
-// How keys stand in for the EZ2DJ I/O board, for both hosts: each button and
-// turntable direction has a name (the key an INI file binds it under) and a
-// built-in default key, and held turntable keys turn the turntable.
+// How keys and gamepad controls stand in for the EZ2DJ I/O board, for both
+// hosts: each button and turntable direction has a name (the key an INI file
+// binds it under), a built-in default key and a built-in default gamepad
+// control (task 444), and held turntable keys turn the turntable.
 namespace re2dj::input
 {
 
@@ -19,9 +20,10 @@ struct Ez2DjButtonBinding
 {
     std::string_view name;
     Ez2DjButton button;
-    // Written as an INI would write it; config/ez2dj-io.example.ini lists the
-    // same keys, which a unit test enforces.
+    // Written as an INI would write them; config/ez2dj-io.example.ini lists
+    // the same keys and controls, which a unit test enforces.
     std::string_view default_key;
+    std::string_view default_gamepad;
 };
 std::span<const Ez2DjButtonBinding> Ez2DjButtonBindings();
 
@@ -30,6 +32,7 @@ struct Ez2DjTurntableBinding
 {
     std::string_view name;
     std::string_view default_key;
+    std::string_view default_gamepad;
 };
 std::span<const Ez2DjTurntableBinding> Ez2DjTurntableBindings();
 

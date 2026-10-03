@@ -14,6 +14,7 @@
 #include "re2dj/hle/guest_files.h"
 #include "re2dj/hle/host_audio.h"
 #include "re2dj/hle/host_presentation.h"
+#include "re2dj/input/io_bindings.h"
 #include "re2dj/input/legacy_io_trap.h"
 #include "re2dj/runtime/address_space.h"
 
@@ -244,6 +245,9 @@ struct OriginalRunEnvironment
     // The profile's I/O board port contract; the run places it at the loaded
     // main image.
     input::LegacyIoTrapPolicy legacy_io;
+    // The keys and gamepad controls the board's inputs follow: the built-in
+    // defaults, or those with an --io-config INI's entries applied (task 444).
+    input::IoBindings io_bindings = input::DefaultIoBindings();
     // Stops the run after this many calls, for diagnostics and regression
     // runs that must end on their own; 0 runs until the guest exits, stops,
     // or the host window is closed.

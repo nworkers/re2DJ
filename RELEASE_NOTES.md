@@ -1,5 +1,43 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.62 (2026-10-04)
+
+### 한국어
+
+Linux host가 게임패드를 받습니다(작업 444). 스팀덱을 겨냥한 첫 단계입니다.
+
+#### 1. 게임패드 입력 (작업 444)
+- SDL3가 인식하는 패드는 모두 같은 매핑으로 1P를 칩니다. 기본값: `X` `Y` `B` `A` `RB`가 1~5번 키, `LB` 페달, 왼쪽 스틱 좌우가 턴테이블, `START` 시작, `BACK` 코인, 십자키가 이펙터 1~4. 2P는 비어 있습니다.
+- 컨트롤 이름(`A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_*` `PADDLE1`~`4` `LSTICK_*` `RSTICK_*` `NONE`)과 바인딩 로더는 host 중립이며, 예제 INI 두 개에 `[gamepad]` 섹션이 생겼습니다. 스틱·트리거는 절반 이상에서 눌림입니다.
+- `--io-config`가 Linux에서도 적용됩니다(키보드·게임패드·`step`). 런처의 자식(6th)에도 전달됩니다.
+- SDL joystick·HIDAPI를 켰습니다. 릴리스 실행 파일의 NEEDED는 그대로(`libm` `libc` `ld-linux`)이며 libudev는 실행 시 `dlopen`합니다.
+
+#### 2. Windows host (작업 445, 원복)
+- Windows 연결을 시도했으나 실제 패드 눌림이 게임에 닿지 않아 원복했습니다. Windows는 이전처럼 키보드만 받습니다. 기록은 작업 445 문서에 있습니다.
+
+#### 3. 검증
+- Linux x64 CTest 5개(새 `re2dj_sdl3_gamepad_test`는 SDL 가상 조이스틱으로 검사), 6th 실행에서 `io config` 적용과 `gamepads ready` 로그, Windows x86 빌드·테스트 통과. 실제 패드로 Linux에서 치는 확인은 아직입니다.
+
+---
+
+### English
+
+The Linux host reads gamepads (task 444), the first step toward the Steam Deck.
+
+#### 1. Gamepad input (task 444)
+- Every pad SDL3 recognises plays player 1 under one mapping. Defaults: `X` `Y` `B` `A` `RB` are keys 1 to 5, `LB` the pedal, the left stick's left and right the turntable, `START` start, `BACK` coin, the d-pad effectors 1 to 4; player 2 is unbound.
+- The control names (`A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_*` `PADDLE1` to `4` `LSTICK_*` `RSTICK_*` `NONE`) and the bindings loader are host-neutral, and both example INIs gain a `[gamepad]` section. Sticks and triggers count as pressed past half their travel.
+- `--io-config` now applies on Linux too (keys, gamepad and `step`), and the launcher's child (6th) inherits it.
+- SDL joystick and HIDAPI are on. The release executable's NEEDED is unchanged (`libm` `libc` `ld-linux`); libudev is `dlopen`ed at run time.
+
+#### 2. The Windows host (task 445, reverted)
+- A Windows wiring was tried, but real pad presses never reached the game, so it was reverted; Windows takes the keyboard only, as before. The record is in the task 445 documents.
+
+#### 3. Verification
+- Five Linux x64 CTest tests (the new `re2dj_sdl3_gamepad_test` drives an SDL virtual joystick), a 6th run logging the applied `io config` and `gamepads ready`, and the Windows x86 build and tests. Playing on Linux with a real pad is still to be checked.
+
+---
+
 ## v0.0.61 (2026-10-03)
 
 ### 한국어

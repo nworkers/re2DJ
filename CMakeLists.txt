@@ -52,9 +52,12 @@ set(SDL_VIDEO ON CACHE BOOL "" FORCE)
 set(SDL_RENDER OFF CACHE BOOL "" FORCE)
 set(SDL_GPU OFF CACHE BOOL "" FORCE)
 set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
-set(SDL_JOYSTICK OFF CACHE BOOL "" FORCE)
+# Gamepads read through the gamepad subsystem (task 444); hidapi serves the
+# pads evdev does not describe, and loads no libusb.
+set(SDL_JOYSTICK ON CACHE BOOL "" FORCE)
 set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
-set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
+set(SDL_HIDAPI ON CACHE BOOL "" FORCE)
+set(SDL_HIDAPI_LIBUSB OFF CACHE BOOL "" FORCE)
 set(SDL_POWER OFF CACHE BOOL "" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
 set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
@@ -166,7 +169,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
     target_link_libraries(re2dj_linux_native_backend
         PUBLIC re2dj_core
-        PRIVATE re2dj_sdl3_opengl_backend re2dj_osd SDL3::SDL3-static re2dj_logging re2dj_warnings
+        PRIVATE re2dj_sdl3_opengl_backend re2dj_sdl3_gamepad re2dj_osd SDL3::SDL3-static re2dj_logging re2dj_warnings
     )
 endif()
 
@@ -328,6 +331,15 @@ target_link_libraries(re2dj_sdl3_opengl_backend
     PRIVATE SDL3::SDL3-static re2dj_warnings
 )
 
+# The SDL3 gamepad reader (task 444): the host's pads as GamepadControls.
+add_library(re2dj_sdl3_gamepad STATIC
+    src/input/sdl3_gamepad_reader.cpp
+)
+target_include_directories(re2dj_sdl3_gamepad PUBLIC include)
+target_link_libraries(re2dj_sdl3_gamepad
+    PRIVATE SDL3::SDL3-static re2dj_warnings
+)
+
 add_library(re2dj_imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -420,6 +432,8 @@ add_library(re2dj_core STATIC
     src/input/virtual_keys.cpp
     src/input/ez2dj_keyboard_map.cpp
     src/input/ez2dancer_keyboard_map.cpp
+    src/input/gamepad.cpp
+    src/input/io_bindings.cpp
     src/exe/code_scan.cpp
     src/exe/immediate_scan.cpp
     src/exe/pe_image.cpp
@@ -779,6 +793,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/present_sync_test.cpp
         tests/unit/window_policy_test.cpp
         tests/unit/ez2dj_keyboard_map_test.cpp
+        tests/unit/gamepad_bindings_test.cpp
         tests/unit/guest_find_test.cpp
         tests/unit/target_profile_test.cpp
         tests/unit/vfs_file_table_test.cpp
@@ -811,5 +826,16 @@ if(RE2DJ_BUILD_TESTS)
         target_link_libraries(re2dj_opengl_true_color_probe
             PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_warnings
         )
+    endif()
+
+    # Drives the gamepad reader with an SDL virtual joystick, so it needs no
+    # hardware and no display.
+    if(TARGET re2dj_sdl3_gamepad)
+        add_executable(re2dj_sdl3_gamepad_test tests/unit/sdl3_gamepad_reader_test.cpp)
+        target_include_directories(re2dj_sdl3_gamepad_test PRIVATE tests/unit)
+        target_link_libraries(re2dj_sdl3_gamepad_test
+            PRIVATE re2dj_sdl3_gamepad re2dj_core SDL3::SDL3-static re2dj_warnings
+        )
+        add_test(NAME re2dj_sdl3_gamepad_test COMMAND re2dj_sdl3_gamepad_test)
     endif()
 endif()

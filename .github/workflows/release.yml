@@ -171,7 +171,7 @@ jobs:
           libwayland-dev libwayland-egl-backend-dev libxkbcommon-dev
           libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev
           libdrm-dev libgbm-dev
-          libasound2-dev libpulse-dev libpipewire-0.3-dev libdecor-0-dev;
+          libasound2-dev libpulse-dev libpipewire-0.3-dev libdecor-0-dev libudev-dev;
           git config --global --add safe.directory "*";
           SDL_AUDIODRIVER=dummy bash scripts/build_release_linux.sh ${{ matrix.platform }} ${{ needs.version.outputs.version }};
           chown -R '"$(id -u):$(id -g)"' build'

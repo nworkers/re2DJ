@@ -13,6 +13,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -411,7 +413,7 @@ void PrintUsage()
         "                      24-bit images and blends at 8 bits per channel.\n"
         "                      The game still sees a 16-bit display. The OSD's\n"
         "                      '32-bit color' switches it while running.\n"
-        "  --io-config <path>  Windows keyboard I/O mapping INI for the selected target.\n"
+        "  --io-config <path>  Keyboard and gamepad I/O mapping INI for the selected target.\n"
         "                      Overrides only the entries it lists; the built-in\n"
         "                      mapping covers the rest.\n"
         "  --version           Print the version and exit.\n"
@@ -813,6 +815,30 @@ struct LinuxHostLifetime
     }
 };
 
+// The I/O board bindings for a Linux run: the built-in defaults with the
+// --io-config INI's entries over them (task 444). The whole file is read and
+// both games' sections resolved, so an error in either shows before the run.
+bool LoadLinuxIoBindings(const std::filesystem::path& io_config,
+                         re2dj::input::IoBindings* bindings,
+                         std::string* error)
+{
+    std::ifstream stream(io_config, std::ios::binary);
+    if (!stream)
+    {
+        *error = "cannot read --io-config " + io_config.string();
+        return false;
+    }
+    std::string text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    std::string detail;
+    if (!re2dj::input::LoadEz2DjIoBindings(text, &bindings->ez2dj, &detail) ||
+        !re2dj::input::LoadEz2DancerIoBindings(text, &bindings->ez2dancer, &detail))
+    {
+        *error = "--io-config " + io_config.string() + ": " + detail;
+        return false;
+    }
+    return true;
+}
+
 // Runs the guest on Linux. Both host widths execute it in this process on the
 // guest facades.
 bool RunLinuxOriginal(const Options& options,
@@ -850,6 +876,25 @@ bool RunLinuxOriginal(const Options& options,
         environment.legacy_io.word_width = lptdi.legacy_io_width == re2dj::target::LegacyIoWidth::kWord;
         environment.legacy_io.in_rva = lptdi.legacy_io_in_rva;
         environment.legacy_io.out_rva = lptdi.legacy_io_out_rva;
+        // The keys and gamepad controls the board follows: the built-in
+        // defaults unless an INI overrides some of them.
+        if (options.io_config.empty())
+        {
+            LogInfo("io config       : built-in defaults");
+        }
+        else if (!lptdi.legacy_io_ports)
+        {
+            LogInfo("io config       : ignored for profile '%s' because legacy I/O is disabled",
+                    profile.id.c_str());
+        }
+        else if (!LoadLinuxIoBindings(options.io_config, &environment.io_bindings, error))
+        {
+            return false;
+        }
+        else
+        {
+            LogInfo("io config       : %s", options.io_config.string().c_str());
+        }
         if (g_linux_presentation == nullptr)
         {
             g_linux_presentation = std::make_unique<linux_platform::LinuxHostPresentation>();
@@ -1704,8 +1749,7 @@ int main(int argc, char** argv)
 #if !defined(_WIN32)
     if (options.demo_volume_explicit ||
         options.audio_volume_trace || options.guest_wait_trace || options.image_dump ||
-        options.present_sync_explicit ||
-        !options.io_config.empty())
+        options.present_sync_explicit)
     {
         LogFatal("EXECUTION_UNSUPPORTED",
                  "selected execution options are currently supported only on Windows");

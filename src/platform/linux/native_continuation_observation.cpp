@@ -394,7 +394,9 @@ bool RunOriginalInProcessContinuation(const std::filesystem::path& executable_pa
     legacy_io.image_base = context.kernel32.image_base();
     ArmAutoplayFlag(environment.autoplay_flag_rva == 0 ? 0
                                                        : context.kernel32.image_base() + environment.autoplay_flag_rva);
-    SetNativeLegacyIo(legacy_io, environment.presentation == nullptr ? nullptr : &environment.presentation->Input());
+    SetNativeLegacyIo(legacy_io,
+                      environment.presentation == nullptr ? nullptr : &environment.presentation->Input(),
+                      environment.io_bindings);
     const bool completed = RunConfiguredNativePeInProcess(file_bytes,
                                                           image_info,
                                                           context.kernel32.image_base(),

@@ -10,6 +10,7 @@
 #include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/window_policy.h"
 #include "re2dj/hle/host_presentation.h"
+#include "re2dj/input/sdl3_gamepad_reader.h"
 
 namespace re2dj::graphics
 {
@@ -30,8 +31,10 @@ namespace re2dj::platform::linux
 // window follows the shared window policy (graphics/window_policy.h): twice
 // the display's size to begin with, Alt+1..3 for the scale, a double click
 // for fullscreen, and the frame rate in the title. Keys, mouse buttons and the
-// pointer over the window become the guest's input state; leaving the window
-// lets go of everything held, since this host sees keys only while focused.
+// pointer over the window become the guest's input state, and so do the
+// gamepads SDL finds, read after every frame's event pump (task 444); leaving
+// the window lets go of everything held, since this host sees keys only
+// while focused.
 //
 // The window carries the same on-screen display as the Windows host's
 // (ui/osd.h): backtick shows and hides it and never reaches the guest, and
@@ -130,6 +133,9 @@ private:
     bool true_color_refusal_reported_ = false;
     graphics::FrameRateMeter frame_rate_;
     hle::HostInputState input_;
+    // The gamepads, started with the window; a start SDL refuses is logged
+    // and leaves the keyboard alone.
+    input::Sdl3GamepadReader gamepads_;
 };
 
 }  // namespace re2dj::platform::linux

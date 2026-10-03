@@ -7,10 +7,10 @@
 #include <time.h>
 
 #include "re2dj/input/ez2dancer_io_port_bus.h"
-#include "re2dj/input/ez2dancer_keyboard_map.h"
 #include "re2dj/input/ez2dj_keyboard_map.h"
+#include "re2dj/input/gamepad.h"
+#include "re2dj/input/io_bindings.h"
 #include "re2dj/input/legacy_io_port_bus.h"
-#include "re2dj/input/virtual_keys.h"
 
 namespace re2dj::platform::linux
 {
@@ -26,20 +26,24 @@ input::LegacyIoTrapPolicy g_policy;
 input::LegacyIoPortBus g_bus;
 input::Ez2DancerIoPortBus g_dancer_bus;
 NativeLegacyIoActivity g_activity;
-// The host's keys and the built-in key map, resolved to virtual keys before
-// the guest starts so the signal handler only looks them up.
+// The host's keys and gamepads, and the bindings resolved to virtual keys
+// and gamepad controls before the guest starts, so the signal handler only
+// looks them up.
 const hle::HostInputState* g_input = nullptr;
-std::array<int, static_cast<std::size_t>(input::Ez2DjButton::kCount)> g_button_keys = {};
-std::array<int, 4> g_turntable_keys = {};
-std::array<int, static_cast<std::size_t>(input::Ez2DancerButton::kCount)> g_dancer_keys = {};
+input::IoBindings g_bindings;
 input::Ez2DjTurntables g_turntables;
 
-bool Held(int virtual_key)
+// Whether an input is pressed: its key or its gamepad control is held.
+bool Held(int virtual_key, int gamepad_control)
 {
-    return virtual_key > 0 && virtual_key < 256 && g_input->virtual_keys.test(static_cast<std::size_t>(virtual_key));
+    if (virtual_key > 0 && virtual_key < 256 && g_input->virtual_keys.test(static_cast<std::size_t>(virtual_key)))
+    {
+        return true;
+    }
+    return input::GamepadControlHeld(g_input->gamepad, gamepad_control);
 }
 
-// Sets the board's inputs from the held keys. Async-signal-safe.
+// Sets the board's inputs from the held keys and controls. Async-signal-safe.
 void PollHostInput()
 {
     if (g_input == nullptr)
@@ -48,44 +52,39 @@ void PollHostInput()
     }
     if (g_policy.word_width)
     {
-        for (std::size_t index = 0; index < g_dancer_keys.size(); ++index)
+        const input::Ez2DancerIoBindings& bindings = g_bindings.ez2dancer;
+        for (std::size_t index = 0; index < bindings.button_keys.size(); ++index)
         {
-            g_dancer_bus.SetButton(static_cast<input::Ez2DancerButton>(index), Held(g_dancer_keys[index]));
+            g_dancer_bus.SetButton(static_cast<input::Ez2DancerButton>(index),
+                                   Held(bindings.button_keys[index], bindings.button_gamepad[index]));
         }
         return;
     }
-    for (std::size_t index = 0; index < g_button_keys.size(); ++index)
+    const input::Ez2DjIoBindings& bindings = g_bindings.ez2dj;
+    for (std::size_t index = 0; index < bindings.button_keys.size(); ++index)
     {
-        g_bus.SetButton(static_cast<input::Ez2DjButton>(index), Held(g_button_keys[index]));
+        g_bus.SetButton(static_cast<input::Ez2DjButton>(index),
+                        Held(bindings.button_keys[index], bindings.button_gamepad[index]));
     }
     std::array<bool, 4> held = {};
     for (std::size_t index = 0; index < held.size(); ++index)
     {
-        held[index] = Held(g_turntable_keys[index]);
+        held[index] = Held(bindings.turntable_keys[index], bindings.turntable_gamepad[index]);
     }
     timespec now = {};
     clock_gettime(CLOCK_MONOTONIC, &now);
     const auto now_ms = static_cast<std::uint64_t>(now.tv_sec) * 1000U + static_cast<std::uint64_t>(now.tv_nsec) / 1000000U;
-    g_turntables.Update(&g_bus, now_ms, held, input::kEz2DjDefaultTurntableStep);
+    g_turntables.Update(&g_bus, now_ms, held, bindings.turntable_step);
 }
 
 }  // namespace
 
-void SetNativeLegacyIo(const input::LegacyIoTrapPolicy& policy, const hle::HostInputState* host_input)
+void SetNativeLegacyIo(const input::LegacyIoTrapPolicy& policy,
+                       const hle::HostInputState* host_input,
+                       const input::IoBindings& bindings)
 {
     g_input = host_input;
-    for (const input::Ez2DjButtonBinding& binding : input::Ez2DjButtonBindings())
-    {
-        g_button_keys[static_cast<std::size_t>(binding.button)] = input::ParseKeyName(binding.default_key);
-    }
-    for (std::size_t index = 0; index < g_turntable_keys.size(); ++index)
-    {
-        g_turntable_keys[index] = input::ParseKeyName(input::Ez2DjTurntableBindings()[index].default_key);
-    }
-    for (const input::Ez2DancerButtonBinding& binding : input::Ez2DancerButtonBindings())
-    {
-        g_dancer_keys[static_cast<std::size_t>(binding.button)] = input::ParseKeyName(binding.default_key);
-    }
+    g_bindings = bindings;
     g_turntables = input::Ez2DjTurntables();
     g_policy = policy;
     g_bus = input::LegacyIoPortBus();
