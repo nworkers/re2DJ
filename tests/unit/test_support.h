@@ -108,6 +108,7 @@ void RunEz2DancerIoBoardTests(re2dj::test::Context& context);
 void RunLegacyDrawCommandTests(re2dj::test::Context& context);
 void RunPresentationFilterTests(re2dj::test::Context& context);
 void RunPresentIntervalHistogramTests(re2dj::test::Context& context);
+void RunPostShaderTests(re2dj::test::Context& context);
 void RunPresentSyncTests(re2dj::test::Context& context);
 void RunWindowPolicyTests(re2dj::test::Context& context);
 void RunEz2DjKeyboardMapTests(re2dj::test::Context& context);

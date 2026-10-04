@@ -31,6 +31,7 @@
 #include "re2dj/storage/guest_path.h"
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/graphics/color_depth.h"
+#include "re2dj/graphics/post_shader_catalog.h"
 #include "re2dj/hle/hex_bytes.h"
 #include "re2dj/logging/logging.h"
 #include "re2dj/target/target_profile.h"
@@ -173,6 +174,9 @@ struct Options
     unsigned image_dump_delay_ms = 0;
     bool fullscreen = false;
     re2dj::graphics::ColorDepth color_depth = re2dj::graphics::ColorDepth::k16;
+    // --post-shader (task 455); without it RE2DJ_POST_SHADER, then none.
+    bool post_shader_explicit = false;
+    std::string post_shader;
     bool list_targets = false;
     bool run = false;
     bool positional_target = false;
@@ -408,11 +412,17 @@ void PrintUsage()
         "                      24-bit images and blends at 8 bits per channel.\n"
         "                      The game still sees a 16-bit display. The OSD's\n"
         "                      '32-bit color' switches it while running.\n"
+        "  --post-shader <id>, --post-shader=<id>\n"
+        "                      Screen post-processing shader: 'none' (default),\n"
+        "                      the built-in 'crt' or 'scanline', or a .glsl file\n"
+        "                      name in shaders/. Overrides RE2DJ_POST_SHADER. The\n"
+        "                      OSD switches it while running.\n"
         "  --io-config <path>  Keyboard and gamepad I/O mapping INI for the selected target.\n"
         "                      Overrides only the entries it lists; the built-in\n"
         "                      mapping covers the rest.\n"
         "  --version           Print the version and exit.\n"
         "  --help              Print this message and exit.\n"
+        "  --                  End the options: what follows is read as the profile id.\n"
         "\n"
         "The HDD directory is read only. Supported execution paths route\n"
         "guest writes to a separate overlay directory.\n",
@@ -904,6 +914,18 @@ bool RunInProcessOriginal(const Options& options,
             {re2dj::VersionBanner("re2DJ", re2dj::VersionString()) + " - Build " + __DATE__,
              "Target Profile : " + profile.id,
              "Executable : " + std::filesystem::path(profile.executable_relative_path).filename().string()});
+        // The screen shader: --post-shader, then RE2DJ_POST_SHADER, then none.
+        // A launcher's child inherits both the command line and the
+        // environment, so it opens with the same one.
+        const std::string post_shader = re2dj::graphics::ChoosePostShader(
+            options.post_shader_explicit ? &options.post_shader : nullptr,
+            std::getenv(re2dj::graphics::kPostShaderVariable));
+        g_presentation->SetPostShader(post_shader);
+        if (post_shader != re2dj::graphics::kPostShaderNoneId)
+        {
+            LogInfo("post shader     : %s%s", post_shader.c_str(),
+                    options.post_shader_explicit ? "" : " (RE2DJ_POST_SHADER)");
+        }
         environment.presentation = g_presentation.get();
         // Autoplay only for the exact build it was confirmed in; a launcher's
         // child picks by its own executable (task 436).
@@ -1019,6 +1041,9 @@ bool RunInProcessOriginal(const Options& options,
 }
 #endif
 
+constexpr std::string_view kEndOfOptions = "--";
+constexpr std::string_view kPostShaderEquals = "--post-shader=";
+
 bool TakeValue(int argc, char** argv, int* index, std::string_view name, std::string* out)
 {
     if (*index + 1 >= argc)
@@ -1031,12 +1056,43 @@ bool TakeValue(int argc, char** argv, int* index, std::string_view name, std::st
     return true;
 }
 
+// A profile id given without --target, which also selects --run.
+bool TakePositionalTarget(std::string_view argument, Options* options)
+{
+    if (options->positional_target)
+    {
+        LogError("only one profile id may be specified");
+        return false;
+    }
+    options->positional_target = true;
+    if (!options->target_option_explicit)
+    {
+        options->target_id = std::string(argument);
+    }
+    options->run = true;
+    return true;
+}
+
 bool ParseOptions(int argc, char** argv, Options* options)
 {
+    // After `--` nothing is read as an option (rePIU task 771's rule).
+    bool options_ended = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string_view argument = argv[index];
-        if (argument == "--help" || argument == "-h")
+        if (options_ended)
+        {
+            if (!argument.empty() && !TakePositionalTarget(argument, options))
+            {
+                return false;
+            }
+            continue;
+        }
+        if (argument == kEndOfOptions)
+        {
+            options_ended = true;
+        }
+        else if (argument == "--help" || argument == "-h")
         {
             options->show_help = true;
         }
@@ -1232,6 +1288,28 @@ bool ParseOptions(int argc, char** argv, Options* options)
             }
             options->color_depth_explicit = true;
         }
+        else if (argument == "--post-shader" || argument.rfind(kPostShaderEquals, 0) == 0)
+        {
+            // `--post-shader <id>` or `--post-shader=<id>`; a repeated option
+            // takes the last value.
+            if (argument == "--post-shader")
+            {
+                if (!TakeValue(argc, argv, &index, argument, &options->post_shader))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                options->post_shader = std::string(argument.substr(kPostShaderEquals.size()));
+            }
+            if (options->post_shader.empty())
+            {
+                LogError("--post-shader needs a shader id, or none");
+                return false;
+            }
+            options->post_shader_explicit = true;
+        }
         else if (argument == "--io-config")
         {
             std::string value;
@@ -1260,17 +1338,10 @@ bool ParseOptions(int argc, char** argv, Options* options)
         }
         else if (!argument.empty() && argument.front() != '-')
         {
-            if (options->positional_target)
+            if (!TakePositionalTarget(argument, options))
             {
-                LogError("only one profile id may be specified");
                 return false;
             }
-            options->positional_target = true;
-            if (!options->target_option_explicit)
-            {
-                options->target_id = std::string(argument);
-            }
-            options->run = true;
         }
         else
         {
@@ -1598,6 +1669,13 @@ int RunMain(int argc, char** argv)
             argument == "--guest-exit-code-fd")
         {
             ++index;
+            continue;
+        }
+        // The child options go after these arguments, where a `--` would
+        // stop them being read as options. Profile ids never start with '-',
+        // so the arguments it guarded read the same without it.
+        if (argument == kEndOfOptions)
+        {
             continue;
         }
         g_child_base_arguments.emplace_back(argument);

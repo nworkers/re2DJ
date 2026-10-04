@@ -21,3 +21,19 @@ README와 프로젝트 사이트의 소개에 쓰는 화면입니다. 원본 실
 - 사이트 빌드(`scripts/site/build_site.py`)는 이 디렉터리를 산출물의 `screenshots/`로 복사합니다. 사이트에 보일 목록과 순서는 `docs/sites/site.toml`의 `[[screenshots]]`, 설명은 `docs/sites/i18n/*.toml`의 `[screenshots.captions]`에 있습니다.
 
 *Taken with the Windows x86 Release build of v0.0.63 (task 453), running `re2dj <target>` in the default 2x window (1280x960); the window's client area was captured every 3 s for 60 s of attract screens with no input, one frame chosen, scaled to 640x480 and saved as JPEG (quality 90). The site build (`scripts/site/build_site.py`) copies this directory to `screenshots/` in its output; the list and order shown on the site are in `[[screenshots]]` of `docs/sites/site.toml`, and the captions in `[screenshots.captions]` of `docs/sites/i18n/*.toml`.*
+
+## 셰이더 비교 / Shader comparison (`shaders/`)
+
+작업 456에서 후처리 셰이더(작업 455)를 비교하려고 찍은 화면입니다. 장면마다 `none`·`crt`·`scanline`의 1280x960 전체 화면(JPEG, 품질 90)과, 같은 320x240 부분을 1:1로 잘라 그 순서로 나란히 놓은 띠(`*-crop.png`)가 있습니다. 주사선은 출력 픽셀 단위 무늬라 줄이지 않았습니다.
+
+*Captured in task 456 to compare the post-processing shaders (task 455): for each scene, the full 1280x960 frame under `none`, `crt` and `scanline` (JPEG, quality 90) and a strip of the same 320x240 part cropped 1:1 in that order (`*-crop.png`); scanlines are an output-pixel pattern, so nothing is scaled down.*
+
+| 장면 | 파일 |
+| --- | --- |
+| 4th 타이틀 / title | `ez2dj4th-title-{none,crt,scanline}.jpg`, `ez2dj4th-title-crop.png` |
+| 4th 데모 플레이 / demo play | `ez2dj4th-demo-play-{none,crt,scanline}.jpg`, `ez2dj4th-demo-play-crop.png` |
+| 6th 타이틀 / title | `ez2dj6th-title-{none,crt,scanline}.jpg`, `ez2dj6th-title-crop.png` |
+
+- Windows x86 Release, 기본 2배 창, `re2dj <target> --post-shader <id>`를 셰이더마다 따로 실행해 같은 시점(4th 40초·56초, 6th 46초)에 `PrintWindow`로 창 클라이언트 영역을 받았습니다. 데모 플레이는 실행마다 몇 프레임씩 어긋납니다.
+
+  *Windows x86 Release in the default 2x window, `re2dj <target> --post-shader <id>` run separately per shader and the window's client area taken with `PrintWindow` at the same moments (4th at 40 s and 56 s, 6th at 46 s); demo play drifts by a few frames between runs.*

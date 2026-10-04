@@ -4,6 +4,22 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+- **작업 457 — 셰이더 명령행 옵션을 rePIU 작업 771과 맞췄습니다.** `--post-shader=<id>` 형식, 빈 값의 exit 1, 옵션 끝을 뜻하는 `--`를 더했고, 런처 자식 인자에서는 `--`를 뺍니다. 근거: [설계](design/20261005-457-post-shader-command-line.md), [작업 로그](work-logs/20261005-457-post-shader-command-line.md).
+
+  *Task 457 — matched the shader command-line option to rePIU task 771: the `--post-shader=<id>` form, exit 1 on an empty value, and `--` ending the options, dropped from a launcher child's arguments. Evidence: [design](design/20261005-457-post-shader-command-line.md), [work log](work-logs/20261005-457-post-shader-command-line.md).*
+
+- **작업 454 — CI의 Linux x64 clang 빌드를 고쳤습니다.** 쓰이지 않는 `kHeapGenerateExceptions`가 clang `-Wunused-const-variable`(`-Werror`)로 dfa8e69부터 빌드를 막고 gcc 작업까지 취소시켰습니다. 근거: [작업 로그](work-logs/20261005-454-clang-ci-build.md).
+
+  *Task 454 — fixed the Linux x64 clang CI build: the unused `kHeapGenerateExceptions` had failed it under clang's `-Wunused-const-variable` (`-Werror`) since dfa8e69, cancelling the gcc job too. Evidence: [work log](work-logs/20261005-454-clang-ci-build.md).*
+
+- **작업 455 — 화면 후처리 셰이더를 넣었습니다.** rePIU 작업 768과 같은 libretro 단일 pass GLSL 형식으로, 내장 `crt`·`scanline`과 `shaders/*.glsl`을 `--post-shader`·`RE2DJ_POST_SHADER`·OSD로 고릅니다. Present가 논리 해상도 render target을 창에 그리는 마지막 quad를 셰이더로 그리므로 복사가 없고, `none`이면 GL 호출이 이전과 같습니다. 근거: [설계](design/20261005-455-post-process-shaders.md), [작업 로그](work-logs/20261005-455-post-process-shaders.md), [가이드](guides/post-process-shaders.md).
+
+  *Task 455 — added screen post-processing shaders in rePIU task 768's libretro single-pass GLSL format: the built-in `crt` and `scanline` and `shaders/*.glsl`, chosen with `--post-shader`, `RE2DJ_POST_SHADER` or the OSD. Present's final quad drawing the logical-resolution render target into the window is drawn through the shader, so nothing is copied, and `none` issues the same GL calls as before. Evidence: [design](design/20261005-455-post-process-shaders.md), [work log](work-logs/20261005-455-post-process-shaders.md), [guide](guides/post-process-shaders.md).*
+
+- **작업 456 — 셰이더 비교 스크린샷과 WIP 글을 냈습니다.** 4th·6th의 `none`·`crt`·`scanline` 화면을 `docs/screenshots/shaders/`에 두고 개발 기록 글과 README에 실었습니다. 개발 기록 지침은 re2DJ가 그린 화면 캡처를 허용하도록 바꿨습니다. 근거: [작업 로그](work-logs/20261005-456-shader-screenshots-and-post.md).
+
+  *Task 456 — published shader comparison screenshots and a WIP post: 4th and 6th under `none`, `crt` and `scanline` in `docs/screenshots/shaders/`, shown in the dev-log post and the README, with the dev-log guideline changed to allow captures of what re2DJ draws. Evidence: [work log](work-logs/20261005-456-shader-screenshots-and-post.md).*
+
 - **작업 446~450 — Windows도 in-process 러너로 원본을 실행하고 주입 경로를 지웠습니다.** OS 중립 러너를 `src/platform/native/`(OS 계약 `native_host_services.h`), SDL3 host를 `src/platform/sdl/`로 옮겼고, Windows x86 backend(그림자 TEB, VEH fault 배달, naked asm 전환)를 더했습니다. `re2dj.exe`는 일시 정지 재실행으로 0x400000을 예약하고 게스트를 16 MiB 스택 스레드에서 돌립니다. 주입 runtime과 Windows 전용 facade 73개 파일을 지웠습니다. 근거: [446](work-logs/20261004-446-windows-in-process-loader.md), [447](work-logs/20261004-447-sdl-hosts-shared.md), [448](work-logs/20261004-448-windows-x86-backend.md), [449](work-logs/20261004-449-windows-cli-in-process.md), [450](work-logs/20261004-450-remove-windows-injection.md) 작업 로그.
 
   *Tasks 446 to 450 — Windows runs the original through the in-process runner and the injection path is gone. The OS-neutral runner moved to `src/platform/native/` (OS contract `native_host_services.h`) and the SDL3 hosts to `src/platform/sdl/`, with a Windows x86 backend added (shadow TEB, VEH fault delivery, naked-asm transitions); `re2dj.exe` reserves 0x400000 through a suspended relaunch and runs the guest on a 16 MiB-stack thread; the injected runtime and Windows-only facades (73 files) were removed. Evidence: the work logs of [446](work-logs/20261004-446-windows-in-process-loader.md), [447](work-logs/20261004-447-sdl-hosts-shared.md), [448](work-logs/20261004-448-windows-x86-backend.md), [449](work-logs/20261004-449-windows-cli-in-process.md), [450](work-logs/20261004-450-remove-windows-injection.md).*

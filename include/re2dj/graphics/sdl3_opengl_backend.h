@@ -9,6 +9,7 @@
 #include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/post_shader_control.h"
 #include "re2dj/graphics/present_overlay.h"
 #include "re2dj/graphics/present_sync.h"
 
@@ -41,6 +42,11 @@ struct Sdl3OpenGlWindowConfig
     // can resize it, and whether it opens centred on its display.
     bool resizable = false;
     bool centered = false;
+    // The post-processing shader the window starts with (task 455): `none`,
+    // a built-in id or a file name in the shader directory. Null or empty is
+    // `none`. One that does not compile leaves the window without a shader;
+    // the host reads why through post_shader_control().
+    const char* post_shader = nullptr;
 };
 
 class Sdl3OpenGlBackend
@@ -123,6 +129,11 @@ public:
     // planes.
     ColorDepth render_target_depth() const;
     bool true_color_unavailable() const;
+    // The post-processing pass (task 455), for the OSD's shader menu and for
+    // the host to record what the window started with. Null before
+    // Initialize succeeds or when the driver lacks the shader entry points.
+    // Use it on the presenting thread only.
+    PostShaderControl* post_shader_control();
 
     // The primary display's desktop mode, read without a window: its size,
     // bits per pixel (bytes per pixel times eight, as Windows reports a

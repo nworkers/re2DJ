@@ -822,7 +822,6 @@ bool WriteProcessMemory(const ImportCall& call, ImportReturn* result, std::strin
 
 // Win32 heap flags (winnt.h) the heap exports read.
 constexpr std::uint32_t kHeapNoSerialize = 0x00000001U;
-constexpr std::uint32_t kHeapGenerateExceptions = 0x00000004U;
 constexpr std::uint32_t kHeapZeroMemory = 0x00000008U;
 constexpr std::uint32_t kHeapReallocInPlaceOnly = 0x00000010U;
 

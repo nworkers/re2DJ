@@ -1,0 +1,31 @@
+# 작업 455 작업 로그 — 화면 후처리 셰이더 / Task 455 work log — post-processing shaders
+
+설계: [20261005-455-post-process-shaders.md](../design/20261005-455-post-process-shaders.md) · 지시서: [20261005-455-post-process-shaders.md](../work-orders/20261005-455-post-process-shaders.md)
+
+## 2026-10-05
+
+- **출발점**: 사용자가 rePIU v0.0.200의 셰이더 기능을 같은 방식으로 넣으라고 했다. rePIU 로컬 클론(`5a40dae`)의 설계·코드·셰이더·OSD·가이드·kb를 읽었다. 범위는 사용자와 정해 셰이더만(rePIU 작업 769의 전체 화면 토글 제외)으로 했다.
+- **re2DJ에 맞춘 차이**: rePIU는 back buffer를 `glCopyTexSubImage2D`로 복사하지만, re2DJ는 게임이 논리 해상도 FBO에 그리고 Present가 그것을 quad 하나로 창에 그리므로 그 quad를 후처리 program으로 그린다. 복사·`glPushAttrib`·immediate mode가 없고, Present의 client-side 배열(attribute 0·1·2)을 그대로 쓴다. `Draw`가 매번 자기 program을 쓰는 것을 확인해, 후처리 뒤에는 기본 program만 되돌린다. 런처 ini 대신 `--post-shader`와 `RE2DJ_POST_SHADER`를 둔다.
+- **구현**
+  - GL 없음(`re2dj_legacy_graphics`): `post_shader_source`(rePIU 코드를 namespace만 바꿔 가져옴), `post_shader_catalog`(+ `ChoosePostShader`), `post_shader_control.h`(OSD용 인터페이스). 내장 `crt.glsl`·`scanline.glsl`은 머리 주석만 re2DJ로 바꿨다. CMake가 configure 때 `generated/re2dj/graphics/post_shader_builtins.inc`를 만든다.
+  - GL(`re2dj_sdl3_opengl_backend`): `OpenGlPostProcess`(함수 해석, 컴파일·링크, `Select`·`Reload`, `UseForPresent`). backend는 `Initialize` 끝에서 만들고 `Sdl3OpenGlWindowConfig::post_shader`로 처음 셰이더를 고르며, 소멸 때 컨텍스트가 살아 있을 때 `Shutdown`한다. `post_shader_control()`을 연다.
+  - OSD: `SetPostShaderControl`, Screen shader 메뉴(콤보, Reload, 빨간 오류, 매개변수 슬라이더, 디렉터리 안내).
+  - SDL host: `SetPostShader`, 창을 연 뒤 `presentation: post shader …` 또는 적용 실패 경고 로그, OSD 연결.
+  - CLI: `--post-shader <id>`(빈 값 거부), 없으면 `RE2DJ_POST_SHADER`, 로그 `post shader     : …`, 사용법.
+  - 테스트: `tests/unit/post_shader_test.cpp`(조립, `#version` 뒤 삽입, 중복 매개변수, 형식 오류 5종, 내장·임시 디렉터리 목록, `none`·없는 파일 조회, 선택 우선순위), GL probe `tests/graphics/opengl_post_shader_probe.cpp`(present overlay로 swap 직전 back buffer를 읽음).
+  - 도중 문제: 스크립트로 문자 상수를 넣다 실제 NUL 바이트가 들어가 파일이 바이너리로 보였다. 바로 고쳤다.
+- **문서**: 가이드 `post-process-shaders.md`, kb `libretro-glsl-post-shaders.md`, 두 색인, README(옵션·소개 문단), ARCHITECTURE(새 절, 빌드 표). 셰이더는 같은 저작자의 BSD 3-Clause 코드라 `THIRD_PARTY_NOTICES.md`·`CREDITS.md`는 바꾸지 않았다.
+
+  *Starting point: the user asked for rePIU v0.0.200's shader feature the same way; the design, code, shaders, OSD, guide and kb in the local rePIU clone (`5a40dae`) were read, and the scope was agreed as shaders only (without rePIU task 769's fullscreen toggle). Differences for re2DJ: rePIU copies the back buffer with `glCopyTexSubImage2D`, while re2DJ's game draws into a logical-resolution FBO that Present draws as one quad, so that quad is drawn through the post program — no copy, no `glPushAttrib`, no immediate mode, Present's client-side arrays (attributes 0, 1, 2) as they are; `Draw` was confirmed to set its program on every draw, so only the default program is restored afterwards; `--post-shader` and `RE2DJ_POST_SHADER` stand in for the launcher ini. Implementation: GL-free `post_shader_source` (rePIU's code with the namespace changed), `post_shader_catalog` (plus `ChoosePostShader`) and `post_shader_control.h` in `re2dj_legacy_graphics`, the built-ins with only their header comments changed, the header generated at configure time; `OpenGlPostProcess` in the backend library, created at the end of `Initialize`, given the first shader through `Sdl3OpenGlWindowConfig::post_shader`, shut down while the context lives, exposed through `post_shader_control()`; the OSD's Screen shader menu; the SDL host's `SetPostShader`, log and OSD wiring; the CLI's `--post-shader` (an empty value refused), `RE2DJ_POST_SHADER`, log line and usage; unit tests and the GL probe reading the back buffer before the swap through the present overlay. A stray NUL byte from a scripted character constant made one file look binary and was fixed at once. Documents: the guide, the kb topic, both indexes, the README and ARCHITECTURE; the shaders are BSD 3-Clause code by the same author, so the notices and credits are unchanged.*
+
+- **검증**
+  - Windows x86 Debug(MSVC, 경고를 오류로): 다시 configure한 전체 빌드 성공, CTest 4개 통과. Windows x86 Release 빌드 성공(경고 없음).
+  - GL probe(Windows, RTX 4090): 12/12 — 2배 그림, `none` 흰색, `scanline` 밝은 행 48·어두운 행 48 교대, `crt` 모서리 0,0,0·가운데 230,255,230, 없는 셰이더 거부·`none` 유지, 셰이더 뒤 게스트의 빨간 그리기 255,0,0.
+  - GL probe(WSLg, llvmpipe): 12/12, 같은 값.
+  - WSL Linux x64 clang·gcc, x86 Debug(경고를 오류로): 빌드 성공, CTest 각 5개 통과.
+  - 실제 게임(Windows Debug): 4th `--post-shader crt`(6 parameters), `RE2DJ_POST_SHADER=scanline`(2 parameters), 환경 변수 crt + `--post-shader my_scan.glsl`(명령행 우선, 사용자 파일), `--post-shader nope`(경고 후 `none`). 6th `--post-shader crt`: 런처와 `EZ2DJ6TH.EXE` 자식 모두 crt, 자식 창에 적용.
+  - 실제 게임(WSL Linux x64): 4th `--post-shader crt` 적용 로그.
+  - 성능(Windows Release, 4th 어트랙트 25초, vsync, 10초 이후 평균): `none` 59.7 fps·CPU 15%, `crt` 60.0·12%, `scanline` 59.8·14.5%(코어 하나 기준, 측정 오차 범위).
+  - **사람이 확인할 것**: OSD에서 마우스로 셰이더 전환·Reload·슬라이더 조작(이 작업에서는 자동화하지 않음).
+
+  *Verification: the Windows x86 Debug build (MSVC, warnings as errors), reconfigured, passes in full with 4 CTest tests, and the Release build passes with no warnings; the GL probe passes 12/12 on Windows (RTX 4090) — the 2x picture, white under `none`, 48 bright and 48 dark alternating rows under `scanline`, a 0,0,0 corner and a 230,255,230 centre under `crt`, a missing shader refused with `none` kept, and the guest's red draw after the shader at 255,0,0 — and 12/12 with the same values under WSLg (llvmpipe); the WSL Linux x64 clang and gcc and x86 Debug builds (warnings as errors) pass with 5 CTest tests each; real Windows Debug runs: 4th with `--post-shader crt` (6 parameters), `RE2DJ_POST_SHADER=scanline` (2 parameters), the variable at crt with `--post-shader my_scan.glsl` (the command line wins, a user file), and `--post-shader nope` (a warning, then `none`), and 6th with `--post-shader crt`, where both the launcher and the `EZ2DJ6TH.EXE` child took crt and the child's window applied it; a real WSL Linux x64 run of 4th logs crt applied; performance (Windows Release, 4th attract 25 s, vsync, averaged after 10 s): `none` 59.7 fps at 15% CPU, `crt` 60.0 at 12%, `scanline` 59.8 at 14.5% (of one core, within noise). For a person to check: switching, Reload and the sliders with the mouse in the OSD, not automated here.*

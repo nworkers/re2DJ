@@ -54,6 +54,9 @@ public:
     // The OSD's information lines, as the Windows host shows them; set before
     // the guest takes the display.
     void SetOsdInfoLines(std::vector<std::string> lines) { osd_info_lines_ = std::move(lines); }
+    // The post-processing shader the window opens with (task 455), chosen by
+    // the CLI; `none` by default.
+    void SetPostShader(std::string id) { post_shader_ = std::move(id); }
 
     bool ShowGuestWindow(std::uint32_t guest_window,
                          std::uint32_t width,
@@ -113,10 +116,14 @@ private:
     // Records the render target's colour depth when it differs from what was
     // last recorded, so a run's log says when 32-bit colour took effect.
     void ReportColorDepth();
+    // Logs which post-processing shader the window opened with, or why the
+    // one asked for is not applied.
+    void ReportPostShader();
 
     // Declared before the backend, so the backend, which draws it, goes first.
     std::unique_ptr<ui::Osd> osd_;
     std::vector<std::string> osd_info_lines_;
+    std::string post_shader_ = "none";
     std::unique_ptr<graphics::Sdl3OpenGlBackend> backend_;
     std::uint32_t guest_window_ = 0;
     std::uint32_t logical_width_ = 0;

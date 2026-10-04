@@ -36,7 +36,7 @@ Body...
 * 첫 문단이 목록 페이지의 요약으로 쓰입니다.
 * 저장소 상대 링크는 GitHub으로, 이 디렉터리의 다른 글 링크는 사이트 글 페이지로 자동 변환됩니다.
 * Mermaid 코드 블록은 게시 페이지에서 도식으로 렌더링됩니다.
-* 원본 게임 자산(바이트 덤프, 화면 캡처 포함)은 싣지 않습니다.
+* 원본 게임 자산(실행 파일, 데이터, 바이트 덤프)은 싣지 않습니다. 화면 캡처는 re2DJ가 실행해 그린 화면을 `docs/screenshots/`에 두고 그 파일을 링크할 때만 씁니다(2026-10-05 변경, 작업 456).
 
 ## English
 
@@ -50,4 +50,4 @@ Posts in this directory are published as the "Dev log" of the project site (<htt
 
 ## Body structure
 
-Same rule as the release notes: the full Korean document first, then the full English document under a `## English` line. Each language's first heading becomes that page's title, and the first paragraph becomes the list-page summary. Repository-relative links are rewritten to GitHub, links to other posts in this directory become site links, and Mermaid code blocks render as diagrams. Never include original game assets, byte dumps or captured game screens.
+Same rule as the release notes: the full Korean document first, then the full English document under a `## English` line. Each language's first heading becomes that page's title, and the first paragraph becomes the list-page summary. Repository-relative links are rewritten to GitHub, links to other posts in this directory become site links, and Mermaid code blocks render as diagrams. Never include original game assets (executables, data, byte dumps); a screen capture is allowed only as a picture re2DJ drew while running, stored under `docs/screenshots/` and linked from there (changed 2026-10-05, task 456).

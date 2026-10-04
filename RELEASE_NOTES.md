@@ -1,5 +1,69 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.64 (2026-10-05)
+
+### 한국어
+
+게임 화면에 CRT 모니터 느낌을 입히는 후처리 셰이더가 생겼습니다(작업 455~457). rePIU v0.0.200·v0.0.201과 같은 형식과 명령행 규칙입니다. CI의 Linux clang 빌드도 고쳤습니다(작업 454).
+
+#### 1. 화면 후처리 셰이더 (작업 455)
+- 형식은 libretro 단일 pass GLSL입니다. 내장 `crt`(곡률, 가우시안 빔 주사선, aperture grille 마스크, 비네트)와 `scanline`이 실행 파일에 들어 있고, `shaders/*.glsl` 파일도 목록에 함께 나옵니다.
+- 고르는 법: `--post-shader <id>`가 먼저이고, 없으면 `RE2DJ_POST_SHADER`, 둘 다 없으면 `none`입니다. 실행 중에는 백틱 OSD의 Screen shader 메뉴에서 바꾸고, Reload로 다시 읽고, 매개변수 슬라이더로 조절합니다.
+- 6th처럼 런처가 자식을 띄우는 타깃은 자식도 같은 셰이더로 열립니다.
+- 표시 단계에서만 적용됩니다. 게임이 그린 640x480 화면을 창에 그리는 마지막 단계를 셰이더로 바꾸므로 복사가 없고, 게임이 읽는 화면은 그대로입니다. `none`이면 이전과 GL 호출이 같습니다.
+- 4th에서 세 셰이더 모두 약 60fps이고, CPU 차이는 측정 오차 범위입니다.
+
+#### 2. 명령행 규칙 (작업 457)
+- rePIU 작업 771과 같게, `--post-shader=<id>` 형식을 쓸 수 있습니다. 값이 없거나 비어 있으면 exit 1이고, 여러 번 주면 마지막 값을 씁니다.
+- `--`는 옵션의 끝입니다. 뒤에 오는 인자는 프로파일 id로 읽습니다.
+
+#### 3. 문서와 사이트 (작업 456)
+- 셰이더 비교 화면(4th 타이틀·데모 플레이, 6th 타이틀의 `none`·`crt`·`scanline`)을 `docs/screenshots/shaders/`에 두고 README에 넣었습니다.
+- 개발 기록 글 두 편을 냈습니다: 후처리 셰이더, Win32를 주입에서 직접 로딩으로 바꾼 과정(작업 446~453).
+- 개발 기록 지침은 re2DJ가 그린 화면 캡처를 싣도록 바꿨습니다. 원본 자산은 계속 싣지 않습니다.
+
+#### 4. CI (작업 454)
+- 쓰이지 않는 상수 하나가 clang의 `-Wunused-const-variable`(경고를 오류로)에 걸려, 10월 1일부터 `linux-x64 (clang)` 작업이 실패하고 gcc 작업도 취소되고 있었습니다. 상수를 지웠습니다.
+
+#### 5. 검증
+- Windows x86 Debug·Release와 WSL Linux x64(clang·gcc)·x86 빌드(경고를 오류로), CTest 통과.
+- 새 GL probe `re2dj_opengl_post_shader_probe`가 Windows(RTX 4090)와 WSLg(llvmpipe)에서 12/12. 2배 창에서 `scanline`이 밝은 행과 어두운 행을 번갈아 내고, `crt` 모서리가 검고, 셰이더 뒤에도 게임 그리기가 그대로인지 확인합니다.
+- 실제 게임: Windows 4th·6th에서 명령행·환경 변수·사용자 파일·없는 id(경고 후 `none`)·`=` 형식·`--`, Linux 4th에서 `crt`.
+- 확인하지 못한 것: OSD에서 마우스로 셰이더를 바꾸고 Reload하고 슬라이더를 움직이는 동작.
+
+---
+
+### English
+
+Post-processing shaders now put a CRT monitor look on the game's picture (tasks 455 to 457), in the format and with the command-line rules of rePIU v0.0.200 and v0.0.201. The Linux clang build in CI is fixed as well (task 454).
+
+#### 1. Post-processing shaders (task 455)
+- The format is libretro single-pass GLSL. The built-in `crt` (curvature, Gaussian beam scanlines, an aperture-grille mask, a vignette) and `scanline` are embedded in the executable, and `shaders/*.glsl` files join the list.
+- Choosing: `--post-shader <id>` first, then `RE2DJ_POST_SHADER`, then `none`. While running, the backtick OSD's Screen shader menu switches, reloads and adjusts parameters with sliders.
+- A target whose launcher starts a child, such as 6th, opens the child with the same shader.
+- It applies at presentation only: the last step, drawing the game's 640x480 picture into the window, goes through the shader, so nothing is copied and the picture the game reads is untouched; under `none` the GL calls are the same as before.
+- On 4th all three hold about 60 fps, with CPU differences within noise.
+
+#### 2. Command-line rules (task 457)
+- As in rePIU task 771, `--post-shader=<id>` works too; a missing or empty value exits 1, and a repeated option takes the last value.
+- `--` ends the options; what follows is read as the profile id.
+
+#### 3. Documents and the site (task 456)
+- Shader comparison screens (the 4th title and demo play and the 6th title under `none`, `crt` and `scanline`) are in `docs/screenshots/shaders/` and the README.
+- Two dev-log posts: post-processing shaders, and moving Win32 from injection to direct loading (tasks 446 to 453).
+- The dev-log guideline now allows captures of what re2DJ draws; original assets stay out.
+
+#### 4. CI (task 454)
+- An unused constant tripped clang's `-Wunused-const-variable` (warnings as errors), failing the `linux-x64 (clang)` job since October 1 and cancelling the gcc job with it; the constant is gone.
+
+#### 5. Verification
+- Windows x86 Debug and Release and WSL Linux x64 (clang, gcc) and x86 builds (warnings as errors) with CTest pass.
+- The new GL probe `re2dj_opengl_post_shader_probe` passes 12/12 on Windows (RTX 4090) and WSLg (llvmpipe), checking alternating bright and dark rows under `scanline` in a 2x window, a black `crt` corner, and the game's drawing unaffected after the shader.
+- Real games: on Windows, 4th and 6th with the command line, the variable, a user file, an unknown id (a warning, then `none`), the `=` form and `--`; on Linux, 4th with `crt`.
+- Not checked: switching, Reload and the sliders with the mouse in the OSD.
+
+---
+
 ## v0.0.63 (2026-10-05)
 
 ### 한국어

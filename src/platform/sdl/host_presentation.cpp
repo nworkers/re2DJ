@@ -82,6 +82,7 @@ bool SdlHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
     config.title = title.c_str();
     config.resizable = true;
     config.centered = true;
+    config.post_shader = post_shader_.c_str();
     // Nothing is drawn yet, so the first frame is the guest's cleared screen.
     if (!backend->Initialize(config, error))
     {
@@ -102,6 +103,8 @@ bool SdlHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
         ui::AddColorDepthToggle(osd_.get());
     }
     backend_->SetPresentOverlay(osd_.get());
+    osd_->SetPostShaderControl(backend_->post_shader_control());
+    ReportPostShader();
     if (!ApplyWindowMode(error) || !backend_->ClearRenderTarget(0, error) || !backend_->Present(error))
     {
         backend_.reset();
@@ -125,6 +128,34 @@ bool SdlHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
     }
     error->clear();
     return true;
+}
+
+void SdlHostPresentation::ReportPostShader()
+{
+    const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+    if (logger == nullptr)
+    {
+        return;
+    }
+    graphics::PostShaderControl* control = backend_->post_shader_control();
+    if (control == nullptr)
+    {
+        if (post_shader_ != graphics::kPostShaderNoneId)
+        {
+            logger->warn("presentation: post shader '{}' not applied: the driver lacks the shader entry points",
+                         post_shader_);
+        }
+        return;
+    }
+    if (control->active_id() != graphics::kPostShaderNoneId)
+    {
+        logger->info("presentation: post shader {} ({} parameters)", control->active_id(),
+                     control->parameters().size());
+    }
+    else if (post_shader_ != graphics::kPostShaderNoneId && !post_shader_.empty())
+    {
+        logger->warn("presentation: post shader '{}' not applied: {}", post_shader_, control->last_error());
+    }
 }
 
 void SdlHostPresentation::ReportColorDepth()

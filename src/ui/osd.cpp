@@ -5,6 +5,7 @@
 #include <cfloat>
 #include <chrono>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "imgui.h"
@@ -41,6 +42,56 @@ constexpr float kMinimumFontScale = 0.75f;
 // The backend creates an OpenGL 2.1 compatibility context, whose GLSL is 1.20.
 constexpr char kGlslVersion[] = "#version 120";
 
+// The shader list, Reload, the last error and the active shader's parameters
+// (task 455).
+void DrawPostShaderMenu(graphics::PostShaderControl* control)
+{
+    ImGui::SeparatorText("Screen shader");
+    const std::string current = control->active_id();
+    std::string chosen;
+    if (ImGui::BeginCombo("Shader", current.c_str()))
+    {
+        if (ImGui::Selectable(graphics::kPostShaderNoneId, current == graphics::kPostShaderNoneId))
+        {
+            chosen = graphics::kPostShaderNoneId;
+        }
+        for (const graphics::PostShaderEntry& entry : control->catalog())
+        {
+            const std::string label = entry.builtin ? entry.id + "  (built-in)" : entry.id;
+            if (ImGui::Selectable(label.c_str(), current == entry.id))
+            {
+                chosen = entry.id;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    // Compiled after the combo closes so the menu never draws half a switch.
+    if (!chosen.empty() && chosen != current)
+    {
+        control->Select(chosen);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reload"))
+    {
+        control->Reload();
+    }
+    if (!control->last_error().empty())
+    {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", control->last_error().c_str());
+        ImGui::PopTextWrapPos();
+    }
+    for (graphics::PostShaderParameter& parameter : control->parameters())
+    {
+        const std::string& label = parameter.description.empty() ? parameter.name : parameter.description;
+        ImGui::PushID(parameter.name.c_str());
+        ImGui::SliderFloat(label.c_str(), &parameter.value, parameter.minimum, parameter.maximum, "%.2f");
+        ImGui::PopID();
+    }
+    ImGui::TextDisabled("Files: %s/*.glsl. Changes last for this run;", control->shader_directory().c_str());
+    ImGui::TextDisabled("--post-shader or RE2DJ_POST_SHADER sets the start.");
+}
+
 }  // namespace
 
 struct Osd::Impl
@@ -53,6 +104,7 @@ struct Osd::Impl
     std::vector<QueuedInput> input;
     std::vector<OsdToggle> toggles;
     std::vector<std::string> info_lines;
+    graphics::PostShaderControl* post_shader_control = nullptr;
 
     // Touched only on the presenting thread.
     ImGuiContext* context = nullptr;
@@ -122,6 +174,12 @@ void Osd::AddToggle(const OsdToggle& toggle)
     impl_->toggles.push_back(toggle);
 }
 
+void Osd::SetPostShaderControl(graphics::PostShaderControl* control)
+{
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->post_shader_control = control;
+}
+
 void Osd::ToggleVisible()
 {
     const bool now_visible = !impl_->visible.load();
@@ -186,11 +244,13 @@ void Osd::DrawOverlay(int pixel_width, int pixel_height)
     std::vector<QueuedInput> input;
     std::vector<OsdToggle> toggles;
     std::vector<std::string> info_lines;
+    graphics::PostShaderControl* post_shader_control = nullptr;
     {
         const std::lock_guard<std::mutex> lock(impl_->mutex);
         input.swap(impl_->input);
         toggles = impl_->toggles;
         info_lines = impl_->info_lines;
+        post_shader_control = impl_->post_shader_control;
     }
     for (const QueuedInput& event : input)
     {
@@ -239,6 +299,10 @@ void Osd::DrawOverlay(int pixel_width, int pixel_height)
             }
             ImGui::EndDisabled();
             ImGui::PopID();
+        }
+        if (post_shader_control != nullptr)
+        {
+            DrawPostShaderMenu(post_shader_control);
         }
     }
     ImGui::End();

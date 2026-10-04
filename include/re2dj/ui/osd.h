@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/graphics/post_shader_control.h"
 #include "re2dj/graphics/present_overlay.h"
 
 namespace re2dj::ui
@@ -48,6 +49,11 @@ public:
     // Informational lines shown above the controls, in order.
     void SetInfoLines(const std::vector<std::string>& lines);
     void AddToggle(const OsdToggle& toggle);
+    // The post-processing pass whose shader menu the OSD shows below the
+    // toggles (task 455), or null to hide the menu. Not owned; it must outlive
+    // the OSD or be removed first. Choosing a shader compiles it during the
+    // draw, on the presenting thread, which the control requires.
+    void SetPostShaderControl(graphics::PostShaderControl* control);
 
     void ToggleVisible();
     bool visible() const;

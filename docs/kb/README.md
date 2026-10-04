@@ -17,6 +17,7 @@
 | [win32-hle-boundary.md](win32-hle-boundary.md) | Win32 API를 HLE 경계로 삼는 방식과 호출 규약 |
 | [x86-32-guest-on-64-bit-host.md](x86-32-guest-on-64-bit-host.md) | 32비트 게스트를 64비트·WebAssembly 호스트에서 실행하는 선택지 |
 | [linux-x86-64-compatibility-mode.md](linux-x86-64-compatibility-mode.md) | Linux x86-64 프로세스 안의 `0x23`/`0x33` far transition, LDT FS와 host FS base 복원, signal 경로 |
+| [libretro-glsl-post-shaders.md](libretro-glsl-post-shaders.md) | libretro 단일 pass GLSL 후처리 셰이더 형식, 호스트가 주는 값, `#pragma parameter`, 정수 배율의 주사선 함정, GLSL 1.20 기준 |
 | [windows-x64-compatibility-mode.md](windows-x64-compatibility-mode.md) | Windows x64 프로세스 안의 `0x23` 실행, 문맥 전환 때 사라지는 `wrfsbase` TEB와 VEH 지연 복구, CS `0x33`으로 바뀌는 재개와 64비트 stub |
 | [web-x86-execution-engines.md](web-x86-execution-engines.md) | Web용 x86 실행 엔진 후보, 라이선스와 제한된 검증 결정 |
 | [windows-wow64-process-introspection.md](windows-wow64-process-introspection.md) | suspended WOW64 process의 주 이미지 주소를 검증하는 제한된 방법 |

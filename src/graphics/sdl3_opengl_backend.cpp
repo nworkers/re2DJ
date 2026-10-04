@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <limits>
 #include <new>
 #include <string>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "re2dj/graphics/color_depth.h"
+#include "re2dj/graphics/opengl_post_process.h"
 #include "re2dj/graphics/present_pacer.h"
 #include "re2dj/graphics/presentation_filter.h"
 #include "re2dj/graphics/true_color.h"
@@ -194,6 +196,9 @@ struct Sdl3OpenGlBackend::Impl
     std::unordered_map<std::uint64_t, CachedTexture> textures;
     // Drawn over the composited frame just before the swap. Not owned.
     PresentOverlay* present_overlay = nullptr;
+    // The post-processing pass (task 455). Null when the driver lacks the
+    // shader entry points, in which case Present always draws as `none`.
+    std::unique_ptr<OpenGlPostProcess> post_process;
     bool frame_started = false;
     std::uint32_t logical_width = 0;
     std::uint32_t logical_height = 0;
@@ -635,6 +640,10 @@ Sdl3OpenGlBackend::~Sdl3OpenGlBackend()
         {
             impl_->delete_program(impl_->program);
         }
+        if (impl_->post_process != nullptr)
+        {
+            impl_->post_process->Shutdown();
+        }
         SDL_GL_MakeCurrent(impl_->window, nullptr);
     }
     if (impl_->context != nullptr)
@@ -704,6 +713,11 @@ bool Sdl3OpenGlBackend::software_pacing_engaged() const
 ColorDepth Sdl3OpenGlBackend::render_target_depth() const
 {
     return impl_ == nullptr ? ColorDepth::k16 : impl_->render_target_depth;
+}
+
+PostShaderControl* Sdl3OpenGlBackend::post_shader_control()
+{
+    return impl_ == nullptr ? nullptr : impl_->post_process.get();
 }
 
 bool Sdl3OpenGlBackend::true_color_unavailable() const
@@ -892,6 +906,18 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
     impl->enable_vertex_attrib_array(1);
     impl->enable_vertex_attrib_array(2);
     impl->draw_diagnostics = config.draw_diagnostics;
+    // A pass that cannot start, or a first shader that does not compile, is
+    // not a failure of the window: the picture is drawn as `none`.
+    auto post_process = std::make_unique<OpenGlPostProcess>();
+    std::string post_message;
+    if (post_process->Initialize(&post_message))
+    {
+        if (config.post_shader != nullptr)
+        {
+            post_process->Select(config.post_shader);
+        }
+        impl->post_process = std::move(post_process);
+    }
     error->clear();
     return true;
 }
@@ -1640,14 +1666,33 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
         vertices[index].texture[0] = u;
         vertices[index].texture[1] = v;
     };
-    const float logical_width = static_cast<float>(impl_->logical_width);
-    const float logical_height = static_cast<float>(impl_->logical_height);
-    // The FBO texture uses OpenGL's lower-left origin, while the guest's
-    // logical screen coordinates use a top-left origin.
-    set_vertex(0, 0.0f, 0.0f, 0.0f, 1.0f);
-    set_vertex(1, logical_width, 0.0f, 1.0f, 1.0f);
-    set_vertex(2, 0.0f, logical_height, 0.0f, 0.0f);
-    set_vertex(3, logical_width, logical_height, 1.0f, 0.0f);
+    // With a post-processing shader selected the same quad is drawn through
+    // it, in the unit square its MVPMatrix maps to the viewport (task 455).
+    const bool post_processed =
+        impl_->post_process != nullptr &&
+        impl_->post_process->UseForPresent(impl_->logical_width,
+                                           impl_->logical_height,
+                                           static_cast<std::uint32_t>(presentation_width),
+                                           static_cast<std::uint32_t>(presentation_height));
+    if (post_processed)
+    {
+        // The unit square's y runs up, as the texture's rows do.
+        set_vertex(0, 0.0f, 1.0f, 0.0f, 1.0f);
+        set_vertex(1, 1.0f, 1.0f, 1.0f, 1.0f);
+        set_vertex(2, 0.0f, 0.0f, 0.0f, 0.0f);
+        set_vertex(3, 1.0f, 0.0f, 1.0f, 0.0f);
+    }
+    else
+    {
+        const float logical_width = static_cast<float>(impl_->logical_width);
+        const float logical_height = static_cast<float>(impl_->logical_height);
+        // The FBO texture uses OpenGL's lower-left origin, while the guest's
+        // logical screen coordinates use a top-left origin.
+        set_vertex(0, 0.0f, 0.0f, 0.0f, 1.0f);
+        set_vertex(1, logical_width, 0.0f, 1.0f, 1.0f);
+        set_vertex(2, 0.0f, logical_height, 0.0f, 0.0f);
+        set_vertex(3, logical_width, logical_height, 1.0f, 0.0f);
+    }
     impl_->vertex_attrib_pointer(0,
                                  4,
                                  GL_FLOAT,
@@ -1667,6 +1712,10 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
                                  static_cast<GLsizei>(sizeof(GlVertex)),
                                  vertices.data()->texture);
     impl_->draw_arrays(GL_TRIANGLE_STRIP, 0, static_cast<GLsizei>(vertices.size()));
+    if (post_processed)
+    {
+        impl_->use_program(impl_->program);
+    }
     // Presentation runs once per frame, so this check stays unconditional and
     // keeps catching a persistently broken GL state even when the per-draw
     // check in Draw is off.

@@ -17,5 +17,6 @@
 | [hardlock-descriptor-extraction.md](hardlock-descriptor-extraction.md) | 프로파일 제작에 필요한 Hardlock descriptor ID와 module address 추출 절차 |
 | [hardlock-seed-recovery-walkthrough.md](hardlock-seed-recovery-walkthrough.md) | 별도 생성기로 Hardlock seed 후보를 복구해 re2DJ에서 판별하는 절차 |
 | [linux-sdl3-build.md](linux-sdl3-build.md) | Ubuntu/WSL의 SDL3 X11·Wayland·OpenGL 개발 패키지와 빌드 절차 |
+| [post-process-shaders.md](post-process-shaders.md) | 화면 후처리 셰이더 고르기(`--post-shader`·`RE2DJ_POST_SHADER`·OSD), 직접 쓰기, 확인 절차 |
 | [windows-x86-runtime.md](windows-x86-runtime.md) | Windows x86 제품의 in-process 실행, 시작 시 재실행, 진단 옵션, OSD |
 | [decrypted-image-dump.md](decrypted-image-dump.md) | 보호 빌드가 실행 중 복호화한 주 이미지를 떠서 정적 분석에 쓰는 절차 |

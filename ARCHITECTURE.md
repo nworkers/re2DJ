@@ -949,12 +949,12 @@ launcher probe의 bounded 진단 debug-event loop는 `--diagnostic-idle-timeout 
 
 | 타깃 | 내용 |
 | --- | --- |
-| `re2dj_legacy_graphics` | draw command, texture와 vertex-buffer 공용 정적 라이브러리 |
+| `re2dj_legacy_graphics` | draw command, texture와 vertex-buffer 공용 정적 라이브러리. 후처리 셰이더의 GL 없는 해석·목록(작업 455)과 내장 셰이더 생성 헤더 포함 |
 | `re2dj_storage_common` | Win32 게스트 경로 파싱·정규화·ASCII 대소문자 절첩을 공유하는 정적 라이브러리 |
 | `re2dj_chd_storage` | libchdr 기반 MAME CHD와 FAT32 read-only 저장소 계층 |
 | `re2dj_core` | 공용 코어 정적 라이브러리 |
 | `re2dj_windows_original_process_backend` | Win32 제품 CLI와 진단 launcher가 공유하는 원본-process 실행 engine |
-| `re2dj_sdl3_opengl_backend` | Win32·Linux 공용 SDL3/OpenGL 렌더 backend |
+| `re2dj_sdl3_opengl_backend` | Win32·Linux 공용 SDL3/OpenGL 렌더 backend. Present의 후처리 pass(`OpenGlPostProcess`, 작업 455) 포함 |
 | `re2dj_imgui` | Dear ImGui 코어와 OpenGL3 렌더러 backend. 플랫폼 backend는 포함하지 않음 |
 | `re2dj_osd` | 공용 on-screen display. 입력 큐를 받아 backend의 present overlay 지점에 그림 |
 | `re2dj` | 명령행 호스트 |
@@ -1269,6 +1269,14 @@ flowchart LR
 - ***The backend.** The logical render target moves between `GL_RGB565` and `GL_RGB8` with the mode, carrying its contents; neither has alpha, so `DESTALPHA` reads 1.0. A driver that refuses `GL_RGB8` keeps it at 565. A 32-bit target takes texture RGB from the plane and the colour key from 565; render-target locks narrow on read and reconcile on write.*
 - ***The OSD.** The Linux host now installs the same `ui::Osd` as Windows: backtick shows and hides it, and while it is shown the mouse buttons belong to it. Both hosts register the toggle through the shared `ui::AddColorDepthToggle`.*
 - ***The exception.** In 32-bit mode, Windows `GetDC` returns a 32bpp DC, which is the only way to have real GDI draw at 24 bits.*
+
+## 2026-10-05 화면 후처리 셰이더 / Post-processing shaders
+
+관련 설계: [화면 후처리 셰이더](docs/design/20261005-455-post-process-shaders.md) · 가이드: [post-process-shaders](docs/guides/post-process-shaders.md)
+
+게임이 그린 화면에 표시 단계에서만 libretro 단일 pass GLSL 셰이더를 적용한다(rePIU 작업 768과 같은 형식). 게임은 논리 해상도의 render target에 그리고 `Present`가 그것을 창의 비율 유지 사각형에 quad 하나로 그리므로, 셰이더가 선택되면 그 quad를 `OpenGlPostProcess`의 program으로 그린다. 복사는 없고, render target과 게스트 readback은 그대로이며, `none`이면 Present의 GL 호출은 이전과 같다. `InputSize`·`TextureSize`는 render target 크기(논리 해상도), `OutputSize`는 그림 사각형의 픽셀 크기다. 내장 `crt`·`scanline`은 configure 때 실행 파일에 들어가고, `shaders/*.glsl`(작업 디렉터리, 없으면 실행 파일 옆)이 목록에 더해진다. 시작 셰이더는 `--post-shader` → `RE2DJ_POST_SHADER` → `none` 순이며, OSD의 Screen shader 메뉴가 실행 중 전환·Reload·매개변수를 맡는다. OSD는 GL 없는 `PostShaderControl` 인터페이스만 안다.
+
+*A libretro single-pass GLSL shader (the format of rePIU task 768) applies to the game's picture at presentation only. The game draws into a render target at its logical resolution and `Present` draws that as one quad into the window's aspect-kept rectangle, so with a shader selected the quad is drawn through `OpenGlPostProcess`'s program: no copy, the render target and guest readbacks untouched, and under `none` Present issues the same GL calls as before. `InputSize` and `TextureSize` are the render target's size (the logical resolution), `OutputSize` the picture rectangle's pixel size. The built-in `crt` and `scanline` are embedded at configure time and `shaders/*.glsl` (the working directory, else beside the executable) join the list. The starting shader is `--post-shader`, then `RE2DJ_POST_SHADER`, then `none`, and the OSD's Screen shader menu switches, reloads and adjusts parameters while running; the OSD knows only the GL-free `PostShaderControl` interface.*
 
 ## 2026-09-19 Linux x86 real first-import completion / Linux x86 실제 첫 import completion
 

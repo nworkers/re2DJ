@@ -33,6 +33,16 @@ re2DJ v0.0.63의 Windows x86 Release 빌드에서 원본 실행 파일이 그린
 | **EZ2DJ 5th Trax (`ez2dj5th`)** | **EZ2DJ 6th Trax (`ez2dj6th`)** | **EZ2Dancer 2nd MOVE (`ez2d2m`)** |
 | ![EZ2DJ 5th title](docs/screenshots/ez2dj5th-title.jpg) | ![EZ2DJ 6th title](docs/screenshots/ez2dj6th-title.jpg) | ![EZ2Dancer 2nd MOVE title](docs/screenshots/ez2d2m-title.jpg) |
 
+### 화면 후처리 셰이더 / Post-processing shaders
+
+같은 장면을 `none`, `crt`, `scanline`으로 찍어 같은 부분을 1:1로 잘라 나란히 놓았습니다(왼쪽부터). 주사선은 출력 픽셀 단위 무늬라 줄이면 사라지므로 원본 크기입니다. 1280x960 전체 화면은 [`docs/screenshots/shaders/`](docs/screenshots/shaders/)에 있습니다.
+
+*The same scene under `none`, `crt` and `scanline`, the same part cropped 1:1 and placed side by side (left to right); scanlines are an output-pixel pattern that vanishes when scaled down, so the crops are at full size. The full 1280x960 frames are in [`docs/screenshots/shaders/`](docs/screenshots/shaders/).*
+
+![EZ2DJ 4th title: none, crt, scanline](docs/screenshots/shaders/ez2dj4th-title-crop.png)
+
+![EZ2DJ 6th title: none, crt, scanline](docs/screenshots/shaders/ez2dj6th-title-crop.png)
+
 ---
 
 ## 주요 특징 / Why re2DJ
@@ -60,9 +70,9 @@ flowchart LR
     HLE --> PLAT["Platform backend<br/>windows / linux"]
 ```
 
-두 OS 모두 `re2dj --run`이 원본 PE32를 re2dj **자기 프로세스 안에** 매핑해 실행합니다(작업 446~449). 예를 들어 `re2dj ez2dj4th`는 `roms/ez2dj4th`의 CHD에서 `EZ2DJ/EZ2DJ.EXE`를 선택합니다. Linux는 x86·x86-64 제품이 있고 x86-64는 CPU compatibility mode를 씁니다. Windows는 64비트 Windows에서 도는 Win32 x86 제품이며, 시작할 때 자기 자신을 한 번 다시 띄워 게스트 이미지 주소(0x400000)를 확보합니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, 6th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 두 호스트 모두 실행 중 백틱(`` ` ``) 키로 OSD를 열 수 있습니다. OSD의 "32-bit color"는 24비트 이미지와 반투명 합성을 채널당 8비트로 보여 주는 표시 모드를 켜고 끕니다(`--color-depth`). 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+두 OS 모두 `re2dj --run`이 원본 PE32를 re2dj **자기 프로세스 안에** 매핑해 실행합니다(작업 446~449). 예를 들어 `re2dj ez2dj4th`는 `roms/ez2dj4th`의 CHD에서 `EZ2DJ/EZ2DJ.EXE`를 선택합니다. Linux는 x86·x86-64 제품이 있고 x86-64는 CPU compatibility mode를 씁니다. Windows는 64비트 Windows에서 도는 Win32 x86 제품이며, 시작할 때 자기 자신을 한 번 다시 띄워 게스트 이미지 주소(0x400000)를 확보합니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, 6th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 두 호스트 모두 실행 중 백틱(`` ` ``) 키로 OSD를 열 수 있습니다. OSD의 "32-bit color"는 24비트 이미지와 반투명 합성을 채널당 8비트로 보여 주는 표시 모드를 켜고 끕니다(`--color-depth`). 화면 후처리 셰이더(내장 `crt`·`scanline`, `shaders/*.glsl`)는 `--post-shader`나 OSD로 고릅니다([가이드](docs/guides/post-process-shaders.md)). 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On both OSes `re2dj --run` maps the original PE32 into re2dj's **own process** and runs it there (tasks 446 to 449); for example, `re2dj ez2dj4th` selects `EZ2DJ/EZ2DJ.EXE` in the CHD under `roms/ez2dj4th`. Linux has x86 and x86-64 products, x86-64 using CPU compatibility mode; Windows has the Win32 x86 product on 64-bit Windows, which starts itself once more at launch to secure the guest image address (0x400000). Runs go through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, 6th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. On both hosts, backtick (`` ` ``) opens the OSD while running; its "32-bit color" switches a display mode that shows 24-bit images and translucent compositing at 8 bits per channel (`--color-depth`). See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On both OSes `re2dj --run` maps the original PE32 into re2dj's **own process** and runs it there (tasks 446 to 449); for example, `re2dj ez2dj4th` selects `EZ2DJ/EZ2DJ.EXE` in the CHD under `roms/ez2dj4th`. Linux has x86 and x86-64 products, x86-64 using CPU compatibility mode; Windows has the Win32 x86 product on 64-bit Windows, which starts itself once more at launch to secure the guest image address (0x400000). Runs go through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, 6th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. On both hosts, backtick (`` ` ``) opens the OSD while running; its "32-bit color" switches a display mode that shows 24-bit images and translucent compositing at 8 bits per channel (`--color-depth`). Screen post-processing shaders (the built-in `crt` and `scanline`, and `shaders/*.glsl`) are chosen with `--post-shader` or in the OSD ([guide](docs/guides/post-process-shaders.md)). See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -245,10 +255,16 @@ re2dj --hdd <directory> [options]
                       16비트 화면(기본값), 32는 24비트 이미지와 블렌드를 채널당
                       8비트로 유지합니다. 게임은 계속 16비트 화면을 봅니다.
                       실행 중에는 OSD의 "32-bit color"로 바꿀 수 있습니다.
+  --post-shader <id>, --post-shader=<id>
+                      화면 후처리 셰이더. none(기본값), 내장 crt·scanline,
+                      또는 shaders/ 안의 .glsl 파일 이름. 타깃 앞뒤 어디든 되고,
+                      RE2DJ_POST_SHADER보다 우선하며, 여러 번 주면 마지막 값을
+                      씁니다. 실행 중에는 OSD에서 바꿀 수 있습니다.
   --io-config <path>  선택한 타깃용 키보드·게임패드 I/O mapping INI. 적힌 항목만
                       내장 기본 매핑을 덮어씁니다.
   --version           버전 출력.
   --help              도움말 출력.
+  --                  옵션의 끝. 뒤의 인자는 프로파일 id로 읽습니다.
 ```
 
 CHD 자체의 header, metadata와 논리 sector를 확인하려면 다음 비실행 도구를 사용합니다.

@@ -371,12 +371,33 @@ add_library(re2dj_legacy_graphics STATIC
     src/graphics/present_sync.cpp
     src/graphics/present_pacer.cpp
     src/graphics/presentation_filter.cpp
+    src/graphics/post_shader_catalog.cpp
+    src/graphics/post_shader_source.cpp
     src/graphics/true_color.cpp
 )
 target_include_directories(re2dj_legacy_graphics PUBLIC include)
 target_link_libraries(re2dj_legacy_graphics PRIVATE re2dj_warnings)
 
+# Task 455: the built-in post-processing shaders are embedded from their .glsl
+# sources at configure time, so a package never has to ship them. Editing one
+# re-runs the configure step.
+set(RE2DJ_POST_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/post_shaders")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${RE2DJ_POST_SHADER_SOURCE_DIR}/crt.glsl"
+    "${RE2DJ_POST_SHADER_SOURCE_DIR}/scanline.glsl"
+    "${RE2DJ_POST_SHADER_SOURCE_DIR}/post_shader_builtins.inc.in"
+)
+file(READ "${RE2DJ_POST_SHADER_SOURCE_DIR}/crt.glsl" RE2DJ_POST_SHADER_CRT)
+file(READ "${RE2DJ_POST_SHADER_SOURCE_DIR}/scanline.glsl" RE2DJ_POST_SHADER_SCANLINE)
+configure_file(
+    "${RE2DJ_POST_SHADER_SOURCE_DIR}/post_shader_builtins.inc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/re2dj/graphics/post_shader_builtins.inc"
+    @ONLY
+)
+target_include_directories(re2dj_legacy_graphics PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 add_library(re2dj_sdl3_opengl_backend STATIC
+    src/graphics/opengl_post_process.cpp
     src/graphics/sdl3_opengl_backend.cpp
 )
 target_include_directories(re2dj_sdl3_opengl_backend PUBLIC include)
@@ -693,6 +714,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/synthetic_pe32.cpp
         tests/unit/temporary_tree.cpp
         tests/unit/present_interval_histogram_test.cpp
+        tests/unit/post_shader_test.cpp
         tests/unit/present_sync_test.cpp
         tests/unit/window_policy_test.cpp
         tests/unit/ez2dj_keyboard_map_test.cpp
@@ -731,6 +753,10 @@ if(RE2DJ_BUILD_TESTS)
         )
         add_executable(re2dj_opengl_true_color_probe tests/graphics/opengl_true_color_probe.cpp)
         target_link_libraries(re2dj_opengl_true_color_probe
+            PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_warnings
+        )
+        add_executable(re2dj_opengl_post_shader_probe tests/graphics/opengl_post_shader_probe.cpp)
+        target_link_libraries(re2dj_opengl_post_shader_probe
             PRIVATE re2dj_sdl3_opengl_backend SDL3::SDL3-static re2dj_warnings
         )
     endif()
