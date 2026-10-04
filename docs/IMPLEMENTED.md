@@ -4,6 +4,22 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+- **작업 446~450 — Windows도 in-process 러너로 원본을 실행하고 주입 경로를 지웠습니다.** OS 중립 러너를 `src/platform/native/`(OS 계약 `native_host_services.h`), SDL3 host를 `src/platform/sdl/`로 옮겼고, Windows x86 backend(그림자 TEB, VEH fault 배달, naked asm 전환)를 더했습니다. `re2dj.exe`는 일시 정지 재실행으로 0x400000을 예약하고 게스트를 16 MiB 스택 스레드에서 돌립니다. 주입 runtime과 Windows 전용 facade 73개 파일을 지웠습니다. 근거: [446](work-logs/20261004-446-windows-in-process-loader.md), [447](work-logs/20261004-447-sdl-hosts-shared.md), [448](work-logs/20261004-448-windows-x86-backend.md), [449](work-logs/20261004-449-windows-cli-in-process.md), [450](work-logs/20261004-450-remove-windows-injection.md) 작업 로그.
+
+  *Tasks 446 to 450 — Windows runs the original through the in-process runner and the injection path is gone. The OS-neutral runner moved to `src/platform/native/` (OS contract `native_host_services.h`) and the SDL3 hosts to `src/platform/sdl/`, with a Windows x86 backend added (shadow TEB, VEH fault delivery, naked-asm transitions); `re2dj.exe` reserves 0x400000 through a suspended relaunch and runs the guest on a 16 MiB-stack thread; the injected runtime and Windows-only facades (73 files) were removed. Evidence: the work logs of [446](work-logs/20261004-446-windows-in-process-loader.md), [447](work-logs/20261004-447-sdl-hosts-shared.md), [448](work-logs/20261004-448-windows-x86-backend.md), [449](work-logs/20261004-449-windows-cli-in-process.md), [450](work-logs/20261004-450-remove-windows-injection.md).*
+
+- **작업 451 — `guest_memory.py`가 Windows에서 명령줄로 게스트 `re2dj.exe`를 찾습니다.** 근거: [작업 로그](work-logs/20261004-451-guest-memory-windows-in-process.md).
+
+  *Task 451 — `guest_memory.py` finds the guest `re2dj.exe` by its command line on Windows. Evidence: [work log](work-logs/20261004-451-guest-memory-windows-in-process.md).*
+
+- **작업 452 — Windows x64 프로세스 안의 호환 모드를 probe로 확인했습니다.** 근거: [작업 로그](work-logs/20261004-452-windows-x64-compat-mode-probe.md).
+
+  *Task 452 — probed compatibility mode inside a Windows x64 process. Evidence: [work log](work-logs/20261004-452-windows-x64-compat-mode-probe.md).*
+
+- **작업 453 — 릴리스 스크린샷과 in-process 성능 측정을 기록했습니다.** 다섯 타깃의 스크린샷을 `docs/screenshots/`에 두고 README와 사이트 소개에 넣었습니다. 주입 경로(v0.0.62) 대비 성능은 [분석 문서](analysis/windows-in-process-performance.md)에 있습니다. 근거: [설계](design/20261005-453-release-screenshots-performance.md), [작업 로그](work-logs/20261005-453-release-screenshots-performance.md).
+
+  *Task 453 — recorded release screenshots and the in-process performance measurements. Screenshots of five targets live in `docs/screenshots/` and appear in the README and the site's introduction; performance against the injection path (v0.0.62) is in the [analysis](analysis/windows-in-process-performance.md). Evidence: [design](design/20261005-453-release-screenshots-performance.md), [work log](work-logs/20261005-453-release-screenshots-performance.md).*
+
 - **작업 443 — Linux 자식 run을 실행 중인 그 실행 파일로 띄웁니다.** 실행 도중 re2dj가 다시 빌드되어 교체되면, launcher가 Remember 1st 뒤 6th를 다시 띄우지 못했습니다(`readlink` 경로가 `(deleted)`). 이제 `/proc/self/exe` 자체를 `posix_spawn`합니다. 근거: [설계](design/20261003-443-linux-child-self-exe.md), [작업 로그](work-logs/20261003-443-linux-child-self-exe.md).
 
   *Task 443 — Linux child runs start from the very executable running. When re2dj was rebuilt and replaced mid-run, the launcher could not start 6th again after Remember 1st (the `readlink` path read `(deleted)`); it now `posix_spawn`s `/proc/self/exe` itself. Evidence: [design](design/20261003-443-linux-child-self-exe.md), [work log](work-logs/20261003-443-linux-child-self-exe.md).*

@@ -11,12 +11,12 @@
 
 #include "native_compat_mode.h"
 
-namespace linux_platform = re2dj::platform::linux;
+namespace native_platform = re2dj::platform::native;
 
 extern "C"
 {
 std::uint32_t g_probe_callee_saved_mismatches = 0;
-std::uint64_t ProbeEnterWithCalleeSavedCheck(linux_platform::NativeCompatTransitionState* state,
+std::uint64_t ProbeEnterWithCalleeSavedCheck(native_platform::NativeCompatTransitionState* state,
                                              std::uint32_t entry,
                                              std::uint32_t guest_stack_pointer);
 }
@@ -147,8 +147,8 @@ struct ImportContext
     bool event_valid = true;
 };
 
-bool CompleteSyntheticImport(const linux_platform::NativeImportGateEvent& event,
-                             linux_platform::NativeImportGateResult* result,
+bool CompleteSyntheticImport(const native_platform::NativeImportGateEvent& event,
+                             native_platform::NativeImportGateResult* result,
                              void* opaque)
 {
     auto* context = static_cast<ImportContext*>(opaque);
@@ -204,20 +204,20 @@ private:
     int failures_ = 0;
 };
 
-bool ReturnsConstant(linux_platform::NativeCompatModeRuntime* runtime, std::uint32_t code)
+bool ReturnsConstant(native_platform::NativeCompatModeRuntime* runtime, std::uint32_t code)
 {
-    linux_platform::NativeCompatModeCall call;
+    native_platform::NativeCompatModeCall call;
     call.entry = code + kReturnConstant;
-    linux_platform::NativeCompatModeRunResult result;
-    linux_platform::NativeGuestFault fault;
+    native_platform::NativeCompatModeRunResult result;
+    native_platform::NativeGuestFault fault;
     std::string error;
     return runtime->Run(call, &result, &fault, &error) && result.eax == 0x12345678U;
 }
 
 int RunProbe(bool force_arch_prctl)
 {
-    linux_platform::NativeCompatModeRuntime runtime;
-    linux_platform::NativeCompatModeOptions options;
+    native_platform::NativeCompatModeRuntime runtime;
+    native_platform::NativeCompatModeOptions options;
     options.force_arch_prctl = force_arch_prctl;
     std::string error;
     if (!runtime.Initialize(0x00400000U, options, &error))
@@ -235,10 +235,10 @@ int RunProbe(bool force_arch_prctl)
         probe.Check(!runtime.UsesFsGsBase(), "forced arch_prctl path is selected");
     }
 
-    linux_platform::NativeLowMemory code_page;
-    linux_platform::NativeLowMemory scratch_page;
-    if (!linux_platform::MapNativeLowMemory(4096, PROT_READ | PROT_WRITE, &code_page, &error) ||
-        !linux_platform::MapNativeLowMemory(4096, PROT_READ | PROT_WRITE, &scratch_page, &error))
+    native_platform::NativeLowMemory code_page;
+    native_platform::NativeLowMemory scratch_page;
+    if (!native_platform::MapNativeLowMemory(4096, native_platform::HostProtection::kReadWrite, &code_page, &error) ||
+        !native_platform::MapNativeLowMemory(4096, native_platform::HostProtection::kReadWrite, &scratch_page, &error))
     {
         std::printf("cannot map probe pages: %s\n", error.c_str());
         return 1;
@@ -311,12 +311,12 @@ int RunProbe(bool force_arch_prctl)
         return 1;
     }
 
-    linux_platform::NativeCompatModeCall call;
-    linux_platform::NativeCompatModeRunResult result;
-    linux_platform::NativeGuestFault fault;
+    native_platform::NativeCompatModeCall call;
+    native_platform::NativeCompatModeRunResult result;
+    native_platform::NativeGuestFault fault;
 
     // 1. Return value and host state.
-    const std::uint64_t fs_before = linux_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase());
+    const std::uint64_t fs_before = native_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase());
     g_host_marker = 0x5A5AA5A5U;
     errno = 1234;
     call.entry = code + kReturnConstant;
@@ -325,7 +325,7 @@ int RunProbe(bool force_arch_prctl)
     probe.Check(ran && result.eax == 0x12345678U, "1 guest return value");
     probe.Check(g_host_marker == 0x5A5AA5A5U && errno_after == 1234,
                 "1 host thread_local and errno survive");
-    probe.Check(linux_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase()) == fs_before,
+    probe.Check(native_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase()) == fs_before,
                 "1 host FS base restored");
 
     // 2. Guest FS points at the TEB.
@@ -360,7 +360,7 @@ int RunProbe(bool force_arch_prctl)
     probe.Check(fault.stack_pointer == result.entry_stack_pointer &&
                     fault.eax == 0x11111111U && fault.ebx == 0x22222222U,
                 "4 fault carries guest esp and registers");
-    probe.Check(linux_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase()) == fs_before &&
+    probe.Check(native_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase()) == fs_before &&
                     g_host_marker == 0x5A5AA5A5U,
                 "4 host FS base restored after the fault");
     probe.Check(ReturnsConstant(&runtime, code), "4 runtime runs again after the fault");
@@ -397,13 +397,13 @@ int RunProbe(bool force_arch_prctl)
                     runtime.LastSehResumedEip() == code + kSehGuest + 25,
                 "7 SEH handler and resume address recorded");
     probe.Check(exception_list == 0xFFFFFFFFU &&
-                    linux_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase()) == fs_before &&
+                    native_platform::ReadNativeHostFsBase(runtime.UsesFsGsBase()) == fs_before &&
                     g_host_marker == 0x5A5AA5A5U,
                 "7 SEH chain unwound and host state intact");
     probe.Check(ReturnsConstant(&runtime, code), "7 runtime runs again after SEH");
 
-    linux_platform::ReleaseNativeLowMemory(&scratch_page);
-    linux_platform::ReleaseNativeLowMemory(&code_page);
+    native_platform::ReleaseNativeLowMemory(&scratch_page);
+    native_platform::ReleaseNativeLowMemory(&code_page);
     return probe.failures();
 }
 

@@ -90,10 +90,6 @@ BuiltInTargetProfile MakeChdCompatibilityProfile(std::string_view id,
     entry.profile.display_name = std::string(display_name);
     entry.profile.hle_profile_id = std::string(id);
     entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
-    entry.profile.run_defaults.hle_vfs = true;
-    entry.profile.run_defaults.hle_dynamic_vfs = true;
-    entry.profile.run_defaults.hle_d3d3 = true;
-    entry.profile.run_defaults.hle_directsound = true;
     entry.profile.run_defaults.lptdi.legacy_io_ports = true;
     entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
     entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000c3817;
@@ -102,8 +98,6 @@ BuiltInTargetProfile MakeChdCompatibilityProfile(std::string_view id,
     entry.profile.run_defaults.lptdi.device_mock_path_prefix =
         "\\\\.\\FEnteDev";
     entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
-    entry.profile.run_defaults.hle_wts_console_session = true;
-    entry.profile.run_defaults.run_detached = true;
     entry.profile.run_defaults.default_hdd_image_relative_path =
         std::string(image_path);
     entry.profile.executable_relative_path = std::string(executable_path);
@@ -132,24 +126,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.default_hdd_directory_relative_path =
                 "roms/ez2dj1st";
             entry.profile.run_defaults.audio_gain_db = 0.0f;
-            entry.profile.run_defaults.demo_volume = 3;
-            entry.profile.run_defaults.hle_command_line = true;
-            // GetWindowsDirectoryA is not in this build's import table.
-            // Requesting it fails the whole handoff preparation, exactly as it
-            // does on the 1st SE CHD build.
-            entry.profile.run_defaults.hle_windows_directory = false;
-            entry.profile.run_defaults.hle_vfs = true;
-            // This executable is the same .protect family as the 1st SE CHD
-            // build: the packer resolves the original imports itself at unpack
-            // time, so a static IAT patch is overwritten. Without the dynamic
-            // resolver its CreateFileA reaches the host, it opens the real
-            // device, and it calls ExitProcess before any Hardlock request.
-            entry.profile.run_defaults.hle_dynamic_vfs = true;
-            // Unlike the 1st SE CHD build, this one's import table carries
-            // DirectDrawCreate and GetPrivateProfileIntA, so these two
-            // boundaries prepare and stay on.
-            entry.profile.run_defaults.hle_d3d3 = true;
-            entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             // Read out of this build's own decrypted .text. Past the Hardlock
@@ -171,7 +147,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
-            entry.profile.run_defaults.run_detached = true;
             // The user-prepared Ez2DJ.exe is the only HDD entry used for profile
             // identification. Its parent directory becomes the VFS source root
             // after matching.
@@ -198,16 +173,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.default_hdd_directory_relative_path =
                 "roms/ez2dj2nd";
             entry.profile.run_defaults.audio_gain_db = 0.0f;
-            // The 2nd import table has no GetPrivateProfileIntA slot, so the
-            // 1st SE demo-volume injection is not applicable here.
-            entry.profile.run_defaults.demo_volume.reset();
-            // These defaults mirror 1st SE where runtime evidence has not yet
-            // established a different 2nd executable contract.
-            entry.profile.run_defaults.hle_command_line = true;
-            entry.profile.run_defaults.hle_windows_directory = true;
-            entry.profile.run_defaults.hle_vfs = true;
-            entry.profile.run_defaults.hle_d3d3 = true;
-            entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             // Confirmed by the first 2nd runtime privileged-instruction fault.
@@ -217,7 +182,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.lptdi.legacy_io_out_rva = 0x0007832b;
             entry.profile.run_defaults.lptdi.device_mock_path_prefix = "\\\\.\\LPTDI";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
-            entry.profile.run_defaults.run_detached = true;
             entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
                 "0900000000000000";
             // No System.ini was found in the 2nd dump, so the guest boot path
@@ -245,32 +209,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.default_hdd_image_relative_path =
                 "roms/ez2dj1stse";
             entry.profile.run_defaults.audio_gain_db = 0.0f;
-            // Every HLE default below follows the CHD build's packed import
-            // directory at RVA 0x01aebbd0, which is what the launcher searches
-            // for IAT slots. The original .idata survives in the file but the
-            // PE header no longer points at it, so an import missing from the
-            // packed table cannot be patched at all.
-            //
-            // GetPrivateProfileIntA is absent, so the demo-volume injection
-            // cannot be prepared. The CHD's own ez2dj.ini already reads
-            // DemoVolume=3.
-            entry.profile.run_defaults.demo_volume.reset();
-            // GetCommandLineA is present in the packed table.
-            entry.profile.run_defaults.hle_command_line = true;
-            // GetWindowsDirectoryA is not, and requesting it failed the whole
-            // handoff preparation.
-            entry.profile.run_defaults.hle_windows_directory = false;
-            entry.profile.run_defaults.hle_vfs = true;
-            // The protection reaches CreateFileA, DeviceIoControl, and
-            // CloseHandle through GetProcAddress, so the static slots alone
-            // never see its device work.
-            entry.profile.run_defaults.hle_dynamic_vfs = true;
-            // The packed table contributes only DirectDrawEnumerateA, but the
-            // original .idata survives at RVA 0x01aba000 and imports
-            // DDRAW.dll!DirectDrawCreate, which the IAT lookup now finds.
-            entry.profile.run_defaults.hle_d3d3 = true;
-            // DSOUND.dll ordinal 1 is present.
-            entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             // These two RVAs are confirmed in the extracted .gtide build's
@@ -294,10 +232,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
-            entry.profile.run_defaults.run_detached = true;
-            // hle_wts_console_session stays off: runs with and without the
-            // console-session report produced an identical IOCTL sequence, so
-            // there is no evidence to turn it on for this build.
             entry.profile.working_directory_relative_path = {};
             // This CHD boots Explorer and starts the game from a StartUp
             // shortcut whose target string is "C:\ez2dj\Ez2DJ.exe"; the spare
@@ -342,10 +276,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.default_hdd_image_relative_path =
                 "roms/ez2dj3rd";
             entry.profile.run_defaults.audio_gain_db = 0.0f;
-            entry.profile.run_defaults.demo_volume.reset();
-            entry.profile.run_defaults.hle_vfs = true;
-            entry.profile.run_defaults.hle_d3d3 = true;
-            entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000a9887;
@@ -362,16 +292,7 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // confirmed physical Hardlock seed.
             entry.profile.run_defaults.lptdi.device_mock_target_state_hex =
                 "0000000000000000";
-            // The protection opens its device through a GetProcAddress-resolved
-            // CreateFileA, so without dynamic resolution the device boundary
-            // never sees that open and the protection stops at its own dialog.
-            entry.profile.run_defaults.hle_dynamic_vfs = true;
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
-            // Same boundary as 4th: the protection initialization reads the
-            // current session ID (WTSSessionId), and the cabinet ran this executable as
-            // the console's shell.
-            entry.profile.run_defaults.hle_wts_console_session = true;
-            entry.profile.run_defaults.run_detached = true;
             entry.profile.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
             // This dump carries no System.ini, so the drive letter and guest
             // directory stay empty rather than being copied from 1st SE.
@@ -392,10 +313,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.display_name = "EZ2DJ 4th (MAME CHD HDD)";
             entry.profile.hle_profile_id = "ez2dj4th";
             entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
-            entry.profile.run_defaults.hle_vfs = true;
-            entry.profile.run_defaults.hle_dynamic_vfs = true;
-            entry.profile.run_defaults.hle_d3d3 = true;
-            entry.profile.run_defaults.hle_directsound = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports = true;
             entry.profile.run_defaults.lptdi.legacy_io_ports_default = true;
             entry.profile.run_defaults.lptdi.legacy_io_in_rva = 0x000c3817;
@@ -412,14 +329,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.lptdi.device_mock_path_prefix =
                 "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
-            // The protection stops after its first device request unless the
-            // session reports the console session ID 0, and the cabinet ran this
-            // executable as that console's shell.
-            entry.profile.run_defaults.hle_wts_console_session = true;
-            // Without this the launcher treats the first VFS file open as the
-            // handoff and terminates the original, which is diagnostic rather
-            // than product behavior.
-            entry.profile.run_defaults.run_detached = true;
             entry.profile.run_defaults.default_hdd_image_relative_path =
                 "roms/ez2dj4th";
             entry.profile.executable_relative_path = "EZ2DJ/EZ2DJ.EXE";
@@ -472,8 +381,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "VFS, graphics, audio, and device boundaries remain a 4th-based "
                 "compatibility baseline; 6th raw-I/O helper RVAs and Hardlock "
                 "responses are not confirmed.");
-            entry.profile.run_defaults.follow_child_process = true;
-            entry.profile.run_defaults.run_detached = false;
             // The launcher's children (task 434): the game, and the bundled
             // 1st Tracks it starts in place of the game when the game ends
             // with 0x100 (Remember 1st).
@@ -504,26 +411,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             entry.profile.run_defaults.hdd_input_kind = HddInputKind::kMameChd;
             entry.profile.run_defaults.default_hdd_image_relative_path = "roms/ez2d2m";
             entry.profile.run_defaults.audio_gain_db = 0.0f;
-            // Every setting below follows this executable's own packed import
-            // directory, which is what the launcher searches for IAT slots.
-            //
-            // GetCommandLineA, GetWindowsDirectoryA and GetPrivateProfileIntA
-            // are all absent from it, so those three boundaries cannot be
-            // prepared at all and stay off.
-            entry.profile.run_defaults.hle_command_line = false;
-            entry.profile.run_defaults.hle_windows_directory = false;
-            entry.profile.run_defaults.demo_volume.reset();
-            entry.profile.run_defaults.hle_vfs = true;
-            // Same .protect family as 1st, 1st SE, 3rd, 4th and 5th: the
-            // protection reaches CreateFileA through GetProcAddress, so the
-            // static slots alone never see its device work.
-            entry.profile.run_defaults.hle_dynamic_vfs = true;
-            // DDRAW.dll contributes DirectDrawCreateEx rather than
-            // DirectDrawCreate, which the launcher's IAT lookup already
-            // accepts. The image ships DirectX 7.0a, which agrees.
-            entry.profile.run_defaults.hle_d3d3 = true;
-            // DSOUND.dll ordinal 1 is present.
-            entry.profile.run_defaults.hle_directsound = true;
             // Confirmed from this executable's strings: it carries
             // \\.\HARDLOCK.VXD and \\.\FEnteDev, HLW32Proc and API_1LNM.DLL,
             // exactly like the EZ2DJ builds of the same envelope.
@@ -531,10 +418,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
                 "\\\\.\\FEnteDev";
             entry.profile.run_defaults.lptdi.device_mock_enabled = true;
             entry.profile.run_defaults.lptdi.hardlock_cfg_material_default = true;
-            // The same envelope's WTSQuerySessionInformationA path is present
-            // in this build's strings. Whether this build stops without the
-            // console-session report has not been observed here.
-            entry.profile.run_defaults.hle_wts_console_session = true;
             // This board is word-wide over ports 0x300 to 0x30c, which is
             // confirmed rather than inherited: past the Hardlock protection the
             // guest faults on an untrapped `out dx, ax` whose bytes are 66 ef,
@@ -560,7 +443,6 @@ const std::vector<BuiltInTargetProfile>& GetBuiltInTargetProfiles()
             // this build's resumed dump and by a write test in a normal song
             // (task 305).
             entry.profile.game_controls.push_back({0x003fa424, 0x3a5f074c});
-            entry.profile.run_defaults.run_detached = true;
             // The image is a Windows 98 SE boot disk whose MSDOS.SYS reads
             // HostWinBootDrv=C, and the game sits at that volume's root.
             entry.profile.guest_drive_letter = 'C';

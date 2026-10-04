@@ -1,8 +1,8 @@
-#include "../native_import_bridge.h"
-#include "../native_guest_threads.h"
-#include "../native_instruction_trace.h"
+#include "../../native/native_import_bridge.h"
+#include "../../native/native_guest_threads.h"
+#include "../../native/native_instruction_trace.h"
 
-#include "../native_process_bootstrap.h"
+#include "../../native/native_process_bootstrap.h"
 
 #include <cstddef>
 #include <cstring>
@@ -10,7 +10,7 @@
 namespace
 {
 
-thread_local re2dj::platform::linux::NativeImportGateHandler import_gate_handler = nullptr;
+thread_local re2dj::platform::native::NativeImportGateHandler import_gate_handler = nullptr;
 thread_local void* import_gate_context = nullptr;
 // Every thunk reads this one word right after the bridge returns, so it is
 // shared by the guest threads; only the one holding the guest lock runs.
@@ -34,19 +34,19 @@ extern "C" std::uint64_t NativeImportGateBridgeImpl(
     std::uint32_t return_address = 0;
     std::memcpy(&return_address, return_slot, sizeof(return_address));
 
-    re2dj::platform::linux::NativeImportGateEvent event;
+    re2dj::platform::native::NativeImportGateEvent event;
     event.gate_address = gate_address;
     event.instruction_pointer = return_address;
     event.stack_pointer = static_cast<std::uint32_t>(
         reinterpret_cast<std::uintptr_t>(return_slot));
     event.guest_stack_base = import_gate_stack_base;
     event.guest_stack_limit = import_gate_stack_limit;
-    re2dj::platform::linux::NativeImportGateResult result;
+    re2dj::platform::native::NativeImportGateResult result;
     ++import_gate_depth;
     const bool outer_host_code_running = host_code_running;
     host_code_running = true;
     // Another guest thread waiting for the lock runs first.
-    re2dj::platform::linux::YieldNativeGuestThread();
+    re2dj::platform::native::YieldNativeGuestThread();
     const bool handled =
         import_gate_handler != nullptr && import_gate_handler(event, &result, import_gate_context);
     host_code_running = outer_host_code_running;
@@ -54,15 +54,15 @@ extern "C" std::uint64_t NativeImportGateBridgeImpl(
     if (!handled)
     {
         import_gate_cleanup_bytes = 0;
-        re2dj::platform::linux::ResumeNativeInstructionTrace(return_address);
+        re2dj::platform::native::ResumeNativeInstructionTrace(return_address);
         return 0;
     }
     if (result.exit_process)
     {
-        re2dj::platform::linux::ExitNativeGuestProcess(result.exit_code);
+        re2dj::platform::native::ExitNativeGuestProcess(result.exit_code);
     }
     import_gate_cleanup_bytes = result.stack_bytes_to_pop;
-    re2dj::platform::linux::ResumeNativeInstructionTrace(return_address);
+    re2dj::platform::native::ResumeNativeInstructionTrace(return_address);
     return (static_cast<std::uint64_t>(result.edx) << 32) | result.eax;
 }
 
@@ -138,7 +138,7 @@ extern "C" __attribute__((naked)) std::uint32_t CallGuestStdcallWords(
 
 }  // namespace
 
-bool re2dj::platform::linux::CallNativeGuestStdcall(std::uint32_t function,
+bool re2dj::platform::native::CallNativeGuestStdcall(std::uint32_t function,
                                                     std::span<const std::uint32_t> arguments,
                                                     std::span<std::uint8_t> data,
                                                     int data_argument,
@@ -185,7 +185,7 @@ bool re2dj::platform::linux::CallNativeGuestStdcall(std::uint32_t function,
     return true;
 }
 
-bool re2dj::platform::linux::ConfigureNativeImportGateHandler(NativeImportGateHandler handler,
+bool re2dj::platform::native::ConfigureNativeImportGateHandler(NativeImportGateHandler handler,
                                                               void* context)
 {
     if (handler == nullptr)
@@ -198,7 +198,7 @@ bool re2dj::platform::linux::ConfigureNativeImportGateHandler(NativeImportGateHa
     return true;
 }
 
-void re2dj::platform::linux::ConfigureNativeImportGateStackRange(
+void re2dj::platform::native::ConfigureNativeImportGateStackRange(
     std::uint32_t stack_limit,
     std::uint32_t stack_base)
 {
@@ -206,14 +206,14 @@ void re2dj::platform::linux::ConfigureNativeImportGateStackRange(
     import_gate_stack_base = stack_base;
 }
 
-void re2dj::platform::linux::CurrentNativeImportGateHandler(NativeImportGateHandler* handler,
+void re2dj::platform::native::CurrentNativeImportGateHandler(NativeImportGateHandler* handler,
                                                             void** context)
 {
     *handler = import_gate_handler;
     *context = import_gate_context;
 }
 
-void re2dj::platform::linux::ClearNativeImportGateHandler()
+void re2dj::platform::native::ClearNativeImportGateHandler()
 {
     import_gate_handler = nullptr;
     import_gate_context = nullptr;
@@ -224,23 +224,23 @@ void re2dj::platform::linux::ClearNativeImportGateHandler()
     host_code_running = false;
 }
 
-bool re2dj::platform::linux::NativeHostCodeRunning()
+bool re2dj::platform::native::NativeHostCodeRunning()
 {
     return host_code_running;
 }
 
-void re2dj::platform::linux::ResetNativeImportGateNesting()
+void re2dj::platform::native::ResetNativeImportGateNesting()
 {
     import_gate_depth = 0;
     host_code_running = false;
 }
 
-std::uintptr_t re2dj::platform::linux::NativeImportGateBridgeAddress()
+std::uintptr_t re2dj::platform::native::NativeImportGateBridgeAddress()
 {
     return reinterpret_cast<std::uintptr_t>(&NativeImportGateBridge);
 }
 
-std::uintptr_t re2dj::platform::linux::NativeImportGateCleanupAddress()
+std::uintptr_t re2dj::platform::native::NativeImportGateCleanupAddress()
 {
     return reinterpret_cast<std::uintptr_t>(&import_gate_cleanup_bytes);
 }

@@ -169,16 +169,10 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK_EQ(context, first->fingerprint.size_of_image,
                            std::optional<std::uint32_t>{0x019b6000});
             RE2DJ_CHECK(context, first->fingerprint.required_siblings.empty());
-            RE2DJ_CHECK(context, first->profile.run_defaults.hle_command_line);
             // GetWindowsDirectoryA is absent from this build's import table and
             // asking for it fails the whole handoff preparation.
-            RE2DJ_CHECK(context, !first->profile.run_defaults.hle_windows_directory);
-            RE2DJ_CHECK(context, first->profile.run_defaults.hle_vfs);
             // The .protect packer overwrites the static IAT patch, so the
             // device work is only reachable through the dynamic resolver.
-            RE2DJ_CHECK(context, first->profile.run_defaults.hle_dynamic_vfs);
-            RE2DJ_CHECK(context, first->profile.run_defaults.hle_d3d3);
-            RE2DJ_CHECK(context, first->profile.run_defaults.hle_directsound);
             RE2DJ_CHECK(context, first->profile.run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context,
                         first->profile.run_defaults.lptdi.legacy_io_ports_default);
@@ -238,12 +232,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::optional<std::uint32_t>{0x0047d000});
             RE2DJ_CHECK_EQ(context, second->fingerprint.required_siblings.size(),
                            std::size_t{4});
-            RE2DJ_CHECK(context, second->profile.run_defaults.hle_command_line);
-            RE2DJ_CHECK(context,
-                        second->profile.run_defaults.hle_windows_directory);
-            RE2DJ_CHECK(context, second->profile.run_defaults.hle_vfs);
-            RE2DJ_CHECK(context, second->profile.run_defaults.hle_d3d3);
-            RE2DJ_CHECK(context, second->profile.run_defaults.hle_directsound);
             RE2DJ_CHECK(context, second->profile.run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context,
                         second->profile.run_defaults.lptdi.legacy_io_ports_default);
@@ -255,7 +243,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                 context,
                 second->profile.run_defaults.lptdi.legacy_io_out_rva,
                 std::uintptr_t{0x0007832b});
-            RE2DJ_CHECK(context, !second->profile.run_defaults.demo_volume.has_value());
             RE2DJ_CHECK_EQ(
                 context,
                 second->profile.run_defaults.lptdi.device_mock_target_state_hex,
@@ -306,8 +293,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK_EQ(context, fourth->fingerprint.executable_name,
                            std::string_view("EZ2DJ.EXE"));
             RE2DJ_CHECK(context, !fourth->fingerprint.required_siblings.empty());
-            RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_vfs);
-            RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_dynamic_vfs);
             RE2DJ_CHECK(context, fourth->profile.run_defaults.lptdi.hardlock_cfg_material_default);
             RE2DJ_CHECK(context, fourth->profile.run_defaults.lptdi.device_mock_enabled);
             RE2DJ_CHECK_EQ(context,
@@ -316,8 +301,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             // Without these the launcher terminates the original at the first
             // VFS file open and the protection stops after its first device
             // request. Both are product policy.
-            RE2DJ_CHECK(context, fourth->profile.run_defaults.run_detached);
-            RE2DJ_CHECK(context, fourth->profile.run_defaults.hle_wts_console_session);
             RE2DJ_CHECK(context,
                         fourth->profile.run_defaults.lptdi
                             .device_mock_target_state_hex.empty());
@@ -335,9 +318,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                    // build's .text, so the caller states the pair it expects
                    // rather than sharing one baseline.
                    std::uint32_t expected_in_rva,
-                   std::uint32_t expected_out_rva,
-                   bool follow_child,
-                   bool run_detached) {
+                   std::uint32_t expected_out_rva) {
             const re2dj::target::BuiltInTargetProfile* profile =
                 re2dj::target::FindBuiltInTargetProfileById(id);
             RE2DJ_CHECK(context, profile != nullptr);
@@ -360,10 +341,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::string(executable_path));
             RE2DJ_CHECK(context,
                         profile->profile.run_defaults.default_hdd_directory_relative_path.empty());
-            RE2DJ_CHECK(context, profile->profile.run_defaults.hle_vfs);
-            RE2DJ_CHECK(context, profile->profile.run_defaults.hle_dynamic_vfs);
-            RE2DJ_CHECK(context, profile->profile.run_defaults.hle_d3d3);
-            RE2DJ_CHECK(context, profile->profile.run_defaults.hle_directsound);
             RE2DJ_CHECK_EQ(context,
                            profile->profile.run_defaults.lptdi.legacy_io_ports,
                            legacy_io);
@@ -385,14 +362,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::string("\\\\.\\FEnteDev"));
             RE2DJ_CHECK(context,
                         profile->profile.run_defaults.lptdi.hardlock_cfg_material_default);
-            RE2DJ_CHECK(context, profile->profile.run_defaults.hle_wts_console_session);
-            RE2DJ_CHECK_EQ(context,
-                           profile->profile.run_defaults.follow_child_process,
-                           follow_child);
-            RE2DJ_CHECK_EQ(context,
-                           profile->profile.run_defaults.run_detached,
-                           run_detached);
-            RE2DJ_CHECK(context, !profile->profile.run_defaults.demo_volume.has_value());
             RE2DJ_CHECK_EQ(context, profile->fingerprint.executable_name,
                            std::string_view("EZ2DJ.EXE"));
             RE2DJ_CHECK_EQ(context, profile->fingerprint.required_siblings.size(),
@@ -403,7 +372,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
     // this profile used to inherit never matched it.
     check_chd_compatibility_profile(
         "ez2dj5th", "EZ2DJ 5th Trax", "roms/ez2dj5th", "EZ2DJ/EZ2DJ.EXE", true,
-        0x000ca067, 0x000ca09b, false, true);
+        0x000ca067, 0x000ca09b);
     check_chd_compatibility_profile(
         "ez2dj6th",
         "EZ2DJ 6th Trax",
@@ -411,9 +380,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
         "EZ2DJ/EZ2DJ.EXE",
         true,
         0,
-        0,
-        true,
-        false);
+        0);
     // 6th's launcher starts the game and, for Remember 1st, the bundled 1st
     // Tracks (task 434); no other profile has a launcher.
     {
@@ -431,7 +398,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             if (other != nullptr)
             {
                 RE2DJ_CHECK(context, other->profile.run_defaults.child_executable_paths.empty());
-                RE2DJ_CHECK(context, !other->profile.run_defaults.follow_child_process);
             }
         }
     }
@@ -461,17 +427,8 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::string("ez2dancer/EZ2Dancer.exe"));
             RE2DJ_CHECK_EQ(context, profile.guest_drive_letter, 'C');
             RE2DJ_CHECK_EQ(context, profile.guest_directory, std::string("\\ez2dancer"));
-            RE2DJ_CHECK(context, profile.run_defaults.hle_vfs);
-            RE2DJ_CHECK(context, profile.run_defaults.hle_dynamic_vfs);
-            RE2DJ_CHECK(context, profile.run_defaults.hle_d3d3);
-            RE2DJ_CHECK(context, profile.run_defaults.hle_directsound);
-            RE2DJ_CHECK(context, profile.run_defaults.hle_wts_console_session);
-            RE2DJ_CHECK(context, profile.run_defaults.run_detached);
             // Absent from the packed import directory, so none of these can be
             // prepared for this build.
-            RE2DJ_CHECK(context, !profile.run_defaults.hle_command_line);
-            RE2DJ_CHECK(context, !profile.run_defaults.hle_windows_directory);
-            RE2DJ_CHECK(context, !profile.run_defaults.demo_volume.has_value());
             // The EZ2Dancer board is word-wide, and its output helper is
             // confirmed from the guest's own privileged fault. Its reads come
             // from two helpers (task 427), so they go by opcode.
@@ -488,7 +445,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            std::string("\\\\.\\FEnteDev"));
             RE2DJ_CHECK(context,
                         profile.run_defaults.lptdi.hardlock_cfg_material_default);
-            RE2DJ_CHECK(context, !profile.run_defaults.follow_child_process);
             RE2DJ_CHECK(context, !profile.detected);
             RE2DJ_CHECK(context, !profile.bring_up_target);
             RE2DJ_CHECK(context, !profile.note.empty());
@@ -534,15 +490,7 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             // in the surviving original .idata, which the IAT lookup also
             // searches. GetWindowsDirectoryA and GetPrivateProfileIntA are in
             // neither, so those two boundaries stay off.
-            RE2DJ_CHECK(context, canonical->run_defaults.hle_command_line);
-            RE2DJ_CHECK(context, !canonical->run_defaults.hle_windows_directory);
-            RE2DJ_CHECK(context, canonical->run_defaults.hle_vfs);
-            RE2DJ_CHECK(context, canonical->run_defaults.hle_d3d3);
-            RE2DJ_CHECK(context, canonical->run_defaults.hle_directsound);
-            RE2DJ_CHECK(context, !canonical->run_defaults.demo_volume.has_value());
             // The protection resolves its device APIs through GetProcAddress.
-            RE2DJ_CHECK(context, canonical->run_defaults.hle_dynamic_vfs);
-            RE2DJ_CHECK(context, canonical->run_defaults.run_detached);
             RE2DJ_CHECK(context, canonical->run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context, canonical->run_defaults.lptdi.device_mock_enabled);
             // Confirmed by the device trace: this build opens \\.\FEnteDev, so
@@ -556,7 +504,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                         canonical->run_defaults.lptdi.hardlock_cfg_material_default);
             // Runs with and without the console-session report behaved
             // identically, so it stays off rather than being copied from 3rd.
-            RE2DJ_CHECK(context, !canonical->run_defaults.hle_wts_console_session);
             RE2DJ_CHECK_EQ(context,
                            canonical->run_defaults.lptdi.legacy_io_in_rva,
                            std::uintptr_t{0x00038987});
@@ -653,20 +600,12 @@ void RunTargetProfileTests(re2dj::test::Context& context)
                            third->run_defaults.default_hdd_image_relative_path,
                            std::string("roms/ez2dj3rd"));
             RE2DJ_CHECK_EQ(context, third->hle_profile_id, std::string("ez2dj3rd"));
-            RE2DJ_CHECK(context, third->run_defaults.hle_vfs);
-            RE2DJ_CHECK(context, third->run_defaults.hle_directsound);
-            RE2DJ_CHECK(context, third->run_defaults.run_detached);
             // The console-session policy is confirmed for 3rd as well: its
             // protection initialization reads the current session ID, and
             // reporting session 0 advances execution from 0x9c402468 to
             // 0x9c402450. It stays absent from profiles with no such evidence.
-            RE2DJ_CHECK(context, third->run_defaults.hle_wts_console_session);
-            RE2DJ_CHECK(context, third->run_defaults.hle_dynamic_vfs);
             RE2DJ_CHECK(context, third->run_defaults.lptdi.hardlock_cfg_material_default);
             RE2DJ_CHECK(context, !third->run_defaults.fullscreen);
-            RE2DJ_CHECK(context, !third->run_defaults.hle_command_line);
-            RE2DJ_CHECK(context, !third->run_defaults.hle_windows_directory);
-            RE2DJ_CHECK(context, third->run_defaults.hle_d3d3);
             RE2DJ_CHECK(context, third->run_defaults.lptdi.legacy_io_ports);
             RE2DJ_CHECK(context, third->run_defaults.lptdi.legacy_io_ports_default);
             RE2DJ_CHECK_EQ(context,
@@ -684,7 +623,6 @@ void RunTargetProfileTests(re2dj::test::Context& context)
             RE2DJ_CHECK(context,
                         third->run_defaults.lptdi.device_mock_target_state_hex ==
                             "0000000000000000");
-            RE2DJ_CHECK(context, !third->run_defaults.demo_volume.has_value());
         }
 
         RE2DJ_CHECK(context, Find(profiles, "ez2dj1stse") == nullptr);

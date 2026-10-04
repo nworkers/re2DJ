@@ -1,5 +1,67 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.63 (2026-10-05)
+
+### 한국어
+
+Windows도 Linux와 같은 in-process 러너로 원본 실행 파일을 돌립니다(작업 446~450). 원본을 별도 Windows 프로세스로 띄워 DLL을 주입하던 경로는 지웠습니다.
+
+#### 1. in-process 러너로 통합 (작업 446~449)
+- OS 중립 러너를 `src/platform/native/`로 옮기고, 메모리·시계·잠자기는 OS 계약(`native_host_services.h`)으로 분리했습니다(446).
+- SDL3 창·키보드·소리 host를 `src/platform/sdl/`로 옮겨 두 OS가 함께 씁니다(447).
+- Windows x86 backend(448): 그림자 TEB와 fs:0 SEH 체인 동기화, VEH 기반 fault 배달, MSVC naked asm 게스트 전환.
+- Windows CLI 전환(449): `re2dj.exe`가 일시 정지 상태로 자신을 다시 띄워 게스트 이미지 주소 0x400000을 예약하고, 게스트는 16 MiB 스택의 전용 스레드에서 돕니다. 6th 런처의 자식 실행도 같은 방식입니다. `--image-dump`는 `logs/image-dumps/<target>/`에 entry·resumed 두 시점을 씁니다.
+
+#### 2. 주입 경로 제거 (작업 450)
+- 주입 runtime DLL, Windows 전용 COM facade·창·OSD 경계, 관련 도구와 테스트(73개 파일)를 지웠습니다. Windows 패키지에는 `re2dj.exe`만 들어갑니다.
+- `--demo-volume`, `--audio-volume-trace`, `--guest-wait-trace`, `--vsync`는 이제 알 수 없는 옵션으로 거부됩니다.
+- GitHub의 v0.0.61 Windows 패키지는 이 PC에서 Windows Defender가 `re2dj.exe`를 악성으로 판정해 격리했습니다. 주입이 없어져 그 원인으로 보이는 동작이 사라졌지만, 릴리스 패키지가 판정되지 않는지는 아직 확인하지 않았습니다.
+
+#### 3. 개발 도구 (작업 451~452)
+- `game-state-hunt`의 `guest_memory.py`가 Windows에서도 명령줄로 `re2dj.exe` 게스트 프로세스를 찾습니다(451).
+- Windows x64 호환 모드 조사 probe(452, 제품 밖): 64비트 프로세스 안에서 32비트 코드 진입·복귀와 FS 처리 방식을 확인했습니다.
+
+#### 4. 성능과 스크린샷 (작업 453)
+- 주입 경로(v0.0.62)와 비교하면 vsync off 최대 처리량이 4th −17%, 1st SE −22%, 5th −11%, 6th −16%, 2nd MOVE +10%입니다. 기본 설정(vsync on)에서는 다섯 타깃 모두 60fps를 유지하고 CPU는 코어 하나 기준 2~4%p 늘었습니다. 자세한 내용은 [측정 문서](docs/analysis/windows-in-process-performance.md)에 있고, 추가 분석은 TODO로 남겼습니다.
+- README와 프로젝트 사이트 소개에 1st SE, 4th, 5th, 6th, 2nd MOVE의 스크린샷을 넣었습니다(`docs/screenshots/`).
+
+#### 5. 검증
+- Windows x86 Debug·Release 빌드와 CTest, WSL Linux x64·x86 Debug 빌드와 CTest 통과.
+- Windows 실게임: 4th, 1st SE, 5th, 6th(런처 → 자식), 2nd MOVE가 in-process로 실행되고, 성능 측정에서 각 40초씩 vsync on/off로 돌았습니다.
+- 확인하지 못한 것: Windows 게임패드 실제 입력, 창을 손으로 닫는 종료와 `--fullscreen`·OSD 조작, 릴리스 workflow가 만든 Windows 패키지.
+
+---
+
+### English
+
+Windows now runs the original executables through the same in-process runner as Linux (tasks 446 to 450); the path that started the original as its own Windows process and injected a DLL is gone.
+
+#### 1. One in-process runner (tasks 446 to 449)
+- The OS-neutral runner moved to `src/platform/native/`, with memory, clocks and sleeping behind an OS contract (`native_host_services.h`) (446).
+- The SDL3 window, keyboard and sound hosts moved to `src/platform/sdl/`, shared by both OSes (447).
+- The Windows x86 backend (448): a shadow TEB kept in step with the fs:0 SEH chain, fault delivery through a VEH, and guest transitions in MSVC naked asm.
+- The Windows CLI switch (449): `re2dj.exe` starts itself again suspended to reserve the guest image address 0x400000, and the guest runs on a dedicated thread with a 16 MiB stack; the 6th launcher's child runs the same way. `--image-dump` writes the entry and resumed dumps to `logs/image-dumps/<target>/`.
+
+#### 2. The injection path removed (task 450)
+- The injected runtime DLL, the Windows-only COM facades and window and OSD boundaries, and their tools and tests (73 files) are gone; the Windows package holds only `re2dj.exe`.
+- `--demo-volume`, `--audio-volume-trace`, `--guest-wait-trace` and `--vsync` are now refused as unknown options.
+- On this PC Windows Defender quarantined `re2dj.exe` from the v0.0.61 Windows package on GitHub as malicious. Without injection the behaviour that likely caused it is gone, but whether the release package passes has not been checked yet.
+
+#### 3. Developer tools (tasks 451 and 452)
+- `guest_memory.py` of `game-state-hunt` finds the `re2dj.exe` guest process by its command line on Windows too (451).
+- A Windows x64 compatibility-mode probe (452, outside the product) confirmed entering and leaving 32-bit code inside a 64-bit process and how FS behaves there.
+
+#### 4. Performance and screenshots (task 453)
+- Against the injection path (v0.0.62), peak vsync-off throughput is −17% for 4th, −22% for 1st SE, −11% for 5th, −16% for 6th and +10% for 2nd MOVE. At the default (vsync on) all five targets hold 60 fps and CPU rises by 2 to 4 points of one core. Details are in the [measurement document](docs/analysis/windows-in-process-performance.md); further analysis is left as TODO.
+- The README and the project site's introduction show screenshots of 1st SE, 4th, 5th, 6th and 2nd MOVE (`docs/screenshots/`).
+
+#### 5. Verification
+- The Windows x86 Debug and Release builds with CTest, and the WSL Linux x64 and x86 Debug builds with CTest, pass.
+- Real games on Windows: 4th, 1st SE, 5th, 6th (launcher → child) and 2nd MOVE run in-process, each running 40 s with vsync on and off in the performance measurements.
+- Not checked: real gamepad input on Windows, closing the window by hand, `--fullscreen` and the OSD, and the Windows package the release workflow builds.
+
+---
+
 ## v0.0.62 (2026-10-04)
 
 ### 한국어

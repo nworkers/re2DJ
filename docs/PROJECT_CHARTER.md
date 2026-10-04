@@ -22,7 +22,7 @@ Game logic must remain in the original 32-bit x86 code. C++ code should focus on
 | 64-bit Windows | MSVC 또는 clang-cl | 보류된 확장 host |
 | Linux x86 / x86-64 | GCC 또는 Clang | WSL에서 두 아키텍처를 함께 개발·검증하는 다음 이식 목표 |
 
-Windows의 현재 경로는 64비트 Windows에서 Win32 x86 제품 경로를 실행하는 것이다. Linux는 x86-64 제품 host와 i386 제품/helper 경로를 함께 검증한다. 브라우저 실행 경로는 성능과 검증 범위 문제로 현재 지원 목표에서 제거했다.
+Linux는 x86-64와 i386 제품 host가 원본 PE32를 자기 프로세스 안에 매핑해 실행한다(별도 helper는 작업 379에서 제거). Windows도 64비트 Windows에서 도는 Win32 x86 제품이 Linux와 같은 OS 중립 in-process 러너(`src/platform/native/`)로 원본을 실행한다. 원본 EXE를 실제 프로세스로 띄우고 런타임 DLL을 주입하던 예전 경로는 작업 446~450에서 이 러너로 통합하며 지웠다. 두 OS가 같은 HLE, 같은 SDL 창·입력·소리를 쓴다. 브라우저 실행 경로는 성능과 검증 범위 문제로 현재 지원 목표에서 제거했다.
 
 ## Target Host Platforms
 
@@ -32,7 +32,7 @@ Windows의 현재 경로는 64비트 Windows에서 Win32 x86 제품 경로를 �
 | 64-bit Windows | MSVC or clang-cl | Deferred expansion host |
 | Linux x86 / x86-64 | GCC or Clang | Next porting target, developed and validated together under WSL |
 
-The current path runs the original x86 EXE through the Win32 product route on 64-bit Windows. Linux validates x86-64 product and i386 product/helper paths together. The browser execution path was removed from the active target because its performance and verification scope do not fit the project target.
+On Linux the x86-64 and i386 product hosts map the original PE32 into their own process and run it there (the separate helper was removed in task 379). Windows too runs the original through the same OS-neutral in-process runner as Linux (`src/platform/native/`), in its Win32 x86 product on 64-bit Windows; the former path that started the original EXE as a real process and injected a runtime DLL was merged into that runner and deleted in tasks 446 to 450, so both OSes share one HLE and the same SDL window, input and sound. The browser execution path was removed from the active target because its performance and verification scope do not fit the project target.
 
 ---
 

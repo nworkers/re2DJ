@@ -1,4 +1,4 @@
-#include "../native_guest_module_set.h"
+#include "../../native/native_guest_module_set.h"
 
 #include <sys/mman.h>
 
@@ -27,14 +27,14 @@ using CreateFileFunction = std::uint32_t (__attribute__((stdcall))*)(
 
 struct DispatchContext
 {
-    const re2dj::platform::linux::NativeGuestModuleSet* modules = nullptr;
+    const re2dj::platform::native::NativeGuestModuleSet* modules = nullptr;
     std::string error;
     std::uint32_t call_count = 0;
     std::uint32_t last_cleanup = 0;
 };
 
-bool Dispatch(const re2dj::platform::linux::NativeImportGateEvent& event,
-              re2dj::platform::linux::NativeImportGateResult* result,
+bool Dispatch(const re2dj::platform::native::NativeImportGateEvent& event,
+              re2dj::platform::native::NativeImportGateResult* result,
               void* opaque)
 {
     auto* context = static_cast<DispatchContext*>(opaque);
@@ -74,14 +74,14 @@ bool Fail(const std::string& message)
 
 bool RunProbe()
 {
-    using re2dj::platform::linux::NativeGuestModuleSet;
+    using re2dj::platform::native::NativeGuestModuleSet;
     using re2dj::runtime::GuestAddress;
     using re2dj::runtime::ImportGateTable;
 
     constexpr std::uint32_t kCollisionSize = 0x10000U;
     void* collision = mmap(
         reinterpret_cast<void*>(static_cast<std::uintptr_t>(
-            re2dj::platform::linux::kDefaultNativeGuestModuleBase)),
+            re2dj::platform::native::kDefaultNativeGuestModuleBase)),
         kCollisionSize,
         PROT_NONE,
         MAP_PRIVATE | MAP_ANONYMOUS,
@@ -89,7 +89,7 @@ bool RunProbe()
         0);
     if (collision == MAP_FAILED ||
         reinterpret_cast<std::uintptr_t>(collision) !=
-            re2dj::platform::linux::kDefaultNativeGuestModuleBase)
+            re2dj::platform::native::kDefaultNativeGuestModuleBase)
     {
         if (collision != MAP_FAILED)
         {
@@ -103,9 +103,9 @@ bool RunProbe()
     std::string error;
     if (!modules.Add(re2dj::hle::modules::MakeKernel32ModuleDescriptor(),
                      &gates,
-                     re2dj::platform::linux::NativeImportGateBridgeAddress(),
-                     re2dj::platform::linux::NativeImportGateCleanupAddress(),
-                     re2dj::platform::linux::kDefaultNativeGuestModuleBase,
+                     re2dj::platform::native::NativeImportGateBridgeAddress(),
+                     re2dj::platform::native::NativeImportGateCleanupAddress(),
+                     re2dj::platform::native::kDefaultNativeGuestModuleBase,
                      &error))
     {
         munmap(collision, kCollisionSize);
@@ -114,7 +114,7 @@ bool RunProbe()
 
     const auto* module = modules.registry().FindModule("KERNEL32");
     if (module == nullptr ||
-        module->base.value() == re2dj::platform::linux::kDefaultNativeGuestModuleBase)
+        module->base.value() == re2dj::platform::native::kDefaultNativeGuestModuleBase)
     {
         munmap(collision, kCollisionSize);
         return Fail("registry did not preserve the mapped kernel32 base");
@@ -145,7 +145,7 @@ bool RunProbe()
     }
 
     DispatchContext dispatch_context{&modules, {}, 0, 0};
-    if (!re2dj::platform::linux::ConfigureNativeImportGateHandler(
+    if (!re2dj::platform::native::ConfigureNativeImportGateHandler(
             &Dispatch, &dispatch_context))
     {
         return Fail("cannot configure native import bridge handler");
@@ -154,7 +154,7 @@ bool RunProbe()
     {
         ~HandlerCleanup()
         {
-            re2dj::platform::linux::ClearNativeImportGateHandler();
+            re2dj::platform::native::ClearNativeImportGateHandler();
         }
     } handler_cleanup;
 
@@ -168,7 +168,7 @@ bool RunProbe()
         stack_pointer < (std::numeric_limits<std::uint32_t>::max)() - kStackWindow
             ? stack_pointer + kStackWindow
             : (std::numeric_limits<std::uint32_t>::max)();
-    re2dj::platform::linux::ConfigureNativeImportGateStackRange(stack_limit, stack_base);
+    re2dj::platform::native::ConfigureNativeImportGateStackRange(stack_limit, stack_base);
 
     const auto get_version_function = reinterpret_cast<GetVersionFunction>(
         static_cast<std::uintptr_t>(get_version->thunk_address.value()));
@@ -198,9 +198,9 @@ bool RunProbe()
 
     if (!modules.Add(re2dj::hle::modules::MakeUser32ModuleDescriptor(),
                      &gates,
-                     re2dj::platform::linux::NativeImportGateBridgeAddress(),
-                     re2dj::platform::linux::NativeImportGateCleanupAddress(),
-                     re2dj::platform::linux::kDefaultNativeGuestModuleBase,
+                     re2dj::platform::native::NativeImportGateBridgeAddress(),
+                     re2dj::platform::native::NativeImportGateCleanupAddress(),
+                     re2dj::platform::native::kDefaultNativeGuestModuleBase,
                      &error))
     {
         return Fail(error);

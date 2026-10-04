@@ -1,124 +1,53 @@
-# Windows x86 원본 실행 가이드
+# Windows x86 실행 가이드 / Windows x86 runtime guide
 
-관련 설계: [렌더링 정확성·성능 회복](../design/20260826-072-render-correctness-performance.md)
+근거: [작업 446 설계(주입 폐기와 통합)](../design/20261004-446-windows-in-process-loader.md), [작업 448 설계(Windows backend)](../design/20261004-448-windows-x86-backend.md), [작업 449 설계(CLI 전환)](../design/20261004-449-windows-cli-in-process.md), [작업 450 로그(주입 경로 제거)](../work-logs/20261004-450-remove-windows-injection.md)
 
-관련 제품 loader 설계: [Win32 제품 loader 통합](../design/20260828-079-win32-product-loader.md)
+## 한국어
 
-관련 오디오 설계: [Win32 오디오 master gain](../design/20260828-080-win32-audio-master-gain.md)
+Windows 제품(`re2dj.exe`, 64비트 Windows에서 도는 Win32 x86 프로그램)은 작업 449부터 Linux와 같은 in-process 러너로 원본을 실행한다. 원본 EXE를 별도 프로세스로 띄우거나 DLL을 주입하지 않는다. 화면·입력·소리는 Linux와 같은 SDL3 host다.
 
-관련 streaming 설계: [DirectSound streaming/ring-buffer 동기화](../design/20260828-083-directsound-streaming-ring-buffer.md)
+### 실행
 
-관련 데모 음량 설계: [DirectSound 데모 음량 설정 HLE](../design/20260829-086-directsound-volume-transition.md)
-
-관련 창 설계: [Win32 창 모드와 메시지 pump](../design/20260828-084-window-mode-message-pump.md), [Win32 실행 창 제목과 기본 2배 확대](../design/20260829-091-window-title-default-scale.md)
-
-관련 작업 로그: [렌더링 정확성·성능 회복](../work-logs/20260826-072-render-correctness-performance.md), [Win32 제품 loader 통합](../work-logs/20260828-079-win32-product-loader.md)
-
-관련 프로파일 설계: [타깃 프로파일 실행 기본값과 shortcut](../design/20260830-099-profile-defaults-and-shortcut.md)
-
-관련 프로파일 작업 로그: [타깃 프로파일 실행 기본값과 shortcut](../work-logs/20260830-099-profile-defaults-and-shortcut.md)
-
-저장소 root의 PowerShell에서 제품 loader를 실행한다. `--hdd`에는 합법적으로 보유한 1st SE HDD dump 디렉터리를 지정한다.
+저장소 root의 PowerShell에서 프로파일 ID를 준다. CHD shortcut 프로파일은 `roms\<프로파일>` 아래의 CHD를 읽는다.
 
 ```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe --hdd .\roms\ez2dj1stse --target ez2dj1stse --run
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj6th --fullscreen
+.\build\windows-x86\bin\Debug\re2dj.exe ez2d2m --io-config .\config\ez2dancer-io.example.ini
 ```
 
-3rd 프로파일은 저장소 root 기준 `roms\ez2dj3rd`를 기본 HDD 경로로 사용한다. 따라서 다음처럼 프로파일 ID만 입력하면 자동으로 `--run`이 선택되고 `ez2dj\EZ2DJ.EXE`가 실행된다.
+창을 닫으면 끝난다. 6th처럼 런처가 게임을 자식으로 띄우는 프로파일은 자식도 같은 방식의 다른 re2dj 실행이다.
 
-```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd
-```
+### 시작할 때 일어나는 일
 
-`--hdd <directory>`는 shortcut 경로를 덮어쓴다. 3rd의 기본 정책은 확인된 DirectSound ordinal `#1`, 파일 I/O VFS와 detached 실행이며, 3rd IAT에 없는 1st 전용 command-line/Windows-directory/DirectDraw/display·DemoVolume·legacy-I/O hook은 자동으로 주입하지 않는다. 3rd의 `EZ2DJ.INI`가 `FullScreen=1`을 관리하므로 3rd 실행은 해당 원본 설정을 따른다.
+- re2dj.exe는 0x60000000에 고정되어 있고, 시작하자마자 자기 자신을 일시 정지 상태로 한 번 더 띄운다. 새 프로세스의 로더가 돌기 전에 게스트 이미지 영역(0x00400000~0x04400000)을 예약해 두기 위해서다. 그래서 작업 관리자에는 `re2dj.exe`가 둘 보이며, 처음 것은 기다리기만 하고 둘째가 게임을 돌린다. 하나를 끝내면 다른 하나도 같이 끝난다.
+- Hardlock 재료(`cfg\hardlock.ini` 등)는 현재 디렉터리의 `cfg\`에서 읽는다. 저장소 root에서 실행한다.
 
-제품 facade는 선택된 프로파일의 기본 policy를 사용하고, 지원되는 명령행 값으로 이를 덮어쓴다. 1st SE는 command line, Windows directory, VFS, DirectDraw/Direct3D 3, DirectSound, legacy I/O port, LPTDI target state와 detached 실행을 사용한다. 3rd는 확인된 VFS·DirectSound·detached 경계만 기본 활성화한다. 초기 복원과 IAT 검증 뒤 debugger를 분리하므로 실제 화면·오디오·입력과 성능 확인에 사용한다. 창을 닫으면 loader도 종료된다.
+### 진단
 
-*The 3rd profile uses `roms\\ez2dj3rd` relative to the repository root. Entering only the profile ID selects `--run` automatically and runs `ez2dj\\EZ2DJ.EXE`.*
+- 실행별 로그: `logs\re2dj-<시각>.log`, API 호출 로그 `logs\re2dj-<시각>.api.log`.
+- `--call-limit <n>`: 게스트 API 호출 n번 뒤 스스로 멈춘다(회귀 확인용).
+- `--image-dump [--image-dump-delay <ms>]`: [이미지 덤프 가이드](decrypted-image-dump.md).
+- `--linux-in-process-*`: 이름에 linux가 남아 있지만 Windows에서도 같은 진단으로 동작한다.
 
-*`--hdd <directory>` overrides the shortcut path. The 3rd baseline uses confirmed DirectSound ordinal `#1`, file-I/O VFS, and detached execution; it does not inject the 1st-only command-line/Windows-directory, DirectDraw/display, DemoVolume, or legacy-I/O hooks that are absent from the 3rd IAT. The 3rd run follows `FullScreen=1` from its original `EZ2DJ.INI`.*
+### OSD
 
-*The product facade consumes the selected profile's baseline policy and lets supported command-line values override it. 1st SE uses command-line, Windows-directory, VFS, DirectDraw/Direct3D 3, DirectSound, legacy-I/O, LPTDI target-state, and detached execution. 3rd enables only its confirmed VFS, DirectSound, and detached boundaries by default. It restores and verifies the process before detaching the debugger, so it can be used for visual, audio, input, and performance checks. Close the game window to finish the loader.*
+실행 중 백틱(`` ` ``)으로 OSD를 열고 닫는다. 버전, 대상 프로파일, 실행 파일 이름과, 빌드가 확인된 프로파일이면 Autoplay 토글이 나온다. Autoplay는 곡을 시작할 때 읽히므로 곡 시작 전에 켠다. "32-bit color"는 표시 색 깊이(`--color-depth`)를 바꾼다.
 
-기본 실행은 version, build date, SDL3 OpenGL renderer와 FPS를 제목에 표시하는 resize 가능한 1280×960 client-area 창이다. 원본의 640×480 논리 표시는 기본 가로·세로 2배로 확대된다. monitor 크기의 borderless fullscreen을 선택하려면 원본 INI를 수정하지 않고 다음처럼 외부 옵션을 추가한다.
+### 바뀐 점
 
-```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe --hdd .\roms\ez2dj1stse --target ez2dj1stse --run --fullscreen
-```
+작업 450에서 주입 경로만 받던 옵션 `--demo-volume`, `--audio-volume-trace`, `--guest-wait-trace`, `--vsync`를 지웠다. 예전 VFS trace·launcher 진단 로그(`logs\windows_x86_launcher_probe\`)도 더는 생기지 않는다.
 
-키보드 I/O를 사용하려면 [예제 INI](../../config/ez2dj-io.example.ini)를 복사·수정한 뒤 외부 설정으로 주입한다.
+## English
 
-```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe --hdd .\roms\ez2dj1stse --target ez2dj1stse --run --io-config .\config\ez2dj-io.example.ini
-```
+From task 449 the Windows product (`re2dj.exe`, a Win32 x86 program on 64-bit Windows) runs the original through the same in-process runner as Linux, starting no separate original process and injecting no DLL; window, input and sound are the same SDL3 hosts.
 
-`[buttons]` 값은 `A`~`Z`, `0`~`9`, `F1`~`F24`, `ENTER`, `SPACE`, `LSHIFT`, `RSHIFT`, 방향키, `NUMPAD0`~`NUMPAD9`, `DECIMAL`, `NONE`을 지원한다. `[turntables] step`은 1~32다. 설정을 생략하면 I/O board는 idle 상태로 동작한다.
+Run it from the repository root with a profile ID, CHD shortcut profiles reading the CHD under `roms\<profile>` (examples above). Closing the window ends the run; a launcher's child, as in 6th, is another re2dj run of the same kind.
 
-창을 클릭하거나 이동한 뒤에도 화면 갱신이 계속되고 Windows 작업 관리자에서 응답 중인지 확인한다.
+At start re2dj.exe, fixed at 0x60000000, starts itself once more suspended so the guest image range (0x00400000 to 0x04400000) is reserved before the new process's loader runs; Task Manager therefore shows two `re2dj.exe`, the first only waiting and the second running the game, and ending one ends both. Hardlock material (`cfg\hardlock.ini` and the rest) is read from `cfg\` in the current directory, so run from the repository root.
 
-re2DJ는 실행 중 어느 시점에도 데스크탑 해상도를 바꾸지 않는다. 원본이 요구하는 해상도 변경은 경계에서 흡수되며, `--fullscreen`은 현재 해상도를 그대로 둔 채 모니터를 덮는 borderless 창이다. 실행 전후의 표시 모드가 같은지 확인하려면 다음처럼 비교한다.
+Diagnostics: per-run logs `logs\re2dj-<time>.log` and the API call log `.api.log`; `--call-limit <n>` stops the run on its own after n guest API calls; `--image-dump` is described in the [image dump guide](decrypted-image-dump.md); the `--linux-in-process-*` diagnostics work on Windows too despite their names.
 
-```powershell
-Get-CimInstance Win32_VideoController |
-  Select-Object CurrentHorizontalResolution, CurrentVerticalResolution, CurrentBitsPerPixel, CurrentRefreshRate
-```
+Backtick (`` ` ``) shows and hides the OSD: version, target profile, executable name and, for a profile whose build is confirmed, the Autoplay toggle, read when a song starts, so tick it before. "32-bit color" switches the display depth (`--color-depth`).
 
-흡수된 요청은 실행 로그의 `re2dj:hle:display-mode:absorbed` 줄로 남는다. 근거는 [호스트 표시 모드 불변 정책 설계](../design/20260905-183-host-display-mode-policy.md)에 있다.
-
-제품은 원본 HDD의 `ez2dj.ini`를 수정하지 않고 `GAMEASSIGNMENTS/DemoVolume`만 기본 profile 3으로 재정의한다. profile 0..3은 원본 DirectSound 값 `-10000`, `-2222`, `-1111`, `0`에 대응한다. 원본 profile을 비교하려면 다음처럼 선택한다.
-
-```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe --hdd .\roms\ez2dj1stse --target ez2dj1stse --demo-volume 2 --run
-```
-
-SDL 최종 master gain 기본값은 0 dB다. 장치별 보정이 필요할 때만 `--audio-gain-db`를 사용한다. 허용 범위는 `-24..+18 dB`이며 양의 값에서는 clipping 가능성을 확인한다.
-
-상세 AV와 API 경계 진단에는 호환 유지되는 진단 entry를 사용한다.
-
-```powershell
-.\build\windows-x86\bin\Debug\re2dj_windows_x86_launcher_probe.exe --hdd .\roms\ez2dj1stse --target ez2dj1stse --hle-command-line --hle-windows-directory --hle-vfs --hle-d3d3 --hle-directsound --hle-io-ports --device-mock-lptdi-target-state 0900000000000000 --api-trace
-```
-
-debugger mode는 I/O마다 exception 왕복이 발생하므로 성능 기준으로 사용하지 않는다.
-
-원본 HDD는 읽기 전용 source로 사용하며 guest write는 `overlays/ez2dj1stse`로 보내는 정책이다. 실행 로그는 `logs/windows_x86_launcher_probe/ez2dj1stse`에 생성되며 저장소에는 commit하지 않는다.
-
----
-
-# Windows x86 Original Runtime Guide
-
-Run the product-loader command above from the repository root in PowerShell, replacing `--hdd` with a legally owned 1st SE HDD directory. The facade selects the selected profile's baseline policy and lets supported command-line values override it. 1st SE uses the command-line, Windows-directory, VFS, graphics, audio, legacy-I/O, LPTDI, and detached-runtime policy; 3rd enables only its confirmed VFS, DirectSound, and detached boundaries by default. It restores and verifies the process, detaches the debugger, and lets the injected runtime handle confirmed boundaries. Close the game window to finish the loader.
-
-The 3rd profile uses `roms\ez2dj3rd` relative to the repository root, so `re2dj ez2dj3rd` is sufficient to select `ez2dj\EZ2DJ.EXE` and run it. `--hdd <directory>` overrides that path. Its `EZ2DJ.INI` contains `FullScreen=1`; the current 3rd baseline follows the original configuration because the executable imports `DirectDrawCreateEx`, while the launcher’s DirectDraw/display hooks target different imports. The 3rd guest drive and Win32 directory remain unresolved because no `System.ini` is present.
-
-The default run uses a resizable 1280x960 client-area window whose title shows the version, build date, SDL3 OpenGL renderer, and FPS. It initially scales the original 640x480 logical display by 2x in each dimension. Add `--fullscreen` to the same command for monitor-sized borderless fullscreen without editing the original INI. After clicking or moving the window, confirm that frames continue and Task Manager still reports it as responsive. re2DJ never changes the desktop resolution at any point in a run: the original's mode change is absorbed at the boundary, and `--fullscreen` is a borderless window covering the monitor at the unchanged resolution. Compare `Get-CimInstance Win32_VideoController` before and after a run to check it, and look for `re2dj:hle:display-mode:absorbed` lines in the run log.
-
-키보드 입력은 **옵션 없이도 동작한다.** 기본 매핑은 실행 파일에 내장되어 있고 [`config/ez2dj-io.example.ini`](../../config/ez2dj-io.example.ini)·[`config/ez2dancer-io.example.ini`](../../config/ez2dancer-io.example.ini)와 같은 값이다. 바꾸고 싶은 항목만 INI에 적어 `--io-config <path>`로 주면 그 항목만 덮어쓰고, 적지 않은 항목은 기본값을 유지한다. 특정 키를 끄려면 그 항목에 `NONE`을 적는다. 버튼 값은 `A`~`Z`, 숫자, `F1`~`F24`, 위에 나온 이름 있는 키와 numpad 키, `NONE`을 받고 턴테이블 `step`은 1~32다. 실행 로그의 `io-config` 줄이 `source=default`인지 `source=file`인지 알려준다.
-
-*Keyboard input works **with no option at all**: the default mapping is built into the executable and matches [`config/ez2dj-io.example.ini`](../../config/ez2dj-io.example.ini) and [`config/ez2dancer-io.example.ini`](../../config/ez2dancer-io.example.ini). Passing `--io-config <path>` overrides only the entries the file lists, leaving the rest at their defaults; write `NONE` for an entry to unbind that key. Button values accept `A` through `Z`, digits, `F1` through `F24`, the named navigation/numpad keys shown above, or `NONE`; turntable `step` accepts 1 through 32. The run log's `io-config` line reports `source=default` or `source=file`.*
-
-Without modifying the original HDD's `ez2dj.ini`, the product overrides only `GAMEASSIGNMENTS/DemoVolume` to profile 3 by default. Profiles 0..3 map to the original DirectSound values `-10000`, `-2222`, `-1111`, and `0`; use `--demo-volume 0..3` to compare them. SDL final master gain now defaults to 0 dB. Use `--audio-gain-db` only for device-specific adjustment within `-24..+18 dB`, checking positive values for clipping.
-
-Use the diagnostic launcher entry shown above when detailed access-violation or API-boundary options are required. Debugger mode incurs a first-chance exception round trip for every legacy I/O instruction and is not a performance baseline. Original HDD data remains the read-only source; guest writes use the overlay policy, and diagnostic logs remain uncommitted.
-
-## OSD / On-screen display
-
-관련 설계: [Dear ImGui OSD와 autoplay 토글](../design/20260917-297-imgui-osd-autoplay.md)
-
-실행 중 **백틱(`` ` ``) 키**로 OSD를 켜고 끈다. 기본은 꺼져 있다. 창 위쪽에 가로 전체로 다음 정보가 보인다.
-
-```
-re2DJ v0.0.47 Sep 17 2026
-Target Profile : ez2dj3rd
-Executable : EZ2DJ.EXE
-```
-
-타깃 프로파일이 게임 제어를 선언했고 실행 파일이 그 빌드와 일치하면 아래에 토글이 나타난다. 현재는 `ez2dj1stse`(CHD, TimeDateStamp `0x3862df27`), `ez2dj3rd`(`0x3bca98a3`), `ez2dj4th`(`0x3d369bfd`), `ez2dj5th`(`0x3f53377b`), `ez2d2m`(`0x3a5f074c`)의 **Autoplay**다. 마우스로 체크한다. 게임은 이 값을 곡 시작 때 읽으므로 **곡을 시작하기 전에** 체크해야 그 곡에 적용된다. 무장 여부는 실행 로그의 `osd_controls` 줄에서 확인할 수 있다.
-
-백틱은 예제 `config/ez2dj-io.example.ini`에서 쓰지 않는 키다. 게임은 키 상태를 직접 읽으므로 io-config에 백틱을 배정하면 OSD 토글과 게임 입력이 함께 일어난다.
-
-모든 실행에는 **32-bit color** 토글도 있다([작업 429 설계](../design/20260929-429-true-color-surfaces.md)). 켜면 24비트 이미지와 반투명 합성이 채널당 8비트로 화면에 나온다. 끄면 원본의 16비트 화면이다. 게임은 어느 쪽이든 16비트 화면을 본다. 바꾸면 다음 프레임부터 적용된다. 이미 불러온 텍스처는 GDI로 다시 그려질 때 24비트 색을 되찾는다. 그 전까지는 16비트 색 그대로다. 시작 값은 제품의 `--color-depth 16|32`로 정하며, 기본값은 16이다. 그래픽 trace의 `re2dj:hle:color-depth:render-target=32` 줄이 적용 시점을 남긴다. Linux 창에도 같은 OSD와 토글이 있다.
-
-*Press **backtick (`` ` ``)** while running to show or hide the OSD, which starts hidden. It spans the top of the window with the version and build date, the target profile and the executable name. When the target profile declares a game control and the executable matches that build, a toggle appears below — today **Autoplay** for `ez2dj1stse` (CHD, TimeDateStamp `0x3862df27`), `ez2dj3rd` (`0x3bca98a3`), `ez2dj4th` (`0x3d369bfd`), `ez2dj5th` (`0x3f53377b`) and `ez2d2m` (`0x3a5f074c`), ticked with the mouse. The game reads it at song start, so tick it **before starting a song** for that song to play itself. The run log's `osd_controls` line shows whether it was armed. Backtick is unused in the example `config/ez2dj-io.example.ini`; the game reads key state directly, so binding backtick in an io-config would trigger the OSD and game input together.*
-
-*Every run also has a **32-bit color** toggle ([Task 429 design](../design/20260929-429-true-color-surfaces.md)). On, 24-bit images and translucent compositing reach the screen at 8 bits per channel; off, the picture is the original's 16-bit one. Either way the game sees a 16-bit display. A change applies from the next frame. Textures loaded before it regain their 24-bit colours when GDI redraws them, and until then keep their 16-bit colours. The product's `--color-depth 16|32` sets the starting value, 16 by default. The graphics trace's `re2dj:hle:color-depth:render-target=32` line records when it took effect. The Linux window has the same OSD and toggle.*
+Task 450 removed the options only the injection path took (`--demo-volume`, `--audio-volume-trace`, `--guest-wait-trace`, `--vsync`); the former VFS traces and launcher diagnostic logs (`logs\windows_x86_launcher_probe\`) are no longer written.

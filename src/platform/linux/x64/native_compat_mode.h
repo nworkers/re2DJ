@@ -5,13 +5,13 @@
 #include <string>
 #include <vector>
 
-#include "../native_guest_fault.h"
-#include "../native_guest_seh.h"
-#include "../native_import_gate.h"
-#include "../native_low_memory.h"
+#include "../../native/native_guest_fault.h"
+#include "../../native/native_guest_seh.h"
+#include "../../native/native_import_gate.h"
+#include "../../native/native_low_memory.h"
 #include "native_compat_mode_transition.h"
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 
 // The process-wide transition pages, created on first use and kept for the
@@ -108,6 +108,6 @@ private:
 // The host FS base as the transition code saves and restores it.
 std::uint64_t ReadNativeHostFsBase(bool use_fsgsbase);
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native
 
 #endif  // RE2DJ_PLATFORM_LINUX_X64_NATIVE_COMPAT_MODE_H_

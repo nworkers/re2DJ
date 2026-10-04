@@ -37,10 +37,22 @@ items = [
   "<strong>Reproducible records</strong> — designs, work orders, analysis and work logs accumulate as repository documents.",
 ]
 
+[screenshots]
+title = "Screenshots"
+lead = "Screens drawn by the original executables under the Windows x86 Release build of re2DJ (640x480)."
+
+[screenshots.captions]
+ez2dj1stse = "EZ2DJ The 1st Tracks Special Edition — title"
+ez2dj4th = "EZ2DJ 4th — title"
+ez2dj4th_demo = "EZ2DJ 4th — demo play"
+ez2dj5th = "EZ2DJ 5th Trax — title"
+ez2dj6th = "EZ2DJ 6th Trax — title"
+ez2d2m = "EZ2Dancer 2nd MOVE — title"
+
 [how]
 title = "How it works"
 body = [
-  "The launcher maps the original PE32 executable into memory, and the original code then runs directly on the host CPU. On Windows the original PE32 starts as the main image; on Linux it executes inside the same process (x86-64 uses CPU compatibility mode).",
+  "re2dj maps the original PE32 executable into its own process, and the original code then runs directly on the host CPU. Windows and Linux share the same runner; Linux x86-64 runs it in CPU compatibility mode.",
   "Only when the code touches a Win32 API, DirectX, a hardware port or the Hardlock dongle does the HLE layer intercept, answer with the virtual file system, the graphics and sound facades or a device model, and return to the original code.",
 ]
 

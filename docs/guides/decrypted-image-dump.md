@@ -8,6 +8,10 @@
 작업 로그: [20260916-292-decrypted-image-dump.md](../work-logs/20260916-292-decrypted-image-dump.md)
 분석 결과: [보호 빌드의 런타임 복호화](../analysis/protected-build-runtime-decryption.md)
 
+> 작업 449부터 덤프는 in-process 러너가 쓴다. "entry"는 이미지를 매핑하고 import를 연결한 직후(진입 전), "resumed"는 지연이 지난 뒤 게스트가 처음 부르는 import에서 쓴다. Linux에서도 같은 옵션으로 동작한다. 이미지가 통째로 매핑되어 있으므로 `gaps`는 늘 비어 있고 sidecar에 `"source": "in-process"`가 붙는다. 근거: [작업 449 설계](../design/20261004-449-windows-cli-in-process.md).
+>
+> *From task 449 the in-process runner writes the dumps: "entry" right after the image is mapped and its imports bound (before the entry), "resumed" at the guest's first import after the delay. The same options work on Linux. The image is mapped whole, so `gaps` is always empty, and the sidecar carries `"source": "in-process"`. See the [task 449 design](../design/20261004-449-windows-cli-in-process.md).*
+
 ## 한국어
 
 ### 덤프 뜨기
@@ -15,7 +19,7 @@
 저장소 root의 PowerShell에서 실행한다. `--image-dump`는 제품 실행에 진단 옵션으로 붙는다.
 
 ```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd --image-dump --image-dump-delay 8000
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th --image-dump --image-dump-delay 8000
 ```
 
 게스트 창이 뜨고 나면 잠시 두었다가 창을 닫는다. `--image-dump-delay`는 재개 후 두 번째 덤프까지의 밀리초이며 기본값은 5000이다. 게임이 그 시간 안에 종료하면 두 번째 덤프는 건너뛰고 진단에 그 사실이 남는다.
@@ -23,10 +27,10 @@
 산출물은 그 실행의 로그 디렉터리에 남는다.
 
 ```
-logs\windows_x86_launcher_probe\<target>\<stamp>.entry.image.bin
-logs\windows_x86_launcher_probe\<target>\<stamp>.entry.image.json
-logs\windows_x86_launcher_probe\<target>\<stamp>.resumed.image.bin
-logs\windows_x86_launcher_probe\<target>\<stamp>.resumed.image.json
+logs\image-dumps\<target>\<stamp>-<executable>.entry.image.bin
+logs\image-dumps\<target>\<stamp>-<executable>.entry.image.json
+logs\image-dumps\<target>\<stamp>-<executable>.resumed.image.bin
+logs\image-dumps\<target>\<stamp>-<executable>.resumed.image.json
 ```
 
 **분석에는 `resumed` 쪽을 쓴다.** `entry`는 복호화 이전이며, 대조용으로만 쓴다. 근거는 분석 문서 2절에 있다.
@@ -57,7 +61,7 @@ logs\windows_x86_launcher_probe\<target>\<stamp>.resumed.image.json
 문자열을 찾는 예다.
 
 ```powershell
-python -c "d=open(r'logs\windows_x86_launcher_probe\ez2dj3rd\<stamp>.resumed.image.bin','rb').read(); i=d.find(b'TotalCoin'); print(hex(i) if i>=0 else 'not found')"
+python -c "d=open(r'logs\image-dumps\ez2dj4th\<stamp>-EZ2DJ.resumed.image.bin','rb').read(); i=d.find(b'TotalCoin'); print(hex(i) if i>=0 else 'not found')"
 ```
 
 나온 오프셋이 RVA이므로, `image_base`를 더하면 실행 중 주소가 된다.
@@ -82,7 +86,7 @@ python -c "d=open(r'logs\windows_x86_launcher_probe\ez2dj3rd\<stamp>.resumed.ima
 Run from the repository root in PowerShell; `--image-dump` attaches to a normal product run as a diagnostic.
 
 ```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd --image-dump --image-dump-delay 8000
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th --image-dump --image-dump-delay 8000
 ```
 
 Let the guest window come up, leave it a moment, then close it. `--image-dump-delay` is the milliseconds between the resume and the second dump, default 5000. If the game exits within that time the second dump is skipped and the diagnostic says so.

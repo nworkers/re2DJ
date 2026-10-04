@@ -49,9 +49,9 @@ GitHub Actions의 `release.yml`은 Windows x86, Linux x86-64, Linux x86 패키�
 
 ### Windows x86
 
-`package_release.ps1`은 Release `re2dj.exe`, 주입 런타임 DLL, 예제 `config/`, 사용자용 저장소 문서(`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`)를 Windows x86 zip으로 묶고 SHA256 파일을 씁니다. `package_release.bat`는 command prompt용 wrapper입니다.
+`package_release.ps1`은 Release `re2dj.exe`(작업 450부터 DLL 없이 실행 파일 하나), 예제 `config/`, 사용자용 저장소 문서(`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`)를 Windows x86 zip으로 묶고 SHA256 파일을 씁니다. `package_release.bat`는 command prompt용 wrapper입니다.
 
-*`package_release.ps1` collects the Release `re2dj.exe`, the injected runtime DLL, the example `config/` and the user-facing repository documents (`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`) into a Windows x86 zip and writes a SHA256 file. `package_release.bat` is the command-prompt wrapper.*
+*`package_release.ps1` collects the Release `re2dj.exe` (one executable with no DLL from task 450), the example `config/` and the user-facing repository documents (`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`) into a Windows x86 zip and writes a SHA256 file. `package_release.bat` is the command-prompt wrapper.*
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Configuration Release -Version 0.0.40

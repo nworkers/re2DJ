@@ -37,10 +37,22 @@ items = [
   "<strong>재현 가능한 기록</strong> — 설계, 작업 지시, 분석과 작업 로그를 저장소 문서로 누적합니다.",
 ]
 
+[screenshots]
+title = "스크린샷"
+lead = "re2DJ의 Windows x86 Release 빌드에서 원본 실행 파일이 그린 화면입니다(640x480)."
+
+[screenshots.captions]
+ez2dj1stse = "EZ2DJ The 1st Tracks Special Edition — 타이틀"
+ez2dj4th = "EZ2DJ 4th — 타이틀"
+ez2dj4th_demo = "EZ2DJ 4th — 데모 플레이"
+ez2dj5th = "EZ2DJ 5th Trax — 타이틀"
+ez2dj6th = "EZ2DJ 6th Trax — 타이틀"
+ez2d2m = "EZ2Dancer 2nd MOVE — 타이틀"
+
 [how]
 title = "동작 방식"
 body = [
-  "런처가 원본 PE32 실행 파일을 메모리에 배치하면, 원본 코드는 호스트 CPU에서 그대로 실행됩니다. Windows에서는 원본 PE32가 main image로 시작되고, Linux에서는 같은 프로세스 안에서 실행됩니다(x86-64는 CPU compatibility mode).",
+  "re2dj가 원본 PE32 실행 파일을 자기 프로세스 안에 배치하면, 원본 코드는 호스트 CPU에서 그대로 실행됩니다. Windows와 Linux가 같은 러너를 쓰며, Linux x86-64는 CPU compatibility mode로 실행합니다.",
   "코드가 Win32 API나 DirectX, 하드웨어 port, Hardlock 동글에 닿는 순간에만 HLE 계층이 가로채 가상 파일 시스템, 그래픽·사운드 facade, 장치 모형으로 응답한 뒤 원본 코드로 돌려보냅니다.",
 ]
 

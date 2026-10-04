@@ -36,6 +36,8 @@ flowchart LR
   새 릴리스를 반영합니다. 본문은 `docs/release-notes/<tag>.md`가 있으면 그 파일을 씁니다.
 * **내장 타깃 목록:** `src/target/target_profile.cpp`의 내장 카탈로그에서 읽습니다. 직접 대입과
   `MakeChdCompatibilityProfile(...)` 두 선언 형태를 모두 인식하고, HDD/CHD 입력 형식도 함께 표시합니다.
+* **스크린샷:** `docs/screenshots/`의 이미지를 산출물의 `screenshots/`로 복사합니다. 소개 페이지에 보일 목록과 순서는
+  `site.toml`의 `[[screenshots]]`, 설명은 `i18n/*.toml`의 `[screenshots.captions]`에 둡니다(작업 453).
 * **플랫폼 상태와 소개 문구:** `site.toml`의 `[[platforms]]`와 `i18n/*.toml`을 직접 고칩니다.
 * **크레딧 페이지:** 언어 중립 사실(이름·버전·라이선스·링크)은 `site.toml`의 `[[credits]]`에,
   그룹 제목과 항목 설명은 `i18n/*.toml`의 `[credits]`에 둡니다. 전체 문서는 저장소의
@@ -96,6 +98,9 @@ names.
   runs next and picks up the new release. The body is `docs/release-notes/<tag>.md` when it exists.
 * **Built-in target list:** read from the catalog in `src/target/target_profile.cpp`; both the direct
   assignment form and `MakeChdCompatibilityProfile(...)` calls are recognised, with the HDD/CHD input kind.
+* **Screenshots:** the images in `docs/screenshots/` are copied to `screenshots/` in the output; the list
+  and order on the introduction page are `[[screenshots]]` in `site.toml`, the captions
+  `[screenshots.captions]` in `i18n/*.toml` (task 453).
 * **Platform status and introduction copy:** edit `[[platforms]]` in `site.toml` and `i18n/*.toml`.
 * **Credits page:** language-neutral facts (name, version, licence, link) live in `[[credits]]` in
   `site.toml`; group titles and item descriptions in `[credits]` of `i18n/*.toml`. The full documents

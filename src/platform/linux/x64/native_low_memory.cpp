@@ -1,10 +1,11 @@
-#include "../native_low_memory.h"
+#include "../../native/native_low_memory.h"
+#include "../native_host_protection.h"
 
 #include <errno.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 namespace
 {
@@ -18,7 +19,7 @@ constexpr std::uint64_t kLowSearchStep = 0x100000ULL;
 }  // namespace
 
 bool MapNativeLowMemory(std::uint32_t size,
-                        int protection,
+                        HostProtection protection,
                         NativeLowMemory* mapping,
                         std::string* error)
 {
@@ -39,7 +40,7 @@ bool MapNativeLowMemory(std::uint32_t size,
          hint -= kLowSearchStep)
     {
         void* requested = reinterpret_cast<void*>(static_cast<std::uintptr_t>(hint));
-        void* memory = mmap(requested, rounded, protection,
+        void* memory = mmap(requested, rounded, PosixProtection(protection),
                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
         if (memory == MAP_FAILED)
         {
@@ -75,4 +76,4 @@ void ReleaseNativeLowMemory(NativeLowMemory* mapping)
     }
 }
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native

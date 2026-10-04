@@ -1,8 +1,8 @@
-#include "../native_import_bridge.h"
+#include "../../native/native_import_bridge.h"
 
 #include "native_compat_mode.h"
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 namespace
 {
@@ -61,4 +61,4 @@ NativeImportGateConfiguration ConfiguredNativeImportGate()
     return {import_gate_handler, import_gate_context};
 }
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native

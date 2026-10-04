@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 
 // Linux x86-64 user segment selectors (arch/x86/include/asm/segment.h).
@@ -39,7 +39,7 @@ using NativeCompatEnterFunction = std::uint64_t (*)(NativeCompatTransitionState*
                                                     std::uint32_t entry,
                                                     std::uint32_t guest_stack_pointer);
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native
 
 extern "C"
 {
@@ -62,7 +62,7 @@ extern const unsigned char native_compat_gate64_target[];
 
 // Enters 32-bit guest code at entry with the given guest stack pointer, whose
 // top slot must hold the exit32 stub address. Returns edx:eax.
-std::uint64_t NativeCompatEnterGuest(re2dj::platform::linux::NativeCompatTransitionState* state,
+std::uint64_t NativeCompatEnterGuest(re2dj::platform::native::NativeCompatTransitionState* state,
                                      std::uint32_t entry,
                                      std::uint32_t guest_stack_pointer);
 void NativeCompatGuestExit();
@@ -70,9 +70,9 @@ void NativeCompatImportLanding();
 void NativeCompatSignalEntry(int signal_number, siginfo_t* signal_info, void* context);
 
 // Defined in native_compat_mode.cpp and reached from the asm above.
-extern re2dj::platform::linux::NativeCompatTransitionState* g_native_compat_active_state;
+extern re2dj::platform::native::NativeCompatTransitionState* g_native_compat_active_state;
 std::uint64_t NativeCompatImportDispatch(
-    re2dj::platform::linux::NativeCompatTransitionState* state,
+    re2dj::platform::native::NativeCompatTransitionState* state,
     std::uint32_t guest_stack_pointer);
 // Returns 1 to resume the guest with the (possibly edited) ucontext, 0 to
 // return to a host context; a guest fault never returns.

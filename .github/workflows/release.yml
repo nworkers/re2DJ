@@ -82,30 +82,7 @@ jobs:
 
       - name: Test (Release)
         shell: powershell
-        # The full product lifecycle probe can wait for an original-device
-        # boundary. Its deterministic VFS mode is run separately below.
-        run: >-
-          ctest --test-dir build/windows-x86 -C Release
-          --output-on-failure -E re2dj_windows_vfs_runtime_probe
-
-      # cmd rather than PowerShell, whose step showed none of the probe's
-      # stderr when it failed.
-      - name: Test VFS enumeration probe
-        shell: cmd
-        run: build\windows-x86\bin\Release\re2dj_windows_vfs_runtime_probe.exe --vfs-enumeration-only
-
-      # When the probe dies without a message, as a CRT fast-fail does, run it
-      # once more under the Windows SDK's debugger for the stack.
-      - name: Diagnose the VFS enumeration probe
-        if: failure()
-        shell: powershell
-        run: |
-          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe' -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-          if ($null -eq $cdb) { Write-Host 'cdb.exe was not found on this runner.'; exit 0 }
-          & $cdb.FullName -G -c "g; .lastevent; .ecxr; kn 40; lm; q" `
-              build\windows-x86\bin\Release\re2dj_windows_vfs_runtime_probe.exe --vfs-enumeration-only
-          exit 0
+        run: ctest --test-dir build/windows-x86 -C Release --output-on-failure
 
       - name: Package
         shell: powershell

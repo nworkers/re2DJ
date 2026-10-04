@@ -7,19 +7,10 @@
 #include <vector>
 
 #include "re2dj/hle/guest_child_process.h"
+#include "re2dj/platform/native/child_run_options.h"
 
 namespace re2dj::platform::linux
 {
-
-// The host options a child run takes, by which a parent run hands a child
-// its request: the child's executable in the image, its command line, first
-// current directory and STARTUPINFO reserved bytes (as hex), and the pipe it
-// writes its 32-bit exit code to.
-inline constexpr const char* kGuestExecutableOption = "--guest-executable";
-inline constexpr const char* kGuestCommandLineOption = "--guest-command-line";
-inline constexpr const char* kGuestCurrentDirectoryOption = "--guest-current-directory";
-inline constexpr const char* kGuestStartupReservedOption = "--guest-startup-reserved";
-inline constexpr const char* kGuestExitCodeFdOption = "--guest-exit-code-fd";
 
 // Starts each child guest process as another run of this program, with the
 // parent's own options and the child's request after them. The child writes

@@ -98,29 +98,36 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL 
         "Configuring an unsupported 32-bit non-Windows host build.")
 endif()
 
+# The OS-neutral in-process runner both OS backends build (task 446).
+set(RE2DJ_NATIVE_RUNNER_SOURCES
+    src/platform/native/game_controls.cpp
+    src/platform/native/native_continuation_observation.cpp
+    src/platform/native/native_create_file_observation.cpp
+    src/platform/native/native_dynamic_thunk.cpp
+    src/platform/native/native_fault_observation.cpp
+    src/platform/native/native_getversion_observation.cpp
+    src/platform/native/native_guest_module_image.cpp
+    src/platform/native/native_guest_module_set.cpp
+    src/platform/native/native_guest_seh.cpp
+    src/platform/native/native_guest_threads.cpp
+    src/platform/native/native_image_dump.cpp
+    src/platform/native/native_import_thunks.cpp
+    src/platform/native/native_in_process_runner.cpp
+    src/platform/native/native_instruction_trace.cpp
+    src/platform/native/native_kernel32_diagnostic.cpp
+    src/platform/native/native_legacy_io.cpp
+    src/platform/native/native_pe_image.cpp
+    src/platform/native/native_pe_session.cpp
+    src/platform/native/original_runner.cpp
+)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(re2dj_linux_native_backend STATIC
-        src/platform/linux/native_continuation_observation.cpp
-        src/platform/linux/native_create_file_observation.cpp
-        src/platform/linux/native_dynamic_thunk.cpp
-        src/platform/linux/native_fault_observation.cpp
-        src/platform/linux/native_getversion_observation.cpp
-        src/platform/linux/native_guest_module_image.cpp
-        src/platform/linux/native_guest_module_set.cpp
-        src/platform/linux/native_guest_seh.cpp
-        src/platform/linux/native_guest_threads.cpp
-        src/platform/linux/native_import_thunks.cpp
-        src/platform/linux/native_in_process_runner.cpp
-        src/platform/linux/native_instruction_trace.cpp
-        src/platform/linux/native_kernel32_diagnostic.cpp
-        src/platform/linux/native_legacy_io.cpp
-        src/platform/linux/native_pe_image.cpp
-        src/platform/linux/game_controls.cpp
-        src/platform/linux/host_presentation.cpp
-        src/platform/linux/host_keyboard.cpp
+        ${RE2DJ_NATIVE_RUNNER_SOURCES}
+        src/platform/sdl/host_presentation.cpp
+        src/platform/sdl/host_keyboard.cpp
         src/platform/linux/host_process_launcher.cpp
-        src/platform/linux/native_pe_session.cpp
-        src/platform/linux/original_runner.cpp
+        src/platform/linux/native_host_services.cpp
     )
     if(CMAKE_SIZEOF_VOID_P EQUAL 4)
         target_sources(re2dj_linux_native_backend PRIVATE
@@ -131,8 +138,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_compile_options(re2dj_linux_native_backend PRIVATE -fno-omit-frame-pointer)
         add_executable(re2dj_linux_native_in_process_probe
             src/platform/linux/x86/native_in_process_probe.cpp
-            src/platform/linux/native_thread_probe.cpp
-            src/platform/native_probe_fixture.cpp
+            src/platform/native/native_thread_probe.cpp
+            src/platform/native/native_probe_fixture.cpp
         )
         target_link_libraries(re2dj_linux_native_in_process_probe
             PRIVATE re2dj_linux_native_backend re2dj_warnings
@@ -160,8 +167,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         )
         add_executable(re2dj_linux_native_in_process_probe
             src/platform/linux/x64/native_in_process_probe.cpp
-            src/platform/linux/native_thread_probe.cpp
-            src/platform/native_probe_fixture.cpp
+            src/platform/native/native_thread_probe.cpp
+            src/platform/native/native_probe_fixture.cpp
         )
         target_link_libraries(re2dj_linux_native_in_process_probe
             PRIVATE re2dj_linux_native_backend re2dj_warnings
@@ -171,6 +178,53 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         PUBLIC re2dj_core
         PRIVATE re2dj_sdl3_opengl_backend re2dj_sdl3_gamepad re2dj_osd SDL3::SDL3-static re2dj_logging re2dj_warnings
     )
+endif()
+
+# The Windows x86 backend of the same runner (task 448): VEH faults, a shadow
+# TEB for the HLE, MSVC naked asm for the transitions.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_library(re2dj_windows_native_backend STATIC
+        ${RE2DJ_NATIVE_RUNNER_SOURCES}
+        src/platform/windows/native_host_services.cpp
+        src/platform/windows/x86/native_guest_transition.cpp
+        src/platform/windows/x86/native_import_bridge.cpp
+        src/platform/windows/x86/native_low_memory.cpp
+        src/platform/windows/x86/native_process_bootstrap.cpp
+        src/platform/windows/x86/native_guest_reservation.cpp
+        src/platform/windows/host_process_launcher.cpp
+        src/platform/sdl/host_presentation.cpp
+        src/platform/sdl/host_keyboard.cpp
+    )
+    target_link_libraries(re2dj_windows_native_backend
+        PUBLIC re2dj_core
+        PRIVATE re2dj_sdl3_opengl_backend re2dj_sdl3_gamepad re2dj_osd SDL3::SDL3-static re2dj_logging re2dj_warnings
+    )
+    if(RE2DJ_BUILD_TESTS)
+        add_executable(re2dj_windows_native_in_process_probe
+            src/platform/windows/x86/native_in_process_probe.cpp
+            src/platform/native/native_thread_probe.cpp
+            src/platform/native/native_probe_fixture.cpp
+        )
+        target_link_libraries(re2dj_windows_native_in_process_probe
+            PRIVATE re2dj_windows_native_backend re2dj_warnings
+        )
+        # As re2dj.exe will be: off the guest's 0x400000, at a fixed base.
+        target_link_options(re2dj_windows_native_in_process_probe PRIVATE
+            /BASE:0x60000000 /DYNAMICBASE:NO /LARGEADDRESSAWARE
+        )
+    endif()
+endif()
+
+# Research probe for a future Windows x64 backend (task 452): compatibility
+# mode and the guest FS in a 64-bit process. Not part of the product or CTest.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND MSVC)
+    add_executable(re2dj_windows_x64_compat_mode_probe
+        src/platform/windows/x64/native_compat_mode_probe.cpp
+    )
+    target_link_libraries(re2dj_windows_x64_compat_mode_probe PRIVATE re2dj_warnings)
+    # A far return into compatibility mode is not expected to pass a hardware
+    # shadow stack.
+    target_link_options(re2dj_windows_x64_compat_mode_probe PRIVATE /CETCOMPAT:NO)
 endif()
 
 add_library(re2dj_warnings INTERFACE)
@@ -490,15 +544,19 @@ if(RE2DJ_SDL3_AUDIO_ACTIVE)
     FetchContent_MakeAvailable(SDL3_mixer)
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND RE2DJ_SDL3_AUDIO_ACTIVE)
-    # The guest's DirectSound plays through the backend the Windows facade uses.
-    target_sources(re2dj_linux_native_backend PRIVATE
-        src/audio/sdl3_mixer_audio_backend.cpp
-        src/platform/linux/host_audio.cpp
-    )
-    target_include_directories(re2dj_linux_native_backend PRIVATE src/audio)
-    target_link_libraries(re2dj_linux_native_backend PRIVATE SDL3_mixer::SDL3_mixer-static)
-    target_compile_definitions(re2dj_linux_native_backend PUBLIC RE2DJ_LINUX_HOST_AUDIO=1)
+# The guest's DirectSound plays through SDL3_mixer on both in-process hosts.
+if(RE2DJ_SDL3_AUDIO_ACTIVE)
+    foreach(backend re2dj_linux_native_backend re2dj_windows_native_backend)
+        if(TARGET ${backend})
+            target_sources(${backend} PRIVATE
+                src/audio/sdl3_mixer_audio_backend.cpp
+                src/platform/sdl/host_audio.cpp
+            )
+            target_include_directories(${backend} PRIVATE src/audio)
+            target_link_libraries(${backend} PRIVATE SDL3_mixer::SDL3_mixer-static)
+            target_compile_definitions(${backend} PUBLIC RE2DJ_SDL_HOST_AUDIO=1)
+        endif()
+    endforeach()
     if(RE2DJ_BUILD_TESTS)
         add_executable(re2dj_audio_stream_progress_test
             tests/audio/stream_progress_test.cpp
@@ -515,165 +573,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND RE2DJ_SDL3_AUDIO_ACTIVE)
     endif()
 endif()
 
-if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
-
-    add_library(re2dj_windows_injected_runtime SHARED
-        src/hle/hardlock/api_descriptor.cpp
-        src/hle/hardlock/protocol.cpp
-        src/hle/hardlock/device.cpp
-        src/hle/hardlock/device_call.cpp
-        src/hle/guest_device_path.cpp
-        src/hle/private_profile.cpp
-        src/hle/hardlock/engine.cpp
-        src/hle/hardlock/payload_responses.cpp
-        src/hle/hardlock/transform_responses.cpp
-        src/device/lptdi_challenge_response.cpp
-        src/input/ez2dj_io_board.cpp
-        src/input/ez2dancer_io_board.cpp
-        src/input/ez2dancer_io_port_bus.cpp
-        src/input/legacy_io_port_bus.cpp
-        src/input/legacy_io_trap.cpp
-        src/input/virtual_keys.cpp
-        src/input/ez2dj_keyboard_map.cpp
-        src/input/ez2dancer_keyboard_map.cpp
-        src/platform/windows/audio_volume_trace.cpp
-        src/platform/windows/direct3d3_com_facade.cpp
-        src/platform/windows/direct3d7_com_facade.cpp
-        src/platform/windows/direct3d7_vertex_buffer_facade.cpp
-        src/platform/windows/directdraw7_com_facade.cpp
-        src/platform/windows/directinput7_com_facade.cpp
-        src/platform/windows/display_mode_boundary.cpp
-        src/platform/windows/ez2dancer_keyboard_input.cpp
-        src/platform/windows/ez2dj_keyboard_input.cpp
-        src/platform/windows/game_controls.cpp
-        src/platform/windows/graphics_trace_log.cpp
-        src/platform/windows/host_window_shell.cpp
-        src/platform/windows/ini_profile_hle.cpp
-        src/platform/windows/guest_wait_accounting.cpp
-        src/platform/windows/injected_runtime.cpp
-        src/platform/windows/keyboard_input_common.cpp
-        src/platform/windows/message_box_boundary.cpp
-        src/platform/windows/osd_host.cpp
-        src/platform/windows/runtime_log.cpp
-        src/platform/windows/timer_resolution_probe.cpp
-        src/platform/windows/window_mode.cpp
-        src/platform/windows/winmm_mixer_trace.cpp
-    )
-    target_include_directories(re2dj_windows_injected_runtime PRIVATE include)
-    target_compile_definitions(re2dj_windows_injected_runtime PRIVATE
-        RE2DJ_VERSION="${RE2DJ_VERSION}"
-    )
-    target_link_libraries(re2dj_windows_injected_runtime
-        PRIVATE re2dj_directx re2dj_sdl3_opengl_backend re2dj_osd re2dj_chd_storage spdlog::spdlog re2dj_warnings dwmapi dxguid winmm
-    )
-    if(RE2DJ_ENABLE_SDL3_AUDIO)
-        target_sources(re2dj_windows_injected_runtime PRIVATE
-            src/audio/directsound_buffer_policy.cpp
-            src/audio/directsound_device.cpp
-            src/audio/legacy_audio_buffer.cpp
-            src/audio/sdl3_mixer_audio_backend.cpp
-            src/platform/windows/directsound_com_facade.cpp
-        )
-        target_link_libraries(re2dj_windows_injected_runtime
-            PRIVATE SDL3_mixer::SDL3_mixer-static SDL3::SDL3-static
-        )
-        if(RE2DJ_BUILD_TESTS)
-            add_executable(re2dj_audio_stream_progress_test
-                tests/audio/stream_progress_test.cpp
-                src/audio/directsound_device.cpp
-                src/audio/legacy_audio_buffer.cpp
-                src/audio/sdl3_mixer_audio_backend.cpp
-            )
-            target_include_directories(re2dj_audio_stream_progress_test PRIVATE include src/audio)
-            target_link_libraries(re2dj_audio_stream_progress_test PRIVATE
-                SDL3_mixer::SDL3_mixer-static SDL3::SDL3-static)
-            add_test(NAME re2dj_audio_stream_progress_test COMMAND re2dj_audio_stream_progress_test)
-            set_tests_properties(re2dj_audio_stream_progress_test PROPERTIES
-                ENVIRONMENT "SDL_AUDIODRIVER=dummy" TIMEOUT 15)
-        endif()
-    endif()
-    if(RE2DJ_BUILD_TESTS)
-        add_executable(re2dj_windows_vfs_runtime_probe
-            src/tools/windows_vfs_runtime_probe/main.cpp
-        )
-        target_include_directories(re2dj_windows_vfs_runtime_probe PRIVATE include)
-        target_compile_definitions(re2dj_windows_vfs_runtime_probe PRIVATE
-            RE2DJ_VERSION="${RE2DJ_VERSION}"
-        )
-        target_link_libraries(re2dj_windows_vfs_runtime_probe
-            PRIVATE re2dj_windows_injected_runtime re2dj_warnings dwmapi dxguid
-        )
-        add_test(NAME re2dj_windows_vfs_runtime_probe COMMAND re2dj_windows_vfs_runtime_probe)
-        set_tests_properties(re2dj_windows_vfs_runtime_probe PROPERTIES
-            ENVIRONMENT "SDL_AUDIODRIVER=dummy"
-        )
-
-        add_executable(re2dj_ez2dj_keyboard_input_test
-            tests/unit/ez2dj_keyboard_input_test.cpp
-            src/platform/windows/ez2dj_keyboard_input.cpp
-            src/platform/windows/keyboard_input_common.cpp
-            tests/unit/temporary_tree.cpp
-        )
-        target_include_directories(re2dj_ez2dj_keyboard_input_test PRIVATE include tests/unit .)
-        target_compile_definitions(re2dj_ez2dj_keyboard_input_test PRIVATE
-            RE2DJ_VERSION="${RE2DJ_VERSION}"
-        )
-        target_link_libraries(re2dj_ez2dj_keyboard_input_test
-            PRIVATE re2dj_core re2dj_warnings
-        )
-        add_test(NAME re2dj_ez2dj_keyboard_input_test COMMAND re2dj_ez2dj_keyboard_input_test)
-
-        add_executable(re2dj_ez2dancer_keyboard_input_test
-            tests/unit/ez2dancer_keyboard_input_test.cpp
-            src/platform/windows/ez2dancer_keyboard_input.cpp
-            src/platform/windows/keyboard_input_common.cpp
-            tests/unit/temporary_tree.cpp
-        )
-        target_include_directories(re2dj_ez2dancer_keyboard_input_test PRIVATE include tests/unit .)
-        target_compile_definitions(re2dj_ez2dancer_keyboard_input_test PRIVATE
-            RE2DJ_VERSION="${RE2DJ_VERSION}"
-        )
-        target_link_libraries(re2dj_ez2dancer_keyboard_input_test
-            PRIVATE re2dj_core re2dj_warnings
-        )
-        add_test(NAME re2dj_ez2dancer_keyboard_input_test COMMAND re2dj_ez2dancer_keyboard_input_test)
-    endif()
-    add_library(re2dj_windows_original_process_backend STATIC
-        src/tools/windows_original_process_probe/iat_verifier.cpp
-        src/platform/windows/injected_runtime_loader.cpp
-        src/platform/windows/original_process_backend.cpp
-        src/platform/windows/process_image_dump.cpp
-        src/platform/windows/runtime_export_locator.cpp
-        src/tools/windows_x86_launcher_probe/remote_module_exports.cpp
-        src/tools/windows_x86_launcher_probe/null_context_object_state.cpp
-        src/tools/windows_x86_launcher_probe/child_process_handoff.cpp
-        src/tools/windows_x86_launcher_probe/main.cpp
-    )
-    target_include_directories(re2dj_windows_original_process_backend PUBLIC include)
-    target_compile_definitions(re2dj_windows_original_process_backend PRIVATE
-        RE2DJ_VERSION="${RE2DJ_VERSION}"
-    )
-    target_link_libraries(re2dj_windows_original_process_backend
-        PRIVATE re2dj_core re2dj_logging re2dj_warnings
-    )
-    add_executable(re2dj_windows_x86_launcher_probe
-        src/tools/windows_x86_launcher_probe/entry.cpp
-    )
-    target_link_libraries(re2dj_windows_x86_launcher_probe
-        PRIVATE re2dj_windows_original_process_backend re2dj_warnings
-    )
-    if(RE2DJ_BUILD_TESTS)
-        add_executable(re2dj_windows_product_loader_probe
-            src/tools/windows_product_loader_probe/main.cpp
-        )
-        target_link_libraries(re2dj_windows_product_loader_probe
-            PRIVATE re2dj_windows_original_process_backend re2dj_warnings
-        )
-        add_test(NAME re2dj_windows_product_loader_probe
-                 COMMAND re2dj_windows_product_loader_probe)
-    endif()
-endif()
-
 # std::filesystem needs no separate link library on GCC 9+, Clang with
 # libstdc++ 9+ or MSVC, which covers every supported host.
 
@@ -683,7 +582,11 @@ add_executable(re2dj
 )
 target_link_libraries(re2dj PRIVATE re2dj_core re2dj_logging re2dj_warnings)
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
-    target_link_libraries(re2dj PRIVATE re2dj_windows_original_process_backend)
+    # The guest image goes at its own base (0x400000 for EZ2DJ), so this
+    # program sits elsewhere at a fixed base; it reserves the guest's range
+    # and runs on a thread whose stack is the guest's (design 448, task 449).
+    target_link_libraries(re2dj PRIVATE re2dj_windows_native_backend)
+    target_link_options(re2dj PRIVATE /BASE:0x60000000 /DYNAMICBASE:NO /LARGEADDRESSAWARE)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(re2dj PRIVATE re2dj_linux_native_backend)
@@ -810,6 +713,10 @@ if(RE2DJ_BUILD_TESTS)
     if(TARGET re2dj_linux_native_in_process_probe)
         add_test(NAME re2dj_linux_native_in_process_probe
                  COMMAND re2dj_linux_native_in_process_probe)
+    endif()
+    if(TARGET re2dj_windows_native_in_process_probe)
+        add_test(NAME re2dj_windows_native_in_process_probe
+                 COMMAND re2dj_windows_native_in_process_probe)
     endif()
     if(TARGET re2dj_linux_compat_mode_probe)
         add_test(NAME re2dj_linux_compat_mode_probe

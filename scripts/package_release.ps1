@@ -33,9 +33,9 @@ if (-not (Test-Path $buildOutput -PathType Container)) {
     throw "Build output directory does not exist: $buildOutput"
 }
 
+# One executable: the guest runs inside it (tasks 446 to 450).
 $requiredBinaries = @(
-    "re2dj.exe",
-    "re2dj_windows_injected_runtime.dll"
+    "re2dj.exe"
 )
 foreach ($binary in $requiredBinaries) {
     $source = Join-Path $buildOutput $binary

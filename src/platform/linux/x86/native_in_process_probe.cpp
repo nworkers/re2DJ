@@ -7,11 +7,11 @@
 
 #include <signal.h>
 
-#include "../native_dynamic_thunk.h"
-#include "../native_in_process_runner.h"
-#include "../native_instruction_trace.h"
-#include "../native_thread_probe.h"
-#include "../../native_probe_fixture.h"
+#include "../../native/native_dynamic_thunk.h"
+#include "../../native/native_in_process_runner.h"
+#include "../../native/native_instruction_trace.h"
+#include "../../native/native_thread_probe.h"
+#include "../../native/native_probe_fixture.h"
 
 using namespace re2dj::platform::native_probe;
 
@@ -23,8 +23,8 @@ struct HandlerContext
     std::uint32_t calls = 0;
 };
 
-bool CompleteSyntheticImport(const re2dj::platform::linux::NativeImportGateEvent& event,
-                             re2dj::platform::linux::NativeImportGateResult* result,
+bool CompleteSyntheticImport(const re2dj::platform::native::NativeImportGateEvent& event,
+                             re2dj::platform::native::NativeImportGateResult* result,
                              void* context)
 {
     if (result == nullptr || context == nullptr)
@@ -67,20 +67,20 @@ struct DynamicStdcallContext
 
 struct TraceHandlerContext
 {
-    re2dj::platform::linux::NativeInstructionTrace trace;
+    re2dj::platform::native::NativeInstructionTrace trace;
     std::string error;
     std::uint32_t image_base = 0;
     std::uint32_t image_size = 0;
     bool handled = false;
 };
 
-bool CompleteTraceImport(const re2dj::platform::linux::NativeImportGateEvent& event,
-                         re2dj::platform::linux::NativeImportGateResult* result,
+bool CompleteTraceImport(const re2dj::platform::native::NativeImportGateEvent& event,
+                         re2dj::platform::native::NativeImportGateResult* result,
                          void* context)
 {
     auto* trace = static_cast<TraceHandlerContext*>(context);
     if (result == nullptr || trace == nullptr || trace->handled ||
-        !re2dj::platform::linux::ArmNativeInstructionTrace(&trace->trace,
+        !re2dj::platform::native::ArmNativeInstructionTrace(&trace->trace,
                                                              event.instruction_pointer,
                                                              trace->image_base,
                                                              trace->image_size,
@@ -94,8 +94,8 @@ bool CompleteTraceImport(const re2dj::platform::linux::NativeImportGateEvent& ev
     return true;
 }
 
-bool CompleteDynamicThunk(const re2dj::platform::linux::NativeImportGateEvent& event,
-                          re2dj::platform::linux::NativeImportGateResult* result,
+bool CompleteDynamicThunk(const re2dj::platform::native::NativeImportGateEvent& event,
+                          re2dj::platform::native::NativeImportGateResult* result,
                           void* context)
 {
     auto* dynamic = static_cast<DynamicThunkContext*>(context);
@@ -109,8 +109,8 @@ bool CompleteDynamicThunk(const re2dj::platform::linux::NativeImportGateEvent& e
 }
 
 bool CompleteDynamicStdcallThunk(
-    const re2dj::platform::linux::NativeImportGateEvent& event,
-    re2dj::platform::linux::NativeImportGateResult* result,
+    const re2dj::platform::native::NativeImportGateEvent& event,
+    re2dj::platform::native::NativeImportGateResult* result,
     void* context)
 {
     auto* dynamic = static_cast<DynamicStdcallContext*>(context);
@@ -144,8 +144,8 @@ struct FirstImportContext
     bool matched = false;
 };
 
-bool CompleteFirstKernel32Import(const re2dj::platform::linux::NativeImportGateEvent& event,
-                                 re2dj::platform::linux::NativeImportGateResult* result,
+bool CompleteFirstKernel32Import(const re2dj::platform::native::NativeImportGateEvent& event,
+                                 re2dj::platform::native::NativeImportGateResult* result,
                                  void* context)
 {
     if (result == nullptr || context == nullptr)
@@ -170,8 +170,8 @@ bool CompleteFirstKernel32Import(const re2dj::platform::linux::NativeImportGateE
 }
 
 // Ends the guest process from its first import, as ExitProcess(7) would.
-bool ExitFromFirstImport(const re2dj::platform::linux::NativeImportGateEvent&,
-                         re2dj::platform::linux::NativeImportGateResult* result,
+bool ExitFromFirstImport(const re2dj::platform::native::NativeImportGateEvent&,
+                         re2dj::platform::native::NativeImportGateResult* result,
                          void* context)
 {
     ++static_cast<HandlerContext*>(context)->calls;
@@ -207,12 +207,12 @@ int main(int argc, char** argv)
         std::vector<std::uint8_t> original;
         re2dj::exe::PeImageInfo original_info;
         std::string original_error;
-        re2dj::platform::linux::NativeInProcessRunResult original_result;
+        re2dj::platform::native::NativeInProcessRunResult original_result;
         FirstImportContext first;
         const bool loaded = ReadFile(argv[1], &original) &&
                             ReadInfo(original, &original_info, &original_error);
         const bool stopped = loaded &&
-                             !re2dj::platform::linux::RunNativePeInProcess(
+                             !re2dj::platform::native::RunNativePeInProcess(
                                  original,
                                  original_info,
                                  static_cast<std::uint32_t>(original_info.image_base),
@@ -241,10 +241,10 @@ int main(int argc, char** argv)
     std::vector<std::uint8_t> image = MakeSyntheticPe32();
     re2dj::exe::PeImageInfo info;
     std::string error;
-    re2dj::platform::linux::NativeInProcessRunResult result;
+    re2dj::platform::native::NativeInProcessRunResult result;
     HandlerContext handler;
     const bool normal = ReadInfo(image, &info, &error) &&
-                        re2dj::platform::linux::RunNativePeInProcess(
+                        re2dj::platform::native::RunNativePeInProcess(
                             image,
                             info,
                             kRequestedBase,
@@ -266,13 +266,13 @@ int main(int argc, char** argv)
     }
 
     constexpr std::uint32_t kDynamicThunkGate = 0xF1000002;
-    re2dj::platform::linux::NativeDynamicThunk dynamic_thunk;
+    re2dj::platform::native::NativeDynamicThunk dynamic_thunk;
     DynamicThunkContext dynamic_context{kDynamicThunkGate};
     error.clear();
     const bool dynamic_ready =
-        re2dj::platform::linux::ConfigureNativeImportGateHandler(&CompleteDynamicThunk,
+        re2dj::platform::native::ConfigureNativeImportGateHandler(&CompleteDynamicThunk,
                                                                    &dynamic_context) &&
-        re2dj::platform::linux::CreateNativeDynamicThunk(kDynamicThunkGate,
+        re2dj::platform::native::CreateNativeDynamicThunk(kDynamicThunkGate,
                                                           &dynamic_thunk,
                                                           &error);
     if (dynamic_ready)
@@ -280,8 +280,8 @@ int main(int argc, char** argv)
         __asm__ volatile("call *%0" : : "r"(dynamic_thunk.memory) : "eax", "ecx", "edx", "memory");
     }
     const bool dynamic_complete = dynamic_ready && dynamic_context.called;
-    re2dj::platform::linux::ReleaseNativeDynamicThunk(&dynamic_thunk);
-    re2dj::platform::linux::ClearNativeImportGateHandler();
+    re2dj::platform::native::ReleaseNativeDynamicThunk(&dynamic_thunk);
+    re2dj::platform::native::ClearNativeImportGateHandler();
     if (!dynamic_complete)
     {
         std::fprintf(stderr, "linux-native-dynamic-thunk-probe: %s called=%u\n",
@@ -293,13 +293,13 @@ int main(int argc, char** argv)
     constexpr std::array<std::uint32_t, 7> kDynamicStdcallArguments = {
         0x11111111, 0x22222222, 0x33333333, 0x44444444,
         0x55555555, 0x66666666, 0x77777777};
-    re2dj::platform::linux::NativeDynamicThunk dynamic_stdcall_thunk;
+    re2dj::platform::native::NativeDynamicThunk dynamic_stdcall_thunk;
     DynamicStdcallContext dynamic_stdcall_context{kDynamicStdcallGate};
     error.clear();
     const bool dynamic_stdcall_ready =
-        re2dj::platform::linux::ConfigureNativeImportGateHandler(
+        re2dj::platform::native::ConfigureNativeImportGateHandler(
             &CompleteDynamicStdcallThunk, &dynamic_stdcall_context) &&
-        re2dj::platform::linux::CreateNativeDynamicThunk(kDynamicStdcallGate,
+        re2dj::platform::native::CreateNativeDynamicThunk(kDynamicStdcallGate,
                                                           &dynamic_stdcall_thunk,
                                                           &error);
     using DynamicStdcallFunction = std::uint32_t(__attribute__((stdcall)) *)(
@@ -331,8 +331,8 @@ int main(int argc, char** argv)
         dynamic_stdcall_ready && dynamic_stdcall_context.called &&
         dynamic_stdcall_context.arguments == kDynamicStdcallArguments &&
         dynamic_stdcall_result == 0xFFFFFFFF && stack_before == stack_after;
-    re2dj::platform::linux::ReleaseNativeDynamicThunk(&dynamic_stdcall_thunk);
-    re2dj::platform::linux::ClearNativeImportGateHandler();
+    re2dj::platform::native::ReleaseNativeDynamicThunk(&dynamic_stdcall_thunk);
+    re2dj::platform::native::ClearNativeImportGateHandler();
     if (!dynamic_stdcall_complete)
     {
         std::fprintf(stderr,
@@ -353,7 +353,7 @@ int main(int argc, char** argv)
     result = {};
     error.clear();
     const bool trace_fault = ReadInfo(trace_image, &info, &error) &&
-                             !re2dj::platform::linux::RunNativePeInProcess(
+                             !re2dj::platform::native::RunNativePeInProcess(
                                  trace_image,
                                  info,
                                  kRequestedBase,
@@ -361,7 +361,7 @@ int main(int argc, char** argv)
                                  &trace_handler,
                                  &result,
                                  &error);
-    re2dj::platform::linux::FinalizeNativeInstructionTrace(&trace_handler.trace);
+    re2dj::platform::native::FinalizeNativeInstructionTrace(&trace_handler.trace);
     const bool trace_complete = trace_fault && trace_handler.handled &&
                                 trace_handler.trace.armed && trace_handler.trace.started &&
                                 !trace_handler.trace.limit_reached &&
@@ -405,11 +405,11 @@ int main(int argc, char** argv)
     // The guest never returns from an import that ends the process: the run
     // completes without a fault, reporting exit code 7 after one import.
     std::vector<std::uint8_t> exit_image = MakeSyntheticPe32();
-    re2dj::platform::linux::NativeInProcessRunResult exit_result;
+    re2dj::platform::native::NativeInProcessRunResult exit_result;
     HandlerContext exit_handler;
     error.clear();
     const bool exited = ReadInfo(exit_image, &info, &error) &&
-                        re2dj::platform::linux::RunNativePeInProcess(exit_image,
+                        re2dj::platform::native::RunNativePeInProcess(exit_image,
                                                                      info,
                                                                      kRequestedBase,
                                                                      &ExitFromFirstImport,
@@ -430,8 +430,8 @@ int main(int argc, char** argv)
         return 8;
     }
 
-    if (!re2dj::platform::linux::RunNativeGuestThreadProbe("x86") ||
-        !re2dj::platform::linux::RunNativeGuestThreadFaultProbe("x86"))
+    if (!re2dj::platform::native::RunNativeGuestThreadProbe("linux-x86") ||
+        !re2dj::platform::native::RunNativeGuestThreadFaultProbe("linux-x86"))
     {
         return 9;
     }

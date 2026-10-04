@@ -1,13 +1,14 @@
-#include "../native_low_memory.h"
+#include "../../native/native_low_memory.h"
+#include "../native_host_protection.h"
 
 #include <sys/mman.h>
 #include <unistd.h>
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 
 bool MapNativeLowMemory(std::uint32_t size,
-                        int protection,
+                        HostProtection protection,
                         NativeLowMemory* mapping,
                         std::string* error)
 {
@@ -17,7 +18,7 @@ bool MapNativeLowMemory(std::uint32_t size,
         return false;
     }
     // Every i386 user address is below 4 GiB, so any placement will do.
-    void* memory = mmap(nullptr, size, protection, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    void* memory = mmap(nullptr, size, PosixProtection(protection), MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (memory == MAP_FAILED)
     {
         *error = "cannot map guest-addressable memory";
@@ -41,4 +42,4 @@ void ReleaseNativeLowMemory(NativeLowMemory* mapping)
     }
 }
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native

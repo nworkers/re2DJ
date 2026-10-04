@@ -110,6 +110,32 @@ version = "v11.17.2"
 license = "MIT"
 url = "https://github.com/mermaid-js/mermaid"
 
+# Screenshots on the introduction page (Task 453), files under docs/screenshots/.
+# Captions come from i18n [screenshots.captions].<key>.
+[[screenshots]]
+key = "ez2dj1stse"
+file = "ez2dj1stse-title.jpg"
+
+[[screenshots]]
+key = "ez2dj4th"
+file = "ez2dj4th-title.jpg"
+
+[[screenshots]]
+key = "ez2dj4th_demo"
+file = "ez2dj4th-demo-play.jpg"
+
+[[screenshots]]
+key = "ez2dj5th"
+file = "ez2dj5th-title.jpg"
+
+[[screenshots]]
+key = "ez2dj6th"
+file = "ez2dj6th-title.jpg"
+
+[[screenshots]]
+key = "ez2d2m"
+file = "ez2d2m-title.jpg"
+
 # Platform status shown on the introduction page. Labels come from i18n [platforms.<key>].
 # state: release | wip | hold
 [[platforms]]

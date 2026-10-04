@@ -205,6 +205,16 @@
 
 ## 다음 작업 / Next work
 
+- [ ] in-process 러너 성능 분석(2026-10-05 등록, [측정 결과](analysis/windows-in-process-performance.md))
+  - [ ] 조건별 반복 측정으로 처리량 차이(4th −17%, 1st SE −22%, 5th −11%, 6th −16%, 2nd MOVE +10%) 확정
+  - [ ] vsync off 실행에서 import별 호출 횟수와 샘플링 프로파일로 비용이 큰 경계 찾기
+  - [ ] 전역 게스트 잠금의 넘겨주기 비용과 스레드 직렬화 영향 측정
+  - [ ] 자주 불리는 단순 import(시간·동기화)의 빠른 경로 검토
+  - [ ] Private bytes 증가(최대 1.4 GB)와 6th working set 증가의 원인 확인
+  - [ ] 측정용 vsync off 선택(현재 `--vsync`는 거부됨)을 정식 옵션으로 둘지 결정
+
+  *In-process runner performance analysis, registered 2026-10-05 ([measurements](analysis/windows-in-process-performance.md)): settle the throughput differences with repeated runs, find the costly boundaries from per-import call counts and a sampling profile of vsync-off runs, measure the global guest lock's hand-over cost and thread serialization, consider fast paths for simple, frequent imports (time, synchronization), explain the private-bytes growth (up to 1.4 GB) and 6th's larger working set, and decide whether a vsync-off choice for measuring (`--vsync` is refused now) becomes a real option.*
+
 - [ ] EZ2DJ 6th 실행(2026-09-30 시작)
   - [x] Win32: 데모, 코인, 모드 선택, 곡 선택, 플레이까지 진행(작업 430 전에도 진행됨)
   - [x] [작업 430 — DX7 조명과 깊이 기본값](work-logs/20260930-430-d3d7-lighting-defaults.md). 모드 선택 화면의 모드별 3D 그림이 그려지지 않던 문제. 새 장치의 render state 기본값(`ZWRITEENABLE` 1, `ZFUNC` LESSEQUAL, `ALPHAFUNC` ALWAYS, DX7 `LIGHTING` 1)과 광원 없는 조명 색(emissive + AMBIENT × material ambient, alpha는 diffuse alpha)을 측정해 공용 core로. Windows DX7 `SetMaterial`·`GetMaterial`, Linux `GetMaterial`

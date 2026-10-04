@@ -33,7 +33,7 @@ description: Find a game-state variable (autoplay, demo play, and similar switch
 | `paired_writes.py DUMP ADDR` | 함수가 켰다가 끄는 전역(PAIRED)을 직접 쓰기와 one-line setter 양쪽에서 수집 |
 | `register_calls.py DUMP FUNC_VA [--args N]` | 등록 함수 호출마다 넘긴 인자 표. 장면 엔진의 장면 이름·콜백·핸들 목록 |
 | `callers.py DUMP VA [--context N]` | link thunk를 거친 호출까지 포함한 호출처 |
-| `guest_memory.py read/poll/write` | 실행 중 게스트 메모리 읽기·폴링, `--yes`가 있어야 쓰기. Windows와 Linux |
+| `guest_memory.py read/poll/write` | 실행 중 게스트 메모리 읽기·폴링, `--yes`가 있어야 쓰기. Windows와 Linux 모두 re2dj run의 명령줄로 찾음 |
 | `file_image.py EXE OUT.bin` | 보호 없는 실행 파일을 덤프와 같은 메모리 배치 이미지와 sidecar로 펼침 |
 
 ## 절차
@@ -44,9 +44,9 @@ description: Find a game-state variable (autoplay, demo play, and similar switch
 .\build\windows-x86\bin\Debug\re2dj.exe <target> --image-dump --image-dump-delay 8000
 ```
 
-`logs\windows_x86_launcher_probe\<target>\<stamp>.resumed.image.bin`과 `.json`을 쓴다. **`entry` 덤프는 보호 빌드에서 아직 복호화 전이라 쓰지 않는다.** sidecar의 `gaps`가 비어 있는지, `timestamp`가 무엇인지 기록한다.
+`logs\image-dumps\<target>\<stamp>-<실행 파일>.resumed.image.bin`과 `.json`을 쓴다(작업 449부터 in-process 러너가 쓰며 Linux에서도 같다). **`entry` 덤프는 보호 빌드에서 아직 복호화 전이라 쓰지 않는다.** sidecar의 `gaps`가 비어 있는지, `timestamp`가 무엇인지 기록한다.
 
-`run_detached = false`인 프로파일(현재 `ez2dj6th`)은 `resumed` 지점이 동작하지 않는다.
+6th처럼 런처가 게임을 자식으로 띄우는 프로파일은 런처와 자식이 각자 덤프를 쓴다. 게임 실행 파일 이름의 덤프를 쓴다.
 
 **보호 섹션이 없는 빌드는 덤프가 필요 없다.** 섹션이 `.text`·`.rdata`·`.data`뿐이면 파일을 그대로 펼쳐 쓴다. CHD 안의 파일은 Linux 실행이 `/tmp/re2dj/chd/<profile>/` 아래에 꺼내 둔다. 6th의 `EZ2DJ6th.EXE`와 동봉 1st가 이 경우였다(작업 436).
 
@@ -131,12 +131,17 @@ python paired_writes.py DUMP <데모 시작 루틴 VA>
 게임을 어트랙트 상태로 두고 데모 플래그와 후보를 함께 폴링한다.
 
 ```text
-python guest_memory.py poll --process EZ2DJ.EXE --seconds 150 demo=<VA> candidate=<VA>
+python guest_memory.py poll --process ez2dj3rd --seconds 150 demo=<VA> candidate=<VA>
 ```
 
-**판정:** 데모가 도는 구간에만 둘이 함께 1이 되고 끝나면 0으로 돌아와야 한다. 3rd는 약 22~25초 데모마다 그랬다. 실행 파일 이름이 다르면 `--process`를 맞춘다.
+**판정:** 데모가 도는 구간에만 둘이 함께 1이 되고 끝나면 0으로 돌아와야 한다. 3rd는 약 22~25초 데모마다 그랬다.
 
-**Linux에서는** 게스트가 `re2dj` host 프로세스 안에서 자기 주소 그대로 돌므로 `/proc/<pid>/mem`으로 읽는다. `--process`는 명령줄의 부분 문자열이다(launcher의 자식 run은 `--guest-executable EZ2DJ/EZ2DJ6TH.EXE`를 가진다). Yama `ptrace_scope` 1에서는 조상만 읽을 수 있으므로 `--launch`로 실행을 스크립트의 자식으로 띄운다. 끝나면 띄운 프로세스 트리를 정리한다.
+게스트는 두 OS 모두 re2dj host 프로세스 안에서 자기 주소 그대로 돈다(Windows는 작업 449부터). `--process`는 그 run의 명령줄 인자의 부분 문자열이며 대소문자를 구분한다. 직접 실행은 프로파일 ID(`ez2dj3rd`), launcher의 자식 run은 실행 파일 이름(`--guest-executable EZ2DJ/EZ2DJ6TH.EXE`에 있는 `EZ2DJ6TH.EXE`)으로 맞춘다. 일치가 여럿이면 가장 나중에 생긴 프로세스를 고른다. **Windows**에서는 `re2dj.exe`가 같은 명령줄로 자신을 한 번 더 띄우고 게스트는 그 둘째에 있으므로 이 규칙으로 둘째를 고르며, `ReadProcessMemory`로 읽는다(작업 451). **Linux**에서는 `/proc/<pid>/mem`으로 읽고, Yama `ptrace_scope` 1에서는 조상만 읽을 수 있으므로 `--launch`로 실행을 스크립트의 자식으로 띄운다. `--launch`는 Windows에서도 쓸 수 있으며, 끝나면 띄운 프로세스 트리를 정리한다.
+
+```powershell
+python guest_memory.py poll --process ez2dj4th --seconds 180 `
+    --launch ".\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th" demo=<VA> autoplay=<VA>
+```
 
 ```text
 python guest_memory.py poll --process EZ2DJ6TH.EXE --seconds 180 \
@@ -153,7 +158,7 @@ python guest_memory.py poll --process EZ2DJ6TH.EXE --seconds 180 \
 ```
 
 1. 사용자가 코인을 넣고 **곡 선택 화면**까지 간다. 어트랙트 중에는 쓰지 않는다. 데모가 끝나면서 값을 0으로 되돌린다.
-2. `python guest_memory.py write --process EZ2DJ.EXE <VA> 1 --yes`
+2. `python guest_memory.py write --process <target> <VA> 1 --yes`
 3. 사용자가 곡을 시작하고 노트가 자동으로 맞는지, 데모 오버레이·음소거·입력 시 종료가 없는지 본다.
 4. 곡 도중 `0`을 써서 반영 시점도 확인한다. 3rd는 **다음 곡부터** 반영됐다.
 
@@ -167,7 +172,7 @@ python guest_memory.py poll --process EZ2DJ6TH.EXE --seconds 180 \
 entry.profile.game_controls.push_back({0x00629508, 0x3bca98a3});   // 3rd 예시: RVA, timestamp
 ```
 
-`game_controls`는 빌드별 목록이다. launcher가 여러 실행 파일을 띄우는 프로파일(6th)은 실행 파일마다 항목을 두며, 각 프로세스는 자기 실행 파일 timestamp와 같은 항목만 무장한다(작업 436). Windows는 주 debuggee와 launcher의 자식 모두, Linux는 각 run이 무장하므로 OSD에 토글이 자동으로 나타난다. Linux 실행 로그의 `game controls` 줄로 무장 여부를 볼 수 있다. `tests/unit/target_profile_test.cpp`의 "3rd 외에는 선언이 없다" 목록에서 해당 id를 빼고 값 검사를 추가한다. 빌드·단위 테스트 후 OSD(백틱)에서 토글이 보이는지 사용자와 확인한다. 실행 로그 `osd_controls` 줄의 `autoplay_armed`로도 확인할 수 있다.
+`game_controls`는 빌드별 목록이다. launcher가 여러 실행 파일을 띄우는 프로파일(6th)은 실행 파일마다 항목을 두며, 각 프로세스는 자기 실행 파일 timestamp와 같은 항목만 무장한다(작업 436). 두 OS 모두 각 run(launcher의 자식 포함)이 무장하므로 OSD에 토글이 자동으로 나타난다. Linux 실행 로그의 `game controls` 줄로 무장 여부를 볼 수 있다. `tests/unit/target_profile_test.cpp`의 "3rd 외에는 선언이 없다" 목록에서 해당 id를 빼고 값 검사를 추가한다. 빌드·단위 테스트 후 OSD(백틱)에서 토글이 보이는지 사용자와 확인한다. 실행 로그 `osd_controls` 줄의 `autoplay_armed`로도 확인할 수 있다.
 
 ### 10. 기록한다
 

@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "re2dj/graphics/color_depth.h"
-#include "re2dj/graphics/present_sync.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
 
@@ -79,51 +78,17 @@ struct TargetRunDefaults
     // Optional values are omitted when the original build has no corresponding
     // configuration import that the runtime can override safely.
     std::optional<float> audio_gain_db;
-    std::optional<unsigned> demo_volume;
     bool fullscreen = false;
-    bool hle_command_line = false;
-    bool hle_windows_directory = false;
-    bool hle_vfs = false;
-    // Allows confirmed dynamic file API resolution through the VFS wrapper.
-    bool hle_dynamic_vfs = false;
-    bool hle_d3d3 = false;
-    bool hle_directsound = false;
-    // Reports the current session ID as 0, the console session of the Windows
-    // XP era the cabinet ran. Since Vista session 0 is reserved for services,
-    // so a modern host returns 1 or higher. The cabinet's original ran as the
-    // console shell, so this is an operating-system boundary rather than a
-    // diagnostic. Only a successful WTS_CURRENT_SESSION WTSSessionId (class 4)
-    // result is rewritten; other queries and failures are preserved.
-    bool hle_wts_console_session = false;
     TargetLptdiPolicy lptdi;
-    // Starts a known bootstrap executable and follows its version-specific
-    // game child before applying the HLE boundary.
-    bool follow_child_process = false;
     // The executables in the image that the profile's launcher starts, as
     // '/'-separated image paths (for example "EZ2DJ/EZ2DJ6th.EXE"). They are
     // staged with the launcher, and each one a followed launcher creates is
     // prepared as its child.
     std::vector<std::string> child_executable_paths;
-    bool run_detached = false;
-    // When a present returns. No profile overrides this yet: the default is
-    // the behavior every profile had before the policy became explicit, and a
-    // product-specific value needs its own runtime evidence first.
-    graphics::PresentSync present_sync = graphics::PresentSync::kVerticalSync;
     // How deep the host keeps colours (graphics/color_depth.h). No profile
     // overrides this: 16 bits is the original's own picture, and 32 bits is
     // an enhancement the user asks for.
     graphics::ColorDepth color_depth = graphics::ColorDepth::k16;
-    // Accounts the guest's blocking calls so frame time that is neither
-    // computation nor presentation can be attributed. Off by default: it
-    // patches guest import slots that the product path leaves alone.
-    bool guest_wait_trace = false;
-    // Saves the main image the protection decrypted in place, at the restored
-    // entry and again once the guest has been running. Off by default: the
-    // image runs to tens of megabytes and only an analysis run wants it.
-    bool image_dump = false;
-    // Milliseconds between resuming the guest and the second dump. Zero leaves
-    // the launcher's own default in place.
-    unsigned image_dump_delay_ms = 0;
 };
 
 // How a built-in profile recognises the dump it belongs to.

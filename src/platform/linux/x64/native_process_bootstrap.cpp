@@ -1,9 +1,9 @@
-#include "../native_process_bootstrap.h"
+#include "../../native/native_process_bootstrap.h"
 
-#include "../native_guest_threads.h"
+#include "../../native/native_guest_threads.h"
 #include "native_compat_mode.h"
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 
 struct NativeProcessBootstrap::Impl
@@ -137,4 +137,4 @@ std::uint32_t NativeProcessBootstrap::GuestExitCode() const
     return impl_->exit_code;
 }
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native

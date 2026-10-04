@@ -6,29 +6,29 @@
 #include <signal.h>
 #include <sys/mman.h>
 
-#include "../native_dynamic_thunk.h"
-#include "../native_guest_module_set.h"
-#include "../native_in_process_runner.h"
-#include "../native_instruction_trace.h"
-#include "../native_thread_probe.h"
+#include "../../native/native_dynamic_thunk.h"
+#include "../../native/native_guest_module_set.h"
+#include "../../native/native_in_process_runner.h"
+#include "../../native/native_instruction_trace.h"
+#include "../../native/native_thread_probe.h"
 #include "native_compat_mode.h"
 #include "re2dj/hle/modules/kernel32_module.h"
-#include "../../native_probe_fixture.h"
+#include "../../native/native_probe_fixture.h"
 
 using namespace re2dj::platform::native_probe;
 
 namespace
 {
 
-namespace linux_platform = re2dj::platform::linux;
+namespace native_platform = re2dj::platform::native;
 
 struct HandlerContext
 {
     std::uint32_t calls = 0;
 };
 
-bool CompleteSyntheticImport(const linux_platform::NativeImportGateEvent& event,
-                             linux_platform::NativeImportGateResult* result,
+bool CompleteSyntheticImport(const native_platform::NativeImportGateEvent& event,
+                             native_platform::NativeImportGateResult* result,
                              void* context)
 {
     if (result == nullptr || context == nullptr)
@@ -72,10 +72,10 @@ bool RunSyntheticToExit(const char* label)
     const std::vector<std::uint8_t> image = MakeSyntheticPe32();
     re2dj::exe::PeImageInfo info;
     std::string error;
-    linux_platform::NativeInProcessRunResult result;
+    native_platform::NativeInProcessRunResult result;
     HandlerContext handler;
     const bool completed = ReadInfo(image, &info, &error) &&
-                           linux_platform::RunNativePeInProcess(image,
+                           native_platform::RunNativePeInProcess(image,
                                                                 info,
                                                                 kRequestedBase,
                                                                 &CompleteSyntheticImport,
@@ -99,8 +99,8 @@ bool RunSyntheticToExit(const char* label)
 }
 
 // Ends the guest process from its first import, as ExitProcess(7) would.
-bool ExitFromFirstImport(const linux_platform::NativeImportGateEvent&,
-                         linux_platform::NativeImportGateResult* result,
+bool ExitFromFirstImport(const native_platform::NativeImportGateEvent&,
+                         native_platform::NativeImportGateResult* result,
                          void* context)
 {
     ++static_cast<HandlerContext*>(context)->calls;
@@ -116,10 +116,10 @@ bool RunGuestProcessExit()
     const std::vector<std::uint8_t> image = MakeSyntheticPe32();
     re2dj::exe::PeImageInfo info;
     std::string error;
-    linux_platform::NativeInProcessRunResult result;
+    native_platform::NativeInProcessRunResult result;
     HandlerContext handler;
     const bool completed = ReadInfo(image, &info, &error) &&
-                           linux_platform::RunNativePeInProcess(image,
+                           native_platform::RunNativePeInProcess(image,
                                                                 info,
                                                                 kRequestedBase,
                                                                 &ExitFromFirstImport,
@@ -147,7 +147,7 @@ bool RunGuestProcessExit()
 
 struct TraceHandlerContext
 {
-    linux_platform::NativeInstructionTrace trace;
+    native_platform::NativeInstructionTrace trace;
     std::string error;
     std::uint32_t image_base = 0;
     std::uint32_t image_size = 0;
@@ -155,13 +155,13 @@ struct TraceHandlerContext
 };
 
 // Arms the trace at the first import's return address and completes it.
-bool CompleteTraceImport(const linux_platform::NativeImportGateEvent& event,
-                         linux_platform::NativeImportGateResult* result,
+bool CompleteTraceImport(const native_platform::NativeImportGateEvent& event,
+                         native_platform::NativeImportGateResult* result,
                          void* context)
 {
     auto* trace = static_cast<TraceHandlerContext*>(context);
     if (result == nullptr || trace == nullptr || trace->handled ||
-        !linux_platform::ArmNativeInstructionTrace(&trace->trace,
+        !native_platform::ArmNativeInstructionTrace(&trace->trace,
                                                    event.instruction_pointer,
                                                    trace->image_base,
                                                    trace->image_size,
@@ -190,15 +190,15 @@ bool RunInstructionTrace()
         return false;
     }
     TraceHandlerContext trace{{}, {}, kRequestedBase, info.size_of_image};
-    linux_platform::NativeInProcessRunResult result;
-    const bool faulted = !linux_platform::RunNativePeInProcess(image,
+    native_platform::NativeInProcessRunResult result;
+    const bool faulted = !native_platform::RunNativePeInProcess(image,
                                                                info,
                                                                kRequestedBase,
                                                                &CompleteTraceImport,
                                                                &trace,
                                                                &result,
                                                                &error);
-    linux_platform::FinalizeNativeInstructionTrace(&trace.trace);
+    native_platform::FinalizeNativeInstructionTrace(&trace.trace);
     const std::uint32_t expected = kRequestedBase + kEntryRva + 8;
     const bool completed = faulted && trace.handled && trace.trace.armed &&
                            trace.trace.started && !trace.trace.limit_reached &&
@@ -226,11 +226,11 @@ bool RunInstructionTrace()
     return true;
 }
 
-bool DispatchFacade(const linux_platform::NativeImportGateEvent& event,
-                    linux_platform::NativeImportGateResult* result,
+bool DispatchFacade(const native_platform::NativeImportGateEvent& event,
+                    native_platform::NativeImportGateResult* result,
                     void* context)
 {
-    const auto* modules = static_cast<const linux_platform::NativeGuestModuleSet*>(context);
+    const auto* modules = static_cast<const native_platform::NativeGuestModuleSet*>(context);
     std::string error;
     return modules->Dispatch(event, result, &error);
 }
@@ -239,14 +239,14 @@ bool DispatchFacade(const linux_platform::NativeImportGateEvent& event,
 // export thunk directly and through a dynamic thunk bound to the same gate.
 bool RunFacadeCalls()
 {
-    linux_platform::NativeGuestModuleSet modules;
+    native_platform::NativeGuestModuleSet modules;
     re2dj::runtime::ImportGateTable gates(re2dj::runtime::GuestAddress(0xF1000000U), 16);
     std::string error;
     if (!modules.Add(re2dj::hle::modules::MakeKernel32ModuleDescriptor(),
                      &gates,
-                     linux_platform::NativeImportGateBridgeAddress(),
-                     linux_platform::NativeImportGateCleanupAddress(),
-                     linux_platform::kDefaultNativeGuestModuleBase,
+                     native_platform::NativeImportGateBridgeAddress(),
+                     native_platform::NativeImportGateCleanupAddress(),
+                     native_platform::kDefaultNativeGuestModuleBase,
                      &error))
     {
         std::fprintf(stderr, "linux-x64-facade-probe: %s\n", error.c_str());
@@ -265,12 +265,12 @@ bool RunFacadeCalls()
     const bool thunk_in_image = thunk >= module->base.value() &&
                                 thunk - module->base.value() < module->image_size;
 
-    linux_platform::NativeDynamicThunk dynamic;
-    linux_platform::NativeLowMemory code;
-    if (!linux_platform::CreateNativeDynamicThunk(gate->address.value(), &dynamic, &error) ||
-        !linux_platform::MapNativeLowMemory(4096, PROT_READ | PROT_WRITE, &code, &error))
+    native_platform::NativeDynamicThunk dynamic;
+    native_platform::NativeLowMemory code;
+    if (!native_platform::CreateNativeDynamicThunk(gate->address.value(), &dynamic, &error) ||
+        !native_platform::MapNativeLowMemory(4096, native_platform::HostProtection::kReadWrite, &code, &error))
     {
-        linux_platform::ReleaseNativeDynamicThunk(&dynamic);
+        native_platform::ReleaseNativeDynamicThunk(&dynamic);
         std::fprintf(stderr, "linux-x64-facade-probe: %s\n", error.c_str());
         return false;
     }
@@ -289,23 +289,23 @@ bool RunFacadeCalls()
     }
     bool completed = mprotect(code.memory, code.size, PROT_READ | PROT_EXEC) == 0;
 
-    linux_platform::NativeCompatModeRuntime runtime;
+    native_platform::NativeCompatModeRuntime runtime;
     completed = completed &&
-                runtime.Initialize(kRequestedBase, linux_platform::NativeCompatModeOptions{}, &error);
+                runtime.Initialize(kRequestedBase, native_platform::NativeCompatModeOptions{}, &error);
     std::uint32_t results[2] = {};
     for (std::uint32_t index = 0; completed && index < 2; ++index)
     {
-        linux_platform::NativeCompatModeCall call;
+        native_platform::NativeCompatModeCall call;
         call.entry = code.address + index * 16;
         call.handler = &DispatchFacade;
         call.handler_context = &modules;
-        linux_platform::NativeCompatModeRunResult run;
-        linux_platform::NativeGuestFault fault;
+        native_platform::NativeCompatModeRunResult run;
+        native_platform::NativeGuestFault fault;
         completed = runtime.Run(call, &run, &fault, &error);
         results[index] = run.eax;
     }
-    linux_platform::ReleaseNativeLowMemory(&code);
-    linux_platform::ReleaseNativeDynamicThunk(&dynamic);
+    native_platform::ReleaseNativeLowMemory(&code);
+    native_platform::ReleaseNativeDynamicThunk(&dynamic);
 
     completed = completed && thunk_in_image &&
                 results[0] == re2dj::hle::modules::kKernel32GuestVersion &&
@@ -340,10 +340,10 @@ int main()
     fault_image[0x409] = 0x0B;
     re2dj::exe::PeImageInfo info;
     std::string error;
-    linux_platform::NativeInProcessRunResult result;
+    native_platform::NativeInProcessRunResult result;
     HandlerContext handler;
     const bool faulted = ReadInfo(fault_image, &info, &error) &&
-                         !linux_platform::RunNativePeInProcess(fault_image,
+                         !native_platform::RunNativePeInProcess(fault_image,
                                                                info,
                                                                kRequestedBase,
                                                                &CompleteSyntheticImport,
@@ -394,8 +394,8 @@ int main()
         return 6;
     }
 
-    if (!linux_platform::RunNativeGuestThreadProbe("x64") ||
-        !linux_platform::RunNativeGuestThreadFaultProbe("x64") ||
+    if (!native_platform::RunNativeGuestThreadProbe("linux-x64") ||
+        !native_platform::RunNativeGuestThreadFaultProbe("linux-x64") ||
         !RunSyntheticToExit("run after threads"))
     {
         return 7;

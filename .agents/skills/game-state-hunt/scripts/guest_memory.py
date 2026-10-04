@@ -1,14 +1,18 @@
 """Reads, polls, or writes 32-bit values in a running guest process.
 
-    python guest_memory.py read  --process EZ2DJ.EXE 0x00a2946c 0x00a29508
-    python guest_memory.py poll  --process EZ2DJ.EXE --seconds 150 demo=0x00a2946c autoplay=0x00a29508
-    python guest_memory.py write --process EZ2DJ.EXE 0x00a29508 1 --yes
+    python guest_memory.py read  --process ez2dj3rd 0x00a2946c 0x00a29508
+    python guest_memory.py poll  --process ez2dj3rd --seconds 150 demo=0x00a2946c autoplay=0x00a29508
+    python guest_memory.py write --process ez2dj3rd 0x00a29508 1 --yes
 
-On Linux the guest runs inside a re2dj host process, so --process matches a
-substring of the process's command line (a child run carries its executable,
-for example EZ2DJ6TH.EXE), and memory is reached through /proc/<pid>/mem at the
-guest's own addresses. Yama's ptrace_scope 1 lets only an ancestor read it, so
---launch starts the run from this script:
+The guest runs inside a re2dj host process at its own addresses on both OSes,
+so --process matches a case-sensitive substring of an argument on the process's
+command line: a direct run carries its profile ID (ez2dj3rd), a launcher's
+child run its executable (EZ2DJ6TH.EXE). Of the matches the newest wins: on
+Windows re2dj.exe starts itself again with the same command line and the guest
+lives in that second process, and a launcher's child starts after the launcher.
+Memory is reached through ReadProcessMemory on Windows and /proc/<pid>/mem on
+Linux. Yama's ptrace_scope 1 lets only an ancestor read it, so --launch starts
+the run from this script:
 
     python guest_memory.py poll --process EZ2DJ6TH.EXE --seconds 150 \
         --launch "build/linux-x64-debug/bin/re2dj --hdd roms/ez2dj6th --target ez2dj6th --run" \
@@ -39,9 +43,38 @@ if WINDOWS:
     PROCESS_VM_WRITE = 0x0020
     PROCESS_VM_OPERATION = 0x0008
     PROCESS_QUERY_INFORMATION = 0x0400
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    TH32CS_SNAPPROCESS = 0x00000002
+    INVALID_HANDLE_VALUE = wt.HANDLE(-1).value
+    PROCESS_COMMAND_LINE_INFORMATION = 60
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wt.DWORD), ("cntUsage", wt.DWORD), ("th32ProcessID", wt.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wt.DWORD),
+                    ("cntThreads", wt.DWORD), ("th32ParentProcessID", wt.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wt.DWORD),
+                    ("szExeFile", wt.WCHAR * 260)]
+
+    class UNICODE_STRING(ctypes.Structure):
+        _fields_ = [("Length", wt.USHORT), ("MaximumLength", wt.USHORT), ("Buffer", ctypes.c_void_p)]
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
     kernel32.OpenProcess.restype = wt.HANDLE
+    kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    kernel32.CloseHandle.argtypes = [wt.HANDLE]
+    kernel32.CreateToolhelp32Snapshot.restype = wt.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wt.DWORD, wt.DWORD]
+    kernel32.Process32FirstW.argtypes = [wt.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.Process32NextW.argtypes = [wt.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.GetProcessTimes.argtypes = [wt.HANDLE] + [ctypes.POINTER(wt.FILETIME)] * 4
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+    ntdll.NtQueryInformationProcess.argtypes = [wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.ULONG,
+                                                ctypes.POINTER(wt.ULONG)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    shell32.CommandLineToArgvW.argtypes = [wt.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
     kernel32.ReadProcessMemory.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
                                            ctypes.POINTER(ctypes.c_size_t)]
     kernel32.WriteProcessMemory.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
@@ -52,14 +85,77 @@ def parse_int(text):
     return int(text, 16) if text.lower().startswith("0x") else int(text, 10)
 
 
-def find_pid_windows(image_name):
-    output = subprocess.run(["tasklist", "/FI", "IMAGENAME eq %s" % image_name, "/FO", "CSV", "/NH"],
-                            capture_output=True, text=True).stdout
-    for line in output.splitlines():
-        fields = line.split('","')
-        if len(fields) > 1 and fields[0].strip('"').lower() == image_name.lower():
-            return int(fields[1].strip('"'))
-    return None
+def windows_parents():
+    """Maps every running pid to its parent pid."""
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == INVALID_HANDLE_VALUE:
+        return {}
+    parents = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            parents[entry.th32ProcessID] = entry.th32ParentProcessID
+            more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return parents
+
+
+def windows_arguments_and_start(pid):
+    """Returns (arguments, creation time) of a process, or None when it cannot be queried."""
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        size = wt.ULONG(0)
+        ntdll.NtQueryInformationProcess(handle, PROCESS_COMMAND_LINE_INFORMATION, None, 0, ctypes.byref(size))
+        if size.value < ctypes.sizeof(UNICODE_STRING):
+            return None
+        buffer = ctypes.create_string_buffer(size.value)
+        if ntdll.NtQueryInformationProcess(handle, PROCESS_COMMAND_LINE_INFORMATION, buffer, size,
+                                           ctypes.byref(size)) != 0:
+            return None
+        text = UNICODE_STRING.from_buffer(buffer)
+        command_line = ctypes.wstring_at(text.Buffer, text.Length // 2) if text.Buffer else ""
+        times = [wt.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+            return None
+        created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+    finally:
+        kernel32.CloseHandle(handle)
+    count = ctypes.c_int(0)
+    argv = shell32.CommandLineToArgvW(command_line, ctypes.byref(count))
+    if not argv:
+        return None
+    try:
+        arguments = [argv[i] for i in range(count.value)]
+    finally:
+        kernel32.LocalFree(argv)
+    return arguments, created
+
+
+def find_pid_windows(pattern, root):
+    # Linux's rule, the newest by creation time as Windows pids are not
+    # monotonic: re2dj.exe starts itself again with the same command line
+    # and the guest lives in that second process.
+    parents = windows_parents()
+    excluded = ancestors_of(os.getpid(), parents) | {os.getpid()}
+    found = None
+    for pid in parents:
+        if pid == 0 or pid in excluded:
+            continue
+        if root is not None and pid != root and root not in ancestors_of(pid, parents):
+            continue
+        queried = windows_arguments_and_start(pid)
+        if queried is None:
+            continue
+        arguments, created = queried
+        if any(pattern in argument for argument in arguments[1:]):
+            if found is None or created > found[1]:
+                found = (pid, created)
+    return found[0] if found is not None else None
 
 
 def parent_of(pid):
@@ -73,10 +169,14 @@ def parent_of(pid):
     return 0
 
 
-def ancestors_of(pid):
+def ancestors_of(pid, parents=None):
+    # Windows hands in its pid-to-parent map, where a reused pid can make a
+    # chain loop, so a pid seen twice ends it.
     result = set()
     while pid > 1:
-        pid = parent_of(pid)
+        pid = parents.get(pid, 0) if parents is not None else parent_of(pid)
+        if pid in result:
+            break
         result.add(pid)
     return result
 
@@ -108,7 +208,7 @@ def find_pid_linux(pattern, root):
 def find_pid(name, wait_seconds, root=None):
     deadline = time.time() + wait_seconds
     while True:
-        pid = find_pid_windows(name) if WINDOWS else find_pid_linux(name, root)
+        pid = find_pid_windows(name, root) if WINDOWS else find_pid_linux(name, root)
         if pid is not None:
             return pid
         if time.time() >= deadline:
@@ -173,7 +273,8 @@ def main():
     parser.add_argument("command", choices=["read", "poll", "write"])
     parser.add_argument("values", nargs="+", help="read/poll: [name=]ADDRESS ...; write: ADDRESS VALUE")
     parser.add_argument("--process", default="EZ2DJ.EXE",
-                        help="Windows: image name; Linux: a substring of the command line")
+                        help="a case-sensitive substring of a command-line argument of the re2dj run: "
+                             "its profile ID, or a launcher child's executable")
     parser.add_argument("--launch", help="start this command first, as this script's child")
     parser.add_argument("--wait", type=float, default=30.0, help="seconds to wait for the process to appear")
     parser.add_argument("--seconds", type=float, default=60.0, help="poll duration")
@@ -187,7 +288,11 @@ def main():
         if not args.yes:
             sys.exit("refusing to write without --yes: this changes the running guest")
 
-    launched = subprocess.Popen(shlex.split(args.launch)) if args.launch else None
+    launched = None
+    if args.launch:
+        # Windows takes the command string as is; POSIX splitting would eat
+        # the backslashes of its paths.
+        launched = subprocess.Popen(args.launch if WINDOWS else shlex.split(args.launch))
     try:
         run(args, launched.pid if launched is not None else None)
     finally:
@@ -196,14 +301,20 @@ def main():
 
 
 def stop_tree(launched):
+    if WINDOWS:
+        # The relaunched re2dj.exe and a launcher's child runs all descend
+        # from the launched process.
+        if launched.poll() is None:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(launched.pid)], capture_output=True)
+        launched.wait()
+        return
     # A launcher waits on its child, so the child goes first.
-    if not WINDOWS:
-        for entry in os.listdir("/proc"):
-            if entry.isdigit() and launched.pid in ancestors_of(int(entry)):
-                try:
-                    os.kill(int(entry), 15)
-                except OSError:
-                    pass
+    for entry in os.listdir("/proc"):
+        if entry.isdigit() and launched.pid in ancestors_of(int(entry)):
+            try:
+                os.kill(int(entry), 15)
+            except OSError:
+                pass
     if launched.poll() is None:
         launched.terminate()
     launched.wait()

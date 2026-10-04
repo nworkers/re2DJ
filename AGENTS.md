@@ -245,6 +245,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## 구현 규칙
 
 * 플랫폼 종속 코드는 `src/platform/windows/`, `src/platform/linux/` 아래에 둔다.
+* 원본 PE32를 re2dj 프로세스 안에서 실행하는 OS 중립 러너는 `src/platform/native/`에 둔다. 이 디렉터리는 OS 헤더를 포함하지 않으며, OS 기능은 `native_host_services.h`와 backend 계약을 거쳐 각 OS 디렉터리의 구현을 쓴다. 두 OS가 함께 쓰는 SDL3 창·입력·소리 host는 `src/platform/sdl/`에 두며 역시 OS 헤더를 포함하지 않는다.
 * `src/platform/windows/`와 `src/platform/linux/`의 루트에는 해당 OS 전용이면서 32비트·64비트에 중립인 코드 또는 두 비트 폭이 공유하는 코드만 둔다.
 * host 32비트 전용 코드는 해당 OS 디렉터리의 `x86/` 하위에, host 64비트 전용 코드는 `x64/` 하위에 둔다. 공개 플랫폼 구현 헤더도 `include/re2dj/platform/<os>/x86/` 또는 `x64/`로 같은 구조를 따른다.
 * 게스트 PE32·32비트 주소를 다루는 것만으로 `x86/`에 두지 않는다. host pointer width, native ABI·register·instruction 또는 특정 비트 폭에서만 선택되는 build 조건에 종속될 때만 비트 폭 전용으로 분류한다.
@@ -264,6 +265,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## Implementation Rules
 
 * Put platform-specific code under `src/platform/windows/` or `src/platform/linux/`.
+* Put the OS-neutral runner that executes the original PE32 inside the re2dj process under `src/platform/native/`. It includes no OS header; OS functionality goes through `native_host_services.h` and the backend contracts to each OS directory's implementation. Put the SDL3 window, input and sound hosts both OSes share under `src/platform/sdl/`, which includes no OS header either.
 * At the roots of `src/platform/windows/` and `src/platform/linux/`, keep only code that is specific to that OS but neutral across 32-bit and 64-bit hosts, or shared by both widths.
 * Put 32-bit-host-only code under the OS directory's `x86/` child and 64-bit-host-only code under `x64/`. Mirror the structure for public platform-implementation headers under `include/re2dj/platform/<os>/x86/` or `x64/`.
 * Handling guest PE32 data or 32-bit guest addresses alone does not make code `x86/`-specific. Classify code by host pointer width, native ABI, registers, instructions, or build selection limited to one host width.
@@ -347,7 +349,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * 절대적으로 필요하지 않으면 게임플레이 로직을 C++로 다시 작성하지 않는다.
 * 모든 하위 시스템은 독립적으로 교체 가능해야 한다.
 * HLE 경계는 **Win32 import thunk 단위**를 기본으로 삼는다. 명령어 단위 트랩은 대체 수단이 없을 때만 사용한다.
-* 실행 경로는 교체 가능한 `ExecutionBackend` 경계 뒤에 둔다. Windows/Linux 데스크톱은 별도 32비트 네이티브 helper를 먼저 검증한다. 브라우저용 x86 실행 엔진과 직접 인터프리터는 현재 지원 범위에 포함하지 않는다.
+* 실행 경로는 교체 가능한 `ExecutionBackend` 경계 뒤에 둔다. 두 OS 모두 원본 PE32를 re2dj 프로세스 안에 매핑해 실행하는 공용 in-process 러너(`src/platform/native/`)로 통합한다. Windows의 원본 프로세스 주입 경로는 작업 450에서 제거했다(설계 446). 브라우저용 x86 실행 엔진과 직접 인터프리터는 현재 지원 범위에 포함하지 않는다.
 * 공용 코어는 Linux와 64-bit Windows에서 모두 빌드되어야 한다. 플랫폼 하나에서만 성립하는 가정을 공용 코어에 넣지 않는다.
 
 ## Architecture Rules
@@ -357,7 +359,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * Do not rewrite gameplay logic into C++ unless absolutely unavoidable.
 * Every subsystem should be replaceable independently.
 * The default HLE boundary is the **Win32 import thunk**. Use instruction-level traps only when no alternative exists.
-* Put execution paths behind a replaceable `ExecutionBackend` boundary and validate a separate native 32-bit helper first for Windows/Linux desktops. Browser x86 execution engines and a custom interpreter are outside the current support scope.
+* Put execution paths behind a replaceable `ExecutionBackend` boundary. Both OSes converge on the shared in-process runner (`src/platform/native/`) that maps the original PE32 into the re2dj process; Windows' original-process injection path was removed in task 450 (design 446). Browser x86 execution engines and a custom interpreter are outside the current support scope.
 * The shared core must build on Linux and 64-bit Windows. Do not place single-platform assumptions in the shared core.
 
 ---

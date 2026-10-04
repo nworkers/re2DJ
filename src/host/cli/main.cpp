@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -30,22 +31,32 @@
 #include "re2dj/storage/guest_path.h"
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/graphics/color_depth.h"
-#include "re2dj/graphics/present_sync.h"
 #include "re2dj/hle/hex_bytes.h"
 #include "re2dj/logging/logging.h"
 #include "re2dj/target/target_profile.h"
 #include "re2dj/version.h"
 
-#if defined(__linux__)
+// Both hosts run the original PE32 in this process through the shared
+// in-process runner (tasks 446 to 449).
+#if defined(__linux__) || defined(_WIN32)
+#define RE2DJ_IN_PROCESS_HOST 1
 #include "re2dj/config/hardlock_secret_config.h"
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/hardlock/device_material.h"
-#include "re2dj/platform/linux/host_audio.h"
-#include "re2dj/platform/linux/host_presentation.h"
+#include "re2dj/platform/native/child_run_options.h"
+#include "re2dj/platform/native/original_runner.h"
+#include "re2dj/platform/sdl/host_audio.h"
+#include "re2dj/platform/sdl/host_presentation.h"
+#endif
+#if defined(__linux__)
 #include "re2dj/platform/linux/host_process_launcher.h"
-#include "re2dj/platform/linux/original_runner.h"
+using HostProcessLauncher = re2dj::platform::linux::LinuxHostProcessLauncher;
+using re2dj::platform::linux::WriteGuestExitCode;
 #elif defined(_WIN32)
-#include "re2dj/platform/windows/original_process_backend.h"
+#include "re2dj/platform/windows/guest_process_entry.h"
+#include "re2dj/platform/windows/host_process_launcher.h"
+using HostProcessLauncher = re2dj::platform::windows::WindowsHostProcessLauncher;
+using re2dj::platform::windows::WriteGuestExitCode;
 #endif
 
 namespace
@@ -155,18 +166,12 @@ struct Options
     std::string target_id;
     std::string resolve_path;
     float audio_gain_db = 0.0f;
-    unsigned demo_volume = 3;
     bool audio_gain_explicit = false;
-    bool demo_volume_explicit = false;
     bool fullscreen_explicit = false;
-    bool present_sync_explicit = false;
     bool color_depth_explicit = false;
-    bool audio_volume_trace = false;
-    bool guest_wait_trace = false;
     bool image_dump = false;
     unsigned image_dump_delay_ms = 0;
     bool fullscreen = false;
-    re2dj::graphics::PresentSync present_sync = re2dj::graphics::PresentSync::kVerticalSync;
     re2dj::graphics::ColorDepth color_depth = re2dj::graphics::ColorDepth::k16;
     bool list_targets = false;
     bool run = false;
@@ -360,7 +365,7 @@ void PrintUsage()
         "  --resolve <path>    Resolve one guest path (for example\n"
         "                      \"C:\\\\EZ2DJ\\\\DATA\\\\SONG.EZ\") and exit.\n"
         "  --run               Start the selected guest executable.\n"
-        "  --hold-window       Linux: keep the guest's window open after the run stops,\n"
+        "  --hold-window       Keep the guest's window open after the run stops,\n"
         "                      until it is closed.\n"
         "  --guest-executable <path>\n"
         "                      Run this CHD executable instead of the profile's\n"
@@ -371,42 +376,32 @@ void PrintUsage()
         "                      The STARTUPINFO reserved bytes the executable\n"
         "                      starts with, as a launcher gives its child.\n"
         "  --guest-current-directory <path>\n"
-        "                      Linux: the guest path the executable starts in.\n"
-        "  --call-limit <n>   Linux: stop the run after n guest API calls, for\n"
+        "                      The guest path the executable starts in.\n"
+        "  --call-limit <n>   Stop the run after n guest API calls, for\n"
         "                      diagnostics and regression runs. By default the run\n"
         "                      goes on until the guest exits or its window is closed.\n"
-        "  --api-log-calls <n> Linux: record the first n guest API calls in the API\n"
+        "  --api-log-calls <n> Record the first n guest API calls in the API\n"
         "                      log (default 32768; 0 records every call).\n"
         "  --linux-in-process-first-import\n"
-        "                      Linux diagnostic: complete only the first import in-process.\n"
+        "                      In-process diagnostic: complete only the first import in-process.\n"
         "  --linux-in-process-first-resolver\n"
-        "                      Linux diagnostic: observe first dynamic GetProcAddress request.\n"
+        "                      In-process diagnostic: observe first dynamic GetProcAddress request.\n"
         "  --linux-in-process-getversion-call\n"
-        "                      Linux diagnostic: observe the resolved GetVersion thunk call.\n"
+        "                      In-process diagnostic: observe the resolved GetVersion thunk call.\n"
         "  --linux-in-process-createfile-call\n"
-        "                      Linux diagnostic: observe the resolved CreateFileA thunk call.\n"
+        "                      In-process diagnostic: observe the resolved CreateFileA thunk call.\n"
         "  --linux-in-process-continue\n"
-        "                      Linux diagnostic: run on the kernel32 facade until the\n"
+        "                      In-process diagnostic: run on the kernel32 facade until the\n"
         "                      first unhandled import, unresolved lookup, or fault.\n"
         "  --audio-gain-db <dB>\n"
         "                      Output gain (-24..+18, default 0).\n"
-        "  --demo-volume <0..3>\n"
-        "                      Windows title/demo profile (default 3 = 0 dB).\n"
-        "  --guest-wait-trace  Account the guest's Sleep, WaitForSingleObject, and\n"
-        "                      timeGetTime calls per frame window (diagnostic).\n"
-        "  --image-dump        Save the decrypted main image at the restored entry and\n"
-        "                      again after the guest has run (diagnostic; tens of MB).\n"
+        "  --image-dump        Save the main image once it is mapped and again at the\n"
+        "                      first import after the delay, under\n"
+        "                      logs/image-dumps/<target> (diagnostic; tens of MB).\n"
         "  --image-dump-delay <milliseconds>\n"
         "                      Wait before the second image dump (default 5000).\n"
-        "  --audio-volume-trace\n"
-        "                      Record bounded DirectSound/WINMM volume evidence.\n"
         "  --fullscreen        Start in monitor-sized borderless fullscreen.\n"
         "  --windowed          Override a profile's fullscreen default.\n"
-        "  --vsync <on|off|adaptive>\n"
-        "                      When a present returns. 'on' waits for the display's\n"
-        "                      refresh (default), 'off' never waits and allows\n"
-        "                      tearing, 'adaptive' waits only for frames that met\n"
-        "                      the deadline. A driver may refuse 'adaptive'.\n"
         "  --color-depth <16|32>\n"
         "                      How deep the host keeps colours. '16' shows the\n"
         "                      original's 16-bit picture (default); '32' keeps\n"
@@ -424,8 +419,8 @@ void PrintUsage()
         re2dj::VersionBanner("re2DJ", re2dj::VersionString()).c_str());
 }
 
-#if defined(__linux__)
-void PrintFaultObservation(const re2dj::platform::linux::OriginalRunResult& result)
+#if defined(RE2DJ_IN_PROCESS_HOST)
+void PrintFaultObservation(const re2dj::platform::native::OriginalRunResult& result)
 {
     const auto& fault = result.fault_observation;
     if (!fault.observed)
@@ -493,7 +488,7 @@ void PrintFaultObservation(const re2dj::platform::linux::OriginalRunResult& resu
     }
 }
 
-void PrintInstructionTrace(const re2dj::platform::linux::OriginalRunResult& result)
+void PrintInstructionTrace(const re2dj::platform::native::OriginalRunResult& result)
 {
     const auto& trace = result.instruction_trace;
     if (!trace.armed)
@@ -524,7 +519,7 @@ void PrintInstructionTrace(const re2dj::platform::linux::OriginalRunResult& resu
     }
 }
 
-void PrintCreateFileObservation(const re2dj::platform::linux::OriginalRunResult& result)
+void PrintCreateFileObservation(const re2dj::platform::native::OriginalRunResult& result)
 {
     const auto& observation = result.create_file_observation;
     if (!observation.observed)
@@ -553,7 +548,7 @@ const char* DescribeIdentity(re2dj::runtime::GuestAddress registry,
                                : " (MISMATCH)";
 }
 
-void PrintResolverIdentity(const re2dj::platform::linux::OriginalRunResult& result)
+void PrintResolverIdentity(const re2dj::platform::native::OriginalRunResult& result)
 {
     const auto& identity = result.resolver_identity;
     if (identity.prepared)
@@ -608,7 +603,7 @@ std::string QuoteGuestText(const std::string& text)
     return quoted;
 }
 
-void PrintApiCalls(const re2dj::platform::linux::OriginalRunResult& result)
+void PrintApiCalls(const re2dj::platform::native::OriginalRunResult& result)
 {
     if (result.api_call_count > result.api_calls.size())
     {
@@ -666,9 +661,9 @@ void PrintApiCalls(const re2dj::platform::linux::OriginalRunResult& result)
     }
 }
 
-bool PrintContinuationBoundary(const re2dj::platform::linux::OriginalRunResult& result)
+bool PrintContinuationBoundary(const re2dj::platform::native::OriginalRunResult& result)
 {
-    using re2dj::platform::linux::OriginalRunBoundary;
+    using re2dj::platform::native::OriginalRunBoundary;
     switch (result.boundary)
     {
     case OriginalRunBoundary::kContinuationUnhandledImport:
@@ -707,19 +702,19 @@ bool PrintContinuationBoundary(const re2dj::platform::linux::OriginalRunResult& 
     return true;
 }
 
-// Whether a Linux --run takes the in-process continuation: named explicitly,
+// Whether an in-process --run takes the in-process continuation: named explicitly,
 // or by default when no other in-process diagnostic was requested.
-bool IsLinuxContinuationRun(const Options& options)
+bool IsContinuationRun(const Options& options)
 {
     return options.linux_in_process_continue ||
            (!options.linux_in_process_first_import && !options.linux_in_process_first_resolver &&
             !options.linux_in_process_getversion_call && !options.linux_in_process_createfile_call);
 }
 
-// The devices a Linux in-process run provides: the profile's device path and,
+// The devices an in-process run provides: the profile's device path and,
 // when the profile allows it, the user's Hardlock material from cfg. Nothing
 // derived from that material is printed or logged.
-bool BuildLinuxGuestDevices(const re2dj::target::TargetProfile& profile,
+bool BuildGuestDevices(const re2dj::target::TargetProfile& profile,
                             re2dj::hle::GuestDeviceConfig* config,
                             std::string* error)
 {
@@ -752,7 +747,7 @@ bool BuildLinuxGuestDevices(const re2dj::target::TargetProfile& profile,
     return true;
 }
 
-void PrintDeviceActivity(const re2dj::platform::linux::OriginalRunResult& result)
+void PrintDeviceActivity(const re2dj::platform::native::OriginalRunResult& result)
 {
     const re2dj::hle::hardlock::HardlockDeviceActivity& activity = result.device_activity;
     LogInfo("hardlock material: %s", result.hardlock_material_applied ? "applied" : "none");
@@ -778,47 +773,47 @@ void PrintDeviceActivity(const re2dj::platform::linux::OriginalRunResult& result
     }
 }
 
-// The host window a Linux run shows the guest's window in, made when the
+// The host window an in-process run shows the guest's window in, made when the
 // guest takes the display and kept for the process's life.
-std::unique_ptr<re2dj::platform::linux::LinuxHostPresentation> g_linux_presentation;
-#if defined(RE2DJ_LINUX_HOST_AUDIO)
-// Where a Linux run's sound plays, kept for the process's life like the
+std::unique_ptr<re2dj::platform::sdl::SdlHostPresentation> g_presentation;
+#if defined(RE2DJ_SDL_HOST_AUDIO)
+// Where an in-process run's sound plays, kept for the process's life like the
 // window.
-std::unique_ptr<re2dj::platform::linux::LinuxHostAudio> g_linux_audio;
+std::unique_ptr<re2dj::platform::sdl::SdlHostAudio> g_audio;
 // Starts the guest's child processes, as other runs of this program with
 // this run's own options.
-std::unique_ptr<re2dj::platform::linux::LinuxHostProcessLauncher> g_linux_process_launcher;
+std::unique_ptr<HostProcessLauncher> g_process_launcher;
 std::vector<std::string> g_child_base_arguments;
 #endif
 
-// Ends a Linux run's host services whichever way main returns: keeps the
+// Ends an in-process run's host services whichever way main returns: keeps the
 // window on screen after everything else is reported when --hold-window asked
 // for it, then releases the services before main returns. Left to static
 // destruction they went after state of other translation units they still
 // use, and a run whose guest left a thread behind (Remember 1st's sound
 // thread) ended with SIGSEGV after ExitProcess (task 440).
-struct LinuxHostLifetime
+struct InProcessHostLifetime
 {
     bool hold_window = false;
-    ~LinuxHostLifetime()
+    ~InProcessHostLifetime()
     {
-        if (hold_window && g_linux_presentation != nullptr && g_linux_presentation->opened())
+        if (hold_window && g_presentation != nullptr && g_presentation->opened())
         {
             LogInfo("host window     : kept open until it is closed (--hold-window)");
-            g_linux_presentation->HoldUntilClosed();
+            g_presentation->HoldUntilClosed();
         }
-#if defined(RE2DJ_LINUX_HOST_AUDIO)
-        g_linux_process_launcher.reset();
-        g_linux_audio.reset();
+#if defined(RE2DJ_SDL_HOST_AUDIO)
+        g_process_launcher.reset();
+        g_audio.reset();
 #endif
-        g_linux_presentation.reset();
+        g_presentation.reset();
     }
 };
 
-// The I/O board bindings for a Linux run: the built-in defaults with the
+// The I/O board bindings for an in-process run: the built-in defaults with the
 // --io-config INI's entries over them (task 444). The whole file is read and
 // both games' sections resolved, so an error in either shows before the run.
-bool LoadLinuxIoBindings(const std::filesystem::path& io_config,
+bool LoadIoBindings(const std::filesystem::path& io_config,
                          re2dj::input::IoBindings* bindings,
                          std::string* error)
 {
@@ -839,22 +834,23 @@ bool LoadLinuxIoBindings(const std::filesystem::path& io_config,
     return true;
 }
 
-// Runs the guest on Linux. Both host widths execute it in this process on the
-// guest facades.
-bool RunLinuxOriginal(const Options& options,
+// Runs the guest in this process on the guest facades, on Linux (both widths)
+// and on Windows x86.
+bool RunInProcessOriginal(const Options& options,
                       const re2dj::target::TargetProfile& profile,
                       const std::filesystem::path& executable_path,
                       const re2dj::exe::PeImageInfo& image_info,
                       const std::filesystem::path& chd_image,
                       const std::filesystem::path& hdd_directory,
-                      re2dj::platform::linux::OriginalRunResult* result,
+                      re2dj::platform::native::OriginalRunResult* result,
                       std::string* error)
 {
-    namespace linux_platform = re2dj::platform::linux;
-    if (IsLinuxContinuationRun(options))
+    namespace native_platform = re2dj::platform::native;
+    namespace sdl_platform = re2dj::platform::sdl;
+    if (IsContinuationRun(options))
     {
-        linux_platform::OriginalRunEnvironment environment;
-        if (!BuildLinuxGuestDevices(profile, &environment.devices, error))
+        native_platform::OriginalRunEnvironment environment;
+        if (!BuildGuestDevices(profile, &environment.devices, error))
         {
             return false;
         }
@@ -864,11 +860,11 @@ bool RunLinuxOriginal(const Options& options,
         environment.startup.command_line = options.guest_command_line;
         environment.startup.reserved = options.guest_startup_reserved;
         environment.current_directory = options.guest_current_directory;
-        if (g_linux_process_launcher == nullptr)
+        if (g_process_launcher == nullptr)
         {
-            g_linux_process_launcher = std::make_unique<linux_platform::LinuxHostProcessLauncher>(g_child_base_arguments);
+            g_process_launcher = std::make_unique<HostProcessLauncher>(g_child_base_arguments);
         }
-        environment.process_launcher = g_linux_process_launcher.get();
+        environment.process_launcher = g_process_launcher.get();
         // The profile's I/O board contract, as the Windows runtime applies it
         // by default.
         const re2dj::target::TargetLptdiPolicy& lptdi = profile.run_defaults.lptdi;
@@ -887,7 +883,7 @@ bool RunLinuxOriginal(const Options& options,
             LogInfo("io config       : ignored for profile '%s' because legacy I/O is disabled",
                     profile.id.c_str());
         }
-        else if (!LoadLinuxIoBindings(options.io_config, &environment.io_bindings, error))
+        else if (!LoadIoBindings(options.io_config, &environment.io_bindings, error))
         {
             return false;
         }
@@ -895,23 +891,44 @@ bool RunLinuxOriginal(const Options& options,
         {
             LogInfo("io config       : %s", options.io_config.string().c_str());
         }
-        if (g_linux_presentation == nullptr)
+        if (g_presentation == nullptr)
         {
-            g_linux_presentation = std::make_unique<linux_platform::LinuxHostPresentation>();
+            g_presentation = std::make_unique<sdl_platform::SdlHostPresentation>();
         }
         // The window starts as the Windows host's does: fullscreen when asked
         // or when the profile defaults to it, windowed otherwise.
-        g_linux_presentation->SetStartFullscreen(options.fullscreen_explicit ? options.fullscreen
+        g_presentation->SetStartFullscreen(options.fullscreen_explicit ? options.fullscreen
                                                                              : profile.run_defaults.fullscreen);
         // The OSD shows what the Windows host's shows.
-        g_linux_presentation->SetOsdInfoLines(
+        g_presentation->SetOsdInfoLines(
             {re2dj::VersionBanner("re2DJ", re2dj::VersionString()) + " - Build " + __DATE__,
              "Target Profile : " + profile.id,
              "Executable : " + std::filesystem::path(profile.executable_relative_path).filename().string()});
-        environment.presentation = g_linux_presentation.get();
+        environment.presentation = g_presentation.get();
         // Autoplay only for the exact build it was confirmed in; a launcher's
         // child picks by its own executable (task 436).
         environment.autoplay_flag_rva = re2dj::target::ArmedAutoplayFlagRva(profile.game_controls, image_info.timestamp);
+        // --image-dump on the in-process runner (task 449): the dumps go
+        // beside the logs, named by this run's time and executable, so a
+        // launcher's child writes its own.
+        if (options.image_dump)
+        {
+            const auto now = std::chrono::system_clock::now();
+            const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
+            const auto milliseconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+            char stamp[32] = {};
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&seconds));
+            char stem[96] = {};
+            std::snprintf(stem, sizeof(stem), "%s-%03d-%s", stamp, static_cast<int>(milliseconds),
+                          executable_path.stem().string().c_str());
+            environment.image_dump.enabled = true;
+            environment.image_dump.delay_ms = options.image_dump_delay_ms != 0 ? options.image_dump_delay_ms : 5000;
+            environment.image_dump.directory = std::filesystem::current_path() / "logs" / "image-dumps" / profile.id;
+            environment.image_dump.stem = stem;
+            environment.image_dump.target_id = profile.id;
+            environment.image_dump.re2dj_version = re2dj::VersionString();
+        }
         LogInfo("game controls   : autoplay %s (build 0x%08x)",
                 environment.autoplay_flag_rva != 0 ? "armed"
                 : profile.game_controls.empty()    ? "not declared"
@@ -923,28 +940,28 @@ bool RunLinuxOriginal(const Options& options,
             options.color_depth_explicit ? options.color_depth : profile.run_defaults.color_depth;
         re2dj::graphics::SelectColorDepth(color_depth);
         LogInfo("colour depth    : %s-bit", re2dj::graphics::ColorDepthName(color_depth));
-#if defined(RE2DJ_LINUX_HOST_AUDIO)
+#if defined(RE2DJ_SDL_HOST_AUDIO)
         // The master gain the Windows host applies: --audio-gain-db, or the
         // profile's default.
-        if (g_linux_audio == nullptr)
+        if (g_audio == nullptr)
         {
             const float gain_db = options.audio_gain_explicit ? options.audio_gain_db
                                                               : profile.run_defaults.audio_gain_db.value_or(0.0f);
-            auto audio = std::make_unique<linux_platform::LinuxHostAudio>();
+            auto audio = std::make_unique<sdl_platform::SdlHostAudio>();
             std::string audio_error;
             if (audio->Initialize(std::pow(10.0f, gain_db / 20.0f), &audio_error))
             {
                 LogInfo("host audio      : SDL3_mixer, master gain %.1f dB%s%s", static_cast<double>(gain_db),
                         audio->headless_reason().empty() ? "" : ", no playback device: ",
                         audio->headless_reason().c_str());
-                g_linux_audio = std::move(audio);
+                g_audio = std::move(audio);
             }
             else
             {
                 LogInfo("host audio      : none, sound plays silently (%s)", audio_error.c_str());
             }
         }
-        environment.audio = g_linux_audio.get();
+        environment.audio = g_audio.get();
 #endif
         environment.call_limit = options.call_limit;
         environment.api_log_calls = options.api_log_calls;
@@ -963,7 +980,7 @@ bool RunLinuxOriginal(const Options& options,
             environment.files.guest_root = re2dj::target::GuestRootPath(profile);
             environment.files.overlay_root = std::filesystem::current_path() / "overlays" / profile.id;
         }
-        const bool ran = linux_platform::RunOriginalInProcessContinuation(
+        const bool ran = native_platform::RunOriginalInProcessContinuation(
             executable_path, image_info, environment, result, error);
         // A child run reports its guest's exit code to the launcher that
         // started it: the ExitProcess code, 0 when the host window was closed,
@@ -971,34 +988,34 @@ bool RunLinuxOriginal(const Options& options,
         if (options.guest_exit_code_fd >= 0)
         {
             std::uint32_t code = 0xFFFFFFFFU;
-            if (ran && result->boundary == linux_platform::OriginalRunBoundary::kProcessExit)
+            if (ran && result->boundary == native_platform::OriginalRunBoundary::kProcessExit)
             {
                 code = static_cast<std::uint32_t>(result->status_code);
             }
-            else if (ran && result->boundary == linux_platform::OriginalRunBoundary::kContinuationHostClosed)
+            else if (ran && result->boundary == native_platform::OriginalRunBoundary::kContinuationHostClosed)
             {
                 code = 0;
             }
-            linux_platform::WriteGuestExitCode(options.guest_exit_code_fd, code);
+            WriteGuestExitCode(options.guest_exit_code_fd, code);
         }
         return ran;
     }
     if (options.linux_in_process_createfile_call)
     {
-        return linux_platform::RunOriginalInProcessCreateFileCall(
+        return native_platform::RunOriginalInProcessCreateFileCall(
             executable_path, image_info, result, error);
     }
     if (options.linux_in_process_getversion_call)
     {
-        return linux_platform::RunOriginalInProcessGetVersionCall(
+        return native_platform::RunOriginalInProcessGetVersionCall(
             executable_path, image_info, result, error);
     }
     if (options.linux_in_process_first_resolver)
     {
-        return linux_platform::RunOriginalInProcessFirstResolver(
+        return native_platform::RunOriginalInProcessFirstResolver(
             executable_path, image_info, result, error);
     }
-    return linux_platform::RunOriginalInProcessFirstImport(executable_path, image_info, result, error);
+    return native_platform::RunOriginalInProcessFirstImport(executable_path, image_info, result, error);
 }
 #endif
 
@@ -1095,7 +1112,7 @@ bool ParseOptions(int argc, char** argv, Options* options)
                     return false;
                 }
             }
-#if defined(__linux__)
+#if defined(RE2DJ_IN_PROCESS_HOST)
             else
             {
                 options->guest_exit_code_fd = std::atoi(value.c_str());
@@ -1181,38 +1198,6 @@ bool ParseOptions(int argc, char** argv, Options* options)
             }
             options->audio_gain_explicit = true;
         }
-        else if (argument == "--audio-volume-trace")
-        {
-            options->audio_volume_trace = true;
-        }
-        else if (argument == "--demo-volume")
-        {
-            std::string value;
-            if (!TakeValue(argc, argv, &index, argument, &value))
-            {
-                return false;
-            }
-            try
-            {
-                std::size_t parsed = 0;
-                const unsigned long parsed_value = std::stoul(value, &parsed);
-                if (parsed != value.size() || parsed_value > 3)
-                {
-                    throw std::out_of_range("demo volume");
-                }
-                options->demo_volume = static_cast<unsigned>(parsed_value);
-            }
-            catch (const std::exception&)
-            {
-                LogError("--demo-volume must be between 0 and 3");
-                return false;
-            }
-            options->demo_volume_explicit = true;
-        }
-        else if (argument == "--guest-wait-trace")
-        {
-            options->guest_wait_trace = true;
-        }
         else if (argument == "--image-dump")
         {
             options->image_dump = true;
@@ -1232,32 +1217,6 @@ bool ParseOptions(int argc, char** argv, Options* options)
         {
             options->fullscreen = false;
             options->fullscreen_explicit = true;
-        }
-        else if (argument == "--vsync")
-        {
-            std::string value;
-            if (!TakeValue(argc, argv, &index, argument, &value))
-            {
-                return false;
-            }
-            if (value == "on")
-            {
-                options->present_sync = re2dj::graphics::PresentSync::kVerticalSync;
-            }
-            else if (value == "off")
-            {
-                options->present_sync = re2dj::graphics::PresentSync::kImmediate;
-            }
-            else if (value == "adaptive")
-            {
-                options->present_sync = re2dj::graphics::PresentSync::kAdaptive;
-            }
-            else
-            {
-                LogError("--vsync must be on, off or adaptive");
-                return false;
-            }
-            options->present_sync_explicit = true;
         }
         else if (argument == "--color-depth")
         {
@@ -1331,24 +1290,6 @@ void PrintProfile(const re2dj::target::TargetProfile& profile, bool selected)
                 profile.detected ? "detected" : "built-in",
                 profile.bring_up_target ? ", bring-up only" : "");
 }
-
-#if defined(_WIN32)
-std::filesystem::path NormalizeIoConfigForProfile(
-    const std::filesystem::path& io_config,
-    const re2dj::target::TargetRunDefaults& defaults,
-    std::string_view profile_id)
-{
-    if (!io_config.empty() && !defaults.lptdi.legacy_io_ports)
-    {
-        re2dj::logging::GetLogger()->warn(
-            "--io-config is ignored for profile '{}' because legacy I/O is disabled",
-            profile_id);
-        return {};
-    }
-    return io_config;
-}
-
-#endif
 
 int ResolveOnePath(const re2dj::hdd::HddRoot& root, const std::string& text)
 {
@@ -1489,76 +1430,7 @@ int RunChdTarget(const Options& options,
         return kExitOk;
     }
 
-#if defined(_WIN32)
-    std::filesystem::path staging_root;
-    if (!PrepareChdStaging(*volume,
-                           profile.id,
-                           profile.executable_relative_path,
-                           profile.run_defaults.child_executable_paths,
-                           &staging_root,
-                           &error))
-    {
-        LogError("cannot stage CHD executable: %s", error.c_str());
-        return kExitHddError;
-    }
-    re2dj::platform::windows::OriginalProcessOptions run_options;
-    run_options.hdd_directory = staging_root;
-    run_options.chd_image = chd_path;
-    run_options.target_id = profile.id;
-    run_options.executable_relative_path = profile.executable_relative_path;
-    run_options.hle_profile_id = profile.hle_profile_id;
-    run_options.profile_defaults = profile.run_defaults;
-    if (options.audio_gain_explicit)
-    {
-        run_options.profile_defaults.audio_gain_db = options.audio_gain_db;
-    }
-    if (options.demo_volume_explicit)
-    {
-        run_options.profile_defaults.demo_volume = options.demo_volume;
-    }
-    if (options.fullscreen_explicit)
-    {
-        run_options.profile_defaults.fullscreen = options.fullscreen;
-    }
-    if (options.present_sync_explicit)
-    {
-        run_options.profile_defaults.present_sync = options.present_sync;
-    }
-    if (options.color_depth_explicit)
-    {
-        run_options.profile_defaults.color_depth = options.color_depth;
-    }
-    if (options.guest_wait_trace)
-    {
-        run_options.profile_defaults.guest_wait_trace = true;
-    }
-    if (options.image_dump)
-    {
-        run_options.profile_defaults.image_dump = true;
-        run_options.profile_defaults.image_dump_delay_ms = options.image_dump_delay_ms;
-    }
-    run_options.audio_volume_trace = options.audio_volume_trace;
-    run_options.io_config = NormalizeIoConfigForProfile(
-        options.io_config, run_options.profile_defaults, profile.id);
-    // A launcher's child started on its own (task 434): it gets the reserved
-    // bytes the launcher would give it, and runs detached rather than
-    // followed, since it starts no child of the profile's.
-    run_options.startup_reserved = options.guest_startup_reserved;
-    if (!options.guest_executable.empty() &&
-        profile.executable_relative_path != built_in.profile.executable_relative_path)
-    {
-        run_options.profile_defaults.follow_child_process = false;
-        run_options.profile_defaults.run_detached = true;
-    }
-    const int result = re2dj::platform::windows::RunOriginalProcess(run_options, &error);
-    if (result < 0)
-    {
-        LogFatal("EXECUTION_FAILED", "Windows execution failed: %s", error.c_str());
-        return kExitNotImplemented;
-    }
-    return result;
-#else
-#if defined(__linux__)
+#if defined(RE2DJ_IN_PROCESS_HOST)
     std::filesystem::path staging_root;
     if (!PrepareChdStaging(*volume,
                            profile.id,
@@ -1572,17 +1444,17 @@ int RunChdTarget(const Options& options,
     }
     const std::filesystem::path staged_executable_path =
         staging_root / profile.executable_relative_path;
-    re2dj::platform::linux::OriginalRunResult run_result;
-    const bool executed = RunLinuxOriginal(
+    re2dj::platform::native::OriginalRunResult run_result;
+    const bool executed = RunInProcessOriginal(
         options, profile, staged_executable_path, executable_info, chd_path, {}, &run_result, &error);
     if (!executed)
     {
-        LogFatal("EXECUTION_FAILED", "Linux execution failed: %s", error.c_str());
+        LogFatal("EXECUTION_FAILED", "execution failed: %s", error.c_str());
         return kExitNotImplemented;
     }
     LogInfo("load base       : 0x%08x", run_result.load_base.value());
     LogInfo("entry point     : 0x%08x", run_result.entry_point.value());
-    if (IsLinuxContinuationRun(options))
+    if (IsContinuationRun(options))
     {
         if (run_result.seh_dispatch_count > 0)
         {
@@ -1594,7 +1466,7 @@ int RunChdTarget(const Options& options,
         PrintApiCalls(run_result);
         PrintDeviceActivity(run_result);
     }
-    if (run_result.boundary == re2dj::platform::linux::OriginalRunBoundary::kImportGate)
+    if (run_result.boundary == re2dj::platform::native::OriginalRunBoundary::kImportGate)
     {
         if (run_result.by_ordinal)
         {
@@ -1620,14 +1492,14 @@ int RunChdTarget(const Options& options,
         }
     }
     else if (run_result.boundary ==
-             re2dj::platform::linux::OriginalRunBoundary::kFirstImportCompleted)
+             re2dj::platform::native::OriginalRunBoundary::kFirstImportCompleted)
     {
         LogInfo("first completion : return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_return_address,
                     run_result.instruction_pointer.value());
     }
     else if (run_result.boundary ==
-             re2dj::platform::linux::OriginalRunBoundary::kFirstResolverObserved)
+             re2dj::platform::native::OriginalRunBoundary::kFirstResolverObserved)
     {
         LogInfo("first resolver completion: %s, return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_first_argument_text.c_str(),
@@ -1636,7 +1508,7 @@ int RunChdTarget(const Options& options,
         PrintResolverIdentity(run_result);
     }
     else if (run_result.boundary ==
-             re2dj::platform::linux::OriginalRunBoundary::kGetVersionCalled)
+             re2dj::platform::native::OriginalRunBoundary::kGetVersionCalled)
     {
         LogInfo("GetVersion call completion: return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_return_address,
@@ -1645,7 +1517,7 @@ int RunChdTarget(const Options& options,
         PrintInstructionTrace(run_result);
     }
     else if (run_result.boundary ==
-             re2dj::platform::linux::OriginalRunBoundary::kGetVersionCallNotReached)
+             re2dj::platform::native::OriginalRunBoundary::kGetVersionCallNotReached)
     {
         LogInfo("GetVersion thunk not reached: signal %u, EIP 0x%08x",
                     run_result.status_code,
@@ -1661,7 +1533,7 @@ int RunChdTarget(const Options& options,
         }
     }
     else if (run_result.boundary ==
-             re2dj::platform::linux::OriginalRunBoundary::kCreateFileCalled)
+             re2dj::platform::native::OriginalRunBoundary::kCreateFileCalled)
     {
         LogInfo("CreateFileA call completion: return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_return_address,
@@ -1670,7 +1542,7 @@ int RunChdTarget(const Options& options,
         PrintResolverIdentity(run_result);
     }
     else if (run_result.boundary ==
-             re2dj::platform::linux::OriginalRunBoundary::kCreateFileCallNotReached)
+             re2dj::platform::native::OriginalRunBoundary::kCreateFileCallNotReached)
     {
         LogInfo("CreateFileA thunk not reached: signal %u, EIP 0x%08x",
                     run_result.status_code,
@@ -1684,15 +1556,14 @@ int RunChdTarget(const Options& options,
     return kExitOk;
 #else
     LogFatal("EXECUTION_UNSUPPORTED",
-             "CHD-backed original-process execution is currently connected only to the Windows x86 launcher");
+             "CHD-backed execution is not connected to an execution backend on this host");
     return kExitNotImplemented;
-#endif
 #endif
 }
 
 }  // namespace
 
-int main(int argc, char** argv)
+int RunMain(int argc, char** argv)
 {
     LoggingLifetime logging_lifetime;
     re2dj::logging::LoggerOptions logger_options;
@@ -1716,7 +1587,7 @@ int main(int argc, char** argv)
     {
         return kExitUsage;
     }
-#if defined(__linux__)
+#if defined(RE2DJ_IN_PROCESS_HOST)
     // A child run gets this run's options; the child options (each with its
     // value) are its own.
     for (int index = 0; index < argc; ++index)
@@ -1732,8 +1603,8 @@ int main(int argc, char** argv)
         g_child_base_arguments.emplace_back(argument);
     }
 #endif
-#if defined(__linux__)
-    LinuxHostLifetime host_lifetime;
+#if defined(RE2DJ_IN_PROCESS_HOST)
+    InProcessHostLifetime host_lifetime;
     host_lifetime.hold_window = options.hold_window;
 #endif
     if (options.show_version)
@@ -1746,16 +1617,6 @@ int main(int argc, char** argv)
         PrintUsage();
         return options.show_help ? kExitOk : kExitUsage;
     }
-#if !defined(_WIN32)
-    if (options.demo_volume_explicit ||
-        options.audio_volume_trace || options.guest_wait_trace || options.image_dump ||
-        options.present_sync_explicit)
-    {
-        LogFatal("EXECUTION_UNSUPPORTED",
-                 "selected execution options are currently supported only on Windows");
-        return kExitNotImplemented;
-    }
-#endif
     const re2dj::target::BuiltInTargetProfile* shortcut =
         options.target_id.empty()
             ? nullptr
@@ -1919,7 +1780,7 @@ int main(int argc, char** argv)
         return kExitOk;
     }
 
-#if defined(__linux__)
+#if defined(RE2DJ_IN_PROCESS_HOST)
     if (selected_entry == nullptr)
     {
         LogError("selected executable metadata is unavailable");
@@ -1933,18 +1794,18 @@ int main(int argc, char** argv)
         return kExitHddError;
     }
 
-    re2dj::platform::linux::OriginalRunResult run_result;
-    const bool executed = RunLinuxOriginal(
+    re2dj::platform::native::OriginalRunResult run_result;
+    const bool executed = RunInProcessOriginal(
         options, *selected, executable_path, selected_entry->pe_info, {}, scan.root, &run_result, &error);
     if (!executed)
     {
-        LogFatal("EXECUTION_FAILED", "Linux execution failed: %s", error.c_str());
+        LogFatal("EXECUTION_FAILED", "execution failed: %s", error.c_str());
         return kExitNotImplemented;
     }
 
     LogInfo("load base       : 0x%08x", run_result.load_base.value());
     LogInfo("entry point     : 0x%08x", run_result.entry_point.value());
-    if (IsLinuxContinuationRun(options))
+    if (IsContinuationRun(options))
     {
         if (run_result.seh_dispatch_count > 0)
         {
@@ -1958,7 +1819,7 @@ int main(int argc, char** argv)
     }
     switch (run_result.boundary)
     {
-    case re2dj::platform::linux::OriginalRunBoundary::kImportGate:
+    case re2dj::platform::native::OriginalRunBoundary::kImportGate:
     {
         if (run_result.by_ordinal)
         {
@@ -1995,8 +1856,8 @@ int main(int argc, char** argv)
                  export_name.c_str());
         return kExitNotImplemented;
     }
-    case re2dj::platform::linux::OriginalRunBoundary::kProcessExit:
-        if (IsLinuxContinuationRun(options))
+    case re2dj::platform::native::OriginalRunBoundary::kProcessExit:
+        if (IsContinuationRun(options))
         {
             PrintContinuationBoundary(run_result);
             return kExitOk;
@@ -2004,32 +1865,32 @@ int main(int argc, char** argv)
         LogInfo("first boundary  : process exit (guest status 0x%08x)",
                     run_result.status_code);
         return kExitOk;
-    case re2dj::platform::linux::OriginalRunBoundary::kFault:
+    case re2dj::platform::native::OriginalRunBoundary::kFault:
         LogFatal("GUEST_FAULT",
                  "host signal/status %u, eip 0x%08x",
                  run_result.status_code,
                  run_result.instruction_pointer.value());
         return kExitNotImplemented;
-    case re2dj::platform::linux::OriginalRunBoundary::kStopped:
+    case re2dj::platform::native::OriginalRunBoundary::kStopped:
         LogFatal("EXECUTION_STOPPED", "guest stopped before a supported terminal boundary");
         return kExitNotImplemented;
-    case re2dj::platform::linux::OriginalRunBoundary::kFirstImportCompleted:
+    case re2dj::platform::native::OriginalRunBoundary::kFirstImportCompleted:
         LogInfo("first import completion: return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_return_address, run_result.instruction_pointer.value());
         return kExitOk;
-    case re2dj::platform::linux::OriginalRunBoundary::kFirstResolverObserved:
+    case re2dj::platform::native::OriginalRunBoundary::kFirstResolverObserved:
         LogInfo("first resolver completion: %s, return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_first_argument_text.c_str(),
                     run_result.import_return_address, run_result.instruction_pointer.value());
         PrintResolverIdentity(run_result);
         return kExitOk;
-    case re2dj::platform::linux::OriginalRunBoundary::kGetVersionCalled:
+    case re2dj::platform::native::OriginalRunBoundary::kGetVersionCalled:
         LogInfo("GetVersion call completion: return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_return_address, run_result.instruction_pointer.value());
         PrintResolverIdentity(run_result);
         PrintInstructionTrace(run_result);
         return kExitOk;
-    case re2dj::platform::linux::OriginalRunBoundary::kGetVersionCallNotReached:
+    case re2dj::platform::native::OriginalRunBoundary::kGetVersionCallNotReached:
         LogInfo("GetVersion thunk not reached: signal %u, EIP 0x%08x",
                     run_result.status_code, run_result.instruction_pointer.value());
         PrintFaultObservation(run_result);
@@ -2042,98 +1903,44 @@ int main(int argc, char** argv)
                      run_result.unhandled_dynamic_request.c_str());
         }
         return kExitOk;
-    case re2dj::platform::linux::OriginalRunBoundary::kCreateFileCalled:
+    case re2dj::platform::native::OriginalRunBoundary::kCreateFileCalled:
         LogInfo("CreateFileA call completion: return 0x%08x, SIGTRAP EIP 0x%08x",
                     run_result.import_return_address,
                     run_result.instruction_pointer.value());
         PrintCreateFileObservation(run_result);
         PrintResolverIdentity(run_result);
         return kExitOk;
-    case re2dj::platform::linux::OriginalRunBoundary::kCreateFileCallNotReached:
+    case re2dj::platform::native::OriginalRunBoundary::kCreateFileCallNotReached:
         LogInfo("CreateFileA thunk not reached: signal %u, EIP 0x%08x",
                     run_result.status_code,
                     run_result.instruction_pointer.value());
         PrintFaultObservation(run_result);
         return kExitOk;
-    case re2dj::platform::linux::OriginalRunBoundary::kContinuationUnhandledImport:
-    case re2dj::platform::linux::OriginalRunBoundary::kContinuationUnresolvedLookup:
-    case re2dj::platform::linux::OriginalRunBoundary::kContinuationFault:
-    case re2dj::platform::linux::OriginalRunBoundary::kContinuationCallLimit:
-    case re2dj::platform::linux::OriginalRunBoundary::kContinuationHostClosed:
+    case re2dj::platform::native::OriginalRunBoundary::kContinuationUnhandledImport:
+    case re2dj::platform::native::OriginalRunBoundary::kContinuationUnresolvedLookup:
+    case re2dj::platform::native::OriginalRunBoundary::kContinuationFault:
+    case re2dj::platform::native::OriginalRunBoundary::kContinuationCallLimit:
+    case re2dj::platform::native::OriginalRunBoundary::kContinuationHostClosed:
         PrintContinuationBoundary(run_result);
         return kExitOk;
     }
-#elif defined(_WIN32)
-    if (options.fullscreen && !selected->run_defaults.hle_d3d3)
-    {
-        LogFatal("EXECUTION_UNSUPPORTED",
-                 "--fullscreen is not supported by profile '%s'",
-                 selected->id.c_str());
-        return kExitNotImplemented;
-    }
-    if ((options.audio_gain_explicit || options.audio_volume_trace) &&
-        !selected->run_defaults.hle_directsound)
-    {
-        LogFatal("EXECUTION_UNSUPPORTED",
-                 "audio options are not supported by profile '%s'",
-                 selected->id.c_str());
-        return kExitNotImplemented;
-    }
-    if (options.demo_volume_explicit && !selected->run_defaults.demo_volume.has_value())
-    {
-        LogFatal("EXECUTION_UNSUPPORTED",
-                 "--demo-volume is not supported by profile '%s'",
-                 selected->id.c_str());
-        return kExitNotImplemented;
-    }
-    re2dj::platform::windows::OriginalProcessOptions run_options;
-    run_options.hdd_directory = root.root();
-    run_options.target_id = selected->id;
-    run_options.hle_profile_id = selected->hle_profile_id;
-    run_options.profile_defaults = selected->run_defaults;
-    if (options.audio_gain_explicit)
-    {
-        run_options.profile_defaults.audio_gain_db = options.audio_gain_db;
-    }
-    if (options.demo_volume_explicit)
-    {
-        run_options.profile_defaults.demo_volume = options.demo_volume;
-    }
-    if (options.fullscreen_explicit)
-    {
-        run_options.profile_defaults.fullscreen = options.fullscreen;
-    }
-    if (options.present_sync_explicit)
-    {
-        run_options.profile_defaults.present_sync = options.present_sync;
-    }
-    if (options.color_depth_explicit)
-    {
-        run_options.profile_defaults.color_depth = options.color_depth;
-    }
-    if (options.guest_wait_trace)
-    {
-        run_options.profile_defaults.guest_wait_trace = true;
-    }
-    if (options.image_dump)
-    {
-        run_options.profile_defaults.image_dump = true;
-        run_options.profile_defaults.image_dump_delay_ms = options.image_dump_delay_ms;
-    }
-    run_options.audio_volume_trace = options.audio_volume_trace;
-    run_options.io_config = NormalizeIoConfigForProfile(
-        options.io_config, run_options.profile_defaults, selected->id);
-    const int run_result =
-        re2dj::platform::windows::RunOriginalProcess(run_options, &error);
-    if (run_result < 0)
-    {
-        LogFatal("EXECUTION_FAILED", "Windows execution failed: %s", error.c_str());
-        return kExitNotImplemented;
-    }
-    return run_result;
+    LogFatal("EXECUTION_FAILED", "the run ended at an unknown boundary %u",
+             static_cast<unsigned>(run_result.boundary));
+    return kExitNotImplemented;
 #else
     LogFatal("EXECUTION_UNSUPPORTED",
              "--run is not connected to an execution backend on this host");
     return kExitNotImplemented;
+#endif
+}
+
+int main(int argc, char** argv)
+{
+#if defined(_WIN32)
+    // The guest image's range is held from before the loader ran, and the
+    // guest gets a guest-sized stack (task 449).
+    return re2dj::platform::windows::RunGuestReadyProcess(&RunMain, argc, argv);
+#else
+    return RunMain(argc, argv);
 #endif
 }

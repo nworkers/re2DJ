@@ -1,17 +1,15 @@
 # src/platform/windows
 
-Windows 전용 backend와 probe를 둡니다. x86 helper process와 IPC로 게스트를 실행하던 native helper 계열(`native_helper_backend`, `native_ipc_helper`, `native_pe_image`, `native_import_thunks`, helper probe)은 작업 379에서 제거했습니다.
+공용 in-process 러너([`../native/`](../native/README.md))의 Windows 구현입니다. 작업 450에서 원본 프로세스 주입 경로(주입 런타임 DLL, COM facade, `original_process_backend`, 런처·VFS·product loader probe)를 지웠고, Windows 제품은 Linux와 같은 러너·HLE·SDL host를 씁니다([작업 446 설계](../../../docs/design/20261004-446-windows-in-process-loader.md)).
 
-*Windows-specific backends and probes. The native-helper family that ran the guest in an x86 helper process over IPC (`native_helper_backend`, `native_ipc_helper`, `native_pe_image`, `native_import_thunks`, and the helper probe) was removed in Task 379.*
+*The Windows implementation of the shared in-process runner ([`../native/`](../native/README.md)). Task 450 deleted the original-process injection path (the injected runtime DLL, the COM facades, `original_process_backend`, and the launcher, VFS and product-loader probes); the Windows product uses the same runner, HLE and SDL hosts as Linux ([task 446 design](../../../docs/design/20261004-446-windows-in-process-loader.md)).*
 
-`original_process_backend.cpp`는 Windows loader가 원본 PE를 주 image로 적재하는 검증된 실행 engine을 제품 CLI와 진단 launcher가 함께 사용하게 합니다. 제품 facade는 선택된 built-in profile의 실행 기본값을 사용하며, 현재 `ez2dj1stse`, `ez2dj2nd`, `ez2dj3rd` 정책을 허용합니다. `ez2dj2nd`는 확인된 raw-I/O helper 주소를 사용하고 2nd 전용 보호 계약은 미확정입니다. runtime 주입과 import-thunk HLE를 활성화한 detached 실행을 프로파일별로 조율합니다.
+| 파일 | 역할 |
+| --- | --- |
+| `native_host_services.cpp`, `native_host_protection.h` | OS 계약(`native_host_services.h`)의 Windows 구현: `VirtualAlloc`·`VirtualProtect`·`VirtualFree`, 코드 캐시, 시계, 잠자기 |
+| `native_guest_reservation.h` | 게스트 이미지 영역(0x400000~) 예약을 넘겨받고 푸는 계약 |
+| `host_process_launcher.cpp` | 게스트의 자식 프로세스를 re2dj의 다른 실행으로 띄우는 런처(상속 파이프로 종료 코드) |
+| `x86/` | x86 backend: VEH, 그림자 TEB, naked asm 전환, 게스트 스레드, 시작 시 일시 정지 재실행과 예약([`x86/README.md`](x86/README.md)) |
+| `x64/` | x64 backend 조사용 호환 모드 probe(작업 452). 제품 코드 없음([`x64/README.md`](x64/README.md)) |
 
-*`original_process_backend.cpp` shares the verified engine, in which the Windows loader maps the original PE as the main image, between the product CLI and diagnostic launcher. The product facade consumes the selected built-in profile's execution defaults and currently permits the `ez2dj1stse`, `ez2dj2nd`, and `ez2dj3rd` policies. `ez2dj2nd` uses the confirmed raw-I/O helper addresses; its version-specific protection contract remains unresolved. It orchestrates detached execution with profile-specific runtime injection and import-thunk HLE.*
-
-`ez2dj2nd`의 실행 정책은 2nd 정적 IAT에 없는 `GetPrivateProfileIntA`를 위해 demo-volume을 기본 주입하지 않습니다. raw I/O는 실행으로 확인된 input/output helper RVA `0x000782d7`/`0x0007832b`를 사용합니다. launcher의 `DirectDrawCreateEx` IAT patch 예외는 packer import table을 보존해야 하는 `ez2dj4th`에만 적용됩니다.
-
-*The `ez2dj2nd` execution policy does not inject demo-volume by default because its static IAT has no `GetPrivateProfileIntA`. Raw I/O uses the runtime-confirmed input/output helper RVAs `0x000782d7` and `0x0007832b`. The launcher's `DirectDrawCreateEx` IAT patch exception is limited to `ez2dj4th`, whose packer import table must be preserved.*
-
-이 디렉터리의 루트는 Windows 전용이면서 host 비트 폭 중립인 코드 또는 x86/x64 공용 코드용입니다. 32비트 process·i386 ABI에만 성립하는 injected runtime, COM facade 구현은 향후 `x86/`로, 64비트 process에만 성립하는 구현은 `x64/`로 분리합니다. 현재 파일의 대량 이동은 CMake, include 경로와 runtime DLL 계약을 함께 바꾸는 별도 구조 작업입니다. Windows host API header는 이 플랫폼 트리 안에서만 포함할 수 있습니다.
-
-*This directory root is for Windows-specific code that is host-width-neutral or shared by x86 and x64. The injected runtime and COM facades valid only in a 32-bit process or i386 ABI will move under `x86/`; 64-bit-process-only implementations will move under `x64/`. Bulk movement of current files is a separate structural task that updates CMake, include paths, and the runtime-DLL contract together. Host Windows API headers may be included only inside this platform tree.*
+*`native_host_services.cpp` and `native_host_protection.h` implement the OS contract (`native_host_services.h`) with `VirtualAlloc`, `VirtualProtect`, `VirtualFree`, the code cache, clocks and sleeping; `native_guest_reservation.h` is the contract for taking over and releasing the guest image range (0x400000 up); `host_process_launcher.cpp` starts a guest's children as other re2dj runs with the exit code over an inherited pipe; `x86/` holds the x86 backend: the VEH, the shadow TEB, the naked asm transitions, guest threads, and the suspended relaunch with its reservation ([`x86/README.md`](x86/README.md)); `x64/` holds only the compatibility-mode probe researching an x64 backend (task 452), no product code ([`x64/README.md`](x64/README.md)).*

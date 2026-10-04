@@ -1,11 +1,12 @@
 #include "native_compat_mode.h"
+#include "../native_signal_fault.h"
 
-#include "../native_guest_seh.h"
-#include "../native_guest_threads.h"
-#include "../native_import_bridge.h"
-#include "../native_instruction_trace.h"
-#include "../native_legacy_io.h"
-#include "../native_process_bootstrap.h"
+#include "../../native/native_guest_seh.h"
+#include "../../native/native_guest_threads.h"
+#include "../../native/native_import_bridge.h"
+#include "../../native/native_instruction_trace.h"
+#include "../../native/native_legacy_io.h"
+#include "../../native/native_process_bootstrap.h"
 
 #include <asm/ldt.h>
 #include <asm/prctl.h>
@@ -29,10 +30,10 @@
 
 extern "C"
 {
-re2dj::platform::linux::NativeCompatTransitionState* g_native_compat_active_state = nullptr;
+re2dj::platform::native::NativeCompatTransitionState* g_native_compat_active_state = nullptr;
 }
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 namespace
 {
@@ -144,8 +145,8 @@ bool EnsureTransitionPages(std::string* error)
         *error = "compatibility-mode transition blob exceeds one page";
         return false;
     }
-    if (!MapNativeLowMemory(page, PROT_READ | PROT_WRITE, &g_transition.data, error) ||
-        !MapNativeLowMemory(page, PROT_READ | PROT_WRITE, &g_transition.code, error))
+    if (!MapNativeLowMemory(page, HostProtection::kReadWrite, &g_transition.data, error) ||
+        !MapNativeLowMemory(page, HostProtection::kReadWrite, &g_transition.code, error))
     {
         ReleaseNativeLowMemory(&g_transition.code);
         ReleaseNativeLowMemory(&g_transition.data);
@@ -288,7 +289,7 @@ struct NativeCompatModeRuntime::Impl
     bool AllocateGuestStack(std::string* error)
     {
         const std::uint32_t page = PageSize();
-        if (!MapNativeLowMemory(page + kGuestStackSize, PROT_NONE, &stack, error))
+        if (!MapNativeLowMemory(page + kGuestStackSize, HostProtection::kNone, &stack, error))
         {
             return false;
         }
@@ -306,7 +307,7 @@ struct NativeCompatModeRuntime::Impl
     // A secondary thread's TEB, pointing at the main thread's PEB.
     bool AllocateThreadEnvironment(std::uint32_t process_peb, std::string* error)
     {
-        if (!MapNativeLowMemory(PageSize(), PROT_READ | PROT_WRITE, &environment, error))
+        if (!MapNativeLowMemory(PageSize(), HostProtection::kReadWrite, &environment, error))
         {
             return false;
         }
@@ -367,7 +368,7 @@ struct NativeCompatModeRuntime::Impl
     bool AllocateEnvironment(std::uint32_t image_base, std::string* error)
     {
         const std::uint32_t page = PageSize();
-        if (!MapNativeLowMemory(page * 2, PROT_READ | PROT_WRITE, &environment, error))
+        if (!MapNativeLowMemory(page * 2, HostProtection::kReadWrite, &environment, error))
         {
             return false;
         }
@@ -622,6 +623,7 @@ struct NativeCompatModeRuntime::Impl
             return true;
         }
         fault->status_code = static_cast<std::uint32_t>(g_fault_signal);
+        fault->kind = NativeFaultKindFromSignal(static_cast<int>(g_fault_signal));
         fault->instruction_pointer = static_cast<std::uint32_t>(g_fault_eip);
         fault->stack_pointer = static_cast<std::uint32_t>(g_fault_esp);
         fault->fault_address = static_cast<std::uint32_t>(g_fault_address);
@@ -719,6 +721,7 @@ void RunCompatThread(CompatThreadStart* start)
     if (!ready)
     {
         termination.fault.status_code = SIGSEGV;
+        termination.fault.kind = NativeFaultKind::kAccessViolation;
         termination.fault.instruction_pointer = start->start.start;
         TerminateNativeGuestProcess(termination);
         return;
@@ -1010,30 +1013,30 @@ bool CallNativeGuestStdcall(std::uint32_t function,
     return true;
 }
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native
 
-namespace linux_platform = re2dj::platform::linux;
+namespace native_platform = re2dj::platform::native;
 
 extern "C" std::uint64_t NativeCompatImportDispatch(
-    linux_platform::NativeCompatTransitionState* state,
+    native_platform::NativeCompatTransitionState* state,
     std::uint32_t guest_stack_pointer)
 {
     // Guest stack at the landing: lcall eip, lcall cs, thunk return, gate,
     // caller return, arguments.
-    linux_platform::NativeCompatModeRuntime::Impl* runtime = linux_platform::g_active_runtime;
-    linux_platform::NativeImportGateEvent event;
-    event.gate_address = linux_platform::ReadGuestU32(guest_stack_pointer + 12);
+    native_platform::NativeCompatModeRuntime::Impl* runtime = native_platform::g_active_runtime;
+    native_platform::NativeImportGateEvent event;
+    event.gate_address = native_platform::ReadGuestU32(guest_stack_pointer + 12);
     event.stack_pointer = guest_stack_pointer + 16;
-    event.instruction_pointer = linux_platform::ReadGuestU32(event.stack_pointer);
-    linux_platform::NativeImportGateResult result;
+    event.instruction_pointer = native_platform::ReadGuestU32(event.stack_pointer);
+    native_platform::NativeImportGateResult result;
     if (runtime == nullptr || runtime->handler == nullptr)
     {
         state->cleanup_bytes = 0;
-        linux_platform::ResumeNativeInstructionTrace(event.instruction_pointer);
+        native_platform::ResumeNativeInstructionTrace(event.instruction_pointer);
         return 0;
     }
     // Another guest thread waiting for the lock runs first.
-    linux_platform::YieldNativeGuestThread();
+    native_platform::YieldNativeGuestThread();
     event.guest_stack_base = runtime->stack_base;
     event.guest_stack_limit = runtime->stack_limit;
     const std::uint32_t outer_import_stack_pointer = runtime->import_stack_pointer;
@@ -1043,15 +1046,15 @@ extern "C" std::uint64_t NativeCompatImportDispatch(
     if (!handled)
     {
         state->cleanup_bytes = 0;
-        linux_platform::ResumeNativeInstructionTrace(event.instruction_pointer);
+        native_platform::ResumeNativeInstructionTrace(event.instruction_pointer);
         return 0;
     }
     if (result.exit_process)
     {
-        linux_platform::ExitNativeGuestProcess(result.exit_code);
+        native_platform::ExitNativeGuestProcess(result.exit_code);
     }
     state->cleanup_bytes = result.stack_bytes_to_pop;
-    linux_platform::ResumeNativeInstructionTrace(event.instruction_pointer);
+    native_platform::ResumeNativeInstructionTrace(event.instruction_pointer);
     return (static_cast<std::uint64_t>(result.edx) << 32) | result.eax;
 }
 
@@ -1062,60 +1065,60 @@ extern "C" int NativeCompatSignalHandler(int signal_number,
     auto* context = static_cast<ucontext_t*>(context_pointer);
     const auto code_selector =
         static_cast<std::uint16_t>(context->uc_mcontext.gregs[REG_CSGSFS] & 0xFFFF);
-    linux_platform::NativeCompatModeRuntime::Impl* runtime = linux_platform::g_active_runtime;
-    if (runtime == nullptr || code_selector != linux_platform::kCompatUser32CodeSelector)
+    native_platform::NativeCompatModeRuntime::Impl* runtime = native_platform::g_active_runtime;
+    if (runtime == nullptr || code_selector != native_platform::kCompatUser32CodeSelector)
     {
         // A host fault: let the default action run once this handler returns.
         signal(signal_number, SIG_DFL);
         raise(signal_number);
         return 0;
     }
-    linux_platform::NativeTrapRegisters trap = linux_platform::ReadTrapRegisters(context, *runtime);
-    if ((signal_number == SIGTRAP && linux_platform::HandleNativeInstructionTraceTrap(&trap)) ||
-        (signal_number == SIGSEGV && linux_platform::HandleNativeLegacyIoTrap(&trap)) ||
-        linux_platform::TryDeliverGuestException(runtime, signal_number, signal_info, context, &trap))
+    native_platform::NativeTrapRegisters trap = native_platform::ReadTrapRegisters(context, *runtime);
+    if ((signal_number == SIGTRAP && native_platform::HandleNativeInstructionTraceTrap(&trap)) ||
+        (signal_number == SIGSEGV && native_platform::HandleNativeLegacyIoTrap(&trap)) ||
+        native_platform::TryDeliverGuestException(runtime, signal_number, signal_info, context, &trap))
     {
-        linux_platform::WriteTrapRegisters(trap, context);
+        native_platform::WriteTrapRegisters(trap, context);
         return 1;
     }
-    linux_platform::Win32ExceptionRecord32 unhandled_record;
-    linux_platform::Win32Context32 unhandled_context;
-    if (linux_platform::ReadNativeGuestUnhandledException(
+    native_platform::Win32ExceptionRecord32 unhandled_record;
+    native_platform::Win32Context32 unhandled_context;
+    if (native_platform::ReadNativeGuestUnhandledException(
             runtime->exceptions, trap, &unhandled_record, &unhandled_context))
     {
         // No handler continued: report the fault the exception came from.
-        linux_platform::g_fault_signal = static_cast<std::uint64_t>(runtime->delivered_signal);
-        linux_platform::g_fault_eip = unhandled_record.exception_address;
-        linux_platform::g_fault_esp = unhandled_context.esp;
-        linux_platform::g_fault_address = runtime->delivered_fault_address;
-        linux_platform::g_fault_signal_code = runtime->delivered_signal_code;
-        linux_platform::g_fault_cpu_error_code = runtime->delivered_cpu_error;
-        linux_platform::g_fault_eax = unhandled_context.eax;
-        linux_platform::g_fault_ebx = unhandled_context.ebx;
-        linux_platform::g_fault_ecx = unhandled_context.ecx;
-        linux_platform::g_fault_edx = unhandled_context.edx;
-        linux_platform::g_fault_esi = unhandled_context.esi;
-        linux_platform::g_fault_edi = unhandled_context.edi;
-        linux_platform::g_fault_ebp = unhandled_context.ebp;
-        linux_platform::g_fault_eflags = unhandled_context.eflags;
-        siglongjmp(linux_platform::g_guest_jump, 1);
+        native_platform::g_fault_signal = static_cast<std::uint64_t>(runtime->delivered_signal);
+        native_platform::g_fault_eip = unhandled_record.exception_address;
+        native_platform::g_fault_esp = unhandled_context.esp;
+        native_platform::g_fault_address = runtime->delivered_fault_address;
+        native_platform::g_fault_signal_code = runtime->delivered_signal_code;
+        native_platform::g_fault_cpu_error_code = runtime->delivered_cpu_error;
+        native_platform::g_fault_eax = unhandled_context.eax;
+        native_platform::g_fault_ebx = unhandled_context.ebx;
+        native_platform::g_fault_ecx = unhandled_context.ecx;
+        native_platform::g_fault_edx = unhandled_context.edx;
+        native_platform::g_fault_esi = unhandled_context.esi;
+        native_platform::g_fault_edi = unhandled_context.edi;
+        native_platform::g_fault_ebp = unhandled_context.ebp;
+        native_platform::g_fault_eflags = unhandled_context.eflags;
+        siglongjmp(native_platform::g_guest_jump, 1);
     }
     const greg_t* registers = context->uc_mcontext.gregs;
-    linux_platform::g_fault_signal = static_cast<std::uint64_t>(signal_number);
-    linux_platform::g_fault_eip = static_cast<std::uint64_t>(registers[REG_RIP]);
-    linux_platform::g_fault_esp = static_cast<std::uint64_t>(registers[REG_RSP]);
-    linux_platform::g_fault_address = signal_info == nullptr
+    native_platform::g_fault_signal = static_cast<std::uint64_t>(signal_number);
+    native_platform::g_fault_eip = static_cast<std::uint64_t>(registers[REG_RIP]);
+    native_platform::g_fault_esp = static_cast<std::uint64_t>(registers[REG_RSP]);
+    native_platform::g_fault_address = signal_info == nullptr
         ? 0 : reinterpret_cast<std::uint64_t>(signal_info->si_addr);
-    linux_platform::g_fault_signal_code =
+    native_platform::g_fault_signal_code =
         signal_info == nullptr ? 0 : static_cast<std::uint64_t>(signal_info->si_code);
-    linux_platform::g_fault_cpu_error_code = static_cast<std::uint64_t>(registers[REG_ERR]);
-    linux_platform::g_fault_eax = static_cast<std::uint64_t>(registers[REG_RAX]);
-    linux_platform::g_fault_ebx = static_cast<std::uint64_t>(registers[REG_RBX]);
-    linux_platform::g_fault_ecx = static_cast<std::uint64_t>(registers[REG_RCX]);
-    linux_platform::g_fault_edx = static_cast<std::uint64_t>(registers[REG_RDX]);
-    linux_platform::g_fault_esi = static_cast<std::uint64_t>(registers[REG_RSI]);
-    linux_platform::g_fault_edi = static_cast<std::uint64_t>(registers[REG_RDI]);
-    linux_platform::g_fault_ebp = static_cast<std::uint64_t>(registers[REG_RBP]);
-    linux_platform::g_fault_eflags = static_cast<std::uint64_t>(registers[REG_EFL]);
-    siglongjmp(linux_platform::g_guest_jump, 1);
+    native_platform::g_fault_cpu_error_code = static_cast<std::uint64_t>(registers[REG_ERR]);
+    native_platform::g_fault_eax = static_cast<std::uint64_t>(registers[REG_RAX]);
+    native_platform::g_fault_ebx = static_cast<std::uint64_t>(registers[REG_RBX]);
+    native_platform::g_fault_ecx = static_cast<std::uint64_t>(registers[REG_RCX]);
+    native_platform::g_fault_edx = static_cast<std::uint64_t>(registers[REG_RDX]);
+    native_platform::g_fault_esi = static_cast<std::uint64_t>(registers[REG_RSI]);
+    native_platform::g_fault_edi = static_cast<std::uint64_t>(registers[REG_RDI]);
+    native_platform::g_fault_ebp = static_cast<std::uint64_t>(registers[REG_RBP]);
+    native_platform::g_fault_eflags = static_cast<std::uint64_t>(registers[REG_EFL]);
+    siglongjmp(native_platform::g_guest_jump, 1);
 }

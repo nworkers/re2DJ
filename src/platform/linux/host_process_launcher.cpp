@@ -50,13 +50,13 @@ bool LinuxHostProcessLauncher::Start(const hle::ChildProcessRequest& request,
 
     std::vector<std::string> arguments = base_arguments_;
     arguments.insert(arguments.end(),
-                     {kGuestExecutableOption, request.image_path, kGuestCommandLineOption, request.command_line,
-                      kGuestCurrentDirectoryOption, request.current_directory, kGuestExitCodeFdOption,
+                     {native::kGuestExecutableOption, request.image_path, native::kGuestCommandLineOption, request.command_line,
+                      native::kGuestCurrentDirectoryOption, request.current_directory, native::kGuestExitCodeFdOption,
                       std::to_string(pipe_fds[1])});
     if (!request.startup_reserved.empty())
     {
         arguments.insert(arguments.end(),
-                         {kGuestStartupReservedOption, hle::EncodeHexBytes(request.startup_reserved)});
+                         {native::kGuestStartupReservedOption, hle::EncodeHexBytes(request.startup_reserved)});
     }
     std::vector<char*> argv;
     argv.reserve(arguments.size() + 1);

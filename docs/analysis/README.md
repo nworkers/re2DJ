@@ -52,6 +52,7 @@
 | [ez2d2m-ez2dj4th-graphics-clear.md](ez2d2m-ez2dj4th-graphics-clear.md) | `ez2d2m`/`ez2dj4th` retained-frame presentation and Direct3D clear forwarding | Both `DDSCAPS_FLIP` and `LegacyDeviceClear` traces confirmed; HLE omission fixed, new-screen verification pending |
 
 | [ez2d2m-jam-audio-runtime.md](ez2d2m-jam-audio-runtime.md) | EZ2Dancer JAM VFS/DirectSound/SDL runtime audio evidence and streaming Play semantics | 2026-09-14 VFS, PCM delivery, and repeated-Play HLE divergence confirmed |
+| [windows-in-process-performance.md](windows-in-process-performance.md) | 주입 경로(v0.0.62)와 in-process 러너의 Windows 실행 성능 비교: vsync off 처리량, CPU, 메모리 / Windows run performance of the injection path (v0.0.62) against the in-process runner: vsync-off throughput, CPU, memory | 5개 타깃 실제 실행 측정으로 확인됨. 원인은 추정, 반복 측정·프로파일링은 미확정 / Confirmed by real runs of five targets; causes inferred, repeated runs and profiling unresolved |
 
 *Update this table in the same task whenever an analysis document is added or renamed.*
 

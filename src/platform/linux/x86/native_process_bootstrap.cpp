@@ -1,9 +1,10 @@
-#include "../native_process_bootstrap.h"
-#include "../native_guest_seh.h"
-#include "../native_guest_threads.h"
-#include "../native_import_bridge.h"
-#include "../native_instruction_trace.h"
-#include "../native_legacy_io.h"
+#include "../../native/native_process_bootstrap.h"
+#include "../native_signal_fault.h"
+#include "../../native/native_guest_seh.h"
+#include "../../native/native_guest_threads.h"
+#include "../../native/native_import_bridge.h"
+#include "../../native/native_instruction_trace.h"
+#include "../../native/native_legacy_io.h"
 
 #include <asm/ldt.h>
 #include <setjmp.h>
@@ -19,7 +20,7 @@
 #include <cstring>
 #include <thread>
 
-namespace re2dj::platform::linux
+namespace re2dj::platform::native
 {
 namespace
 {
@@ -484,6 +485,7 @@ struct NativeProcessBootstrap::Impl
             return true;
         }
         fault->status_code = static_cast<std::uint32_t>(g_fault_signal);
+        fault->kind = NativeFaultKindFromSignal(static_cast<int>(g_fault_signal));
         fault->instruction_pointer = g_fault_eip;
         fault->stack_pointer = g_fault_esp;
         fault->fault_address = static_cast<std::uint32_t>(g_fault_address);
@@ -722,6 +724,7 @@ void RunSecondaryThread(SecondaryThread* secondary)
     {
         // Nothing of the guest ran; report it as a fault at the ThreadProc.
         termination.fault.status_code = SIGSEGV;
+        termination.fault.kind = NativeFaultKind::kAccessViolation;
         termination.fault.instruction_pointer = secondary->start.start;
         TerminateNativeGuestProcess(termination);
         return;
@@ -862,4 +865,4 @@ void ExitNativeGuestProcess(std::uint32_t exit_code)
     siglongjmp(g_guest_jump, 1);
 }
 
-}  // namespace re2dj::platform::linux
+}  // namespace re2dj::platform::native

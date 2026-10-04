@@ -5,7 +5,6 @@
 
 #include "re2dj/graphics/present_pacer.h"
 
-#include "re2dj/target/target_profile.h"
 #include "test_support.h"
 
 namespace
@@ -103,11 +102,6 @@ void RunPresentSyncTests(re2dj::test::Context& context)
     // A rejected parse leaves the caller's value alone.
     RE2DJ_CHECK(context, parsed == PresentSync::kImmediate);
     RE2DJ_CHECK(context, !ParsePresentSyncName("vsync", nullptr));
-
-    // Every profile inherits the behavior the product had before the policy
-    // became explicit. A profile that opts out must do so deliberately.
-    const re2dj::target::TargetRunDefaults defaults;
-    RE2DJ_CHECK(context, defaults.present_sync == PresentSync::kVerticalSync);
 
     CheckPresentPacer(context);
 }

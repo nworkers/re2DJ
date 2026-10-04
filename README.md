@@ -12,14 +12,26 @@ re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, EZ2DJ의 원�
 *re2DJ is an experimental runtime for executing the original 32-bit x86 EZ2DJ executable on Linux and 64-bit Windows without an emulator or a virtual machine. Original game logic stays authoritative; only the surrounding Win32 API, DirectX, and hardware boundaries are replaced with High Level Emulation (HLE). See [VERSION](VERSION) for the current version.*
 
 > [!WARNING]
-> 현재는 초기 연구·개발 단계입니다. 지금 저장소가 하는 일은 **원본 HDD 디렉터리를 읽어 실행 대상 바이너리를 식별하고 PE 헤더를 분석하는 것까지**이며, 로더·실행 backend·HLE 계층은 아직 설계 단계입니다. 게임은 실행되지 않습니다.
+> 아직 실험 단계입니다. 1st SE, 4th, 5th, 6th, EZ2Dancer 2nd MOVE는 창을 닫을 때까지 실행되지만, 다른 타깃은 아직 모형이 없는 경계에서 멈출 수 있고 소리·입력·화면의 정확성도 계속 검증 중입니다.
 >
-> *This is early research-stage software. What the repository does today is **read a user-supplied HDD directory, identify which binary is the game, and analyze its PE headers**. The loader, execution backend, and HLE layer are still design-only, so nothing runs yet.*
+> *This is still experimental software. 1st SE, 4th, 5th, 6th, and EZ2Dancer 2nd MOVE run until their window is closed, but other targets may stop at a boundary not yet modelled, and the accuracy of sound, input, and graphics is still being verified.*
 
 > [!IMPORTANT]
 > 이 저장소는 원본 게임 바이너리나 데이터를 포함하지 않으며 배포하지도 않습니다. 합법적으로 보유한 자산에 대해서만 사용하십시오.
 >
 > *This repository neither contains nor distributes original game binaries or data. Use it only with assets you legally own.*
+
+## 스크린샷 / Screenshots
+
+re2DJ v0.0.63의 Windows x86 Release 빌드에서 원본 실행 파일이 그린 화면입니다. 640x480 원본 화면을 2배 창에서 캡처해 다시 640x480으로 줄였습니다.
+
+*Screens drawn by the original executables under the Windows x86 Release build of re2DJ v0.0.63, captured from the 2x window and scaled back to the original 640x480.*
+
+| EZ2DJ The 1st Tracks Special Edition (`ez2dj1stse`) | EZ2DJ 4th (`ez2dj4th`) | EZ2DJ 4th — demo play |
+| :---: | :---: | :---: |
+| ![EZ2DJ 1st SE title](docs/screenshots/ez2dj1stse-title.jpg) | ![EZ2DJ 4th title](docs/screenshots/ez2dj4th-title.jpg) | ![EZ2DJ 4th demo play](docs/screenshots/ez2dj4th-demo-play.jpg) |
+| **EZ2DJ 5th Trax (`ez2dj5th`)** | **EZ2DJ 6th Trax (`ez2dj6th`)** | **EZ2Dancer 2nd MOVE (`ez2d2m`)** |
+| ![EZ2DJ 5th title](docs/screenshots/ez2dj5th-title.jpg) | ![EZ2DJ 6th title](docs/screenshots/ez2dj6th-title.jpg) | ![EZ2Dancer 2nd MOVE title](docs/screenshots/ez2d2m-title.jpg) |
 
 ---
 
@@ -42,15 +54,15 @@ re2DJ는 에뮬레이터나 가상 머신을 동원하지 않고, EZ2DJ의 원�
 flowchart LR
     HDD["HDD directory<br/>(user-supplied path)"] --> SCAN["HDD scan<br/>+ target profile"]
     SCAN --> PE["PE32 image reader"]
-    PE --> LOAD["PE32 loader<br/>(implemented)"]
-    LOAD --> EXEC["replaceable execution backend<br/>(planned)"]
-    EXEC -->|import gate| HLE["Win32 / DirectX HLE<br/>(planned)"]
+    PE --> LOAD["PE32 loader"]
+    LOAD --> EXEC["in-process runner<br/>(native 32-bit x86)"]
+    EXEC -->|import gate| HLE["Win32 / DirectX HLE"]
     HLE --> PLAT["Platform backend<br/>windows / linux"]
 ```
 
-x86-64 Windows에서는 Win32 `re2dj --run`이 선택된 프로파일의 원본 PE32를 Windows main image로 시작하고 injected runtime의 프로파일별 HLE 경계를 연결합니다. 예를 들어 `re2dj ez2dj3rd`는 `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`를 선택합니다. Linux에서는 x86·x86-64 제품 CLI의 `re2dj --run`이 별도 helper 없이 같은 프로세스 안에서 원본 PE32를 실행합니다. x86-64는 CPU compatibility mode를 씁니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, 6th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 두 호스트 모두 실행 중 백틱(`` ` ``) 키로 OSD를 열 수 있습니다. OSD의 "32-bit color"는 24비트 이미지와 반투명 합성을 채널당 8비트로 보여 주는 표시 모드를 켜고 끕니다(`--color-depth`). 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+두 OS 모두 `re2dj --run`이 원본 PE32를 re2dj **자기 프로세스 안에** 매핑해 실행합니다(작업 446~449). 예를 들어 `re2dj ez2dj4th`는 `roms/ez2dj4th`의 CHD에서 `EZ2DJ/EZ2DJ.EXE`를 선택합니다. Linux는 x86·x86-64 제품이 있고 x86-64는 CPU compatibility mode를 씁니다. Windows는 64비트 Windows에서 도는 Win32 x86 제품이며, 시작할 때 자기 자신을 한 번 다시 띄워 게스트 이미지 주소(0x400000)를 확보합니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, 6th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 두 호스트 모두 실행 중 백틱(`` ` ``) 키로 OSD를 열 수 있습니다. OSD의 "32-bit color"는 24비트 이미지와 반투명 합성을 채널당 8비트로 보여 주는 표시 모드를 켜고 끕니다(`--color-depth`). 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On x86-64 Windows, Win32 `re2dj --run` starts the selected profile's original PE32 as the Windows main image and connects profile-specific HLE boundaries through the injected runtime. For example, `re2dj ez2dj3rd` selects `roms/ez2dj3rd/ez2dj/EZ2DJ.EXE`. On Linux, `re2dj --run` in the x86 and x86-64 product CLIs executes the original PE32 in the same process without a separate helper (x86-64 uses CPU compatibility mode), through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, 6th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. On both hosts, backtick (`` ` ``) opens the OSD while running; its "32-bit color" switches a display mode that shows 24-bit images and translucent compositing at 8 bits per channel (`--color-depth`). See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On both OSes `re2dj --run` maps the original PE32 into re2dj's **own process** and runs it there (tasks 446 to 449); for example, `re2dj ez2dj4th` selects `EZ2DJ/EZ2DJ.EXE` in the CHD under `roms/ez2dj4th`. Linux has x86 and x86-64 products, x86-64 using CPU compatibility mode; Windows has the Win32 x86 product on 64-bit Windows, which starts itself once more at launch to secure the guest image address (0x400000). Runs go through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, 6th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. On both hosts, backtick (`` ` ``) opens the OSD while running; its "32-bit color" switches a display mode that shows 24-bit images and translucent compositing at 8 bits per channel (`--color-depth`). See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -220,18 +232,14 @@ re2dj --hdd <directory> [options]
   --list-targets      후보 타깃 프로파일을 나열하고 종료.
   --resolve <path>    게스트 경로 하나를 해석하고 종료.
   --run               게스트 실행. positional 프로파일은 자동으로 --run을 선택.
-  --hold-window       Linux: 실행이 멈춘 뒤에도 게임 창을 닫을 때까지 유지.
-  --audio-gain-db     Windows 출력 보정(-24..+18 dB, 기본값 0).
-  --demo-volume       Windows title/demo 프로필(0..3, 기본값 3=0 dB).
-  --audio-volume-trace
-                      DirectSound/WINMM 음량 증거를 별도 로그에 기록.
-  --fullscreen        Windows에서 monitor 크기 borderless fullscreen 사용.
+  --hold-window       실행이 멈춘 뒤에도 게임 창을 닫을 때까지 유지.
+  --audio-gain-db     출력 보정(-24..+18 dB, 기본값 0).
+  --fullscreen        monitor 크기 borderless fullscreen 사용.
   --windowed          프로파일의 fullscreen 기본값을 끄기.
-  --vsync <on|off|adaptive>
-                      present가 언제 반환할지 고릅니다. on은 디스플레이 refresh를
-                      기다리고(기본값), off는 기다리지 않아 tearing을 허용하며,
-                      adaptive는 마감을 지킨 프레임만 기다립니다. 드라이버가
-                      adaptive를 거부하면 on으로 내려갑니다.
+  --image-dump        매핑된 주 이미지를 진입 전과 지연 뒤에 저장(진단).
+  --image-dump-delay <ms>
+                      두 번째 덤프까지의 지연(기본값 5000).
+  --call-limit <n>    게스트 API 호출 n번 뒤 멈춤(진단·회귀용).
   --color-depth <16|32>
                       호스트가 색을 얼마나 깊게 다룰지 고릅니다. 16은 원본의
                       16비트 화면(기본값), 32는 24비트 이미지와 블렌드를 채널당
@@ -249,7 +257,7 @@ CHD 자체의 header, metadata와 논리 sector를 확인하려면 다음 비실
 re2dj_chd_probe /path/to/ez2dj4th.chd
 ```
 
-*Use the following tool to inspect a CHD's header, metadata, logical sectors, FAT32 layout, and the 4th PE32 header. On Windows x86 the same FAT32 boundary is used by `re2dj ez2dj4th --run`.*
+*Use the following tool to inspect a CHD's header, metadata, logical sectors, FAT32 layout, and the 4th PE32 header; `re2dj ez2dj4th` reads the CHD through the same FAT32 boundary.*
 
 ```bash
 re2dj_chd_probe /path/to/ez2dj4th.chd
@@ -265,37 +273,17 @@ re2dj_chd_probe /path/to/ez2d2m.chd --dump ez2dancer/EZ2Dancer.exe ./EZ2Dancer.e
 re2dj_chd_probe /path/to/ez2d2m.chd --extract "" roms/ez2d2m/extracted
 ```
 
-Windows 제품 실행 예:
+Windows 제품 실행 예(두 OS의 사용법은 같습니다):
 
 ```powershell
-.\build\windows-x86\bin\Debug\re2dj.exe ez2dj1stse
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th
 .\build\windows-x86\bin\Debug\re2dj.exe ez2dj1stse --hdd D:\EZ2DJ\1stSE --list-targets
-.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd
-.\build\windows-x86\bin\Debug\re2dj.exe ez2dj3rd --hdd D:\EZ2DJ\3rd --audio-gain-db 3
-.\build\windows-x86\bin\Debug\re2dj.exe ez2dj4th --run
+.\build\windows-x86\bin\Debug\re2dj.exe ez2dj6th --fullscreen
 ```
 
-`ez2dj3rd` shortcut은 저장소 root 기준 `roms/ez2dj3rd`를 HDD 기본 경로로 사용하고, 첫 번째 positional profile ID만으로 실행을 선택한다. `--hdd`가 있으면 shortcut 경로를 덮어쓰며, 프로파일이 지원하는 오디오·fullscreen·I/O 관련 명령행 값은 프로파일 기본값보다 우선한다. 3rd의 `EZ2DJ.INI`에는 `FullScreen=1`이 있지만, 이 빌드는 `DirectDrawCreateEx`를 import하므로 현재 3rd 기본값은 확인된 VFS·DirectSound hook만 활성화한다.
+프로파일 ID만 주면 그 shortcut 경로(`roms/<프로파일>`)를 쓰고 실행까지 고릅니다. `--hdd`는 그 경로를 덮어씁니다. Windows에서 시작 직후 `re2dj.exe`가 한 번 더 뜨는 것은 게스트 이미지 주소를 예약하기 위한 것입니다([Windows 실행 가이드](docs/guides/windows-x86-runtime.md)). 1st SE·4th 같은 보호 빌드는 로컬 Hardlock 자료(`cfg/hardlock.ini` 등)가 있어야 Hardlock 요청을 지나갑니다. 그 자료는 저장소에 포함하지 않으며 사용자가 직접 확보합니다. 관측 내용은 각 프로파일의 [분석 문서](docs/analysis/README.md)에 있습니다.
 
-*The `ez2dj3rd` shortcut uses `roms/ez2dj3rd` relative to the repository root and selects execution from the first positional profile ID. `--hdd` overrides that convenience path, and supported command-line audio, fullscreen, and I/O values take precedence over profile defaults. The 3rd `EZ2DJ.INI` contains `FullScreen=1`, but this build imports `DirectDrawCreateEx`, so the current 3rd baseline enables only the confirmed VFS and DirectSound hooks.*
-
-`ez2dj1stse` shortcut도 같은 형태로 `roms/ez2dj1stse` 아래의 CHD를 사용하며, `--hdd`로 다른 CHD 디렉터리를 지정할 수 있다. 이 CHD의 실행 파일은 기존 추출 덤프의 `.gtide` 빌드가 아니라 `.protect` 빌드다. 프로파일 기본값은 이 빌드에서 관측한 경계를 따라 `\\.\FEnteDev` 장치와 dynamic VFS를 쓰고, packed import directory에 없는 Windows directory·DirectDraw·demo volume 경계는 끈다. 로컬 Hardlock 자료(`cfg/hardlock.ini`의 `[ez2dj1stse]` section과 `cfg/hardlock-ez2dj1stse.map`)가 없으면 Hardlock initialize 요청에서 멈춘다. 자료가 있으면 transform loop를 통과해 복호화된 게임 코드가 `System\CompanyLogo` 자산까지 읽는다. 관측 내용은 [ez2dj1stse CHD 파일시스템 분석](docs/analysis/ez2dj1stse-chd-filesystem.md)에 있다. 그 자료는 저장소에 포함하지 않으며 사용자가 직접 확보한다.
-
-*The `ez2dj1stse` shortcut works the same way against the CHD under `roms/ez2dj1stse`, and `--hdd` can point at a different CHD directory. Its executable is the `.protect` build rather than the extracted dump's `.gtide` build. The profile defaults follow the boundary observed on that build: it uses the `\\.\FEnteDev` device and the dynamic VFS, and disables the Windows-directory, DirectDraw, and demo-volume boundaries whose imports are missing from the packed import directory. Without local Hardlock material — the `[ez2dj1stse]` section of `cfg/hardlock.ini` plus `cfg/hardlock-ez2dj1stse.map` — a run stops at the Hardlock initialize request; with it, the run passes the transform loop and decrypted game code reads as far as the `System\CompanyLogo` assets. The observations are recorded in the [ez2dj1stse CHD filesystem analysis](docs/analysis/ez2dj1stse-chd-filesystem.md). That material is not part of the repository; users supply it themselves.*
-
-The `ez2dj4th` target uses a MAME CHD HDD shortcut at `roms/ez2dj4th`.
-`re2dj_chd_probe <path-to-chd>` now reads the real CHD through libchdr, validates
-its FAT32 layout, and reports the `EZ2DJ/EZ2DJ.EXE` PE32 header. On Windows x86,
-`re2dj ez2dj4th --run` stages the executable and profile siblings into a
-temporary directory while the injected runtime serves guest `D:\ez2dj` reads
-directly from the CHD; writes remain in the overlay. The first protected 4th
-HLE/Hardlock boundary remains a runtime observation item.
-
-*The `ez2dj4th` target uses the `roms/ez2dj4th` MAME CHD shortcut. `re2dj_chd_probe <path-to-chd>` reads the real image through libchdr, validates FAT32, and reports the `EZ2DJ/EZ2DJ.EXE` PE32 header. On Windows x86, `re2dj ez2dj4th --run` stages the executable and profile siblings while injected-runtime pseudo handles serve guest `D:\ez2dj` reads directly from CHD; writes stay in the overlay. The first protected 4th HLE/Hardlock boundary remains an observation item.*
-
-실제 `re2dj ez2dj3rd` 최신 실행(`20260831-000859-972.jsonl`)은 프로파일별 `\\.\\FEnteDev` mock 경로와 별도 zero target-state probe를 전달한 뒤 원본 프로세스의 runtime 주입·detached 실행까지 확인했다. VFS trace에는 `GetProcAddress` resolver 슬롯 2개와 `\\.\\NTICE`, `\\.\\FEnteDev` 장치 open이 기록되었다. 이후 256바이트 Hardlock descriptor와 Function `0x0e` 요청까지는 별도 계측으로 확인했지만 유효한 암호 응답과 게임 화면 도달은 아직 확인되지 않았다. zero state도 실제 동글 seed로 확정하지 않는다.
-
-*The latest `re2dj ez2dj3rd` run (`20260831-000859-972.jsonl`) passed the profile-specific `\\.\\FEnteDev` mock path and separate zero target-state probe, then confirmed runtime injection and detached execution of the original process. Its VFS trace recorded two `GetProcAddress` resolver slots and device opens for `\\.\\NTICE` and `\\.\\FEnteDev`. The later 256-byte Hardlock descriptor and Function `0x0e` request are confirmed by a separate instrumentation run, but the valid encrypted response and game-screen reach remain unconfirmed. Zero is not identified as the physical dongle seed.*
+*Giving only a profile ID takes its shortcut path (`roms/<profile>`) and selects the run; `--hdd` overrides that path. On Windows, `re2dj.exe` starting once more right after launch reserves the guest image address ([Windows runtime guide](docs/guides/windows-x86-runtime.md)). Protected builds such as 1st SE and 4th need local Hardlock material (`cfg/hardlock.ini` and the rest) to pass their Hardlock requests; that material is not part of the repository and users supply it themselves. The observations are in each profile's [analysis documents](docs/analysis/README.md).*
 
 기본값은 version, build date, SDL3 OpenGL renderer와 FPS를 표시하는 제목 및 1280×960 client 영역을 가진 resize 가능한 일반 창이다. 원본의 640×480 논리 표시는 기본 가로·세로 정확히 2배로 확대된다. 원본 INI를 바꾸지 않고 fullscreen을 선택하려면 `--fullscreen`을 추가한다.
 
@@ -305,25 +293,21 @@ HLE/Hardlock boundary remains a runtime observation item.
 
 *Keyboard input works with no option: the default mapping is built into the executable and matches `config/ez2dj-io.example.ini` for EZ2DJ and `config/ez2dancer-io.example.ini` for EZ2Dancer 2nd MOVE. Passing `--io-config <path>` overrides only the entries the file lists and leaves the rest at their defaults; write `NONE` for an entry to unbind that key. EZ2Dancer's `coin=F5` is a compatibility mapping because the original cabinet wiring is not confirmed; each press increments the `0x304` counter.*
 
-Linux에서는 게임패드도 옵션 없이 동작한다(작업 444). SDL3가 인식하는 패드는 모두 같은 매핑으로 1P를 치며, 기본값은 예제 INI의 `[gamepad]` 섹션과 같다: EZ2DJ는 `X` `Y` `B` `A` `RB`가 1~5번 키, `LB`가 페달, 왼쪽 스틱 좌우가 턴테이블, `START`가 시작, `BACK`이 코인, 십자키가 이펙터 1~4다. 같은 `--io-config` INI의 `[gamepad]` 섹션에 적어 바꾼다. 이름은 `A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `PADDLE1`~`4` `LSTICK_LEFT` `LSTICK_RIGHT` `LSTICK_UP` `LSTICK_DOWN` `RSTICK_*`와 `NONE`이다. 스틱과 트리거는 절반 이상 기울이거나 당겼을 때 눌린 것으로 본다. Windows host는 아직 키보드만 받는다.
+게임패드도 두 OS에서 옵션 없이 동작한다(작업 444, Windows는 작업 449부터). SDL3가 인식하는 패드는 모두 같은 매핑으로 1P를 치며, 기본값은 예제 INI의 `[gamepad]` 섹션과 같다: EZ2DJ는 `X` `Y` `B` `A` `RB`가 1~5번 키, `LB`가 페달, 왼쪽 스틱 좌우가 턴테이블, `START`가 시작, `BACK`이 코인, 십자키가 이펙터 1~4다. 같은 `--io-config` INI의 `[gamepad]` 섹션에 적어 바꾼다. 이름은 `A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `PADDLE1`~`4` `LSTICK_LEFT` `LSTICK_RIGHT` `LSTICK_UP` `LSTICK_DOWN` `RSTICK_*`와 `NONE`이다. 스틱과 트리거는 절반 이상 기울이거나 당겼을 때 눌린 것으로 본다.
 
-*On Linux a gamepad works with no option too (task 444): every pad SDL3 recognises plays player 1 under the same mapping, whose defaults are the example INIs' `[gamepad]` section. For EZ2DJ, `X` `Y` `B` `A` `RB` are keys 1 to 5, `LB` the pedal, the left stick's left and right the turntable, `START` start, `BACK` coin and the d-pad effectors 1 to 4. Change them in the `[gamepad]` section of the same `--io-config` INI; the names are `A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `PADDLE1` to `4`, `LSTICK_LEFT` `LSTICK_RIGHT` `LSTICK_UP` `LSTICK_DOWN`, `RSTICK_*` and `NONE`. A stick or trigger counts as pressed past half its travel. The Windows host still takes the keyboard only.*
+*A gamepad works with no option on both OSes too (task 444, Windows from task 449): every pad SDL3 recognises plays player 1 under the same mapping, whose defaults are the example INIs' `[gamepad]` section. For EZ2DJ, `X` `Y` `B` `A` `RB` are keys 1 to 5, `LB` the pedal, the left stick's left and right the turntable, `START` start, `BACK` coin and the d-pad effectors 1 to 4. Change them in the `[gamepad]` section of the same `--io-config` INI; the names are `A` `B` `X` `Y` `BACK` `GUIDE` `START` `LSTICK` `RSTICK` `LB` `RB` `LT` `RT` `DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `PADDLE1` to `4`, `LSTICK_LEFT` `LSTICK_RIGHT` `LSTICK_UP` `LSTICK_DOWN`, `RSTICK_*` and `NONE`. A stick or trigger counts as pressed past half its travel.*
 
 ```powershell
 .\build\windows-x86\bin\Debug\re2dj.exe ez2d2m --io-config .\config\ez2dancer-io.example.ini
 ```
 
-제품은 원본 HDD의 `DemoVolume=0`을 수정하지 않고 title/demo 프로필을 기본 3(0 dB)으로 재정의한다. 원본 프로필을 선택하려면 `--demo-volume 0..3`을 사용한다. 대응 DirectSound 값은 각각 `-10000`, `-2222`, `-1111`, `0`이다. 최종 출력 보정이 별도로 필요할 때만 `--audio-gain-db`를 사용하며 기본값은 0 dB다.
+title/demo 음량은 원본 HDD의 `DemoVolume`을 바꾸지 않고 기본 3(0 dB)으로 답합니다. 최종 출력 보정이 따로 필요할 때만 `--audio-gain-db`를 쓰며 기본값은 0 dB입니다.
 
-*Without modifying the original HDD's `DemoVolume=0`, the product overrides the title/demo profile to 3 (0 dB) by default. Use `--demo-volume 0..3` to select the original profiles, which map to DirectSound values `-10000`, `-2222`, `-1111`, and `0`. Use `--audio-gain-db` only for separate final-output adjustment; its default is 0 dB.*
+*The title and demo volume answers the default 3 (0 dB) without changing the original HDD's `DemoVolume`. Use `--audio-gain-db` only for a separate final-output adjustment; its default is 0 dB.*
 
-`--audio-volume-trace`는 launcher 진단 로그 옆의 `.audio.log`에 buffer별 dB, PCM peak/RMS, WINMM mixer 값을 제한적으로 기록한다. 원본 WAV 샘플 자체는 기록하지 않는다.
+제품 CLI의 host 진단은 시작과 동시에 stderr에 출력되고 같은 내용이 실행별 `logs/re2dj-YYYYMMDD-HHMMSS-mmm.log`에 기록됩니다. 모든 메시지는 즉시 flush됩니다. 미구현 HLE와 지원되지 않는 실행 경계는 `[critical]` 레벨과 `FATAL <분류>` marker로 남습니다. 게스트 API 호출은 같은 이름의 `.api.log`에 기록됩니다.
 
-*`--audio-volume-trace` writes bounded per-buffer dB, PCM peak/RMS, and WINMM mixer values to an `.audio.log` beside the launcher diagnostic log. It does not record original WAV samples.*
-
-제품 CLI의 host 진단은 시작과 동시에 stderr에 출력되고 같은 내용이 실행별 `logs/re2dj-YYYYMMDD-HHMMSS-mmm.log`에 기록됩니다. 모든 메시지는 즉시 flush됩니다. 미구현 HLE와 지원되지 않는 실행 경계는 `[critical]` 레벨과 `FATAL <분류>` marker로 남습니다. 구조화된 launcher·VFS·graphics·audio 분석 trace와 stdout 명령 결과는 기존 파일 및 채널을 유지합니다.
-
-*Product-CLI host diagnostics appear on stderr from startup and are mirrored to a per-run `logs/re2dj-YYYYMMDD-HHMMSS-mmm.log`. Every message is flushed immediately. Unimplemented HLE and unsupported execution boundaries carry `[critical]` severity plus a `FATAL <classification>` marker. Structured launcher, VFS, graphics, and audio analysis traces and stdout command results keep their existing files and channels.*
+*Product-CLI host diagnostics appear on stderr from startup and are mirrored to a per-run `logs/re2dj-YYYYMMDD-HHMMSS-mmm.log`. Every message is flushed immediately. Unimplemented HLE and unsupported execution boundaries carry `[critical]` severity plus a `FATAL <classification>` marker. Guest API calls go to the `.api.log` of the same name.*
 
 종료 코드: `0` 성공, `1` 잘못된 사용, `2` HDD 디렉터리 오류, `3` 지원되지 않는 실행 경로, `4` 로깅 초기화 실패.
 

@@ -1,0 +1,30 @@
+#ifndef RE2DJ_PLATFORM_NATIVE_NATIVE_LOW_MEMORY_H_
+#define RE2DJ_PLATFORM_NATIVE_NATIVE_LOW_MEMORY_H_
+
+#include <cstdint>
+#include <string>
+
+#include "native_host_services.h"
+
+namespace re2dj::platform::native
+{
+
+// Anonymous memory placed wholly below 4 GiB so 32-bit guest code can address
+// it. The i386 implementation takes any mapping; the x86-64 implementation
+// searches the low address range. Released by ReleaseNativeLowMemory.
+struct NativeLowMemory
+{
+    void* memory = nullptr;
+    std::uint32_t address = 0;
+    std::uint32_t size = 0;
+};
+
+bool MapNativeLowMemory(std::uint32_t size,
+                        HostProtection protection,
+                        NativeLowMemory* mapping,
+                        std::string* error);
+void ReleaseNativeLowMemory(NativeLowMemory* mapping);
+
+}  // namespace re2dj::platform::native
+
+#endif  // RE2DJ_PLATFORM_NATIVE_NATIVE_LOW_MEMORY_H_
