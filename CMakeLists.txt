@@ -363,6 +363,7 @@ target_link_libraries(re2dj_directx PUBLIC re2dj_legacy_graphics PRIVATE re2dj_w
 
 add_library(re2dj_legacy_graphics STATIC
     src/graphics/color_depth.cpp
+    src/graphics/gl_renderer_identity.cpp
     src/graphics/legacy_draw_command.cpp
     src/graphics/legacy_texture.cpp
     src/graphics/legacy_transform.cpp
@@ -715,6 +716,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/temporary_tree.cpp
         tests/unit/present_interval_histogram_test.cpp
         tests/unit/post_shader_test.cpp
+        tests/unit/gl_renderer_identity_test.cpp
         tests/unit/present_sync_test.cpp
         tests/unit/window_policy_test.cpp
         tests/unit/ez2dj_keyboard_map_test.cpp

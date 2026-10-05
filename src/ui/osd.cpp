@@ -42,6 +42,28 @@ constexpr float kMinimumFontScale = 0.75f;
 // The backend creates an OpenGL 2.1 compatibility context, whose GLSL is 1.20.
 constexpr char kGlslVersion[] = "#version 120";
 
+// Error and warning text.
+constexpr ImVec4 kWarningColor(1.0f, 0.45f, 0.35f, 1.0f);
+
+// What draws the picture (#6). A software rasterizer is the one case worth
+// calling out: the game runs, only slowly, and nothing else says why.
+void DrawRendererSection(const graphics::GlRendererIdentity& identity)
+{
+    ImGui::SeparatorText("Renderer");
+    if (identity.software)
+    {
+        ImGui::TextColored(kWarningColor, "%s", identity.renderer.c_str());
+        ImGui::TextColored(kWarningColor, "Software rendering: no 3D acceleration");
+    }
+    else
+    {
+        ImGui::TextUnformatted(identity.renderer.c_str());
+    }
+    ImGui::TextDisabled("Vendor: %s", identity.vendor.c_str());
+    ImGui::TextDisabled("OpenGL: %s", identity.version.c_str());
+    ImGui::TextDisabled("Video driver: %s", identity.video_driver.c_str());
+}
+
 // The shader list, Reload, the last error and the active shader's parameters
 // (task 455).
 void DrawPostShaderMenu(graphics::PostShaderControl* control)
@@ -78,7 +100,7 @@ void DrawPostShaderMenu(graphics::PostShaderControl* control)
     if (!control->last_error().empty())
     {
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", control->last_error().c_str());
+        ImGui::TextColored(kWarningColor, "%s", control->last_error().c_str());
         ImGui::PopTextWrapPos();
     }
     for (graphics::PostShaderParameter& parameter : control->parameters())
@@ -104,6 +126,8 @@ struct Osd::Impl
     std::vector<QueuedInput> input;
     std::vector<OsdToggle> toggles;
     std::vector<std::string> info_lines;
+    bool has_renderer_identity = false;
+    graphics::GlRendererIdentity renderer_identity;
     graphics::PostShaderControl* post_shader_control = nullptr;
 
     // Touched only on the presenting thread.
@@ -162,6 +186,13 @@ void Osd::SetInfoLines(const std::vector<std::string>& lines)
 {
     const std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->info_lines = lines;
+}
+
+void Osd::SetRendererIdentity(const graphics::GlRendererIdentity& identity)
+{
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->renderer_identity = identity;
+    impl_->has_renderer_identity = true;
 }
 
 void Osd::AddToggle(const OsdToggle& toggle)
@@ -244,12 +275,19 @@ void Osd::DrawOverlay(int pixel_width, int pixel_height)
     std::vector<QueuedInput> input;
     std::vector<OsdToggle> toggles;
     std::vector<std::string> info_lines;
+    bool has_renderer_identity = false;
+    graphics::GlRendererIdentity renderer_identity;
     graphics::PostShaderControl* post_shader_control = nullptr;
     {
         const std::lock_guard<std::mutex> lock(impl_->mutex);
         input.swap(impl_->input);
         toggles = impl_->toggles;
         info_lines = impl_->info_lines;
+        has_renderer_identity = impl_->has_renderer_identity;
+        if (has_renderer_identity)
+        {
+            renderer_identity = impl_->renderer_identity;
+        }
         post_shader_control = impl_->post_shader_control;
     }
     for (const QueuedInput& event : input)
@@ -281,6 +319,10 @@ void Osd::DrawOverlay(int pixel_width, int pixel_height)
         for (const std::string& line : info_lines)
         {
             ImGui::TextUnformatted(line.c_str());
+        }
+        if (has_renderer_identity)
+        {
+            DrawRendererSection(renderer_identity);
         }
         if (!toggles.empty())
         {

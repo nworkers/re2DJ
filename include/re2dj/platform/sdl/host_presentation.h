@@ -116,6 +116,8 @@ private:
     // Records the render target's colour depth when it differs from what was
     // last recorded, so a run's log says when 32-bit colour took effect.
     void ReportColorDepth();
+    // Logs what the window's OpenGL context renders with (#6).
+    void ReportRenderer();
     // Logs which post-processing shader the window opened with, or why the
     // one asked for is not applied.
     void ReportPostShader();

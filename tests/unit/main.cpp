@@ -59,6 +59,7 @@ int main()
     RunPresentationFilterTests(context);
     RunPresentIntervalHistogramTests(context);
     RunPostShaderTests(context);
+    RunGlRendererIdentityTests(context);
     RunPresentSyncTests(context);
     RunWindowPolicyTests(context);
     RunEz2DjKeyboardMapTests(context);
