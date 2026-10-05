@@ -84,11 +84,15 @@ extern "C" __attribute__((naked)) std::uint64_t NativeImportGateBridge(
         "jz 2f\n"
         "movw %bx, %gs\n"
         "2:\n"
+        // The guest's stack is only 4-byte aligned; host code expects the
+        // i386 System V ABI's 16 bytes at the call (SSE spills use movdqa).
         "leal 12(%ebp), %eax\n"
+        "andl $-16, %esp\n"
+        "subl $8, %esp\n"
         "pushl %eax\n"
         "pushl 8(%ebp)\n"
         "call NativeImportGateBridgeImpl\n"
-        "addl $8, %esp\n"
+        "leal -8(%ebp), %esp\n"
         "popl %ebx\n"
         "movw %bx, %gs\n"
         "popl %ebx\n"

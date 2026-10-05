@@ -67,10 +67,17 @@ std::uint16_t QueryCurrentGs()
     return selector;
 }
 
+} // namespace
+
+// Outside the unnamed namespace: with internal linkage GCC 15 mangles even an
+// extern "C" name, and the import bridge and the assembly here name it as is.
 extern "C"
 {
 std::uint16_t g_native_host_gs_selector = QueryCurrentGs();
 }
+
+namespace
+{
 
 void WriteU32(std::uint8_t* bytes, std::size_t offset, std::uint32_t value)
 {
