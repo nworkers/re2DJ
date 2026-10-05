@@ -53,6 +53,8 @@ build/linux-x86-release/bin/re2dj ez2dj4th
 SDL_VIDEO_DRIVER=x11 build/linux-x86-release/bin/re2dj ez2dj4th
 ```
 
+두 방법 모두 vsync on에서 60 fps를 낸다. vsync off 처리량은 2) X11 쪽이 1.6~1.7배 높다. `egl-wayland` v1 경로는 표시에서 기다리는 시간이 길다([성능 비교](../analysis/linux-windows-performance.md), #4).
+
 
 WSL에서 Windows filesystem 아래 build가 느리면 source는 그대로 두고 binary directory만 Linux filesystem의 임시 디렉터리로 지정할 수 있다. 이 경로는 일회성 build 산출물이며 저장소에 넣지 않는다.
 
@@ -66,4 +68,4 @@ Install the packages shown above, then run the configure, build, and CTest comma
 
 For the Linux x86 product host, install multilib support and 32-bit SDL/X11/Wayland/OpenGL development packages alongside `g++-multilib libc6-dev-i386`. The preset disables SDL XScreenSaver and XTest integration when i386 `libxss`/`libxtst` are unavailable; install `libxss-dev:i386 libxtst-dev:i386` and configure with `-DSDL_X11_XSCRNSAVER=ON -DSDL_X11_XTEST=ON` when those integrations are required. Build the product host and PE32 helper in separate trees. The x86 product and helper should be reported as ELF 32-bit Intel 80386 by `file`, while the x64 product is ELF 64-bit x86-64. Run the host probe from each product architecture against the same i386 helper.
 
-With the NVIDIA 595 driver, SDL3's `eglCreateWindowSurface` fails under the 32-bit `libnvidia-egl-wayland2` (reporting `EGL_SUCCESS`); `re2dj_opengl_post_shader_probe`, which opens a window without any guest, fails the same way, so it is a driver matter (task 459), and 64-bit is unaffected. Run the x86 product either with `__EGL_EXTERNAL_PLATFORM_CONFIG_FILENAMES` listing the NVIDIA platform files without `09_nvidia_wayland2.json`, so EGL uses `egl-wayland` (v1) and still the NVIDIA hardware GL, or under XWayland with `SDL_VIDEO_DRIVER=x11` (GLX, NVIDIA hardware GL), as in the commands above.
+With the NVIDIA 595 driver, SDL3's `eglCreateWindowSurface` fails under the 32-bit `libnvidia-egl-wayland2` (reporting `EGL_SUCCESS`); `re2dj_opengl_post_shader_probe`, which opens a window without any guest, fails the same way, so it is a driver matter (task 459), and 64-bit is unaffected. Run the x86 product either with `__EGL_EXTERNAL_PLATFORM_CONFIG_FILENAMES` listing the NVIDIA platform files without `09_nvidia_wayland2.json`, so EGL uses `egl-wayland` (v1) and still the NVIDIA hardware GL, or under XWayland with `SDL_VIDEO_DRIVER=x11` (GLX, NVIDIA hardware GL), as in the commands above. Both hold 60 fps with vsync on; with vsync off, X11 gives 1.6 to 1.7 times the throughput, the `egl-wayland` v1 path spending longer waiting in presentation ([performance comparison](../analysis/linux-windows-performance.md), #4).

@@ -319,6 +319,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 * `main`에 머지할 때는 작업 브랜치 안의 커밋 제목들을 확인하고, 전체 변경 내용을 잘 표현하는 최종 커밋 제목을 만들어 사용한다.
 * `main`에 머지한 뒤에는 갱신한 로컬 `main`의 squash 커밋에 `VERSION`과 같은 값의 annotated tag를 `vmajor.minor.patch` 형식으로 붙인다. 예: `VERSION`이 `0.0.1`이면 `v0.0.1`.
 * tag 메시지에는 해당 버전의 핵심 변경을 한 줄로 남긴다.
+* 릴리스 노트(`docs/release-notes/vX.md`와 `RELEASE_NOTES.md`의 해당 버전 절)에는 한국어·영어 본문 각각에 "해결된 이슈 / Resolved issues" 절을 두고, 그 버전이 해결한 이슈 `#N`(제목)과 PR 번호를 링크로 적는다. 해결한 이슈가 없으면 "없음"이라고 적는다. 그래서 머지할 때는 PR을 먼저 만들고, 그 번호를 노트에 적은 뒤 squash merge한다.
+* squash 커밋 ID는 머지 뒤에야 생기므로 노트 파일에 적지 않는다. 태그를 push하면 `release.yml`이 `scripts/release/release_refs.py`로 직전 태그 이후 커밋의 ID·제목·닫은 이슈·PR 표를 만들어 GitHub Release 본문 끝에 붙인다.
 * tag는 로컬까지만 만들고 원격 push는 사용자가 직접 수행한다.
 * 머지가 완료되면 작업 브랜치를 로컬과 원격에서 삭제한다.
 * 저장소 루트의 `roms/`와 `overlays/`는 서로 독립된 디렉터리이며, 각각 0바이트 `dir.txt`만 Git으로 추적한다. 그 밖의 모든 내용은 ignore한다.
@@ -339,6 +341,8 @@ If the requirement is a simple question or confirmation request, answer it direc
 * When merging into `main`, inspect the commit titles in the task branch and create a final commit title that best describes the complete change.
 * After merging into `main`, tag the squash commit in the updated local `main` with an annotated tag matching `VERSION`, in the form `vmajor.minor.patch`. For example, tag `v0.0.1` when `VERSION` reads `0.0.1`.
 * Put a one-line summary of the version's key change in the tag message.
+* Release notes (`docs/release-notes/vX.md` and the version's section of `RELEASE_NOTES.md`) carry a "해결된 이슈 / Resolved issues" part in both the Korean and English bodies, linking each issue `#N` the version resolves (with its title) and the PR number, or "None" when nothing was resolved; so when merging, open the PR first, write its number into the notes, then squash-merge.
+* A squash commit's ID exists only after the merge, so note files do not hold it; when a tag is pushed, `release.yml` builds a table of the commits since the previous tag — ID, subject, issues closed and PR — with `scripts/release/release_refs.py` and appends it to the GitHub Release body.
 * Create tags locally only; the user pushes them to the remote.
 * Delete the task branch locally and on the remote after the merge is complete.
 * The repository-root `roms/` and `overlays/` are separate directories. Track only a zero-byte `dir.txt` in each and ignore all other contents.

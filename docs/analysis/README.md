@@ -53,6 +53,7 @@
 
 | [ez2d2m-jam-audio-runtime.md](ez2d2m-jam-audio-runtime.md) | EZ2Dancer JAM VFS/DirectSound/SDL runtime audio evidence and streaming Play semantics | 2026-09-14 VFS, PCM delivery, and repeated-Play HLE divergence confirmed |
 | [windows-in-process-performance.md](windows-in-process-performance.md) | 주입 경로(v0.0.62)와 in-process 러너의 Windows 실행 성능 비교: vsync off 처리량, CPU, 메모리 / Windows run performance of the injection path (v0.0.62) against the in-process runner: vsync-off throughput, CPU, memory | 5개 타깃 실제 실행 측정으로 확인됨. 원인은 추정, 반복 측정·프로파일링은 미확정 / Confirmed by real runs of five targets; causes inferred, repeated runs and profiling unresolved |
+| [linux-windows-performance.md](linux-windows-performance.md) | 같은 PC에서 Windows in-process와 Linux x86·x64 비교: vsync off 처리량, vsync on CPU·FPS, 메모리, 표시 경로(egl-wayland2·v1·X11) 대조 / Windows in-process against Linux x86 and x64 on one PC: vsync-off throughput, vsync-on CPU and FPS, memory, and a presentation-path control (egl-wayland2, v1, X11) | 5개 타깃 실제 실행(Linux 조건마다 2회)으로 확인됨. 원인은 추정, 프로파일링은 미확정 / Confirmed by real runs of five targets (two per Linux condition); causes inferred, profiling unresolved |
 
 *Update this table in the same task whenever an analysis document is added or renamed.*
 

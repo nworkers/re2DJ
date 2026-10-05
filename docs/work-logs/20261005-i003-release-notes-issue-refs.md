@@ -1,0 +1,21 @@
+# #3 작업 로그 — 릴리스 노트에 해결된 이슈와 커밋 ID 표시 / #3 work log — resolved issues and commit IDs in release notes
+
+이슈: [#3](https://github.com/nworkers/re2DJ/issues/3) · 설계: [20261005-i003-release-notes-issue-refs.md](../design/20261005-i003-release-notes-issue-refs.md) · 지시서: [20261005-i003-release-notes-issue-refs.md](../work-orders/20261005-i003-release-notes-issue-refs.md)
+
+## 2026-10-05
+
+- **출발점**: v0.0.65 머지 뒤 사용자가 릴리스 노트에 해결된 이슈 번호가 없다고 지적했다. 해결된 이슈와 커밋 ID가 보여야 한다고 했다. squash 커밋 ID는 머지 뒤에야 생기므로, 파일에는 이슈·PR을 적고 커밋 표는 Release 본문에 자동으로 붙이기로 했다. 아직 push하지 않은 v0.0.65 태그는 그대로 두고, Release가 올라간 뒤 본문을 보강하기로 사용자와 정했다.
+- **구현**
+  - `scripts/release/release_refs.py`: 직전 `v*` 태그부터 태그까지 `git log`를 읽는다. 커밋 본문의 `Closes`·`Fixes`·`Resolves #N`과 `gh issue view`의 제목, `gh api …/commits/<sha>/pulls`의 머지된 PR을 모아 표와 비교 링크를 출력한다. `gh`가 없거나 실패하면 이슈 번호만 링크한다.
+  - `release.yml`: `publish`의 checkout을 `fetch-depth: 0`으로 바꿨다. 본문은 노트 파일 + `---` + 스크립트 출력이다(파일이 없으면 출력만, 이전의 `--generate-notes` 대신). 이슈 제목과 PR을 읽도록 권한에 `issues: read`, `pull-requests: read`를 더했다. 처음 권한은 `contents: write`뿐이라, 명시하지 않은 두 권한이 none이었다.
+  - `docs/release-notes/v0.0.65.md`와 `RELEASE_NOTES.md`의 v0.0.65 절에 해결된 이슈 #1, PR #2, 커밋 `26a9151`을 두 언어로 넣었다.
+  - 규칙: `AGENTS.md` Git 규칙(두 언어)에 노트의 "해결된 이슈" 절, PR을 먼저 만들어 번호를 노트에 적는 머지 순서, Release 본문의 자동 표를 적었다. `docs/release-notes/README.md`(두 언어)와 `scripts/README.md` 표도 고쳤다.
+
+  *Starting point: after the v0.0.65 merge the user pointed out that the release notes showed no resolved issue numbers and that resolved issues and commit IDs must appear. A squash commit's ID exists only after the merge, so the files name issues and PRs while a commit table is appended to the Release body automatically; the unpushed v0.0.65 tag stays as it is, its Release body to be filled in once it is up, as agreed with the user. Implementation: `scripts/release/release_refs.py` reads `git log` from the previous `v*` tag to the tag, gathers `Closes`/`Fixes`/`Resolves #N` from commit bodies with titles from `gh issue view` and merged PRs from `gh api …/commits/<sha>/pulls`, and prints the table and a compare link, linking issue numbers alone when `gh` is missing or fails. In `release.yml`, `publish` checks out with `fetch-depth: 0`, the body is the note file, `---` and the script's output (the output alone without a file, replacing `--generate-notes`), and the permissions gain `issues: read` and `pull-requests: read`, which were none under the lone `contents: write`. `docs/release-notes/v0.0.65.md` and the v0.0.65 section of `RELEASE_NOTES.md` name resolved issue #1, PR #2 and commit `26a9151` in both languages. Rules: the Git rules of `AGENTS.md` (both languages) now require the notes' resolved-issues part, a merge order that opens the PR first to write its number into the notes, and the automatic table in the Release body; `docs/release-notes/README.md` (both languages) and the `scripts/README.md` table are updated.*
+
+- **검증**
+  - `release_refs.py v0.0.65`(로컬 태그): `26a9151` 한 행에 이슈 #1(제목 포함), PR #2, `v0.0.64...v0.0.65` 비교 링크가 나왔다. `v0.0.64`: `6eb4bc1` 한 행, 이슈·PR은 `-`, "해결된 이슈: 없음 / none"이 나왔다. 인증 없는 `gh`(`GH_CONFIG_DIR` 빈 디렉터리, 토큰 없음): `[#1]` 링크만 있고 PR은 `-`였다.
+  - `release.yml`: PyYAML로 읽어 권한 `{contents: write, issues: read, pull-requests: read}`와 `publish` checkout의 `fetch-depth: 0`을 확인했다. `publish` 마지막 단계의 셸은 `bash -n`을 통과했다. 같은 조립 순서를 로컬에서 v0.0.65로 돌려, 노트 파일 뒤에 `---`와 표가 붙는 것을 확인했다.
+  - 실제 Release 생성은 태그 push 때만 돈다. 이 변경은 다음 태그부터 적용되고, v0.0.65는 설계 결정 3대로 따로 고친다.
+
+  *Verification: `release_refs.py v0.0.65` against the local tag gives one `26a9151` row with issue #1 and its title, PR #2 and a `v0.0.64...v0.0.65` compare link; `v0.0.64` gives one `6eb4bc1` row with `-` for issues and PR and "Resolved issues: none"; with an unauthenticated `gh` (an empty `GH_CONFIG_DIR`, no token) it links `[#1]` alone and leaves the PR `-`. PyYAML reads `release.yml` with permissions `{contents: write, issues: read, pull-requests: read}` and `fetch-depth: 0` on the `publish` checkout, the last `publish` step's shell passes `bash -n`, and running the same assembly locally for v0.0.65 appends `---` and the table after the note file. Creating a real Release runs only on a tag push, so this applies from the next tag, with v0.0.65 fixed separately as in design decision 3.*

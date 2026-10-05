@@ -4,6 +4,14 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+- **#4 — 같은 PC에서 Windows와 Linux x86·x64 성능을 비교했습니다.** vsync on에서는 모두 60 fps이고 Linux x64의 CPU가 가장 낮습니다. vsync off 처리량은 Linux x64가 Windows in-process의 ×0.98~×3.37, x86이 ×0.54~×1.03입니다. x86의 격차는 주로 NVIDIA 32비트 `egl-wayland` v1 경로에서 옵니다. 근거: [분석](analysis/linux-windows-performance.md), [작업 로그](work-logs/20261005-i004-linux-windows-performance.md).
+
+  *#4 — compared Windows with Linux x86 and x64 on one PC: all hold 60 fps with vsync on and Linux x64 uses the least CPU; vsync-off throughput on Linux x64 is ×0.98 to ×3.37 of the Windows in-process runner and on x86 ×0.54 to ×1.03, x86's gap coming mainly from NVIDIA's 32-bit `egl-wayland` v1 path. Evidence: [analysis](analysis/linux-windows-performance.md), [work log](work-logs/20261005-i004-linux-windows-performance.md).*
+
+- **#3 — 릴리스 노트에 해결된 이슈와 커밋 ID를 표시합니다.** 노트 파일에는 이슈 `#N`과 PR을 적습니다. GitHub Release 본문에는 `release.yml`이 `scripts/release/release_refs.py`로 만든 커밋·이슈·PR 표를 붙입니다. 근거: [설계](design/20261005-i003-release-notes-issue-refs.md), [작업 로그](work-logs/20261005-i003-release-notes-issue-refs.md).
+
+  *#3 — release notes show resolved issues and commit IDs: note files name issues `#N` and PRs, and `release.yml` appends a commit, issue and PR table built by `scripts/release/release_refs.py` to the GitHub Release body. Evidence: [design](design/20261005-i003-release-notes-issue-refs.md), [work log](work-logs/20261005-i003-release-notes-issue-refs.md).*
+
 - **#1 — CI가 모든 브랜치 push에서 돌고, 작업은 GitHub 이슈·PR로 관리합니다.** `ci.yml`은 모든 브랜치 push와 수동 실행에서 세 타깃을 검증하고, 같은 저장소 PR의 중복 실행은 건너뜁니다. 작업 번호는 이슈 번호(`#N`)이고 `main` 머지는 PR squash merge입니다. 근거: [설계](design/20261005-i001-branch-ci-and-issue-workflow.md), [작업 로그](work-logs/20261005-i001-branch-ci-and-issue-workflow.md).
 
   *#1 — CI runs on every branch push and tasks are tracked as GitHub issues and PRs: `ci.yml` checks the three targets on every branch push and by hand, skipping duplicate same-repository PR runs; the task number is the issue number (`#N`) and merges into `main` are PR squash merges. Evidence: [design](design/20261005-i001-branch-ci-and-issue-workflow.md), [work log](work-logs/20261005-i001-branch-ci-and-issue-workflow.md).*
