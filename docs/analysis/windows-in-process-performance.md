@@ -4,6 +4,10 @@
 
 *Tasks 446 to 450 moved Windows execution from injection (the original PE32 started as its own Windows process with a runtime DLL injected) to the in-process runner (the original PE32 mapped into re2dj's own process). This document compares run performance before and after on one PC, measured in task 453 ([work log](../work-logs/20261005-453-release-screenshots-performance.md)).*
 
+같은 PC에서 Linux x86·x64와 비교한 결과는 [Windows와 Linux x86·x64 성능 비교](linux-windows-performance.md)에 있다.
+
+*The comparison with Linux x86 and x64 on the same PC is in [Windows compared with Linux x86 and x64 performance](linux-windows-performance.md).*
+
 ## 요약 / Summary
 
 - **확인됨**: vsync를 끈 최대 처리량은 in-process 쪽이 4th −17%, 1st SE −22%, 5th −11%, 6th −16% 낮고 2nd MOVE만 +10% 높다. 프레임당 CPU 시간은 6th(×1.02)를 빼고 ×1.5~×2.0이다.

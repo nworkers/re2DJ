@@ -212,8 +212,9 @@
   - [ ] 자주 불리는 단순 import(시간·동기화)의 빠른 경로 검토
   - [ ] Private bytes 증가(최대 1.4 GB)와 6th working set 증가의 원인 확인
   - [ ] 측정용 vsync off 선택(현재 `--vsync`는 거부됨)을 정식 옵션으로 둘지 결정
+  - [ ] Linux x86과 x64의 X11 처리량 차이(x86이 51~84%)와 x86 상주 private 메모리(+85~100 MB)의 원인 확인([Linux 비교](analysis/linux-windows-performance.md), #4)
 
-  *In-process runner performance analysis, registered 2026-10-05 ([measurements](analysis/windows-in-process-performance.md)): settle the throughput differences with repeated runs, find the costly boundaries from per-import call counts and a sampling profile of vsync-off runs, measure the global guest lock's hand-over cost and thread serialization, consider fast paths for simple, frequent imports (time, synchronization), explain the private-bytes growth (up to 1.4 GB) and 6th's larger working set, and decide whether a vsync-off choice for measuring (`--vsync` is refused now) becomes a real option.*
+  *In-process runner performance analysis, registered 2026-10-05 ([measurements](analysis/windows-in-process-performance.md)): settle the throughput differences with repeated runs, find the costly boundaries from per-import call counts and a sampling profile of vsync-off runs, measure the global guest lock's hand-over cost and thread serialization, consider fast paths for simple, frequent imports (time, synchronization), explain the private-bytes growth (up to 1.4 GB) and 6th's larger working set, decide whether a vsync-off choice for measuring (`--vsync` is refused now) becomes a real option, and explain Linux x86's X11 throughput gap to x64 (51 to 84%) and its extra resident private memory (+85 to 100 MB) ([Linux comparison](analysis/linux-windows-performance.md), #4).*
 
 - [ ] EZ2DJ 6th 실행(2026-09-30 시작)
   - [x] Win32: 데모, 코인, 모드 선택, 곡 선택, 플레이까지 진행(작업 430 전에도 진행됨)
