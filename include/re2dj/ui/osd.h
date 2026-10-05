@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "re2dj/graphics/gl_renderer_identity.h"
 #include "re2dj/graphics/post_shader_control.h"
 #include "re2dj/graphics/present_overlay.h"
 
@@ -48,6 +49,9 @@ public:
 
     // Informational lines shown above the controls, in order.
     void SetInfoLines(const std::vector<std::string>& lines);
+    // What draws the picture (#6), shown in its own section right below the
+    // information lines. Absent until set.
+    void SetRendererIdentity(const graphics::GlRendererIdentity& identity);
     void AddToggle(const OsdToggle& toggle);
     // The post-processing pass whose shader menu the OSD shows below the
     // toggles (task 455), or null to hide the menu. Not owned; it must outlive

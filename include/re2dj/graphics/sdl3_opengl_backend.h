@@ -9,6 +9,7 @@
 #include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/legacy_draw_command.h"
 #include "re2dj/graphics/legacy_texture.h"
+#include "re2dj/graphics/gl_renderer_identity.h"
 #include "re2dj/graphics/post_shader_control.h"
 #include "re2dj/graphics/present_overlay.h"
 #include "re2dj/graphics/present_sync.h"
@@ -134,6 +135,10 @@ public:
     // Initialize succeeds or when the driver lacks the shader entry points.
     // Use it on the presenting thread only.
     PostShaderControl* post_shader_control();
+    // What the window's OpenGL context reports it renders with, read once when
+    // Initialize made it current (#6), for the OSD and the host's log. Empty
+    // strings before Initialize succeeds.
+    GlRendererIdentity renderer_identity() const;
 
     // The primary display's desktop mode, read without a window: its size,
     // bits per pixel (bytes per pixel times eight, as Windows reports a

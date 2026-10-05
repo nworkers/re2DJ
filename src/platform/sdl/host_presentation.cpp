@@ -103,6 +103,8 @@ bool SdlHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
         ui::AddColorDepthToggle(osd_.get());
     }
     backend_->SetPresentOverlay(osd_.get());
+    osd_->SetRendererIdentity(backend_->renderer_identity());
+    ReportRenderer();
     osd_->SetPostShaderControl(backend_->post_shader_control());
     ReportPostShader();
     if (!ApplyWindowMode(error) || !backend_->ClearRenderTarget(0, error) || !backend_->Present(error))
@@ -128,6 +130,19 @@ bool SdlHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
     }
     error->clear();
     return true;
+}
+
+void SdlHostPresentation::ReportRenderer()
+{
+    const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+    if (logger == nullptr)
+    {
+        return;
+    }
+    const graphics::GlRendererIdentity identity = backend_->renderer_identity();
+    logger->info("presentation: GL renderer: {} | vendor: {} | version: {} | video driver: {}{}",
+                 identity.renderer, identity.vendor, identity.version, identity.video_driver,
+                 identity.software ? " | software rendering" : "");
 }
 
 void SdlHostPresentation::ReportPostShader()

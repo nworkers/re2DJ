@@ -1282,6 +1282,14 @@ flowchart LR
 
 *A libretro single-pass GLSL shader (the format of rePIU task 768) applies to the game's picture at presentation only. The game draws into a render target at its logical resolution and `Present` draws that as one quad into the window's aspect-kept rectangle, so with a shader selected the quad is drawn through `OpenGlPostProcess`'s program: no copy, the render target and guest readbacks untouched, and under `none` Present issues the same GL calls as before. `InputSize` and `TextureSize` are the render target's size (the logical resolution), `OutputSize` the picture rectangle's pixel size. The built-in `crt` and `scanline` are embedded at configure time and `shaders/*.glsl` (the working directory, else beside the executable) join the list. The starting shader is `--post-shader`, then `RE2DJ_POST_SHADER`, then `none`, and the OSD's Screen shader menu switches, reloads and adjusts parameters while running; the OSD knows only the GL-free `PostShaderControl` interface.*
 
+## 2026-10-06 OSD의 OpenGL renderer 표시 / The OpenGL renderer in the OSD
+
+관련 설계: [#6](docs/design/20261006-i006-osd-gl-renderer.md)
+
+`Sdl3OpenGlBackend::Initialize`는 GL context를 current로 만든 직후 `GL_RENDERER`·`GL_VENDOR`·`GL_VERSION`과 `SDL_GetCurrentVideoDriver()`를 GL·SDL 없는 값 구조체 `graphics::GlRendererIdentity`(`gl_renderer_identity.h`)에 담고 `renderer_identity()`로 내준다. `SdlHostPresentation`이 OSD를 붙일 때 `ui::Osd::SetRendererIdentity`로 넘기고 `presentation: GL renderer: …` 한 줄을 로그에 남긴다. OSD는 프로세스 정보 줄 바로 아래 Renderer 절에 그리며, `IsSoftwareGlRenderer`가 소프트웨어 렌더러(llvmpipe, GDI Generic, WARP 등)로 판정하면 경고 색과 문구로 구분한다.
+
+*Right after making its GL context current, `Sdl3OpenGlBackend::Initialize` puts `GL_RENDERER`, `GL_VENDOR`, `GL_VERSION` and `SDL_GetCurrentVideoDriver()` into the GL- and SDL-free `graphics::GlRendererIdentity` (`gl_renderer_identity.h`) and exposes it as `renderer_identity()`. `SdlHostPresentation` hands it to `ui::Osd::SetRendererIdentity` when it attaches the OSD and logs one `presentation: GL renderer: …` line. The OSD draws it in a Renderer section right below the process-information lines, in a warning colour with a note when `IsSoftwareGlRenderer` judges it a software rasterizer (llvmpipe, GDI Generic, WARP and the like).*
+
 ## 2026-09-19 Linux x86 real first-import completion / Linux x86 실제 첫 import completion
 
 Linux x86 in-process probe observed `ez2dj4th` returning from first `GetModuleHandleA("kernel32")` to `0x00ae028a`; a temporary guest `INT3` stopped at EIP `0x00ae028b`. This diagnostic does not establish real module-handle or later API compatibility. See [the analysis](docs/analysis/ez2dj4th-linux-inprocess-first-import.md).

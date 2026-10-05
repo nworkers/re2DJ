@@ -1,5 +1,47 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.67 (2026-10-06)
+
+### 한국어
+
+OSD의 프로세스 정보 아래에 OpenGL renderer를 표시합니다(#6).
+
+#### 해결된 이슈
+
+- [#6](https://github.com/nworkers/re2DJ/issues/6) OSD에 OpenGL renderer 표시 — PR [#7](https://github.com/nworkers/re2DJ/pull/7)
+
+#### 1. OSD의 Renderer 절 (#6)
+- rePIU OSD(rePIU #5)처럼 프로세스 정보 줄 바로 아래 "Renderer" 구분선에 `GL_RENDERER`, `Vendor`(`GL_VENDOR`), `OpenGL`(`GL_VERSION`), `Video driver`(`SDL_GetCurrentVideoDriver()`)를 표시합니다.
+- `IsSoftwareGlRenderer`가 llvmpipe·softpipe·swrast·GDI Generic·WARP(Microsoft Basic Render Driver)·SwiftShader를 소프트웨어 렌더러로 판정하면 경고 색과 "Software rendering: no 3D acceleration" 문구로 구분합니다.
+- `Sdl3OpenGlBackend`가 GL context를 만든 직후 값을 GL·SDL 없는 `graphics::GlRendererIdentity`에 담고, `SdlHostPresentation`이 OSD에 넘기며 `presentation: GL renderer: …` 로그를 남깁니다. `glGetString`도 다른 GL 진입점처럼 `SDL_GL_GetProcAddress`로 얻습니다.
+
+#### 2. 검증
+- 단위 테스트 `gl_renderer_identity_test`: 소프트웨어 이름(대문자 변형 포함)은 true, NVIDIA·Intel Arc·AMD·`D3D12 (NVIDIA …)`·빈 문자열·`unknown`은 false, 빈 값의 `unknown` 대체.
+- Windows x86 Debug: 단위 테스트 6158건 실패 0건. 6th 실행에서 로그 `GL renderer: NVIDIA GeForce RTX 4090/PCIe/SSE2 | vendor: NVIDIA Corporation | version: 4.6.0 NVIDIA 616.56 | video driver: windows`와 OSD 캡처를 확인했습니다.
+- Linux x64 Debug(WSL): 단위 테스트 6155건 실패 0건.
+- CI(브랜치 push): `windows-x86`, `linux-x86`, `linux-x64` gcc·clang.
+
+### English
+
+The OSD shows the OpenGL renderer below the process information (#6).
+
+#### Resolved issues
+
+- [#6](https://github.com/nworkers/re2DJ/issues/6) Show the OpenGL renderer in the OSD — PR [#7](https://github.com/nworkers/re2DJ/pull/7)
+
+#### 1. The OSD's Renderer section (#6)
+- As in rePIU's OSD (rePIU #5), a "Renderer" separator right below the process-information lines shows `GL_RENDERER`, `Vendor` (`GL_VENDOR`), `OpenGL` (`GL_VERSION`) and `Video driver` (`SDL_GetCurrentVideoDriver()`).
+- When `IsSoftwareGlRenderer` judges it a software rasterizer — llvmpipe, softpipe, swrast, GDI Generic, WARP (Microsoft Basic Render Driver) or SwiftShader — it is set apart in a warning colour with "Software rendering: no 3D acceleration".
+- `Sdl3OpenGlBackend` puts the values into the GL- and SDL-free `graphics::GlRendererIdentity` right after creating its GL context, and `SdlHostPresentation` hands them to the OSD and logs a `presentation: GL renderer: …` line. `glGetString` is reached through `SDL_GL_GetProcAddress` like every other GL entry point.
+
+#### 2. Verification
+- Unit test `gl_renderer_identity_test`: software names (an upper-case variant included) are true; NVIDIA, Intel Arc, AMD, `D3D12 (NVIDIA …)`, the empty string and `unknown` are false; empty values become `unknown`.
+- Windows x86 Debug: 6158 unit checks, 0 failures; a 6th run logs `GL renderer: NVIDIA GeForce RTX 4090/PCIe/SSE2 | vendor: NVIDIA Corporation | version: 4.6.0 NVIDIA 616.56 | video driver: windows`, and the OSD capture was checked.
+- Linux x64 Debug (WSL): 6155 unit checks, 0 failures.
+- CI (branch push): `windows-x86`, `linux-x86` and `linux-x64` gcc and clang.
+
+---
+
 ## v0.0.66 (2026-10-05)
 
 ### 한국어

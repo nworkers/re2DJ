@@ -28,6 +28,7 @@ namespace
 {
 
 using GlChar = char;
+using GetStringFunction = const GLubyte*(APIENTRY*)(GLenum);
 using CreateShaderFunction = GLuint(APIENTRY*)(GLenum);
 using ShaderSourceFunction = void(APIENTRY*)(GLuint, GLsizei, const GlChar* const*, const GLint*);
 using CompileShaderFunction = void(APIENTRY*)(GLuint);
@@ -191,6 +192,7 @@ struct Sdl3OpenGlBackend::Impl
     // What SDL reported after the present-sync policy was applied. Reported to
     // the host rather than logged here, since this layer has no log.
     int applied_swap_interval = 0;
+    GlRendererIdentity renderer_identity;
     // Stands in for vertical sync when the swap does not block (WSLg).
     PresentPacer pacer;
     std::unordered_map<std::uint64_t, CachedTexture> textures;
@@ -720,6 +722,11 @@ PostShaderControl* Sdl3OpenGlBackend::post_shader_control()
     return impl_ == nullptr ? nullptr : impl_->post_process.get();
 }
 
+GlRendererIdentity Sdl3OpenGlBackend::renderer_identity() const
+{
+    return impl_ == nullptr ? GlRendererIdentity{} : impl_->renderer_identity;
+}
+
 bool Sdl3OpenGlBackend::true_color_unavailable() const
 {
     return impl_ != nullptr && impl_->true_color_unavailable;
@@ -814,6 +821,17 @@ bool Sdl3OpenGlBackend::Initialize(const Sdl3OpenGlWindowConfig& config, std::st
         return false;
     }
 
+    // Read for the OSD and the host's log (#6); a driver without the entry
+    // point leaves the strings "unknown".
+    GetStringFunction get_string = nullptr;
+    LoadGlFunction("glGetString", &get_string);
+    const auto gl_string = [get_string](GLenum name) {
+        return get_string == nullptr ? nullptr : reinterpret_cast<const char*>(get_string(name));
+    };
+    impl->renderer_identity = MakeGlRendererIdentity(gl_string(GL_RENDERER),
+                                                     gl_string(GL_VENDOR),
+                                                     gl_string(GL_VERSION),
+                                                     SDL_GetCurrentVideoDriver());
     ApplyPresentSync(config.present_sync, &impl->applied_swap_interval);
     // Paced at the window's display rate, as vertical sync would; a policy
     // that asks presents not to block is left alone.
