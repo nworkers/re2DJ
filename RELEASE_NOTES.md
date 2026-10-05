@@ -1,5 +1,59 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.66 (2026-10-05)
+
+### 한국어
+
+릴리스 노트에 그 버전이 해결한 이슈와 커밋 ID가 보이도록 했습니다(#3). 같은 PC에서 Windows와 Linux x86·x64의 성능을 비교해 정리했습니다(#4).
+
+#### 해결된 이슈
+
+- [#3](https://github.com/nworkers/re2DJ/issues/3) 릴리스 노트에 해결된 이슈와 커밋 ID 표시 — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
+- [#4](https://github.com/nworkers/re2DJ/issues/4) Windows와 Linux x86·x64 성능 비교 — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
+
+#### 1. 릴리스 노트의 이슈와 커밋 (#3)
+- 노트 파일(`docs/release-notes/vX.md`, 이 문서)의 한국어·영어 본문에 "해결된 이슈" 절을 두고, 이슈 `#N`과 PR을 링크로 적습니다.
+- 태그를 push하면 `release.yml`이 `scripts/release/release_refs.py`로 직전 태그 이후 커밋의 ID·제목·닫은 이슈·PR 표를 만들어 GitHub Release 본문 끝에 붙입니다. squash 커밋 ID는 머지 뒤에야 생기기 때문입니다. 이슈 제목과 PR을 읽도록 워크플로에 `issues: read`, `pull-requests: read` 권한을 더했습니다.
+- v0.0.65 노트에도 #1, PR #2, 커밋 `26a9151`을 넣었습니다.
+
+#### 2. Windows와 Linux 성능 비교 (#4)
+- 작업 453과 같은 PC·같은 조건(다섯 타깃, vsync on/off 40초, 2배 창)으로 Linux x86·x64 Release를 쟀습니다. 결과는 `docs/analysis/linux-windows-performance.md`에 있습니다.
+- vsync on(기본)에서는 세 빌드 모두 평균 60 fps입니다. CPU는 Linux x64가 코어 하나의 4~13%로 Windows(9~17%)의 절반 안팎입니다.
+- vsync off 처리량은 Linux x64가 Windows in-process의 ×0.98~×3.37, Linux x86이 ×0.54~×1.03입니다.
+- Linux x86이 느린 주된 이유는 NVIDIA 32비트에서 쓰는 `egl-wayland` v1 표시 경로입니다. X11(`SDL_VIDEO_DRIVER=x11`)로 띄우면 처리량이 1.6~1.7배이고, Linux 빌드 가이드에 이 내용을 적었습니다.
+
+#### 3. 검증
+- `release_refs.py`: v0.0.65는 #1·PR #2·`26a9151`, 이슈가 없던 v0.0.64는 "없음"으로 나옵니다. `gh` 인증이 없으면 이슈 번호만 링크합니다. `release.yml`은 YAML과 `bash -n` 검사를 통과했습니다. 실제 Release 본문은 다음 태그 push에서 만들어집니다.
+- 성능: x86·x64 × 다섯 타깃 × vsync on/off × 2회(40회)와 표시 경로 대조 9회. 측정용 패치는 되돌리고 다시 빌드했습니다.
+- CI(브랜치 push): `windows-x86`, `linux-x86`, `linux-x64` gcc·clang이 모두 성공했습니다.
+
+### English
+
+Release notes now show the issues and commit IDs a version resolves (#3), and the performance of Windows and Linux x86 and x64 on one PC is compared (#4).
+
+#### Resolved issues
+
+- [#3](https://github.com/nworkers/re2DJ/issues/3) Show resolved issues and commit IDs in release notes — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
+- [#4](https://github.com/nworkers/re2DJ/issues/4) Compare Windows with Linux x86 and x64 performance — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
+
+#### 1. Issues and commits in release notes (#3)
+- Note files (`docs/release-notes/vX.md`, this document) carry a "Resolved issues" part in both the Korean and English bodies, linking each issue `#N` and its PR.
+- When a tag is pushed, `release.yml` builds a table of the commits since the previous tag — ID, subject, issues closed and PR — with `scripts/release/release_refs.py` and appends it to the GitHub Release body, since a squash commit's ID exists only after the merge. The workflow gains `issues: read` and `pull-requests: read` to read issue titles and PRs.
+- The v0.0.65 notes now name #1, PR #2 and commit `26a9151`.
+
+#### 2. Windows and Linux performance (#4)
+- Linux x86 and x64 Release were measured on task 453's PC under its conditions (five targets, vsync on and off for 40 s, the 2x window); the results are in `docs/analysis/linux-windows-performance.md`.
+- With vsync on (the default) all three builds average 60 fps; Linux x64 uses 4 to 13% of one core, about half of Windows' 9 to 17%.
+- With vsync off, Linux x64 reaches ×0.98 to ×3.37 of the Windows in-process runner and Linux x86 ×0.54 to ×1.03.
+- Linux x86 is held back mainly by the `egl-wayland` v1 presentation path used for NVIDIA's 32-bit driver; on X11 (`SDL_VIDEO_DRIVER=x11`) it runs 1.6 to 1.7 times faster, as the Linux build guide now says.
+
+#### 3. Verification
+- `release_refs.py` gives #1, PR #2 and `26a9151` for v0.0.65 and "none" for v0.0.64, which had no issues, and links issue numbers alone without `gh` authentication; `release.yml` passes YAML and `bash -n` checks, and the real Release body is built at the next tag push.
+- Performance: x86 and x64 × five targets × vsync on and off × 2 (40 runs) plus nine presentation-path control runs; the measuring patch was reverted and the builds rebuilt.
+- CI (branch push): `windows-x86`, `linux-x86` and `linux-x64` gcc and clang all pass.
+
+---
+
 ## v0.0.65 (2026-10-05)
 
 ### 한국어
