@@ -18,6 +18,6 @@ spdlog의 최고 내장 level 이름은 `critical`입니다. 프로젝트가 사
 
 ## 라이선스 / License
 
-spdlog는 MIT License로 배포됩니다. 고정 버전, upstream과 license 링크를 프로젝트 third-party notice에 기록해야 합니다. [spdlog license](https://github.com/gabime/spdlog/blob/v1.14.1/LICENSE)
+spdlog는 MIT License로 배포됩니다. 고정 버전, upstream과 license 링크를 프로젝트 third-party notice에 기록해야 합니다. [spdlog license](https://github.com/gabime/spdlog/blob/v1.15.3/LICENSE)
 
-*spdlog is distributed under the MIT License. Record the pinned version plus upstream and license links in the project's third-party notice. [spdlog license](https://github.com/gabime/spdlog/blob/v1.14.1/LICENSE)*
+*spdlog is distributed under the MIT License. Record the pinned version plus upstream and license links in the project's third-party notice. [spdlog license](https://github.com/gabime/spdlog/blob/v1.15.3/LICENSE)*

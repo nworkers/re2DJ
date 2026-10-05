@@ -21,7 +21,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
-find_package(spdlog 1.14.1 EXACT CONFIG QUIET)
+find_package(spdlog 1.15.3 EXACT CONFIG QUIET)
 if(NOT spdlog_FOUND)
     set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
     set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -29,7 +29,7 @@ if(NOT spdlog_FOUND)
     set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(spdlog
         GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.14.1
+        GIT_TAG v1.15.3
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(spdlog)
