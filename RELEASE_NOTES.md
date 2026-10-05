@@ -1,5 +1,63 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.65 (2026-10-05)
+
+### 한국어
+
+데스크톱 Linux 실기(Ubuntu 26.04, GNOME Wayland, RTX 4090)에서 v0.0.62~v0.0.64를 검증했습니다(작업 458). 그 과정에서 새 컴파일러와 배포판에서만 드러나는 문제 세 가지를 고쳤습니다(작업 459·460). 이번부터 작업은 GitHub 이슈로 관리하고, CI는 모든 브랜치 push에서 돕니다(#1).
+
+#### 1. Linux 실기 검증 (작업 458)
+- 후처리 셰이더와 명령행 10가지 경우, 6th 런처→자식(`--` 처리 포함), 패키지 glibc 가드를 확인했습니다.
+- 실물 패드 대신 uinput 가상 Xbox 360 패드를 썼습니다. 연결·분리 인식, 버튼·스틱·십자키·트리거 매핑, 그리고 6th에서 BACK(코인)이 키보드 F5와 같은 코인 효과음을 내는 것까지 확인했습니다.
+- 관찰 사항: 창이 가려지거나 최소화되면 GNOME이 프레임을 1 Hz로 줄여 게임도 초당 1프레임으로 느려집니다. 또 코인을 넣은 뒤 START로 타이틀을 넘기지 못했는데, 키보드도 같아 패드 문제는 아닙니다. 두 가지 모두 원인을 확정하지 않았습니다.
+
+#### 2. GCC 15에서 Linux x86 (작업 459)
+- GCC 15는 이름 없는 namespace 안의 `extern "C"` 변수를 맹글링합니다. 그래서 GS 선택자 변수를 찾지 못해 x86 링크가 실패했고, 정의를 namespace 밖으로 옮겼습니다.
+- import 브리지가 게스트 스택(4바이트 정렬)에서 바로 호스트 코드를 불러, 32비트 Mesa LLVM의 SSE 명령(`movdqa`)에서 SIGSEGV가 났습니다. 이제 호스트 코드를 부르기 전에 스택을 16바이트로 정렬합니다.
+- NVIDIA 595의 32비트 `egl-wayland2`에서는 Wayland 창 표면이 만들어지지 않습니다. 드라이버 쪽 문제라, 우회 방법(egl-wayland v1 지정 또는 X11)을 Linux 빌드 가이드에 적었습니다.
+
+#### 3. clang 20 이상 (작업 460)
+- spdlog 1.14.1에 들어 있던 fmt 10.2.1이 clang 21에서 컴파일되지 않아, spdlog 1.15.3(fmt 11.2)으로 올렸습니다. fmt 11.2에서 deprecated가 된 `fmt::localtime`은 `std::localtime`으로 바꿨습니다.
+- 10월 19일부터 GitHub의 `ubuntu-latest`가 Ubuntu 26(clang 21, GCC 15)으로 바뀌므로, 459·460이 없으면 그날부터 CI가 실패했을 것입니다.
+
+#### 4. 작업 흐름과 CI (#1)
+- CI가 `main`만이 아니라 모든 브랜치 push와 수동 실행에서 Windows x86·Linux x64(gcc·clang)·Linux x86을 빌드하고 테스트합니다.
+- 작업은 GitHub 이슈(`#N`)로 만들고, `main` 머지는 PR squash merge로 합니다(`AGENTS.md`).
+
+#### 5. 검증
+- Ubuntu 26.04: GCC 15.2 x64·x86 Debug(경고를 오류로)와 Release, clang 21.1.8 x64 Debug 빌드가 경고 없이 성공했고, CTest 5개가 모두 통과했습니다. GL probe도 x64·x86 모두 통과했습니다.
+- 실제 게임: x64와 x86에서 4th, 6th 런처→자식을 실행해 셰이더 적용과 정상 종료를 확인했습니다.
+- CI(브랜치 push): `windows-x86`(MSVC), `linux-x86`(GCC 12), `linux-x64` gcc·clang 18 모두 성공했습니다.
+
+### English
+
+v0.0.62 to v0.0.64 were validated on a desktop Linux machine (Ubuntu 26.04, GNOME Wayland, RTX 4090) (task 458), which turned up three problems seen only with newer compilers and distributions (tasks 459 and 460). From this release tasks are GitHub issues and CI runs on every branch push (#1).
+
+#### 1. Linux desktop validation (task 458)
+- Ten shader and command-line cases, 6th's launcher → child (including `--`) and the package glibc guard were checked.
+- A uinput virtual Xbox 360 pad stood in for a physical one: hot-plug, the button, stick, d-pad and trigger mapping, and on 6th BACK (the coin) playing the same coin sound as the keyboard's F5.
+- Observations: a covered or minimised window has its frames cut to 1 Hz by GNOME, slowing the game to one frame a second; START did not get past the title after coins, with the keyboard behaving the same, so not a pad issue; neither cause is settled.
+
+#### 2. Linux x86 with GCC 15 (task 459)
+- GCC 15 mangles an `extern "C"` variable inside an unnamed namespace, so the x86 link could not find the GS selector variable; its definition moved out of the namespace.
+- The import bridge called host code straight on the guest stack (4-byte aligned), and an SSE instruction (`movdqa`) in 32-bit Mesa's LLVM raised SIGSEGV; the stack is now aligned to 16 bytes before host code.
+- NVIDIA 595's 32-bit `egl-wayland2` cannot create Wayland window surfaces; this is a driver matter, and the Linux build guide gives workarounds (pinning egl-wayland v1, or X11).
+
+#### 3. clang 20 and later (task 460)
+- fmt 10.2.1, bundled in spdlog 1.14.1, does not compile with clang 21, so spdlog moves to 1.15.3 (fmt 11.2); `fmt::localtime`, deprecated in fmt 11.2, is replaced with `std::localtime`.
+- GitHub's `ubuntu-latest` becomes Ubuntu 26 (clang 21, GCC 15) from October 19; without 459 and 460, CI would fail from that day.
+
+#### 4. Workflow and CI (#1)
+- CI builds and tests Windows x86, Linux x64 (gcc, clang) and Linux x86 on every branch push and by hand, not only on `main`.
+- Tasks are GitHub issues (`#N`), and merges into `main` are PR squash merges (`AGENTS.md`).
+
+#### 5. Verification
+- Ubuntu 26.04: GCC 15.2 x64 and x86 Debug (warnings as errors) and Release and clang 21.1.8 x64 Debug build without warnings and pass all 5 CTest tests; the GL probes pass on x64 and x86.
+- Real games: 4th and 6th's launcher → child on x64 and x86, with shaders applied and clean exits.
+- CI (branch push): `windows-x86` (MSVC), `linux-x86` (GCC 12) and `linux-x64` gcc and clang 18 all pass.
+
+---
+
 ## v0.0.64 (2026-10-05)
 
 ### 한국어

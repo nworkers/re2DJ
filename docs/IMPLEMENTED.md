@@ -4,6 +4,22 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+- **#1 — CI가 모든 브랜치 push에서 돌고, 작업은 GitHub 이슈·PR로 관리합니다.** `ci.yml`은 모든 브랜치 push와 수동 실행에서 세 타깃을 검증하고, 같은 저장소 PR의 중복 실행은 건너뜁니다. 작업 번호는 이슈 번호(`#N`)이고 `main` 머지는 PR squash merge입니다. 근거: [설계](design/20261005-i001-branch-ci-and-issue-workflow.md), [작업 로그](work-logs/20261005-i001-branch-ci-and-issue-workflow.md).
+
+  *#1 — CI runs on every branch push and tasks are tracked as GitHub issues and PRs: `ci.yml` checks the three targets on every branch push and by hand, skipping duplicate same-repository PR runs; the task number is the issue number (`#N`) and merges into `main` are PR squash merges. Evidence: [design](design/20261005-i001-branch-ci-and-issue-workflow.md), [work log](work-logs/20261005-i001-branch-ci-and-issue-workflow.md).*
+
+- **작업 460 — spdlog 1.15.3(fmt 11.2)으로 올려 clang 20 이상에서 빌드됩니다.** fmt 10.2.1의 `consteval` 형식 문자열이 clang 21에서 컴파일되지 않았습니다. `fmt::localtime`은 `std::localtime`으로 바꿨습니다. 근거: [설계](design/20261005-460-spdlog-fmt-clang21.md), [작업 로그](work-logs/20261005-460-spdlog-fmt-clang21.md).
+
+  *Task 460 — moved to spdlog 1.15.3 (fmt 11.2) so clang 20 and later build: fmt 10.2.1's `consteval` format strings did not compile with clang 21; `fmt::localtime` became `std::localtime`. Evidence: [design](design/20261005-460-spdlog-fmt-clang21.md), [work log](work-logs/20261005-460-spdlog-fmt-clang21.md).*
+
+- **작업 459 — GCC 15·새 배포판에서 Linux x86 product가 링크되고 실행됩니다.** `g_native_host_gs_selector`를 이름 없는 namespace 밖으로 옮겼고, import 브리지가 호스트 코드를 부르기 전에 스택을 16바이트로 정렬합니다. NVIDIA 32비트 `egl-wayland2` 우회 방법을 가이드에 적었습니다. 근거: [설계](design/20261005-459-linux-x86-gcc15-host-abi.md), [작업 로그](work-logs/20261005-459-linux-x86-gcc15-host-abi.md), [kb](kb/i386-host-abi-at-guest-boundary.md).
+
+  *Task 459 — the Linux x86 product links and runs with GCC 15 on newer distributions: `g_native_host_gs_selector` left the unnamed namespace, and the import bridge aligns the stack to 16 bytes before host code; the guide covers NVIDIA's 32-bit `egl-wayland2`. Evidence: [design](design/20261005-459-linux-x86-gcc15-host-abi.md), [work log](work-logs/20261005-459-linux-x86-gcc15-host-abi.md), [kb](kb/i386-host-abi-at-guest-boundary.md).*
+
+- **작업 458 — v0.0.62~v0.0.64를 데스크톱 Linux 실기에서 검증했습니다.** Ubuntu 26.04(RTX 4090)에서 셰이더·명령행, 6th 런처→자식, uinput 가상 패드의 핫플러그·매핑·코인 입력, 패키지 glibc 가드를 확인했습니다. 근거: [작업 로그](work-logs/20261005-458-linux-desktop-validation.md).
+
+  *Task 458 — validated v0.0.62 to v0.0.64 on a desktop Linux machine: on Ubuntu 26.04 (RTX 4090), shaders and the command line, 6th's launcher → child, a uinput virtual pad's hot-plug, mapping and coin input, and the package glibc guard. Evidence: [work log](work-logs/20261005-458-linux-desktop-validation.md).*
+
 - **작업 457 — 셰이더 명령행 옵션을 rePIU 작업 771과 맞췄습니다.** `--post-shader=<id>` 형식, 빈 값의 exit 1, 옵션 끝을 뜻하는 `--`를 더했고, 런처 자식 인자에서는 `--`를 뺍니다. 근거: [설계](design/20261005-457-post-shader-command-line.md), [작업 로그](work-logs/20261005-457-post-shader-command-line.md).
 
   *Task 457 — matched the shader command-line option to rePIU task 771: the `--post-shader=<id>` form, exit 1 on an empty value, and `--` ending the options, dropped from a launcher child's arguments. Evidence: [design](design/20261005-457-post-shader-command-line.md), [work log](work-logs/20261005-457-post-shader-command-line.md).*
