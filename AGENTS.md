@@ -134,7 +134,7 @@ Repeated investigation and work procedures live as skills in `.agents/skills/<na
 
 ## 요구사항 처리 절차
 
-1. 요구사항 접수
+1. 요구사항 접수와 GitHub 이슈 생성(작업 번호는 이슈 번호)
 2. 관련 코드, 문서, 자산 맥락 확인
 3. 설계 문서 작성 또는 갱신
 4. 구현 계획서 작성 또는 갱신
@@ -149,7 +149,7 @@ Repeated investigation and work procedures live as skills in `.agents/skills/<na
 
 ## Requirement Handling Procedure
 
-1. Receive the requirement.
+1. Receive the requirement and create its GitHub issue (the issue number is the task number).
 2. Inspect the relevant code, documentation, and asset context.
 3. Write or update the design document.
 4. Write or update the implementation work order.
@@ -176,7 +176,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * 현재 구현되는 코드의 설계와 구조는 `ARCHITECTURE.md`에 지속적으로 반영한다.
 * 원본 파일 분석으로 확인한 구조와 설계는 `docs/EXE_DESIGN.ko.md`, `docs/EXE_DESIGN.en.md`에 누적 반영한다.
 * 규칙이 바뀌면 `AGENTS.md`와 관련 문서를 함께 갱신한다.
-* 작업 단위 문서 파일명은 가능하면 `YYYYMMDD-###-slug.md` 형식을 사용한다.
+* 작업 단위 문서 파일명은 `YYYYMMDD-iNNN-slug.md` 형식을 사용한다. `NNN`은 작업 이슈 번호를 세 자리 이상으로 채운 값이다(예: 이슈 #1 → `20261005-i001-slug.md`). 이슈 기반 이전의 작업 001~460 문서는 `YYYYMMDD-###-slug.md` 그대로 둔다.
 * Markdown 문서에서 구조, 관계, 흐름, 호출 순서, 상태 전이, 주소 변환을 도식화할 수 있으면 이해를 돕기 위해 Mermaid를 적극적으로 사용한다.
 * 세 개 이상의 구성요소·단계·분기·계층이 있으면 Mermaid 적용 가능성을 검토하고, flowchart, sequenceDiagram, stateDiagram, classDiagram 등 내용에 맞는 형식을 선택한다.
 * 도식이 본문 이해를 실질적으로 개선하는 경우 최대한 포함하되, 단순 사실 하나나 한 단계 설명에는 불필요한 도식을 강제하지 않는다.
@@ -194,7 +194,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * Continuously reflect the design and structure of currently implemented code in `ARCHITECTURE.md`.
 * Accumulate original executable analysis findings and design notes in `docs/EXE_DESIGN.ko.md` and `docs/EXE_DESIGN.en.md`.
 * When rules change, update `AGENTS.md` and the related documents together.
-* Use the `YYYYMMDD-###-slug.md` filename format for task documents whenever possible.
+* Name task documents `YYYYMMDD-iNNN-slug.md`, where `NNN` is the task's issue number padded to at least three digits (for example, issue #1 → `20261005-i001-slug.md`). Documents of tasks 001–460, from before issues, keep `YYYYMMDD-###-slug.md`.
 * Actively use Mermaid in Markdown documents whenever structure, relationships, flows, call sequences, state transitions, or address translation can be visualized to improve understanding.
 * Evaluate Mermaid whenever content has three or more components, steps, branches, or layers, choosing an appropriate form such as flowchart, sequenceDiagram, stateDiagram, or classDiagram.
 * Include useful diagrams as broadly as practical when they materially improve the prose, but do not force them into single-fact or one-step explanations.
@@ -286,6 +286,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 ## 작업 단위 규칙
 
+* 의미 있는 작업마다 GitHub 이슈를 만들고(`gh issue create`), 그 이슈 번호를 작업 번호로 쓴다. 문서·커밋·PR에서는 `#N`으로 적어 이전 작업 번호 체계의 "작업 NNN"(001~460)과 구분한다. 단순 질문과 확인 요청에는 이슈를 만들지 않는다.
 * 의미 있는 작업마다 하나의 작업 지시 문서를 만든다.
 * 작업이 끝나면 대응되는 작업 로그를 남긴다.
 * 설계 없이 바로 코드만 추가하지 않는다.
@@ -294,6 +295,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 ## Task Unit Rules
 
+* Create a GitHub issue for each meaningful task (`gh issue create`) and use its number as the task number, written `#N` in documents, commits and PRs to tell it from the earlier numbering's "task NNN" (001–460). Simple questions and confirmation requests get no issue.
 * Create one work-order document for each meaningful task.
 * When the task is complete, leave the corresponding work log.
 * Do not add code directly without a design.
@@ -308,16 +310,17 @@ If the requirement is a simple question or confirmation request, answer it direc
 * 현재 브랜치가 `main`일 때만 사용자가 요청한 작업 내용을 바탕으로 작업용 브랜치를 새로 만든 뒤 작업한다.
 * 현재 브랜치가 `main`이 아니면(이미 작업 브랜치에 있으면) 새 브랜치를 생성하지 않고 현재 브랜치를 그대로 유지하며 작업을 이어간다.
 * 작업 단위가 하나 끝날 때마다 관련 변경을 Git 커밋으로 남긴다.
+* 작업 브랜치를 push하면 CI가 모든 타깃(Windows x86, Linux x64 gcc·clang, Linux x86)을 빌드하고 테스트한다. 로컬에서 돌릴 수 없는 타깃은 push 뒤 CI 결과로 확인한다.
 * 프로젝트 버전은 저장소 루트의 `VERSION` 파일에서 `major.minor.patch` 형식으로 관리한다.
 * 사용자가 머지를 요청하면 `main`에 머지하기 전에 patch 버전을 1 증가시킨다.
 * 사용자가 minor 버전 증가를 요청하면 minor 버전을 1 증가시키고 patch 버전은 0으로 리셋한다.
 * 사용자가 major 버전 증가를 요청하면 major 버전을 1 증가시키고 minor와 patch 버전은 0으로 리셋한다.
-* 사용자가 머지를 요청하면 현재 작업 브랜치의 모든 커밋을 하나로 합쳐 `main`에 머지한다.
+* 사용자가 머지를 요청하면 작업 브랜치를 원격에 push하고 `main` 대상 PR을 만든다(이미 있으면 그 PR을 쓴다). PR 본문은 `Closes #N`으로 작업 이슈를 연결한다. CI 통과를 확인한 뒤 GitHub에서 squash merge하고(`gh pr merge --squash`), 로컬 `main`을 `git pull --ff-only`로 갱신한다.
 * `main`에 머지할 때는 작업 브랜치 안의 커밋 제목들을 확인하고, 전체 변경 내용을 잘 표현하는 최종 커밋 제목을 만들어 사용한다.
-* `main`에 머지한 뒤에는 그 머지 커밋에 `VERSION`과 같은 값의 annotated tag를 `vmajor.minor.patch` 형식으로 붙인다. 예: `VERSION`이 `0.0.1`이면 `v0.0.1`.
+* `main`에 머지한 뒤에는 갱신한 로컬 `main`의 squash 커밋에 `VERSION`과 같은 값의 annotated tag를 `vmajor.minor.patch` 형식으로 붙인다. 예: `VERSION`이 `0.0.1`이면 `v0.0.1`.
 * tag 메시지에는 해당 버전의 핵심 변경을 한 줄로 남긴다.
 * tag는 로컬까지만 만들고 원격 push는 사용자가 직접 수행한다.
-* 머지가 완료되면 현재 작업 브랜치를 삭제한다.
+* 머지가 완료되면 작업 브랜치를 로컬과 원격에서 삭제한다.
 * 저장소 루트의 `roms/`와 `overlays/`는 서로 독립된 디렉터리이며, 각각 0바이트 `dir.txt`만 Git으로 추적한다. 그 밖의 모든 내용은 ignore한다.
 * 저장소 루트의 `logs/`는 전체를 ignore하며 생성된 로그를 Git에 추가하지 않는다. 이미 추적된 로그가 발견되면 저장소에서 제거한다.
 
@@ -327,16 +330,17 @@ If the requirement is a simple question or confirmation request, answer it direc
 * Only when the current branch is `main`, create a new task branch based on the user's requested work before making changes.
 * If the current branch is not `main` (already on a task branch), do not create a new branch; continue working on the current branch.
 * Leave a Git commit for the related changes whenever one task unit is complete.
+* Pushing a task branch makes CI build and test every target (Windows x86, Linux x64 gcc and clang, Linux x86); targets that cannot run locally are checked through CI after the push.
 * Manage the project version in the repository-root `VERSION` file using `major.minor.patch`.
 * When the user requests a merge, increment the patch version by 1 before merging into `main`.
 * When the user requests a minor version bump, increment the minor version by 1 and reset the patch version to 0.
 * When the user requests a major version bump, increment the major version by 1 and reset the minor and patch versions to 0.
-* When the user requests a merge, squash all commits from the current task branch into `main`.
+* When the user requests a merge, push the task branch and open a PR against `main` (or use the existing one), linking the task issue with `Closes #N` in its body. After CI passes, squash-merge it on GitHub (`gh pr merge --squash`) and update the local `main` with `git pull --ff-only`.
 * When merging into `main`, inspect the commit titles in the task branch and create a final commit title that best describes the complete change.
-* After merging into `main`, tag that merge commit with an annotated tag matching `VERSION`, in the form `vmajor.minor.patch`. For example, tag `v0.0.1` when `VERSION` reads `0.0.1`.
+* After merging into `main`, tag the squash commit in the updated local `main` with an annotated tag matching `VERSION`, in the form `vmajor.minor.patch`. For example, tag `v0.0.1` when `VERSION` reads `0.0.1`.
 * Put a one-line summary of the version's key change in the tag message.
 * Create tags locally only; the user pushes them to the remote.
-* Delete the task branch after the merge is complete.
+* Delete the task branch locally and on the remote after the merge is complete.
 * The repository-root `roms/` and `overlays/` are separate directories. Track only a zero-byte `dir.txt` in each and ignore all other contents.
 * Ignore the entire repository-root `logs/` directory and never add generated logs to Git. Remove any tracked logs found there from the repository.
 
