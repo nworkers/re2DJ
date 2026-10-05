@@ -42,9 +42,12 @@ std::filesystem::path MakeDefaultLogPath()
     const std::time_t time = std::chrono::system_clock::to_time_t(now);
     const std::uint64_t millisecond =
         static_cast<std::uint64_t>(milliseconds.count()) % 1000U;
+    // Copied at once out of std::localtime's shared buffer; fmt 11 deprecates
+    // fmt::localtime.
+    const std::tm local = *std::localtime(&time);
     return std::filesystem::path("logs") /
            fmt::format("re2dj-{:%Y%m%d-%H%M%S}-{:03}.log",
-                       fmt::localtime(time),
+                       local,
                        millisecond);
 }
 

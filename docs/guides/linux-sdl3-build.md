@@ -39,6 +39,21 @@ file build/linux-x86-debug/bin/re2dj build/linux-x64-debug/bin/re2dj
 
 `file` 결과에서 x86 product는 ELF 32-bit Intel 80386, x64 product는 ELF 64-bit x86-64여야 한다. 두 product 모두 원본 PE32를 같은 프로세스 안에서 실행한다(작업 379에서 별도 i386 helper를 제거했다).
 
+### NVIDIA 드라이버에서 x86 product를 Wayland로 실행 / Running the x86 product on Wayland with the NVIDIA driver
+
+NVIDIA 595 드라이버의 32비트 `libnvidia-egl-wayland2`에서는 SDL3의 `eglCreateWindowSurface`가 실패한다(오류 문자열은 `EGL_SUCCESS`). 게스트 없이 창만 만드는 `re2dj_opengl_post_shader_probe`도 똑같이 실패하므로 드라이버 쪽 문제다(작업 459). 64비트는 영향이 없다. 32비트에서는 아래 둘 중 하나로 실행한다.
+
+```bash
+# 1) EGL 외부 플랫폼에서 egl-wayland2를 빼고 egl-wayland(v1)를 쓴다. NVIDIA 하드웨어 GL 그대로.
+d=/usr/share/egl/egl_external_platform.d
+export __EGL_EXTERNAL_PLATFORM_CONFIG_FILENAMES=$d/10_nvidia_wayland.json:$d/15_nvidia_gbm.json:$d/20_nvidia_xcb.json:$d/20_nvidia_xlib.json
+build/linux-x86-release/bin/re2dj ez2dj4th
+
+# 2) XWayland로 실행한다(GLX, NVIDIA 하드웨어 GL).
+SDL_VIDEO_DRIVER=x11 build/linux-x86-release/bin/re2dj ez2dj4th
+```
+
+
 WSL에서 Windows filesystem 아래 build가 느리면 source는 그대로 두고 binary directory만 Linux filesystem의 임시 디렉터리로 지정할 수 있다. 이 경로는 일회성 build 산출물이며 저장소에 넣지 않는다.
 
 ---
@@ -50,3 +65,5 @@ This is the repeatable procedure for configuring and verifying the re2DJ SDL3 X1
 Install the packages shown above, then run the configure, build, and CTest commands. The audio development packages serve SDL3_mixer, which plays through ALSA, PulseAudio or PipeWire, and `libudev-dev` serves gamepad hot-plug enumeration (task 444); without its header SDL builds without udev and watches `/dev/input` through inotify alone. Both libraries are `dlopen`ed at run time, so neither enters the release executable's NEEDED. Optionally install `libdecor-0-dev` for client-side window decorations on GNOME/Weston; X11, Wayland, and OpenGL still build without it. Under WSL, an out-of-tree binary directory on the Linux filesystem can avoid slow Windows-filesystem build I/O. Keep that temporary output outside the repository.
 
 For the Linux x86 product host, install multilib support and 32-bit SDL/X11/Wayland/OpenGL development packages alongside `g++-multilib libc6-dev-i386`. The preset disables SDL XScreenSaver and XTest integration when i386 `libxss`/`libxtst` are unavailable; install `libxss-dev:i386 libxtst-dev:i386` and configure with `-DSDL_X11_XSCRNSAVER=ON -DSDL_X11_XTEST=ON` when those integrations are required. Build the product host and PE32 helper in separate trees. The x86 product and helper should be reported as ELF 32-bit Intel 80386 by `file`, while the x64 product is ELF 64-bit x86-64. Run the host probe from each product architecture against the same i386 helper.
+
+With the NVIDIA 595 driver, SDL3's `eglCreateWindowSurface` fails under the 32-bit `libnvidia-egl-wayland2` (reporting `EGL_SUCCESS`); `re2dj_opengl_post_shader_probe`, which opens a window without any guest, fails the same way, so it is a driver matter (task 459), and 64-bit is unaffected. Run the x86 product either with `__EGL_EXTERNAL_PLATFORM_CONFIG_FILENAMES` listing the NVIDIA platform files without `09_nvidia_wayland2.json`, so EGL uses `egl-wayland` (v1) and still the NVIDIA hardware GL, or under XWayland with `SDL_VIDEO_DRIVER=x11` (GLX, NVIDIA hardware GL), as in the commands above.

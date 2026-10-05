@@ -50,7 +50,7 @@ url = "https://github.com/ocornut/imgui"
 key = "spdlog"
 group = "runtime"
 name = "spdlog"
-version = "v1.14.1"
+version = "v1.15.3"
 license = "MIT"
 url = "https://github.com/gabime/spdlog"
 

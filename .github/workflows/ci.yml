@@ -1,12 +1,22 @@
 name: ci
 
+# Every branch push checks every target. A PR from a branch of this
+# repository already has that push run on its head commit, so its jobs skip
+# the pull_request run; PRs from forks run there. A newer push cancels the
+# branch's earlier run, except on main, where each commit keeps its result.
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   windows-x86:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: windows-latest
     # No preset here. The Visual Studio presets pin a generator version that
     # tracks the developer's local install, while the Ninja preset needs a
@@ -22,6 +32,7 @@ jobs:
         run: ctest --test-dir build/ci -C Debug --output-on-failure
 
   linux-x64:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -53,6 +64,7 @@ jobs:
   # only the build goes into it; Docker's default seccomp profile refuses the
   # modify_ldt the guest runtime needs.
   linux-x86:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
