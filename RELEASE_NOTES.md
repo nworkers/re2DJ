@@ -6,6 +6,11 @@
 
 데스크톱 Linux 실기(Ubuntu 26.04, GNOME Wayland, RTX 4090)에서 v0.0.62~v0.0.64를 검증했습니다(작업 458). 그 과정에서 새 컴파일러와 배포판에서만 드러나는 문제 세 가지를 고쳤습니다(작업 459·460). 이번부터 작업은 GitHub 이슈로 관리하고, CI는 모든 브랜치 push에서 돕니다(#1).
 
+#### 해결된 이슈
+
+- [#1](https://github.com/nworkers/re2DJ/issues/1) 브랜치 push CI와 GitHub 이슈·PR 기반 작업 규칙 — PR [#2](https://github.com/nworkers/re2DJ/pull/2), 커밋 [`26a9151`](https://github.com/nworkers/re2DJ/commit/26a9151d57726f898d58bfd34aeb7bf663a4daf0)
+- 작업 458·459·460은 이슈 기반 이전에 시작한 작업이라 이슈 번호가 없고, 같은 커밋에 들어 있습니다.
+
 #### 1. Linux 실기 검증 (작업 458)
 - 후처리 셰이더와 명령행 10가지 경우, 6th 런처→자식(`--` 처리 포함), 패키지 glibc 가드를 확인했습니다.
 - 실물 패드 대신 uinput 가상 Xbox 360 패드를 썼습니다. 연결·분리 인식, 버튼·스틱·십자키·트리거 매핑, 그리고 6th에서 BACK(코인)이 키보드 F5와 같은 코인 효과음을 내는 것까지 확인했습니다.
@@ -32,6 +37,11 @@
 ### English
 
 v0.0.62 to v0.0.64 were validated on a desktop Linux machine (Ubuntu 26.04, GNOME Wayland, RTX 4090) (task 458), which turned up three problems seen only with newer compilers and distributions (tasks 459 and 460). From this release tasks are GitHub issues and CI runs on every branch push (#1).
+
+#### Resolved issues
+
+- [#1](https://github.com/nworkers/re2DJ/issues/1) Branch-push CI and an issue- and PR-based task workflow — PR [#2](https://github.com/nworkers/re2DJ/pull/2), commit [`26a9151`](https://github.com/nworkers/re2DJ/commit/26a9151d57726f898d58bfd34aeb7bf663a4daf0)
+- Tasks 458, 459 and 460 began before issues and have no issue numbers; they are in the same commit.
 
 #### 1. Linux desktop validation (task 458)
 - Ten shader and command-line cases, 6th's launcher → child (including `--`) and the package glibc guard were checked.

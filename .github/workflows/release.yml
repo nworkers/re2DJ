@@ -10,6 +10,9 @@ on:
 
 permissions:
   contents: write
+  # Issue titles and the PR behind each commit, for the release body.
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -171,6 +174,9 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          # The resolved issues and commits come from the history between tags.
+          fetch-depth: 0
 
       - name: Gather the packages
         uses: actions/download-artifact@v4
@@ -192,20 +198,22 @@ jobs:
           fi
           printf 'Release file: %s\n' "${files[@]}"
 
+          # The note file names the resolved issues; the squash commits' IDs
+          # exist only after the merge, so their table is appended here.
           notes="docs/release-notes/$tag.md"
+          body="build/release-body.md"
           if [[ -f "$notes" ]]; then
             echo "Using release notes from $notes."
+            { cat "$notes"; printf '\n---\n\n'; } > "$body"
           else
-            echo "No $notes; falling back to generated notes."
+            echo "No $notes; the body is the resolved issues and commits alone."
+            : > "$body"
           fi
+          python3 scripts/release/release_refs.py "$tag" >> "$body"
 
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release upload "$tag" "${files[@]}" --clobber
-            if [[ -f "$notes" ]]; then
-              gh release edit "$tag" --notes-file "$notes"
-            fi
-          elif [[ -f "$notes" ]]; then
-            gh release create "$tag" "${files[@]}" --title "$tag" --notes-file "$notes"
+            gh release edit "$tag" --notes-file "$body"
           else
-            gh release create "$tag" "${files[@]}" --title "$tag" --generate-notes
+            gh release create "$tag" "${files[@]}" --title "$tag" --notes-file "$body"
           fi

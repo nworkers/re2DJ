@@ -17,6 +17,7 @@
 | `test_all.sh` | Linux x86/x86-64 | 경고를 오류로 하여 build + ctest |
 | `build_release_linux.sh <linux-x64\|linux-x86> [version]` | Linux x86/x86-64 | Release preset build + ctest + `package_release.sh`, 경고를 오류로 처리 |
 | `package_release.sh <linux-x64\|linux-x86> [version]` | Linux x86/x86-64 | Release `re2dj`를 tar.gz와 SHA256 파일로 묶음, 이식성 검사 포함 |
+| `release/release_refs.py <tag>` | Python 3 (+ 선택 `gh`) | GitHub Release body 끝에 붙는 해결된 이슈·커밋 표를 Markdown으로 출력 (`release.yml`이 사용) |
 
 `test_all` 계열은 `RE2DJ_WARNINGS_AS_ERRORS=ON`으로 configure합니다. CI에서만 걸리는 경고는 이미 기본 브랜치에 들어간 경고이기 때문입니다.
 
