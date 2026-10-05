@@ -4,6 +4,10 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+- **#6 — OSD의 프로세스 정보 아래에 OpenGL renderer를 표시합니다.** renderer·vendor·OpenGL 버전·SDL 비디오 드라이버를 보여 주고, 소프트웨어 렌더러는 경고 색으로 구분하며, 같은 값을 로그에 남깁니다. 근거: [설계](design/20261006-i006-osd-gl-renderer.md), [작업 로그](work-logs/20261006-i006-osd-gl-renderer.md).
+
+  *#6 — the OSD shows the OpenGL renderer below the process information: the renderer, vendor, OpenGL version and SDL video driver, with software rasterizers in a warning colour and the same values logged. Evidence: [design](design/20261006-i006-osd-gl-renderer.md), [work log](work-logs/20261006-i006-osd-gl-renderer.md).*
+
 - **#4 — 같은 PC에서 Windows와 Linux x86·x64 성능을 비교했습니다.** vsync on에서는 모두 60 fps이고 Linux x64의 CPU가 가장 낮습니다. vsync off 처리량은 Linux x64가 Windows in-process의 ×0.98~×3.37, x86이 ×0.54~×1.03입니다. x86의 격차는 주로 NVIDIA 32비트 `egl-wayland` v1 경로에서 옵니다. 근거: [분석](analysis/linux-windows-performance.md), [작업 로그](work-logs/20261005-i004-linux-windows-performance.md).
 
   *#4 — compared Windows with Linux x86 and x64 on one PC: all hold 60 fps with vsync on and Linux x64 uses the least CPU; vsync-off throughput on Linux x64 is ×0.98 to ×3.37 of the Windows in-process runner and on x86 ×0.54 to ×1.03, x86's gap coming mainly from NVIDIA's 32-bit `egl-wayland` v1 path. Evidence: [analysis](analysis/linux-windows-performance.md), [work log](work-logs/20261005-i004-linux-windows-performance.md).*
