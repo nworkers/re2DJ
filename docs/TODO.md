@@ -67,6 +67,12 @@
 
   *Shared HLE still to model: the rest of guest threads (`TerminateThread`, resolve-only now, for 1st's thread-shutdown timeout path; `CREATE_SUSPENDED`/`ResumeThread`; `ExitThread`; `GetExitCodeThread`; per-thread message queues; guest code running without imports blocks other threads, design 417); enlarging and shrinking `StretchBlt` (design 421, 1:1 only now); Korean (CP949 double-byte) and proportional text in `DrawTextA`; the CP949 double-byte table; daylight-saving rules and Korean zone names in `GetTimeZoneInformation`; keyboard and mouse window messages and mouse motion (`--io-config` is shared by both hosts since task 444); a real `SetCursor`; guest SEH unwinding across a host frame during a guest call; paths outside the guest root and guest files of directory-dump runs; defined guest entry registers such as EBX; and the noise mixed into Linux sound.*
 
+- [ ] HDD의 CHD에서 곡 로딩·화면 전환 멈춤 줄이기(#9 후속, [작업 로그](work-logs/20261009-i009-chd-file-prefetch.md))
+  - [ ] 처음 읽는 작은 파일(키음 등) 하나마다 HDD 접근 25~48ms가 쌓여 캐시 없는 곡 로딩이 1.1~2.9초 멈춤. 디렉터리·FAT나 곡 폴더 단위 미리 읽기 검토
+  - [ ] `..\..\ranking\ranking_*.bin`을 여는 `CreateFileA`가 CHD를 읽지 않고도 65~80ms 걸리는 원인 확인
+
+  *Reduce song-loading and screen-transition stalls from a CHD on an HDD (#9 follow-up): each small file read for the first time (key sounds and the like) adds 25 to 48 ms of HDD access, so a cold song load stalls 1.1 to 2.9 s, so consider reading directories, the FAT or whole song folders ahead; and find why `CreateFileA` of `..\..\ranking\ranking_*.bin` takes 65 to 80 ms without reading the CHD.*
+
 - [ ] 3rd present 비용 변화 원인 — 2026-09-17 01:25~01:49 사이 실행 환경 변화 뒤 present가 약 15 ms 블록되고 60 fps로 바뀜. OSD 코드와 무관함은 A/B로 확인([작업 297 로그](work-logs/20260917-297-imgui-osd-autoplay.md))
 - [ ] `ez2dj3rd` 입력 슬롯 `0x1b`의 물리 바인딩 — 게임 내장 autoplay 토글([분석](analysis/ez2dj3rd-demo-play.md))
 - [ ] 나머지 타깃의 `game_controls` — `game-state-hunt` 스킬로 빌드별 autoplay 플래그 확인. 남은 후보: `ez2dj2nd`(덤프 미수집). 완료: `ez2dj3rd`(작업 297), `ez2dj4th`(작업 300), `ez2dj5th`(작업 301), `ez2dj1stse`(작업 302), `ez2d2m`(작업 305), `ez2dj6th`(작업 436). 변수 없음: `ez2dj1st`(작업 304, 데모 전용 플레이어 장면)
