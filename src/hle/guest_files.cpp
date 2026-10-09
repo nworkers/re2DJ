@@ -226,6 +226,7 @@ bool GuestFiles::Configure(GuestFileConfig config,
                            std::string* error)
 {
     config_ = std::move(config);
+    prefetcher_.reset();
     source_.reset();
     if (!storage::ParseGuestPath(config_.guest_root, &root_) ||
         root_.kind != storage::GuestPathKind::kDriveAbsolute || !storage::NormalizeGuestPath(&root_))
@@ -235,6 +236,7 @@ bool GuestFiles::Configure(GuestFileConfig config,
     }
     current_ = root_;
     source_ = std::move(source);
+    prefetcher_ = std::make_unique<GuestFilePrefetcher>(source_.get());
     LoadDeletedList();
     return true;
 }
@@ -782,10 +784,18 @@ std::uint32_t GuestFiles::Read(std::uint32_t handle,
     bytes->assign(count, 0);
     if (count != 0)
     {
-        const bool read = file.host != nullptr
-                              ? std::fseek(file.host, static_cast<long>(file.position), SEEK_SET) == 0 &&
-                                    std::fread(bytes->data(), 1, count, file.host) == count
-                              : source_->ReadRange(file.chd_relative, file.position, bytes->data(), count);
+        bool read = false;
+        if (file.host != nullptr)
+        {
+            read = std::fseek(file.host, static_cast<long>(file.position), SEEK_SET) == 0 &&
+                   std::fread(bytes->data(), 1, count, file.host) == count;
+        }
+        else
+        {
+            read = (file.prefetch != nullptr &&
+                    GuestFilePrefetcher::Copy(*file.prefetch, file.position, bytes->data(), count)) ||
+                   source_->ReadRange(file.chd_relative, file.position, bytes->data(), count);
+        }
         if (!read)
         {
             bytes->clear();
@@ -793,6 +803,15 @@ std::uint32_t GuestFiles::Read(std::uint32_t handle,
         }
     }
     file.position += count;
+    if (file.host == nullptr && !file.prefetch_considered)
+    {
+        file.prefetch_considered = true;
+        const std::uint64_t remaining = file.position >= file.size ? 0 : file.size - file.position;
+        if (prefetcher_ != nullptr && remaining >= kPrefetchMinimumRemaining)
+        {
+            file.prefetch = prefetcher_->Start(file.chd_relative, file.size);
+        }
+    }
     return kWin32ErrorSuccess;
 }
 
@@ -876,8 +895,26 @@ bool GuestFiles::Close(std::uint32_t handle)
     {
         std::fclose(found->second.host);
     }
+    if (found->second.prefetch != nullptr && prefetcher_ != nullptr)
+    {
+        prefetcher_->Cancel(found->second.prefetch);
+    }
     files_.erase(found);
     return true;
+}
+
+std::uint64_t GuestFiles::PrefetchedBytes(std::uint32_t handle) const
+{
+    const auto found = files_.find(handle);
+    return found == files_.end() || found->second.prefetch == nullptr ? 0 : found->second.prefetch->loaded();
+}
+
+void GuestFiles::WaitForPrefetch()
+{
+    if (prefetcher_ != nullptr)
+    {
+        prefetcher_->WaitIdle();
+    }
 }
 
 }  // namespace re2dj::hle

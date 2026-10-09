@@ -32,6 +32,7 @@ int main()
     RunKernel32CrtTests(context);
     RunApiCallRecordTests(context);
     RunGuestFilesTests(context);
+    RunGuestFilePrefetcherTests(context);
     RunImportEventLoopTests(context);
     RunGuestPathTests(context);
     RunPeImageTests(context);

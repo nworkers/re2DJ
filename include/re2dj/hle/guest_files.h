@@ -12,6 +12,7 @@
 #include <string_view>
 #include <vector>
 
+#include "re2dj/hle/guest_file_prefetcher.h"
 #include "re2dj/hle/guest_handles.h"
 #include "re2dj/storage/fat32_chd.h"
 #include "re2dj/storage/guest_find.h"
@@ -168,6 +169,16 @@ public:
     std::uint32_t Size(std::uint32_t handle, std::uint64_t* size) const;
     bool Close(std::uint32_t handle);
 
+    // An image file opened read-only whose first Read leaves at least this
+    // much unread is read ahead in the background (#9): a guest streaming it
+    // in small reads then reads memory instead of waiting on the disk. A
+    // file read whole at once is not, so its data is not read twice.
+    static constexpr std::uint64_t kPrefetchMinimumRemaining = 256 * 1024;
+    // How many bytes from the start of an open file are read ahead (tests).
+    std::uint64_t PrefetchedBytes(std::uint32_t handle) const;
+    // Waits until the background reads are done (tests).
+    void WaitForPrefetch();
+
 private:
     struct File
     {
@@ -180,6 +191,9 @@ private:
         std::uint64_t position = 0;
         bool read = false;
         bool write = false;
+        // Whether the first Read decided on reading ahead, and the job.
+        bool prefetch_considered = false;
+        std::shared_ptr<GuestFilePrefetcher::Job> prefetch;
     };
 
     // The path below the guest root, '/'-separated, or false when the path
@@ -209,6 +223,8 @@ private:
 
     GuestFileConfig config_;
     std::unique_ptr<GuestFileSource> source_;
+    // Reads source_, so it is declared after it and goes first.
+    std::unique_ptr<GuestFilePrefetcher> prefetcher_;
     storage::GuestPath root_;
     storage::GuestPath current_;
     GuestHandleAllocator own_handles_;

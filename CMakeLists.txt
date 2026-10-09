@@ -460,6 +460,7 @@ add_library(re2dj_core STATIC
     src/hle/guest_device_path.cpp
     src/hle/api_call_record.cpp
     src/hle/guest_devices.cpp
+    src/hle/guest_file_prefetcher.cpp
     src/hle/guest_files.cpp
     src/hle/hex_bytes.cpp
     src/hle/private_profile.cpp
@@ -672,6 +673,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/kernel32_crt_test.cpp
         tests/unit/api_call_record_test.cpp
         tests/unit/guest_files_test.cpp
+        tests/unit/guest_file_prefetcher_test.cpp
         tests/unit/logging_test.cpp
         tests/unit/ez2dj_io_board_test.cpp
         tests/unit/ez2dancer_io_board_test.cpp
