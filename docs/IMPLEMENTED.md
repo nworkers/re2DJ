@@ -284,6 +284,36 @@
 
   *Task 096 — scene-transition fade and Direct3D depth-state correction complete. The SDL3/OpenGL context now requests a 16-bit depth buffer, clears color and depth at frame boundaries, and conditionally maps Direct3D `ZENABLE`, `ZWRITEENABLE`, and `ZFUNC` to OpenGL depth state. `D3DBLEND_INVSRCOLOR` and `D3DBLEND_INVSRCALPHA` are supported, and a narrow fade compatibility rule applies only to an untextured full-screen black quad with uniform intermediate alpha. Debug/Release builds and CTest 3/3 pass, and product runs record hundreds of draws/presents plus child-shutdown observation. Visual improvement across every scene and an original Z-enabled path remain unresolved. Evidence: [design](design/20260830-096-transition-depth-correctness.md), [analysis](analysis/graphics-transition-depth.md), [work log](work-logs/20260830-096-transition-depth-correctness.md).*
 
+## TODO 정리 (2026-10-09) / TODO cleanup (2026-10-09)
+
+[TODO](TODO.md)에 남아 있던 완료 항목과, 이후 작업으로 끝났거나 대상 코드가 사라진 항목을 옮겼습니다.
+
+*Items left in [TODO](TODO.md) that were complete, or that later work finished or whose code no longer exists, moved here.*
+
+- **작업 113·114·118·120 — ez2dj4th CHD 입력과 보호 stub trace.** libchdr adapter, read-only FAT32 view, CHD-backed 실행, 첫 동적 `GetProcAddress` 대상 확인과 VFS open trace. 근거는 각 작업 로그.
+
+  *Tasks 113, 114, 118 and 120 — ez2dj4th CHD input and protected-stub tracing: the libchdr adapter, a read-only FAT32 view, CHD-backed execution, the first dynamic `GetProcAddress` targets, and the VFS open trace. Evidence in each task's work log.*
+
+- **작업 119·121~125 — injection 경로의 4th 보호 응답 추적.** 동적 VFS resolver, 반환 ABI, `EIP=0` fault 귀속, pointer-slot writer(`0x00AEFE62`)까지 확인했습니다. 남은 하위 항목(보호 응답, slot이 0이 된 원인, 두 장치 protocol)은 Linux Hardlock 장치 HLE(작업 360~369)와 in-process 러너(작업 446~449)로 4th가 두 host에서 창을 닫을 때까지 실행되면서 대상이 사라졌습니다.
+
+  *Tasks 119 and 121 to 125 — tracing 4th's protection responses on the injection path: the dynamic VFS resolver, the return ABI, attributing the `EIP=0` fault, and the pointer-slot writer at `0x00AEFE62`. The open sub-items (the protection response, why the slot became zero, the two devices' protocols) lapsed once the Linux Hardlock device HLE (tasks 360 to 369) and the in-process runner (tasks 446 to 449) ran 4th on both hosts until its window closes.*
+
+- **작업 077·311·340·353 — Linux 원본 실행 경로.** guest handle·module service(361·364), kernel32·user32·gdi32·INI·게스트 파일(363~372, 389, 393~411), 게스트 호출·스레드(372·417), DirectDraw·Direct3D·DirectSound·DirectInput을 SDL에 연결(373~426), 게스트 SEH·x64 compatibility mode(350~356), 실제 Win32 API binding(작업 311의 남은 항목)을 마쳤습니다. helper 자동 탐색은 helper 제거(379)로 대상이 사라졌고, 가이드는 [Linux 빌드 가이드](guides/linux-sdl3-build.md)입니다. 같은 묶음의 API 기록 상한(395), 창 닫기 종료(395), 표면 `Lock`·`GetDC`·`Blt`·`Flip`(389·391·422·424·425), message queue·window timer·`ShowCursor`(390), DX6 텍스처 형식의 공용 core(Windows facade 제거로 대상 없음), Windows facade의 `EnumSurfaces`(같음), Windows를 in-process 러너로 통일(446~449), guest handle/VFS·DLL별 확장도 끝났습니다.
+
+  *Tasks 077, 311, 340 and 353 — the Linux original-execution path: guest handle and module services (361, 364), kernel32, user32, gdi32, INI and guest files (363 to 372, 389, 393 to 411), guest calls and threads (372, 417), DirectDraw, Direct3D, DirectSound and DirectInput over SDL (373 to 426), guest SEH and x64 compatibility mode (350 to 356), and real Win32 API bindings (task 311's open item). Helper auto-discovery lapsed with the helper's removal (379); the guide is the [Linux build guide](guides/linux-sdl3-build.md). The same group's API-log cap (395), exit on window close (395), surface `Lock`, `GetDC`, `Blt` and `Flip` (389, 391, 422, 424, 425), the message queue, window timers and `ShowCursor` (390), the DX6 texture format in the shared core and the Windows facade's `EnumSurfaces` (both lapsed with the Windows facade's removal), Windows unified on the in-process runner (446 to 449), and guest handles/VFS with per-DLL expansion are done too.*
+
+- **작업 072·074·075와 Windows VFS overlay 쓰기 검증 — injection 시절 Windows 렌더링·오디오·입력·VFS의 사용자 재검증.** 구현은 끝났고, 남은 재검증 항목은 v0.0.63에서 injected runtime·Windows facade·VFS hook이 제거되며 대상이 사라졌습니다. 같은 동작은 이제 두 host 공용 HLE·SDL backend·`GuestFiles` overlay가 맡고, 1st SE·4th·5th·6th·EZ2Dancer 2nd MOVE의 화면·소리·입력은 이후 작업에서 사용자가 확인했습니다(예: 작업 431·434·458).
+
+  *Tasks 072, 074 and 075 and the Windows VFS overlay-write check — user revalidation of injection-era Windows rendering, audio, input and VFS. The implementation was complete; the open revalidation items lapsed when v0.0.63 removed the injected runtime, the Windows facades and the VFS hooks. Both hosts now share the HLE, the SDL backend and the `GuestFiles` overlay, and the user has since confirmed picture, sound and input for 1st SE, 4th, 5th, 6th and EZ2Dancer 2nd MOVE (for example tasks 431, 434 and 458).*
+
+- **작업 294·303·345·362·365·366, Windows x86 INI·디렉터리 열거·4th 동적 `GetProcAddress` HLE, OSD 입력의 Linux 경로, GitHub Actions 첫 workflow 검증.** INI·`FindFirstFileA`·동적 resolver는 공용 HLE(작업 344·399·405·410·411)로 두 host가 함께 쓰고, OSD는 공용 SDL host(작업 447)로 Linux에서도 동작하며, CI는 #1부터 모든 브랜치 push에서 돕니다.
+
+  *Tasks 294, 303, 345, 362, 365 and 366, Windows x86 INI, directory-enumeration and 4th dynamic `GetProcAddress` HLE, the OSD's Linux input path, and the first GitHub Actions workflow check. INI, `FindFirstFileA` and the dynamic resolver are shared HLE on both hosts (tasks 344, 399, 405, 410, 411), the OSD works on Linux through the shared SDL host (task 447), and CI runs on every branch push since #1.*
+
+- **EZ2DJ 6th의 Linux 실행과 Remember 1st.** 작업 430(DX7 조명·깊이 기본값), 431(Linux 자식 프로세스), 434·437~439(Remember 1st 왕복), 436(6th autoplay). 남은 확인은 [TODO](TODO.md)에 있습니다.
+
+  *EZ2DJ 6th on Linux and Remember 1st: tasks 430 (DX7 lighting and depth defaults), 431 (Linux child processes), 434 and 437 to 439 (the Remember 1st round trip), and 436 (6th autoplay). What is left stays in [TODO](TODO.md).*
+
 ## 최신 실행 이정표 / Latest runtime milestones
 
 - **작업 095 — Direct3D 3 indexed vertex-buffer draw 완료.** WER dump의 `EIP=0`, 복귀 주소 `0x004206A3`과 원본 `call [vtable+0x8c]`를 DirectX 6 ABI에 대조해 누락 경계를 `IDirect3DDevice3::DrawIndexedPrimitiveVB(TRIANGLELIST, ..., 600, 0)`로 확정했다. 공용 core가 16-bit index를 범위 검사해 전개하고 triangle-list를 SDL/OpenGL `GL_TRIANGLES`로 전달하며, Win32 facade는 guest pointer·소유권·lock 상태를 검증한다. Debug/Release CTest 3/3이 통과했고 실제 실행 `20260830-000841-620`은 약 3분간 응답을 유지한 뒤 정상 창 닫기에서 exit code 0으로 부모·자식이 종료됐다. 근거: [설계](design/20260829-095-execute-zero-crash.md), [분석](analysis/ez2dj-exe-structures.md), [작업 로그](work-logs/20260830-095-direct3d-indexed-vb-draw.md).
