@@ -1,6 +1,6 @@
 # #1 설계 — 브랜치 push CI와 GitHub 이슈·PR 기반 작업 규칙 / #1 design — branch-push CI and an issue- and PR-based task workflow
 
-이슈: [#1](https://github.com/nworkers/re2DJ/issues/1) · 선행: [작업 458](../work-logs/20261005-458-linux-desktop-validation.md), [작업 459](../work-logs/20261005-459-linux-x86-gcc15-host-abi.md), [작업 460](../work-logs/20261005-460-spdlog-fmt-clang21.md)
+이슈: [#1](https://github.com/reexec/re2DJ/issues/1) · 선행: [작업 458](../work-logs/20261005-458-linux-desktop-validation.md), [작업 459](../work-logs/20261005-459-linux-x86-gcc15-host-abi.md), [작업 460](../work-logs/20261005-460-spdlog-fmt-clang21.md)
 
 ## 배경 / Background
 

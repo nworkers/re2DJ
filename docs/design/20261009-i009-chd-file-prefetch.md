@@ -1,6 +1,6 @@
 # #9 설계: CHD 파일 백그라운드 미리 읽기
 
-이슈: [#9](https://github.com/nworkers/re2DJ/issues/9)
+이슈: [#9](https://github.com/reexec/re2DJ/issues/9)
 
 ## 배경
 
@@ -77,7 +77,7 @@ sequenceDiagram
 
 # #9 Design: Prefetching CHD Files in the Background
 
-Issue: [#9](https://github.com/nworkers/re2DJ/issues/9)
+Issue: [#9](https://github.com/reexec/re2DJ/issues/9)
 
 ## Background
 

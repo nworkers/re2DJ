@@ -8,7 +8,7 @@
 
 #### 해결된 이슈
 
-- [#9](https://github.com/nworkers/re2DJ/issues/9) CHD 파일 백그라운드 미리 읽기로 플레이 중 멈춤 줄이기 — PR [#10](https://github.com/nworkers/re2DJ/pull/10)
+- [#9](https://github.com/reexec/re2DJ/issues/9) CHD 파일 백그라운드 미리 읽기로 플레이 중 멈춤 줄이기 — PR [#10](https://github.com/reexec/re2DJ/pull/10)
 
 #### 1. 원인 (#9)
 - 6th는 소리 스레드 없이 메인 스레드가 매 프레임 배경음 버퍼(약 2.04초)를 보고, 약 133ms마다 `.ezw`에서 22,528바이트를 `ReadFile`로 읽어 채웁니다(재생 위치보다 약 1.5초 앞섬). 한 곡 플레이 70초 동안의 파일 접근은 이 배경음 읽기 532번뿐이었습니다.
@@ -36,7 +36,7 @@ CHD files the game reads in pieces are read ahead in the background, ending the 
 
 #### Resolved issues
 
-- [#9](https://github.com/nworkers/re2DJ/issues/9) Prefetch CHD files in the background to avoid stalls during play — PR [#10](https://github.com/nworkers/re2DJ/pull/10)
+- [#9](https://github.com/reexec/re2DJ/issues/9) Prefetch CHD files in the background to avoid stalls during play — PR [#10](https://github.com/reexec/re2DJ/pull/10)
 
 #### 1. The cause (#9)
 - 6th has no sound thread: its main thread checks the music buffer (about 2.04 s) every frame and refills it about every 133 ms with 22,528 bytes read from an `.ezw` through `ReadFile`, about 1.5 s ahead of the play cursor. Over 70 s of one song, those 532 music reads were the only file access.
@@ -68,7 +68,7 @@ OSD의 프로세스 정보 아래에 OpenGL renderer를 표시합니다(#6).
 
 #### 해결된 이슈
 
-- [#6](https://github.com/nworkers/re2DJ/issues/6) OSD에 OpenGL renderer 표시 — PR [#7](https://github.com/nworkers/re2DJ/pull/7)
+- [#6](https://github.com/reexec/re2DJ/issues/6) OSD에 OpenGL renderer 표시 — PR [#7](https://github.com/reexec/re2DJ/pull/7)
 
 #### 1. OSD의 Renderer 절 (#6)
 - rePIU OSD(rePIU #5)처럼 프로세스 정보 줄 바로 아래 "Renderer" 구분선에 `GL_RENDERER`, `Vendor`(`GL_VENDOR`), `OpenGL`(`GL_VERSION`), `Video driver`(`SDL_GetCurrentVideoDriver()`)를 표시합니다.
@@ -87,7 +87,7 @@ The OSD shows the OpenGL renderer below the process information (#6).
 
 #### Resolved issues
 
-- [#6](https://github.com/nworkers/re2DJ/issues/6) Show the OpenGL renderer in the OSD — PR [#7](https://github.com/nworkers/re2DJ/pull/7)
+- [#6](https://github.com/reexec/re2DJ/issues/6) Show the OpenGL renderer in the OSD — PR [#7](https://github.com/reexec/re2DJ/pull/7)
 
 #### 1. The OSD's Renderer section (#6)
 - As in rePIU's OSD (rePIU #5), a "Renderer" separator right below the process-information lines shows `GL_RENDERER`, `Vendor` (`GL_VENDOR`), `OpenGL` (`GL_VERSION`) and `Video driver` (`SDL_GetCurrentVideoDriver()`).
@@ -110,8 +110,8 @@ The OSD shows the OpenGL renderer below the process information (#6).
 
 #### 해결된 이슈
 
-- [#3](https://github.com/nworkers/re2DJ/issues/3) 릴리스 노트에 해결된 이슈와 커밋 ID 표시 — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
-- [#4](https://github.com/nworkers/re2DJ/issues/4) Windows와 Linux x86·x64 성능 비교 — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
+- [#3](https://github.com/reexec/re2DJ/issues/3) 릴리스 노트에 해결된 이슈와 커밋 ID 표시 — PR [#5](https://github.com/reexec/re2DJ/pull/5)
+- [#4](https://github.com/reexec/re2DJ/issues/4) Windows와 Linux x86·x64 성능 비교 — PR [#5](https://github.com/reexec/re2DJ/pull/5)
 
 #### 1. 릴리스 노트의 이슈와 커밋 (#3)
 - 노트 파일(`docs/release-notes/vX.md`, 이 문서)의 한국어·영어 본문에 "해결된 이슈" 절을 두고, 이슈 `#N`과 PR을 링크로 적습니다.
@@ -135,8 +135,8 @@ Release notes now show the issues and commit IDs a version resolves (#3), and th
 
 #### Resolved issues
 
-- [#3](https://github.com/nworkers/re2DJ/issues/3) Show resolved issues and commit IDs in release notes — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
-- [#4](https://github.com/nworkers/re2DJ/issues/4) Compare Windows with Linux x86 and x64 performance — PR [#5](https://github.com/nworkers/re2DJ/pull/5)
+- [#3](https://github.com/reexec/re2DJ/issues/3) Show resolved issues and commit IDs in release notes — PR [#5](https://github.com/reexec/re2DJ/pull/5)
+- [#4](https://github.com/reexec/re2DJ/issues/4) Compare Windows with Linux x86 and x64 performance — PR [#5](https://github.com/reexec/re2DJ/pull/5)
 
 #### 1. Issues and commits in release notes (#3)
 - Note files (`docs/release-notes/vX.md`, this document) carry a "Resolved issues" part in both the Korean and English bodies, linking each issue `#N` and its PR.
@@ -164,7 +164,7 @@ Release notes now show the issues and commit IDs a version resolves (#3), and th
 
 #### 해결된 이슈
 
-- [#1](https://github.com/nworkers/re2DJ/issues/1) 브랜치 push CI와 GitHub 이슈·PR 기반 작업 규칙 — PR [#2](https://github.com/nworkers/re2DJ/pull/2), 커밋 [`26a9151`](https://github.com/nworkers/re2DJ/commit/26a9151d57726f898d58bfd34aeb7bf663a4daf0)
+- [#1](https://github.com/reexec/re2DJ/issues/1) 브랜치 push CI와 GitHub 이슈·PR 기반 작업 규칙 — PR [#2](https://github.com/reexec/re2DJ/pull/2), 커밋 [`26a9151`](https://github.com/reexec/re2DJ/commit/26a9151d57726f898d58bfd34aeb7bf663a4daf0)
 - 작업 458·459·460은 이슈 기반 이전에 시작한 작업이라 이슈 번호가 없고, 같은 커밋에 들어 있습니다.
 
 #### 1. Linux 실기 검증 (작업 458)
@@ -196,7 +196,7 @@ v0.0.62 to v0.0.64 were validated on a desktop Linux machine (Ubuntu 26.04, GNOM
 
 #### Resolved issues
 
-- [#1](https://github.com/nworkers/re2DJ/issues/1) Branch-push CI and an issue- and PR-based task workflow — PR [#2](https://github.com/nworkers/re2DJ/pull/2), commit [`26a9151`](https://github.com/nworkers/re2DJ/commit/26a9151d57726f898d58bfd34aeb7bf663a4daf0)
+- [#1](https://github.com/reexec/re2DJ/issues/1) Branch-push CI and an issue- and PR-based task workflow — PR [#2](https://github.com/reexec/re2DJ/pull/2), commit [`26a9151`](https://github.com/reexec/re2DJ/commit/26a9151d57726f898d58bfd34aeb7bf663a4daf0)
 - Tasks 458, 459 and 460 began before issues and have no issue numbers; they are in the same commit.
 
 #### 1. Linux desktop validation (task 458)

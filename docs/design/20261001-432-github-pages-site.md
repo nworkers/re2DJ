@@ -6,7 +6,7 @@ rePIU 저장소는 `docs/sites/`의 정적 사이트 소스를 `scripts/site/bui
 
 ## 목표
 
-1. <https://nworkers.github.io/re2DJ/>에 배포되는 한국어/영어 2개 언어 정적 사이트를 만든다.
+1. <https://reexec.github.io/re2DJ/>에 배포되는 한국어/영어 2개 언어 정적 사이트를 만든다.
 2. rePIU와 같은 소스 구성(`docs/sites/` + `scripts/site/` + `pages.yml`)과 콘텐츠 파이프라인(소개 / 진행 상황 / 다운로드 / 개발 기록 / 릴리스 타임라인)을 유지한다.
 3. 디자인은 Galmuri 픽셀 폰트 기반 8비트 레트로를 유지하되, 팔레트와 장식 요소를 EZ2DJ 1st·1st SE의 어두운 네온 아케이드 분위기로 바꾼다.
 4. 원본 자산을 포함하지 않는다는 프로젝트 원칙을 사이트 문구와 자산 구성 모두에서 지킨다.
@@ -85,7 +85,7 @@ The rePIU repository builds a static site from `docs/sites/` with `scripts/site/
 
 ## Goals
 
-1. A bilingual (Korean/English) static site deployed at <https://nworkers.github.io/re2DJ/>.
+1. A bilingual (Korean/English) static site deployed at <https://reexec.github.io/re2DJ/>.
 2. The same source layout (`docs/sites/` + `scripts/site/` + `pages.yml`) and content pipeline as rePIU (about / progress / download / dev log / release timeline).
 3. Keep the Galmuri-pixel-font 8-bit retro base, but move the palette and ornaments to the dark neon arcade mood of EZ2DJ 1st and 1st SE.
 4. Uphold the no-original-assets principle in both the copy and the asset set.

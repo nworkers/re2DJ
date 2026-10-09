@@ -1,6 +1,6 @@
 # #6 설계: OSD에 OpenGL renderer 표시
 
-이슈: [#6](https://github.com/nworkers/re2DJ/issues/6)
+이슈: [#6](https://github.com/reexec/re2DJ/issues/6)
 
 ## 배경
 
@@ -45,7 +45,7 @@ flowchart LR
 
 # #6 Design: The OpenGL Renderer in the OSD
 
-Issue: [#6](https://github.com/nworkers/re2DJ/issues/6)
+Issue: [#6](https://github.com/reexec/re2DJ/issues/6)
 
 ## Background
 

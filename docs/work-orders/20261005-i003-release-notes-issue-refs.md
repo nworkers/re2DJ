@@ -1,6 +1,6 @@
 # #3 작업 지시서 — 릴리스 노트에 해결된 이슈와 커밋 ID 표시 / #3 work order — resolved issues and commit IDs in release notes
 
-이슈: [#3](https://github.com/nworkers/re2DJ/issues/3) · 설계: [20261005-i003-release-notes-issue-refs.md](../design/20261005-i003-release-notes-issue-refs.md)
+이슈: [#3](https://github.com/reexec/re2DJ/issues/3) · 설계: [20261005-i003-release-notes-issue-refs.md](../design/20261005-i003-release-notes-issue-refs.md)
 
 ## 절차 / Steps
 

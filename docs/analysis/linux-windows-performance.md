@@ -1,8 +1,8 @@
 # Windows와 Linux x86·x64 성능 비교 / Windows compared with Linux x86 and x64 performance
 
-[작업 453](../work-logs/20261005-453-release-screenshots-performance.md)에서 Windows x86 in-process 러너의 성능을 쟀다([Windows in-process 러너 성능](windows-in-process-performance.md)). 같은 PC에서 같은 조건으로 Linux x86·x64 Release를 재서 그 결과와 비교했다. 측정은 [#4](https://github.com/nworkers/re2DJ/issues/4)에서 했다([작업 로그](../work-logs/20261005-i004-linux-windows-performance.md)).
+[작업 453](../work-logs/20261005-453-release-screenshots-performance.md)에서 Windows x86 in-process 러너의 성능을 쟀다([Windows in-process 러너 성능](windows-in-process-performance.md)). 같은 PC에서 같은 조건으로 Linux x86·x64 Release를 재서 그 결과와 비교했다. 측정은 [#4](https://github.com/reexec/re2DJ/issues/4)에서 했다([작업 로그](../work-logs/20261005-i004-linux-windows-performance.md)).
 
-*[Task 453](../work-logs/20261005-453-release-screenshots-performance.md) measured the Windows x86 in-process runner ([Windows in-process runner performance](windows-in-process-performance.md)); the Linux x86 and x64 Release builds were measured on the same PC under the same conditions and compared with it in [#4](https://github.com/nworkers/re2DJ/issues/4) ([work log](../work-logs/20261005-i004-linux-windows-performance.md)).*
+*[Task 453](../work-logs/20261005-453-release-screenshots-performance.md) measured the Windows x86 in-process runner ([Windows in-process runner performance](windows-in-process-performance.md)); the Linux x86 and x64 Release builds were measured on the same PC under the same conditions and compared with it in [#4](https://github.com/reexec/re2DJ/issues/4) ([work log](../work-logs/20261005-i004-linux-windows-performance.md)).*
 
 ## 요약 / Summary
 

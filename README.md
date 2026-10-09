@@ -95,7 +95,7 @@ Ubuntu/WSL의 정확한 패키지 설치 명령은 [Linux SDL3/OpenGL 빌드 가
 ### 1. 저장소 복제 / Clone
 
 ```bash
-git clone https://github.com/nworkers/re2DJ.git
+git clone https://github.com/reexec/re2DJ.git
 cd re2DJ
 ```
 
@@ -363,7 +363,7 @@ title/demo 음량은 원본 HDD의 `DemoVolume`을 바꾸지 않고 기본 3(0 d
 * [코딩 스타일](docs/CODING_STYLE.md) — C++20 스타일과 디렉터리 정책
 * [작업 규칙](AGENTS.md) — 설계 우선 개발, 문서화와 Git workflow
 
-질문과 재현 가능한 결함 보고는 [GitHub Issues](https://github.com/nworkers/re2DJ/issues)에 남겨 주십시오.
+질문과 재현 가능한 결함 보고는 [GitHub Issues](https://github.com/reexec/re2DJ/issues)에 남겨 주십시오.
 
 ---
 

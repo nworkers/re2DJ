@@ -3,10 +3,10 @@
 
 [site]
 name = "re2DJ"
-repo = "nworkers/re2DJ"
+repo = "reexec/re2DJ"
 branch = "main"
 # Overridden in CI by actions/configure-pages (base_url).
-default_url = "https://nworkers.github.io/re2DJ/"
+default_url = "https://reexec.github.io/re2DJ/"
 default_lang = "ko"
 languages = ["ko", "en"]
 

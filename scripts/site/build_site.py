@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "build" / "site")
     parser.add_argument("--site-url", default=None,
-                        help="Public base URL, e.g. https://nworkers.github.io/re2DJ/")
+                        help="Public base URL, e.g. https://reexec.github.io/re2DJ/")
     parser.add_argument("--offline", action="store_true",
                         help="Do not call the GitHub API; use release-notes files only")
     return parser.parse_args()

@@ -1,6 +1,6 @@
 # #3 설계 — 릴리스 노트에 해결된 이슈와 커밋 ID 표시 / #3 design — resolved issues and commit IDs in release notes
 
-이슈: [#3](https://github.com/nworkers/re2DJ/issues/3) · 선행: [#1 설계(이슈·PR 기반 작업 규칙)](20261005-i001-branch-ci-and-issue-workflow.md)
+이슈: [#3](https://github.com/reexec/re2DJ/issues/3) · 선행: [#1 설계(이슈·PR 기반 작업 규칙)](20261005-i001-branch-ci-and-issue-workflow.md)
 
 ## 배경 / Background
 

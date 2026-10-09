@@ -1,6 +1,6 @@
 # #6 작업 로그 — OSD에 OpenGL renderer 표시 / #6 work log — the OpenGL renderer in the OSD
 
-이슈: [#6](https://github.com/nworkers/re2DJ/issues/6) · 설계: [20261006-i006-osd-gl-renderer.md](../design/20261006-i006-osd-gl-renderer.md) · 지시서: [20261006-i006-osd-gl-renderer.md](../work-orders/20261006-i006-osd-gl-renderer.md)
+이슈: [#6](https://github.com/reexec/re2DJ/issues/6) · 설계: [20261006-i006-osd-gl-renderer.md](../design/20261006-i006-osd-gl-renderer.md) · 지시서: [20261006-i006-osd-gl-renderer.md](../work-orders/20261006-i006-osd-gl-renderer.md)
 
 ## 2026-10-06
 

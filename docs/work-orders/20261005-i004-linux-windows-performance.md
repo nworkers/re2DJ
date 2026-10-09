@@ -1,6 +1,6 @@
 # #4 작업 지시서 — Windows와 Linux x86·x64 성능 비교 / #4 work order — comparing Windows with Linux x86 and x64 performance
 
-이슈: [#4](https://github.com/nworkers/re2DJ/issues/4) · 설계: [20261005-i004-linux-windows-performance.md](../design/20261005-i004-linux-windows-performance.md)
+이슈: [#4](https://github.com/reexec/re2DJ/issues/4) · 설계: [20261005-i004-linux-windows-performance.md](../design/20261005-i004-linux-windows-performance.md)
 
 ## 절차 / Steps
 

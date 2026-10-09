@@ -1,6 +1,6 @@
 # 화면 후처리 셰이더: 원본 640x480 화면 위의 아케이드 모니터 (WIP)
 
-범위: [`v0.0.63`부터 `v0.0.64`까지](https://github.com/nworkers/re2DJ/compare/v0.0.63...v0.0.64) (작업 455~456)
+범위: [`v0.0.63`부터 `v0.0.64`까지](https://github.com/reexec/re2DJ/compare/v0.0.63...v0.0.64) (작업 455~456)
 
 EZ2DJ 기판은 640x480 화면을 아케이드 CRT 모니터로 내보냈습니다. re2DJ는 그 화면을 현대 모니터의 창에 2배로 그리는데, 정확할수록 오히려 "그 시절 화면"과 멀어집니다. 이번 작업은 게임이 다 그린 프레임 위에 **표시 단계에서만** CRT 모니터 느낌을 입히는 후처리 셰이더를 넣은 기록입니다. 같은 저작자의 rePIU에 먼저 들어간 기능(rePIU 작업 768)을 같은 형식으로 가져왔고, 게스트가 보는 화면은 한 바이트도 바뀌지 않습니다.
 
@@ -145,7 +145,7 @@ re2DJ의 SDL3/OpenGL backend는 게임의 그리기를 창이 아니라 논리 �
 
 # Post-Processing Shaders: An Arcade Monitor on Top of the Original 640x480 Picture (WIP)
 
-Range: [`v0.0.63` to `v0.0.64`](https://github.com/nworkers/re2DJ/compare/v0.0.63...v0.0.64) (tasks 455–456)
+Range: [`v0.0.63` to `v0.0.64`](https://github.com/reexec/re2DJ/compare/v0.0.63...v0.0.64) (tasks 455–456)
 
 EZ2DJ boards sent a 640x480 picture to an arcade CRT monitor. re2DJ draws that picture into a window on a modern monitor at 2x, and the more exact it is, the further it gets from "how it looked back then". This work adds post-processing shaders that put a CRT monitor look over the finished frame **at presentation only**. The feature arrived first in rePIU by the same author (rePIU task 768) and came over in the same format; the picture the guest sees does not change by a single byte.
 
