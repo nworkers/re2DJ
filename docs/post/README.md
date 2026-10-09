@@ -9,7 +9,7 @@ YYYY-MM-DD-NNNNNN-slug.md
 ```
 
 * `YYYY-MM-DD` — 게시 날짜
-* `NNNNNN` — 관련 작업 번호 6자리 (예: 작업 432 → `000432`)
+* `NNNNNN` — 관련 작업 번호 6자리 (예: 작업 432 → `000432`). 이슈 기반 작업은 이슈 번호를 씁니다(예: #9 → `000009`)
 * `slug` — 소문자와 하이픈으로 된 짧은 제목
 
 예: `2026-10-01-000432-github-pages-site.md`
@@ -46,7 +46,7 @@ Posts in this directory are published as the "Dev log" of the project site (<htt
 
 ## File name
 
-`YYYY-MM-DD-NNNNNN-slug.md` — the publish date, the related six-digit task number (task 432 → `000432`) and a short lowercase hyphenated slug, e.g. `2026-10-01-000432-github-pages-site.md`. Files not matching this pattern (including this README) are not published.
+`YYYY-MM-DD-NNNNNN-slug.md` — the publish date, the related six-digit task number (task 432 → `000432`; an issue-based task uses its issue number, #9 → `000009`) and a short lowercase hyphenated slug, e.g. `2026-10-01-000432-github-pages-site.md`. Files not matching this pattern (including this README) are not published.
 
 ## Body structure
 

@@ -4,6 +4,10 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+- **#9 — 게임이 나눠 읽는 CHD 파일을 백그라운드에서 미리 읽습니다.** 6th는 메인 스레드가 133ms마다 배경음 `.ezw`를 `ReadFile`로 스트리밍하므로, HDD에 둔 CHD를 처음 읽는 조각마다 25~480ms씩 멈췄습니다. 이제 첫 `Read` 뒤 256KiB 이상 남은 이미지 파일은 작업 스레드가 메모리에 미리 읽고, 이후 읽기는 메모리에서 돌려줍니다. 게스트가 CHD를 쓰는 동안에는 작업 스레드가 비켜섭니다. SpaceMix 플레이와 35분 어트랙트에서 곡 재생 중 느린 읽기가 없어졌습니다. 근거: [설계](design/20261009-i009-chd-file-prefetch.md), [작업 로그](work-logs/20261009-i009-chd-file-prefetch.md).
+
+  *#9 — CHD files the game reads in pieces are read ahead in the background: 6th's main thread streams its music `.ezw` with `ReadFile` every 133 ms, so each CHD piece read for the first time from an HDD stalled it for 25 to 480 ms. An image file with at least 256 KiB left after its first `Read` is now read into memory by a worker thread and later reads come from memory, the worker stepping aside while the guest uses the CHD. A SpaceMix play and a 35-minute attract showed no slow read during a song. Evidence: [design](design/20261009-i009-chd-file-prefetch.md), [work log](work-logs/20261009-i009-chd-file-prefetch.md).*
+
 - **#6 — OSD의 프로세스 정보 아래에 OpenGL renderer를 표시합니다.** renderer·vendor·OpenGL 버전·SDL 비디오 드라이버를 보여 주고, 소프트웨어 렌더러는 경고 색으로 구분하며, 같은 값을 로그에 남깁니다. 근거: [설계](design/20261006-i006-osd-gl-renderer.md), [작업 로그](work-logs/20261006-i006-osd-gl-renderer.md).
 
   *#6 — the OSD shows the OpenGL renderer below the process information: the renderer, vendor, OpenGL version and SDL video driver, with software rasterizers in a warning colour and the same values logged. Evidence: [design](design/20261006-i006-osd-gl-renderer.md), [work log](work-logs/20261006-i006-osd-gl-renderer.md).*

@@ -1,5 +1,65 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.68 (2026-10-09)
+
+### 한국어
+
+게임이 나눠 읽는 CHD 파일을 백그라운드에서 미리 읽어, HDD에서 6th를 플레이할 때의 멈칫거림과 배경음 끊김을 없앴습니다(#9).
+
+#### 해결된 이슈
+
+- [#9](https://github.com/nworkers/re2DJ/issues/9) CHD 파일 백그라운드 미리 읽기로 플레이 중 멈춤 줄이기 — PR [#10](https://github.com/nworkers/re2DJ/pull/10)
+
+#### 1. 원인 (#9)
+- 6th는 소리 스레드 없이 메인 스레드가 매 프레임 배경음 버퍼(약 2.04초)를 보고, 약 133ms마다 `.ezw`에서 22,528바이트를 `ReadFile`로 읽어 채웁니다(재생 위치보다 약 1.5초 앞섬). 한 곡 플레이 70초 동안의 파일 접근은 이 배경음 읽기 532번뿐이었습니다.
+- 4KB LZMA hunk의 CHD를 HDD에서 처음 읽는 조각마다 `chd_read`가 디스크를 기다려, 메인 스레드가 25~482ms씩 멈췄습니다. 배경음 출력(SDL 스트림)에는 덮어쓰기나 공백이 없었습니다.
+
+#### 2. CHD 파일 미리 읽기 (#9)
+- `hle::GuestFilePrefetcher`: 작업 스레드 하나가 파일을 처음부터 16KiB씩 메모리에 읽고 채운 길이를 atomic으로 공개합니다. 열린 작업의 메모리는 합쳐서 256MiB까지입니다.
+- `GuestFiles`: 읽기 전용으로 연 이미지 파일의 첫 `Read` 뒤 256KiB 이상 남으면 시작하고, `Read`는 미리 읽은 범위를 먼저 쓰며, `CloseHandle`이 취소합니다. 한 번에 다 읽는 파일은 미리 읽지 않습니다.
+- 게스트의 source 호출은 `ForegroundSource` wrapper를 거치고, 그동안 작업 스레드는 다음 조각을 시작하지 않습니다. 첫 실행에서 작업 스레드가 CHD 잠금을 조각마다 다시 잡아 게임의 4KB 읽기가 273ms를 기다린 것을 막습니다.
+- CHD handle은 하나만 씁니다(6th CHD의 hunk map이 handle마다 약 60MB). Windows·Linux 공용 코드입니다.
+
+#### 3. 검증
+- 단위 테스트 `guest_file_prefetcher_test`: 나눠 읽기, 한 번에 읽는 파일·작은 파일 제외, 미리 읽는 중의 직접 읽기, `Close` 취소, 메모리 한도와 실패, 게스트 우선, 붙잡힌 상태의 종료.
+- Windows x86 Debug: 단위 테스트 6193건 실패 0건, 30번 반복 실패 없음. WSL Linux x64·x86 Debug: CTest 각 5개 통과.
+- 실제 실행(Windows Release, CHD가 HDD): SpaceMix 플레이 약 1분 40초 동안 25ms를 넘는 `ReadFile`이 12번(최대 481.9ms)에서 0번으로, 40ms를 넘는 프레임이 5번(최대 485.3ms)에서 0번으로 줄었습니다. 어트랙트 35분 실행에서도 곡 재생 중 느린 읽기가 없었고, 사용자가 SpaceMix 세 곡을 플레이해 멈칫거림·끊김이 없음을 확인했습니다.
+- 남은 것: 곡 로딩·화면 전환은 처음 읽는 작은 파일마다 HDD 접근이 쌓여 캐시 없이 1.1~2.9초 멈출 수 있습니다([TODO](docs/TODO.md)).
+- 개발 기록: [배경음이 끊기던 이유](docs/post/2026-10-09-000009-chd-file-prefetch-wip.md).
+
+#### 4. 문서
+- `docs/TODO.md`에서 완료됐거나 in-process 러너로 대상이 사라진 항목을 `docs/IMPLEMENTED.md`로 옮겼고, Windows in-process 러너에서 게임패드 입력이 게임까지 동작함을 재확인해 작업 445 로그에 남겼습니다.
+
+### English
+
+CHD files the game reads in pieces are read ahead in the background, ending the stutter and music break-up of playing 6th from an HDD (#9).
+
+#### Resolved issues
+
+- [#9](https://github.com/nworkers/re2DJ/issues/9) Prefetch CHD files in the background to avoid stalls during play — PR [#10](https://github.com/nworkers/re2DJ/pull/10)
+
+#### 1. The cause (#9)
+- 6th has no sound thread: its main thread checks the music buffer (about 2.04 s) every frame and refills it about every 133 ms with 22,528 bytes read from an `.ezw` through `ReadFile`, about 1.5 s ahead of the play cursor. Over 70 s of one song, those 532 music reads were the only file access.
+- Each piece of the CHD (4 KB LZMA hunks) read for the first time from the HDD had `chd_read` wait on the disk, stalling the main thread for 25 to 482 ms. The music output (the SDL stream) showed no overwrite or gap.
+
+#### 2. Prefetching CHD files (#9)
+- `hle::GuestFilePrefetcher`: one worker thread reads a file from the start into memory 16 KiB at a time and publishes the filled length atomically; open jobs hold at most 256 MiB together.
+- `GuestFiles`: starts when at least 256 KiB of an image file opened read-only remain after its first `Read`, serves `Read` from the prefetched range first, and cancels on `CloseHandle`. Files read whole at once are not prefetched.
+- The guest's source calls go through the `ForegroundSource` wrapper, and the worker starts no piece meanwhile; this stops what the first run showed, the worker retaking the CHD lock piece after piece while a 4 KB game read waited 273 ms.
+- One CHD handle is used (6th's CHD hunk map costs about 60 MB per handle). Windows and Linux share the code.
+
+#### 3. Verification
+- Unit test `guest_file_prefetcher_test`: pieced reads, no prefetch for whole or small files, direct reads during a prefetch, cancel on `Close`, the memory budget and failure, the guest going first, and shutdown while held.
+- Windows x86 Debug: 6193 unit checks, 0 failures, 30 repeated runs without a failure. WSL Linux x64 and x86 Debug: 5 CTest tests each pass.
+- Real runs (Windows Release, CHD on an HDD): over about 1 min 40 s of SpaceMix play, `ReadFile`s over 25 ms went from 12 (up to 481.9 ms) to 0 and frames over 40 ms from 5 (up to 485.3 ms) to 0. A 35-minute attract run had no slow read during a song either, and the user played three SpaceMix songs with no stutter or break-up.
+- Left: song loading and screen transitions can still pause 1.1 to 2.9 s when cold, each small file read for the first time adding HDD access ([TODO](docs/TODO.md)).
+- Dev log: [Why the Music Broke Up](docs/post/2026-10-09-000009-chd-file-prefetch-wip.md).
+
+#### 4. Documents
+- Items in `docs/TODO.md` that were finished, or whose target went away with the in-process runner, moved to `docs/IMPLEMENTED.md`, and gamepad input reaching the game on the Windows in-process runner was rechecked and recorded in task 445's log.
+
+---
+
 ## v0.0.67 (2026-10-06)
 
 ### 한국어
