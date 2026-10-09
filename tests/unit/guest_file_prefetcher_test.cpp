@@ -271,6 +271,23 @@ void CheckBudget(re2dj::test::Context& context)
     RE2DJ_CHECK_EQ(context, missing->loaded(), std::uint64_t{0});
 }
 
+// The worker starts no piece while a guest call into the source is under
+// way, and goes on once it ends.
+void CheckWorkerStepsAside(re2dj::test::Context& context)
+{
+    StreamSource source;
+    hle::GuestFilePrefetcher prefetcher(&source);
+    prefetcher.BeginForeground();
+    const auto job = prefetcher.Start("EZ2DJ/BGM.EZW", kLargeBytes);
+    RE2DJ_CHECK(context, job != nullptr);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    RE2DJ_CHECK_EQ(context, source.worker_reads.load(), 0);
+    RE2DJ_CHECK_EQ(context, job->loaded(), std::uint64_t{0});
+    prefetcher.EndForeground();
+    prefetcher.WaitIdle();
+    RE2DJ_CHECK_EQ(context, job->loaded(), kLargeBytes);
+}
+
 // Closing with a held job, then destroying everything, does not hang.
 void CheckShutdownWhileHeld(re2dj::test::Context& context)
 {
@@ -296,5 +313,6 @@ void RunGuestFilePrefetcherTests(re2dj::test::Context& context)
     CheckFilesNotPrefetched(context);
     CheckReadsWhilePrefetching(context);
     CheckBudget(context);
+    CheckWorkerStepsAside(context);
     CheckShutdownWhileHeld(context);
 }

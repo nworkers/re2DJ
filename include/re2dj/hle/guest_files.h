@@ -223,7 +223,8 @@ private:
 
     GuestFileConfig config_;
     std::unique_ptr<GuestFileSource> source_;
-    // Reads source_, so it is declared after it and goes first.
+    // Reads the source source_ wraps, so it is declared after it and goes
+    // first.
     std::unique_ptr<GuestFilePrefetcher> prefetcher_;
     storage::GuestPath root_;
     storage::GuestPath current_;

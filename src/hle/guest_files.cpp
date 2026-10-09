@@ -65,6 +65,57 @@ private:
     std::unique_ptr<storage::Fat32Volume> volume_;
 };
 
+// The guest's own calls into the image source, marked so the prefetcher's
+// worker steps aside while one is under way (#9).
+class ForegroundSource final : public GuestFileSource
+{
+public:
+    ForegroundSource(std::unique_ptr<GuestFileSource> inner, GuestFilePrefetcher* prefetcher)
+        : inner_(std::move(inner)), prefetcher_(prefetcher)
+    {
+    }
+
+    bool Find(std::string_view relative_path, bool* directory, std::uint64_t* size) const override
+    {
+        const Scope scope(prefetcher_);
+        return inner_->Find(relative_path, directory, size);
+    }
+    bool ReadRange(std::string_view relative_path,
+                   std::uint64_t offset,
+                   void* destination,
+                   std::size_t length) const override
+    {
+        const Scope scope(prefetcher_);
+        return inner_->ReadRange(relative_path, offset, destination, length);
+    }
+    bool Materialize(std::string_view relative_path, const std::filesystem::path& output) const override
+    {
+        const Scope scope(prefetcher_);
+        return inner_->Materialize(relative_path, output);
+    }
+    bool ListDirectory(std::string_view relative_path, std::vector<storage::Fat32Entry>* entries) const override
+    {
+        const Scope scope(prefetcher_);
+        return inner_->ListDirectory(relative_path, entries);
+    }
+
+private:
+    class Scope
+    {
+    public:
+        explicit Scope(GuestFilePrefetcher* prefetcher) : prefetcher_(prefetcher) { prefetcher_->BeginForeground(); }
+        ~Scope() { prefetcher_->EndForeground(); }
+        Scope(const Scope&) = delete;
+        Scope& operator=(const Scope&) = delete;
+
+    private:
+        GuestFilePrefetcher* prefetcher_;
+    };
+
+    std::unique_ptr<GuestFileSource> inner_;
+    GuestFilePrefetcher* prefetcher_;
+};
+
 // A directory dump on the host as a file source. A host file system may tell
 // case apart where the guest's does not, so each component is matched
 // without case when its exact spelling is missing. Entries list in the order
@@ -235,8 +286,11 @@ bool GuestFiles::Configure(GuestFileConfig config,
         return false;
     }
     current_ = root_;
-    source_ = std::move(source);
-    prefetcher_ = std::make_unique<GuestFilePrefetcher>(source_.get());
+    // The worker reads the source itself; the guest's calls go through the
+    // wrapper that makes it step aside. prefetcher_ goes before source_, which
+    // owns the source it reads.
+    prefetcher_ = std::make_unique<GuestFilePrefetcher>(source.get());
+    source_ = std::make_unique<ForegroundSource>(std::move(source), prefetcher_.get());
     LoadDeletedList();
     return true;
 }

@@ -94,6 +94,23 @@ void GuestFilePrefetcher::Cancel(const std::shared_ptr<Job>& job)
     job->cancelled_.store(true, std::memory_order_release);
     const std::lock_guard<std::mutex> guard(lock_);
     Release(job.get());
+    changed_.notify_all();
+}
+
+void GuestFilePrefetcher::BeginForeground()
+{
+    const std::lock_guard<std::mutex> guard(lock_);
+    ++foreground_;
+}
+
+void GuestFilePrefetcher::EndForeground()
+{
+    const std::lock_guard<std::mutex> guard(lock_);
+    --foreground_;
+    if (foreground_ == 0)
+    {
+        changed_.notify_all();
+    }
 }
 
 void GuestFilePrefetcher::WaitIdle()
@@ -141,6 +158,16 @@ void GuestFilePrefetcher::Run()
         std::uint64_t offset = 0;
         while (!failed && offset < job->size_ && !job->cancelled_.load(std::memory_order_acquire))
         {
+            {
+                std::unique_lock<std::mutex> guard(lock_);
+                changed_.wait(guard, [this, &job] {
+                    return foreground_ == 0 || stopping_ || job->cancelled_.load(std::memory_order_acquire);
+                });
+                if (stopping_ || job->cancelled_.load(std::memory_order_acquire))
+                {
+                    break;
+                }
+            }
             const auto length = static_cast<std::size_t>(std::min<std::uint64_t>(kPieceBytes, job->size_ - offset));
             if (!source_->ReadRange(job->path_, offset, job->bytes_.get() + offset, length))
             {

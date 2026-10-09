@@ -72,6 +72,11 @@ public:
     void Cancel(const std::shared_ptr<Job>& job);
     // Waits until the queue is empty and the worker idle (tests).
     void WaitIdle();
+    // Brackets a guest call into the source. The worker does not start a
+    // piece while one is under way, so the guest waits for one piece at most
+    // instead of losing the source's lock to the worker piece after piece.
+    void BeginForeground();
+    void EndForeground();
 
 private:
     void Run();
@@ -86,6 +91,8 @@ private:
     std::shared_ptr<Job> current_;
     // Bytes held by jobs not yet cancelled.
     std::uint64_t held_bytes_ = 0;
+    // Guest calls into the source under way.
+    int foreground_ = 0;
     bool busy_ = false;
     bool stopping_ = false;
     std::thread worker_;
