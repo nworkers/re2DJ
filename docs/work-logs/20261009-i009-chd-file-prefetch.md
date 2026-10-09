@@ -36,3 +36,9 @@
   - 2차 실행은 사람이 직접 플레이하지 않았다. 사용자가 플레이 중 끊김이 사라졌는지 다시 확인한다.
 
   *Verification: the Windows x86 Debug build (MSVC, warnings as errors) passes `re2dj_unit_tests` with 6,193 checks, 30 repeated runs without a failure, and 4 CTest tests, and the Release build passes; the WSL Linux x64 and x86 Debug builds (warnings as errors) pass 5 CTest tests each. Real runs (Windows Release, CHD on the HDD, with the temporary instrumentation put back): first, the user playing SpaceMix, `bgm-01.ezw` (16.9 MB) was read whole 167 ms before the song began, and over about 1 min 40 s of play no `ReadFile` took over 25 ms and no frame over 40 ms, where the same situation showed 25 to 480 ms reads before; second, after the worker learned to step aside, the attract's four demo songs looped 9 times over 35 minutes, every song's music was read before the song began (152 to 1,015 ms on the cold first loop, 150 to 300 ms after), and no slow read or long frame came during a song. Left: song loading and screen transitions still stall (1.1 to 2.9 s on the cold loop), each small file read for the first time (key sounds and the like) adding 25 to 48 ms of HDD access, outside this task; `CreateFileA` of `..\..\ranking\ranking_*.bin` takes 65 to 80 ms without reading the CHD, as before the change; and no person played in the second run, so the user checks again that the music no longer breaks up during play.*
+
+## 2026-10-09 — 사용자 확인 / User check
+
+- 임시 계측을 뺀 최종 Release(`8da38ac`)로 사용자가 6th SpaceMix를 세 곡(`blue`, `madrobot`, `lookout`) 플레이했다. 멈칫거림이나 배경음 끊김을 느끼지 못했다. 세 곡의 배경음(13.7~19.7MB)은 모두 곡 시작 전에 261~587ms 만에 다 읽혔고, 로그에 경고·오류가 없었다.
+
+  *With the final Release (`8da38ac`, no temporary instrumentation) the user played three SpaceMix songs on 6th (`blue`, `madrobot`, `lookout`) and noticed no stutter or music break-up; each song's music (13.7 to 19.7 MB) was read whole 261 to 587 ms before the song began, and the log held no warning or error.*
