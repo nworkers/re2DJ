@@ -1,6 +1,6 @@
 # 배경음이 끊기던 이유: 메인 스레드가 HDD를 기다리지 않게 CHD 파일 미리 읽기 (WIP)
 
-범위: [#9](https://github.com/nworkers/re2DJ/issues/9) (브랜치 `feature/chd-file-prefetch`, 아직 릴리스 전)
+범위: [#9](https://github.com/reexec/re2DJ/issues/9) (브랜치 `feature/chd-file-prefetch`, 아직 릴리스 전)
 
 EZ2DJ 6th의 SpaceMix를 Windows에서 플레이하면 가끔 화면이 멈칫하고 배경음이 끊겼습니다. 원인은 그래픽도 오디오도 아니었습니다. 6th는 소리 스레드 없이 게임의 메인 스레드가 배경음 파일을 조금씩 읽어 소리 버퍼를 채우는데, HDD에 둔 CHD를 처음 읽는 조각마다 그 스레드가 디스크를 수십~수백 ms씩 기다렸습니다. 이번 작업은 게임 코드를 건드리지 않고 HLE 파일 계층에서 그 파일을 백그라운드로 미리 읽어, 플레이 중 `ReadFile`이 디스크를 기다리지 않게 한 기록입니다.
 
@@ -107,7 +107,7 @@ DirectSound 게임은 재생 중인 원형 버퍼의 재생 위치(`GetCurrentPo
 
 # Why the Music Broke Up: Prefetching CHD Files So the Main Thread Never Waits on the HDD (WIP)
 
-Range: [#9](https://github.com/nworkers/re2DJ/issues/9) (branch `feature/chd-file-prefetch`, not released yet)
+Range: [#9](https://github.com/reexec/re2DJ/issues/9) (branch `feature/chd-file-prefetch`, not released yet)
 
 Playing EZ2DJ 6th's SpaceMix on Windows stuttered now and then and the background music could break up. The cause was neither graphics nor audio. 6th has no sound thread: the game's main thread reads its music file a little at a time to fill the sound buffer, and each piece of a CHD on an HDD read for the first time kept that thread waiting on the disk for tens to hundreds of milliseconds. This work reads such files ahead in the background in the HLE file layer, without touching the game's code, so `ReadFile` no longer waits on the disk during play.
 

@@ -1,6 +1,6 @@
 # 개발 기록 작성 지침
 
-이 디렉터리의 글은 프로젝트 사이트(<https://nworkers.github.io/re2DJ/>)의 "개발 기록"으로 게시됩니다. main에 머지되면 Pages 워크플로가 자동으로 반영합니다.
+이 디렉터리의 글은 프로젝트 사이트(<https://reexec.github.io/re2DJ/>)의 "개발 기록"으로 게시됩니다. main에 머지되면 Pages 워크플로가 자동으로 반영합니다.
 
 ## 파일명
 
@@ -42,7 +42,7 @@ Body...
 
 # Dev-log authoring guidelines
 
-Posts in this directory are published as the "Dev log" of the project site (<https://nworkers.github.io/re2DJ/>). The Pages workflow picks them up when they reach main.
+Posts in this directory are published as the "Dev log" of the project site (<https://reexec.github.io/re2DJ/>). The Pages workflow picks them up when they reach main.
 
 ## File name
 

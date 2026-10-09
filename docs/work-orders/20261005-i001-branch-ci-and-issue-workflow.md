@@ -1,6 +1,6 @@
 # #1 작업 지시서 — 브랜치 push CI와 GitHub 이슈·PR 기반 작업 규칙 / #1 work order — branch-push CI and an issue- and PR-based task workflow
 
-이슈: [#1](https://github.com/nworkers/re2DJ/issues/1) · 설계: [20261005-i001-branch-ci-and-issue-workflow.md](../design/20261005-i001-branch-ci-and-issue-workflow.md)
+이슈: [#1](https://github.com/reexec/re2DJ/issues/1) · 설계: [20261005-i001-branch-ci-and-issue-workflow.md](../design/20261005-i001-branch-ci-and-issue-workflow.md)
 
 ## 절차 / Steps
 

@@ -1,6 +1,6 @@
 # Win32 실행을 주입에서 직접 로딩으로: 두 벌의 HLE를 하나로 (WIP)
 
-범위: [`v0.0.62`부터 `v0.0.63`까지](https://github.com/nworkers/re2DJ/compare/v0.0.62...v0.0.63) (작업 446~453)
+범위: [`v0.0.62`부터 `v0.0.63`까지](https://github.com/reexec/re2DJ/compare/v0.0.62...v0.0.63) (작업 446~453)
 
 지금까지 re2DJ는 Windows와 Linux에서 원본 EZ2DJ 실행 파일을 서로 다른 방식으로 돌렸습니다. Windows는 원본 EXE를 **실제 Windows 프로세스**로 띄운 뒤 DLL을 주입했고, Linux는 re2dj **자기 프로세스 안에** PE32를 직접 매핑해 실행했습니다. 이번 작업은 Windows도 Linux와 같은 직접 로딩 방식으로 바꾸고 주입 경로를 지운 기록입니다. 그 결과 같은 HLE 코드 한 벌이 두 OS에서 돌고, 코드는 3만 5천 줄 줄었습니다.
 
@@ -153,7 +153,7 @@ FPS로는 v0.0.62 → v0.0.63이 4th 796 → 657, 1st SE 1168 → 908, 5th 900 �
 
 # Win32 Execution from Injection to Direct Loading: Two HLEs Become One (WIP)
 
-Range: [`v0.0.62` to `v0.0.63`](https://github.com/nworkers/re2DJ/compare/v0.0.62...v0.0.63) (tasks 446–453)
+Range: [`v0.0.62` to `v0.0.63`](https://github.com/reexec/re2DJ/compare/v0.0.62...v0.0.63) (tasks 446–453)
 
 Until now re2DJ ran the original EZ2DJ executables differently on Windows and Linux. Windows started the original EXE as a **real Windows process** and injected a DLL into it; Linux mapped the PE32 **into re2dj's own process** and ran it there. This work moves Windows to the same direct loading and removes the injection path. One set of HLE code now runs on both OSes, and the code base is 35 thousand lines smaller.
 

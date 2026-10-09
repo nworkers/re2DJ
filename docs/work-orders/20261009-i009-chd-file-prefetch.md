@@ -1,6 +1,6 @@
 # #9 작업 지시서 — CHD 파일 백그라운드 미리 읽기 / #9 work order — prefetching CHD files in the background
 
-이슈: [#9](https://github.com/nworkers/re2DJ/issues/9) · 설계: [20261009-i009-chd-file-prefetch.md](../design/20261009-i009-chd-file-prefetch.md)
+이슈: [#9](https://github.com/reexec/re2DJ/issues/9) · 설계: [20261009-i009-chd-file-prefetch.md](../design/20261009-i009-chd-file-prefetch.md)
 
 ## 절차 / Steps
 

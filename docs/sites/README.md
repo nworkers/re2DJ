@@ -1,6 +1,6 @@
 # re2DJ 프로젝트 사이트
 
-이 디렉터리는 <https://nworkers.github.io/re2DJ/>의 소스입니다. 설계는
+이 디렉터리는 <https://reexec.github.io/re2DJ/>의 소스입니다. 설계는
 [작업 432 설계](../design/20261001-432-github-pages-site.md)에 있습니다. 작업 방식과 코드 구조는
 rePIU 프로젝트 사이트(rePIU Task 756)를 따르고, 시각 디자인은 8비트 레트로 위에 EZ2DJ 초기
 버전(The 1st Tracks / 1st SE)의 어두운 네온 아케이드 분위기를 입혔습니다.
@@ -78,7 +78,7 @@ python3 -m http.server -d build/site 8000     # http://localhost:8000/
 
 # re2DJ project site
 
-This directory is the source of <https://nworkers.github.io/re2DJ/>. The design is
+This directory is the source of <https://reexec.github.io/re2DJ/>. The design is
 [Task 432](../design/20261001-432-github-pages-site.md). The working method and code structure follow
 the rePIU project site (rePIU Task 756); the visual design layers the dark neon arcade mood of early
 EZ2DJ (The 1st Tracks / 1st SE) on an 8-bit retro base.

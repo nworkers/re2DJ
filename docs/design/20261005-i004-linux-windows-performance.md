@@ -1,6 +1,6 @@
 # #4 설계 — Windows와 Linux x86·x64 성능 비교 / #4 design — comparing Windows with Linux x86 and x64 performance
 
-이슈: [#4](https://github.com/nworkers/re2DJ/issues/4) · 기준: [Windows in-process 러너 성능](../analysis/windows-in-process-performance.md)(작업 453)
+이슈: [#4](https://github.com/reexec/re2DJ/issues/4) · 기준: [Windows in-process 러너 성능](../analysis/windows-in-process-performance.md)(작업 453)
 
 ## 목적 / Goal
 
