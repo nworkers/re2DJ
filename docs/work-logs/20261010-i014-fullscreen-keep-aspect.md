@@ -38,3 +38,9 @@
 
   *The user edited `[gamepad]` in `config/ez2dj-io.example.ini` and asked for those values to become the defaults. The table in `ez2dj_keyboard_map.cpp` now matches: player 1's keys 1 to 5 `DPAD_LEFT` `DPAD_UP` `A` `Y` `B`, the pedal `X`, effectors 1 to 4 `LB` `RB` `LT` `RT`; start, coin and the turntable are unchanged. Both example files' "Linux host" note became "both hosts", and the README's pad description was updated. `gamepad_bindings_test` checks the new defaults and adds the pedal and an effector; the existing test checks that the example file equals the defaults. x64 and x86 Debug and clang build, pass 5 CTest tests, and report 6,297 checks with 0 failures.*
 
+## 2026-10-10 — 사용자 화면 확인 / User's visual check
+
+- 사용자가 화면으로 확인할 항목이 모두 잘 동작한다고 알려 주었다: 런처의 Alt+Enter 전체 화면 전환, 비율 유지 시 가운데 3:2 영역과 검은 띠, Space가 시작하지 않음, 패드 A로 시작, 게임에서 비율 유지를 끈 늘린 화면, Alt+Enter 때 2P 턴테이블이 눌리지 않음.
+
+  *The user reported that every visual check works: the launcher's Alt+Enter fullscreen switch, the centred 3:2 area with black bars when keeping aspect, Space not starting, the pad's A starting, the stretched game picture with keep-aspect off, and no 2P turntable press on Alt+Enter.*
+
