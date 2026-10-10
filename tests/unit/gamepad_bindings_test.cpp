@@ -1,4 +1,5 @@
 #include "re2dj/input/gamepad.h"
+#include "re2dj/input/pad_exit_chord.h"
 #include "re2dj/input/io_bindings.h"
 
 #include <fstream>
@@ -212,8 +213,58 @@ void CheckLoader(re2dj::test::Context& context)
 
 }  // namespace
 
+// The exit chord (#20, rePIU #52): all four controls on one pad, not split
+// across two; the timer fires once after a second's unbroken hold and again
+// only after a release.
+void CheckExitChord(re2dj::test::Context& context)
+{
+    const auto bit = [](input::GamepadControl control) { return static_cast<std::size_t>(control); };
+    input::GamepadControls held;
+    held.set(bit(input::GamepadControl::kLeftTrigger));
+    held.set(bit(input::GamepadControl::kRightTrigger));
+    held.set(bit(input::GamepadControl::kLeftStick));
+    RE2DJ_CHECK(context, !input::IsPadExitChordDown(held));
+    held.set(bit(input::GamepadControl::kRightStick));
+    RE2DJ_CHECK(context, input::IsPadExitChordDown(held));
+    held.set(bit(input::GamepadControl::kSouth));
+    RE2DJ_CHECK(context, input::IsPadExitChordDown(held));
+    for (const input::GamepadControl missing :
+         {input::GamepadControl::kLeftTrigger, input::GamepadControl::kRightTrigger,
+          input::GamepadControl::kLeftStick, input::GamepadControl::kRightStick})
+    {
+        input::GamepadControls partial = held;
+        partial.reset(bit(missing));
+        RE2DJ_CHECK(context, !input::IsPadExitChordDown(partial));
+    }
+
+    input::GamepadControls triggers;
+    triggers.set(bit(input::GamepadControl::kLeftTrigger));
+    triggers.set(bit(input::GamepadControl::kRightTrigger));
+    input::GamepadControls sticks;
+    sticks.set(bit(input::GamepadControl::kLeftStick));
+    sticks.set(bit(input::GamepadControl::kRightStick));
+    RE2DJ_CHECK(context, !input::IsPadExitChordDown(std::vector<input::GamepadControls>{triggers, sticks}));
+    RE2DJ_CHECK(context, input::IsPadExitChordDown(std::vector<input::GamepadControls>{triggers, held}));
+    RE2DJ_CHECK(context, !input::IsPadExitChordDown(std::vector<input::GamepadControls>{}));
+
+    input::PadExitChordTimer timer;
+    RE2DJ_CHECK(context, !timer.Update(true, 5000));
+    RE2DJ_CHECK(context, !timer.Update(true, 5999));
+    RE2DJ_CHECK(context, timer.Update(true, 6000));
+    RE2DJ_CHECK(context, !timer.Update(true, 9000));
+    RE2DJ_CHECK(context, !timer.Update(false, 9001));
+    // Let go before the second: nothing, and the next hold starts afresh.
+    RE2DJ_CHECK(context, !timer.Update(true, 10000));
+    RE2DJ_CHECK(context, !timer.Update(true, 10900));
+    RE2DJ_CHECK(context, !timer.Update(false, 10950));
+    RE2DJ_CHECK(context, !timer.Update(true, 11000));
+    RE2DJ_CHECK(context, !timer.Update(true, 11999));
+    RE2DJ_CHECK(context, timer.Update(true, 12000));
+}
+
 void RunGamepadBindingsTests(re2dj::test::Context& context)
 {
+    CheckExitChord(context);
     CheckControlNames(context);
     CheckGamepadDefaults(context);
     CheckLoader(context);

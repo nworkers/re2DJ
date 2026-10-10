@@ -463,7 +463,7 @@ add_library(re2dj_launcher_ui STATIC
 target_include_directories(re2dj_launcher_ui PUBLIC include)
 target_link_libraries(re2dj_launcher_ui
     PUBLIC re2dj_core
-    PRIVATE re2dj_imgui_sdl3 re2dj_imgui SDL3::SDL3-static re2dj_warnings
+    PRIVATE re2dj_imgui_sdl3 re2dj_imgui re2dj_sdl3_gamepad re2dj_logging SDL3::SDL3-static re2dj_warnings
 )
 
 # Platform-neutral core. Nothing here may include a host OS header; see the

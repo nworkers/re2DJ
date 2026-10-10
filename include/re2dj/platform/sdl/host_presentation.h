@@ -11,6 +11,7 @@
 #include "re2dj/graphics/color_depth.h"
 #include "re2dj/graphics/window_policy.h"
 #include "re2dj/hle/host_presentation.h"
+#include "re2dj/input/pad_exit_chord.h"
 #include "re2dj/input/sdl3_gamepad_reader.h"
 
 namespace re2dj::graphics
@@ -161,6 +162,8 @@ private:
     bool requested_fullscreen_ = false;
     std::function<void(bool fullscreen, bool keep_aspect)> display_observer_;
     bool close_requested_ = false;
+    // LT+RT+L3+R3 held on one pad for a second (#20).
+    input::PadExitChordTimer exit_chord_;
     // Whether the backend's software pacing was already reported.
     bool pacing_reported_ = false;
     // The render target's colour depth last recorded, and whether the

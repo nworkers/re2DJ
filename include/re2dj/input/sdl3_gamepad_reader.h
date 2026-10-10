@@ -41,6 +41,9 @@ public:
     // Every open pad's controls, merged; the caller pumps events first so
     // SDL's state is current.
     GamepadControls Read() const;
+    // Each open pad's controls on its own, for what must happen on one pad,
+    // such as the exit chord (#20).
+    std::vector<GamepadControls> ReadEach() const;
 
     std::size_t open_count() const { return pads_.size(); }
     bool initialized() const { return initialized_; }
