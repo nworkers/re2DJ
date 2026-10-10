@@ -50,6 +50,18 @@ rePIU처럼 인자를 준 실행도 설정 파일을 읽습니다. 명령줄이 
 * 비율 유지가 켜져 있으면 기본 창(960×640, 3:2) 비율의 가장 큰 영역을 가운데에 두고 나머지는 검은 띠로 칠하며, 글자 배율은 그 영역의 높이를 따릅니다. 끄면 창 전체를 씁니다. 같은 `ComputePresentRect`를 씁니다.
 * 표에서 Space는 더 이상 시작하지 않습니다(Enter·키패드 Enter·패드 A·더블클릭만).
 
+### 5. EZ2DJ 게임패드 기본값 (추가 요청, 2026-10-10)
+
+사용자가 `config/ez2dj-io.example.ini`의 `[gamepad]`를 고친 값을 내장 기본값으로 올리기로 했습니다. 예시 파일은 기본값과 같아야 합니다(단위 테스트가 확인).
+
+| 입력 | 이전 | 새 기본값 |
+|---|---|---|
+| 1P 1~5번 키 | `X` `Y` `B` `A` `RB` | `DPAD_LEFT` `DPAD_UP` `A` `Y` `B` |
+| 1P 페달 | `LB` | `X` |
+| 이펙터 1~4 | 십자키 상·하·좌·우 | `LB` `RB` `LT` `RT` |
+
+시작(`START`), 코인(`BACK`), 턴테이블(왼쪽 스틱 좌우)은 그대로입니다. EZ2Dancer는 바꾸지 않습니다. 두 예시 파일의 "Linux host" 문구는 Windows도 패드를 쓰므로(작업 449) "both hosts"로 고칩니다.
+
 ## 바꾸지 않는 것
 
 * 전체 화면 방식(모니터 크기의 테두리 없는 창, 디스플레이 모드 변경 없음), Alt+1..3 배율, 더블클릭 전환.
@@ -114,6 +126,10 @@ As in rePIU, runs with arguments read the settings file too; the command line, t
 * The launcher window opens fullscreen when `fullscreen` is on, and a change through the checkbox or Alt+Enter applies on the spot. Alt+Enter is not passed to ImGui, so Enter does not start a row; a double click starts a row on the table, so it is no toggle here.
 * With keep-aspect on, the largest area of the default window's shape (960×640, 3:2) is centred and the rest painted black, the text scale following that area's height; off, the whole window is used. Both use `ComputePresentRect`.
 * Space no longer starts a row on the table (Enter, keypad Enter, the pad's A and a double click do).
+
+### 5. EZ2DJ gamepad defaults (follow-up request, 2026-10-10)
+
+The user chose to make their edited `[gamepad]` values in `config/ez2dj-io.example.ini` the built-in defaults; the example file must equal the defaults (a unit test checks it). Player 1's keys 1 to 5 go from `X` `Y` `B` `A` `RB` to `DPAD_LEFT` `DPAD_UP` `A` `Y` `B`, the pedal from `LB` to `X`, and effectors 1 to 4 from the d-pad's up, down, left and right to `LB` `RB` `LT` `RT`; start (`START`), coin (`BACK`) and the turntable (the left stick's left and right) stay, and EZ2Dancer is unchanged. Both example files' "Linux host" note becomes "both hosts", as Windows reads pads too (task 449).
 
 ## Unchanged
 

@@ -110,7 +110,11 @@ void CheckGamepadDefaults(re2dj::test::Context& context)
     // Player 1's five keys and the turntable are on the pad by default.
     const input::Ez2DjIoBindings defaults = input::DefaultEz2DjIoBindings();
     RE2DJ_CHECK_EQ(context, defaults.button_gamepad[static_cast<std::size_t>(input::Ez2DjButton::kPlayer1Key1)],
+                   static_cast<int>(input::GamepadControl::kDpadLeft));
+    RE2DJ_CHECK_EQ(context, defaults.button_gamepad[static_cast<std::size_t>(input::Ez2DjButton::kPlayer1Pedal)],
                    static_cast<int>(input::GamepadControl::kWest));
+    RE2DJ_CHECK_EQ(context, defaults.button_gamepad[static_cast<std::size_t>(input::Ez2DjButton::kEffector1)],
+                   static_cast<int>(input::GamepadControl::kLeftShoulder));
     RE2DJ_CHECK_EQ(context, defaults.button_gamepad[static_cast<std::size_t>(input::Ez2DjButton::kPlayer2Key1)], 0);
     RE2DJ_CHECK_EQ(context, defaults.turntable_gamepad[0], static_cast<int>(input::GamepadControl::kLeftStickLeft));
     RE2DJ_CHECK_EQ(context, defaults.turntable_keys[0], input::kVkLShift);
