@@ -1,5 +1,6 @@
 #include "re2dj/input/gamepad.h"
 #include "re2dj/input/pad_exit_chord.h"
+#include "re2dj/input/pad_osd_chord.h"
 #include "re2dj/input/io_bindings.h"
 
 #include <fstream>
@@ -262,9 +263,54 @@ void CheckExitChord(re2dj::test::Context& context)
     RE2DJ_CHECK(context, timer.Update(true, 12000));
 }
 
+// The OSD chord, its edge and the game gate (#22, rePIU #55).
+void CheckOsdChord(re2dj::test::Context& context)
+{
+    const auto bit = [](input::GamepadControl control) { return static_cast<std::size_t>(control); };
+    input::GamepadControls chord;
+    chord.set(bit(input::GamepadControl::kLeftTrigger));
+    chord.set(bit(input::GamepadControl::kRightTrigger));
+    RE2DJ_CHECK(context, !input::IsPadOsdChordDown(chord));
+    chord.set(bit(input::GamepadControl::kNorth));
+    RE2DJ_CHECK(context, input::IsPadOsdChordDown(chord));
+    input::GamepadControls triggers;
+    triggers.set(bit(input::GamepadControl::kLeftTrigger));
+    triggers.set(bit(input::GamepadControl::kRightTrigger));
+    input::GamepadControls north;
+    north.set(bit(input::GamepadControl::kNorth));
+    RE2DJ_CHECK(context, !input::IsPadOsdChordDown(std::vector<input::GamepadControls>{triggers, north}));
+    RE2DJ_CHECK(context, input::IsPadOsdChordDown(std::vector<input::GamepadControls>{north, chord}));
+
+    input::PadChordEdge edge;
+    RE2DJ_CHECK(context, edge.Update(true));
+    RE2DJ_CHECK(context, !edge.Update(true));
+    RE2DJ_CHECK(context, !edge.Update(false));
+    RE2DJ_CHECK(context, edge.Update(true));
+
+    // Closed off: nothing. Reopened with B held: B hidden until let go, while a
+    // newly pressed A shows at once.
+    input::PadGameGate gate;
+    input::GamepadControls b;
+    b.set(bit(input::GamepadControl::kEast));
+    RE2DJ_CHECK(context, gate.Apply(b) == b);
+    gate.SetSuppressed(true, b);
+    RE2DJ_CHECK(context, gate.suppressed());
+    RE2DJ_CHECK(context, gate.Apply(b).none());
+    gate.SetSuppressed(false, b);
+    RE2DJ_CHECK(context, gate.Apply(b).none());
+    input::GamepadControls a_and_b = b;
+    a_and_b.set(bit(input::GamepadControl::kSouth));
+    input::GamepadControls a;
+    a.set(bit(input::GamepadControl::kSouth));
+    RE2DJ_CHECK(context, gate.Apply(a_and_b) == a);
+    RE2DJ_CHECK(context, gate.Apply(input::GamepadControls{}).none());
+    RE2DJ_CHECK(context, gate.Apply(b) == b);
+}
+
 void RunGamepadBindingsTests(re2dj::test::Context& context)
 {
     CheckExitChord(context);
+    CheckOsdChord(context);
     CheckControlNames(context);
     CheckGamepadDefaults(context);
     CheckLoader(context);

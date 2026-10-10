@@ -8,6 +8,7 @@
 #include "re2dj/graphics/gl_renderer_identity.h"
 #include "re2dj/graphics/post_shader_control.h"
 #include "re2dj/graphics/present_overlay.h"
+#include "re2dj/input/gamepad.h"
 
 namespace re2dj::ui
 {
@@ -66,6 +67,10 @@ public:
     void QueueMousePosition(float x, float y);
     // 0 is the primary button, 1 the secondary.
     void QueueMouseButton(int button, bool down);
+    // What the host's pads hold, merged (#22). While the display is shown it
+    // drives ImGui's gamepad navigation: the d-pad or left stick moves, A
+    // chooses, B closes an open menu or, with none open, the display itself.
+    void SetGamepad(const input::GamepadControls& controls);
 
     void DrawOverlay(int pixel_width, int pixel_height) override;
 

@@ -4,6 +4,10 @@
 
 *This document records completed implementation and verification items. Detailed evidence remains in the corresponding design and work-log documents.*
 
+- **#22 — 패드의 LT+RT+Y로 OSD를 열고 패드로 조작합니다(rePIU #55).** 한 패드에서 세 입력을 누르는 순간 OSD가 열리고 닫힙니다. 열려 있는 동안 패드는 OSD 탐색(D-pad·왼쪽 스틱 이동, A 선택, B로 메뉴 닫기나 메뉴가 없으면 OSD 닫기)에만 쓰이고 게임에는 가지 않으며, 닫을 때 누르고 있던 입력은 뗄 때까지 게임에 숨깁니다. 키보드는 그대로 게임에 갑니다. 근거: [설계](design/20261011-i022-pad-osd.md), [작업 로그](work-logs/20261011-i022-pad-osd.md).
+
+  *#22 — LT+RT+Y on a pad opens the OSD and the pad drives it (rePIU #55): the three pressed on one pad toggle it at once; while it is open the pad only navigates it (the d-pad or left stick moves, A chooses, B closes a menu or, with none open, the OSD) and none of it reaches the game, input held as it closes staying hidden from the game until released; the keyboard still reaches the game. Evidence: [design](design/20261011-i022-pad-osd.md), [work log](work-logs/20261011-i022-pad-osd.md).*
+
 - **#20 — 패드 조합 LT+RT+L3+R3을 1초 누르면 게임과 런처가 끝납니다(rePIU #52).** 키보드도 창 닫기 버튼도 없는 스팀덱용입니다. 한 패드에서 네 입력을 1초 이어서 누르면, 게임은 창을 닫은 것과 같이 끝나 런처로 돌아오고 런처는 닫힙니다. 각 버튼은 그동안에도 게임에 그대로 들어갑니다. 근거: [설계](design/20261010-i020-pad-quit-combination.md), [작업 로그](work-logs/20261010-i020-pad-quit-combination.md).
 
   *#20 — holding LT+RT+L3+R3 on a pad for a second ends the game and the launcher (rePIU #52), for a Steam Deck with neither keyboard nor close button: four controls held together on one pad for an unbroken second end the game as closing its window does, back to the launcher, and close the launcher; each control still reaches the game meanwhile. Evidence: [design](design/20261010-i020-pad-quit-combination.md), [work log](work-logs/20261010-i020-pad-quit-combination.md).*
