@@ -20,6 +20,9 @@ struct LauncherSettings
 {
     // Where the list cursor starts next time; not passed to the run.
     std::string last_profile;
+    // Whether the launcher checks GitHub for a newer release (#17); on when
+    // not stored. Not passed to the run.
+    std::optional<bool> check_updates;
     std::optional<bool> fullscreen;
     // Off stretches the picture over the whole window (#14); on by default.
     std::optional<bool> keep_aspect;
@@ -50,7 +53,8 @@ struct LauncherSettingsLoad
 // `config_directory`/re2dj.ini.
 [[nodiscard]] std::filesystem::path LauncherSettingsPath(const std::filesystem::path& config_directory);
 
-// The INI text's settings: [Launcher] last_profile, [Video] fullscreen (0/1),
+// The INI text's settings: [Launcher] last_profile and check_updates (0/1),
+// [Video] fullscreen (0/1),
 // keep_aspect (0/1), color_depth (16/32) and post_shader, [Audio] gain_db
 // (-24..+18). Keys are found by the same rules the guest's private profiles
 // follow.

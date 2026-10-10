@@ -128,7 +128,7 @@ steps = [
 ]
 linux_steps_title = "Getting started on Linux"
 linux_steps = [
-  "Extract with <code>tar -xzf re2dj-v&lt;version&gt;-linux-x64.tar.gz</code> (<code>linux-x86</code> for 32-bit Linux).",
+  "Extract with <code>tar -xzf re2DJ-v&lt;version&gt;-linux-x64.tar.gz</code> (<code>linux-x86</code> for 32-bit Linux).",
   "Put the assets under <code>roms/&lt;set&gt;</code> in the extracted directory, e.g. a MAME CHD in <code>roms/ez2dj4th</code>.",
   "Run <code>./re2dj &lt;set&gt;</code> from that directory, e.g. <code>./re2dj ez2dj4th</code>.",
 ]

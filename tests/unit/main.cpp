@@ -15,6 +15,7 @@ int main()
     RunLoggingTests(context);
     RunVersionTests(context);
     RunLauncherTests(context);
+    RunLauncherUpdateTests(context);
     RunImportDispatcherTests(context);
     RunGuestModuleRegistryTests(context);
     RunGuestPeFacadeTests(context);

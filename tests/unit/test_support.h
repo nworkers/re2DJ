@@ -70,6 +70,7 @@ void RunKernel32ModuleTests(re2dj::test::Context& context);
 void RunUser32ModuleTests(re2dj::test::Context& context);
 void RunVersionTests(re2dj::test::Context& context);
 void RunLauncherTests(re2dj::test::Context& context);
+void RunLauncherUpdateTests(re2dj::test::Context& context);
 void RunDdrawModuleTests(re2dj::test::Context& context);
 void RunDsoundModuleTests(re2dj::test::Context& context);
 void RunDinputModuleTests(re2dj::test::Context& context);

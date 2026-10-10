@@ -94,6 +94,7 @@ flowchart LR
 | in-process 러너 | `src/platform/native/` | 원본 PE32를 re2dj 프로세스 안에서 실행하는 OS 중립 러너. OS 헤더 없이 `native_host_services.h`와 backend 계약만 쓴다(작업 446). Windows x86 backend(`src/platform/windows/x86/`, 작업 448)는 VEH, 그림자 TEB, fs:0 동기화로 같은 계약을 구현하며 합성 PE32 probe를 통과한다 | **[구현됨: Linux, Windows]** |
 | 플랫폼 | `src/platform/{windows,linux}/` | OS 전용이며 host 비트 폭 중립 또는 x86/x64 공용인 구현. 비트 폭 전용 구현은 각 OS 아래 `x86/`·`x64/`로 분리 | **[부분 구현]** |
 | 런처 | `include/re2dj/launcher/`, `src/launcher/`, `src/ui/launcher_screen.cpp`, `src/platform/sdl/launcher_window.cpp`, `src/host/cli/launcher_session.cpp` | 인자 없이 실행했을 때의 프로필 선택 화면(#12). 내장 프로필의 가용 여부와 `cfg/re2dj.ini` 설정은 공용 코어, ImGui 화면과 SDL3 창은 SDL host. 고른 프로필은 자기 실행 파일을 새 프로세스로 실행하고(`platform/self_process.h`) 끝나면 목록으로 돌아온다 | **[구현됨: Linux, Windows]** |
+| 런처 업데이트 | `include/re2dj/update/`, `src/update/`, `platform/https_download.h`(`linux/`: 시스템 `curl`, `windows/`: WinHTTP), `platform/self_process.h` | GitHub 최신 릴리스 확인, 이 빌드용 아카이브 받기·SHA-256 검증·풀기(tar.gz는 `tinfl`, zip은 miniz), 실행 파일 옆 `VERSION`이 맞는 릴리스 설치에서만 제자리 교체·되돌림, 다시 시작(Linux `execv`로 같은 PID, Windows는 자식 실행)(#17, rePIU #48) | **[구현됨: Linux, Windows]** |
 | 호스트 | `src/host/cli/` | 명령행 진입점 | **[구현됨]** |
 | 분석 | `include/re2dj/analysis/`, `src/analysis/` | 바이트 열 통계 판정. 파일도 프로세스도 모르는 순수 측정 | **[구현됨]** |
 | 도구 | `src/tools/{hdd_probe,chd_probe,pe_analyzer,code_score}/` | 비실행 HDD·CHD·PE·바이트 통계 분석 도구 | **[구현됨]** |

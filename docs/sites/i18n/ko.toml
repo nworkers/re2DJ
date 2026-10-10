@@ -128,7 +128,7 @@ steps = [
 ]
 linux_steps_title = "Linux에서 시작하기"
 linux_steps = [
-  "<code>tar -xzf re2dj-v&lt;버전&gt;-linux-x64.tar.gz</code>로 풉니다(32비트 Linux는 <code>linux-x86</code>).",
+  "<code>tar -xzf re2DJ-v&lt;버전&gt;-linux-x64.tar.gz</code>로 풉니다(32비트 Linux는 <code>linux-x86</code>).",
   "풀린 디렉터리에서 <code>roms/&lt;세트&gt;</code>에 자산을 둡니다. 예: <code>roms/ez2dj4th</code>에 MAME CHD.",
   "그 디렉터리에서 <code>./re2dj &lt;세트&gt;</code>로 실행합니다. 예: <code>./re2dj ez2dj4th</code>.",
 ]

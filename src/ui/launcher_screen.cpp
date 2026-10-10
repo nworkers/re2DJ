@@ -1,6 +1,8 @@
 #include "re2dj/ui/launcher_screen.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <string>
 
 #include "imgui.h"
 #include "re2dj/graphics/post_shader_catalog.h"
@@ -44,6 +46,80 @@ bool StartRequested()
 {
     return ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
            ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false);
+}
+
+// The update line under the title (#17), as rePIU's launcher has it: nothing
+// while the check runs, when this is the latest or when the check failed;
+// otherwise the newer version with an Update button (or where to get it), the
+// download's progress, or why it failed. True once the release is staged.
+bool DrawUpdateNotice(update::LauncherUpdater* updater)
+{
+    if (updater == nullptr)
+    {
+        return false;
+    }
+    const update::UpdateSnapshot snapshot = updater->Snapshot();
+    if (snapshot.latest_version.empty())
+    {
+        return false;
+    }
+    const std::string latest = "re2DJ v" + snapshot.latest_version;
+    switch (snapshot.stage)
+    {
+    case update::UpdateStage::kAvailable:
+    case update::UpdateStage::kFailed:
+    {
+        if (snapshot.stage == update::UpdateStage::kAvailable)
+        {
+            ImGui::TextColored(kReadyColor, "%s is available.", latest.c_str());
+        }
+        else
+        {
+            ImGui::TextColored(kWarningColor, "Update to %s failed: %s", latest.c_str(), snapshot.message.c_str());
+        }
+        ImGui::SameLine();
+        if (snapshot.installable)
+        {
+            const char* label = snapshot.stage == update::UpdateStage::kAvailable ? "Update" : "Retry";
+            if (ImGui::Button(label))
+            {
+                updater->StartDownload();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("downloads, replaces this install and restarts");
+        }
+        else
+        {
+            ImGui::TextDisabled("%s (%s)",
+                                snapshot.page_url.empty() ? "github.com/reexec/re2DJ/releases"
+                                                          : snapshot.page_url.c_str(),
+                                snapshot.not_installable_reason.c_str());
+        }
+        break;
+    }
+    case update::UpdateStage::kDownloading:
+    {
+        const float fraction =
+            snapshot.bytes_expected == 0U
+                ? 0.0f
+                : static_cast<float>(static_cast<double>(snapshot.bytes_received) /
+                                     static_cast<double>(snapshot.bytes_expected));
+        const std::string overlay = "Downloading " + latest + " (" + std::to_string(snapshot.bytes_received >> 10) +
+                                    " / " + std::to_string(snapshot.bytes_expected >> 10) + " KiB)";
+        ImGui::ProgressBar(std::min(fraction, 1.0f), ImVec2(-1.0f, 0.0f), overlay.c_str());
+        break;
+    }
+    case update::UpdateStage::kVerifying:
+        ImGui::TextColored(kReadyColor, "Checking and unpacking %s...", latest.c_str());
+        break;
+    case update::UpdateStage::kStaged:
+        ImGui::TextColored(kReadyColor, "Installing %s and restarting...", latest.c_str());
+        return true;
+    default:
+        return false;
+    }
+    ImGui::Separator();
+    return false;
 }
 
 void HelpMarker(const char* text)
@@ -218,6 +294,12 @@ LauncherScreenAction DrawLauncherScreen(const LauncherScreenModel& model,
     if (ImGui::Begin("re2DJ launcher", nullptr, kWindowFlags))
     {
         ImGui::TextUnformatted(model.title.c_str());
+        // Once the update is staged, this frame says so and the window
+        // closes for the caller to install it.
+        if (DrawUpdateNotice(model.updater))
+        {
+            action = LauncherScreenAction::kInstallUpdate;
+        }
         ImGui::TextDisabled("Choose a game and start it: Enter, A on a pad or a double click. Alt+Enter: fullscreen. Esc quits.");
         ImGui::Spacing();
 

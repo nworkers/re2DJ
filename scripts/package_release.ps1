@@ -25,8 +25,8 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 $buildOutput = Join-Path $repository "build/windows-x86/bin/$Configuration"
 $packageDirectory = Join-Path $repository $OutputDirectory
 $stagingDirectory = Join-Path $packageDirectory "staging"
-$stagingRoot = Join-Path $packageDirectory "staging/re2dj-v$Version-windows-x86"
-$archivePath = Join-Path $packageDirectory "re2dj-v$Version-windows-x86.zip"
+$stagingRoot = Join-Path $packageDirectory "staging/re2DJ-v$Version-windows-x86"
+$archivePath = Join-Path $packageDirectory "re2DJ-v$Version-windows-x86.zip"
 $checksumPath = "$archivePath.sha256"
 
 if (-not (Test-Path $buildOutput -PathType Container)) {

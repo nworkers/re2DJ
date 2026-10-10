@@ -77,7 +77,7 @@ def version_key(tag: str) -> tuple[int, int, int]:
 
 
 def asset_platform(name: str) -> str:
-    # scripts/package_release.ps1 produces re2dj-v<version>-windows-x86.zip and
+    # scripts/package_release.ps1 produces re2DJ-v<version>-windows-x86.zip and
     # scripts/package_release.sh the -linux-x64.tar.gz and -linux-x86.tar.gz,
     # each with a matching .sha256 file (Task 442).
     base = name.removesuffix(".sha256")

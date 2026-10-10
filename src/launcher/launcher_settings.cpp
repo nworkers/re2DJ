@@ -75,7 +75,8 @@ std::string FormatGain(float value)
 
 bool operator==(const LauncherSettings& left, const LauncherSettings& right)
 {
-    return left.last_profile == right.last_profile && left.fullscreen == right.fullscreen &&
+    return left.last_profile == right.last_profile && left.check_updates == right.check_updates &&
+           left.fullscreen == right.fullscreen &&
            left.keep_aspect == right.keep_aspect && left.color_depth == right.color_depth && left.post_shader == right.post_shader &&
            left.audio_gain_db == right.audio_gain_db;
 }
@@ -94,6 +95,7 @@ LauncherSettingsLoad ParseLauncherSettings(std::string_view text)
     {
         settings.last_profile = *value;
     }
+    ParseSwitch(text, kLauncherSection, "check_updates", &settings.check_updates, &load.warnings);
     ParseSwitch(text, kVideoSection, "fullscreen", &settings.fullscreen, &load.warnings);
     ParseSwitch(text, kVideoSection, "keep_aspect", &settings.keep_aspect, &load.warnings);
     if (const auto value = FindValue(text, kVideoSection, "color_depth"))
@@ -156,6 +158,10 @@ std::string FormatLauncherSettings(const LauncherSettings& settings)
     if (!settings.last_profile.empty())
     {
         text << "last_profile=" << settings.last_profile << "\n";
+    }
+    if (settings.check_updates.has_value())
+    {
+        text << "check_updates=" << (*settings.check_updates ? "1" : "0") << "\n";
     }
     text << "\n[Video]\n";
     if (settings.fullscreen.has_value())
