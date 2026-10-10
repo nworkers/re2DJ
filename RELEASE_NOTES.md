@@ -1,5 +1,49 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.69 (2026-10-10)
+
+### 한국어
+
+인자 없이 실행하면 프로필을 고르고 옵션을 정해 게임을 실행하는 런처가 뜹니다(#12).
+
+#### 해결된 이슈
+
+- [#12](https://github.com/reexec/re2DJ/issues/12) 인자 없이 실행했을 때 띄우는 런처 — PR [#13](https://github.com/reexec/re2DJ/pull/13)
+
+#### 1. 런처 (#12)
+- rePIU 런처(설계 500·502)를 옮겼습니다. SDL3 창과 OpenGL 2.1 컨텍스트 안에 Dear ImGui(SDL3·OpenGL3 backend)로 그립니다. 키보드·마우스·게임패드로 조작합니다.
+- 내장 프로필마다 명령줄 shortcut과 같은 기본 경로 규칙으로 `Ready`·`No CHD`·`Several CHDs`·`No directory`와 사유를 보여 줍니다. CHD 판정 `FindChdImage`는 `hdd/chd_image_locator`로 옮겨 명령줄과 함께 씁니다.
+- 고른 프로필은 자기 실행 파일을 새 프로세스로 실행합니다(Linux `posix_spawn("/proc/self/exe")`, Windows `CreateProcessA`). 런처가 올린 GPU 드라이버가 게스트 주소 공간을 차지하지 않게 하고, Windows x86의 시작 시 주소 예약도 그대로 지킵니다. 게임 중에는 런처 창과 GL 컨텍스트를 닫고, 끝나면 다시 열어 직전 종료 코드를 보여 줍니다.
+- 설정은 `cfg/re2dj.ini`의 `[Launcher] last_profile`, `[Video] fullscreen`·`color_depth`·`post_shader`, `[Audio] gain_db`입니다. 고른 값만 `--fullscreen`/`--windowed`, `--color-depth`, `--post-shader=`, `--audio-gain-db` 옵션으로 넘기므로 고르지 않은 옵션은 기본값과 우선순위가 그대로입니다. 잘못된 값은 경고 후 무시합니다.
+- 인자가 있으면 지금과 같습니다. `RE2DJ_LAUNCHER=0`이거나 창을 열 수 없으면(디스플레이 없음, GL 실패) 경고 뒤 사용법을 출력합니다.
+
+#### 2. 검증
+- 단위 테스트 `launcher_test`: CHD 판정 다섯 경우, 카탈로그 상태와 사유, 설정 파싱·왕복·잘못된 값, 자식 인자 순서. Linux x64·x86 Debug(경고를 오류로)·Release, clang: CTest 각 5개, 단위 테스트 6,268건 실패 0.
+- 실제 실행(Linux x64·x86, Wayland, RTX 4090): 8개 프로필 `Ready`, 6th 실행 뒤 런처 복귀(종료 코드 0), 32비트·`scanline`·−6dB가 자식 로그에 적용되고 설정 파일에 저장, 마지막 프로필에서 커서 시작. `RE2DJ_LAUNCHER=0`, `SDL_VIDEO_DRIVER=dummy`, x86 + NVIDIA 네이티브 Wayland 기본 설정(작업 459의 `egl-wayland2` 문제)에서 사용법 출력.
+- CI: Windows x86, Linux x64 gcc·clang, Linux x86 통과. Windows 실제 실행은 아직 확인 전입니다.
+
+### English
+
+A bare run opens a launcher that picks a profile and options and runs the game (#12).
+
+#### Resolved issues
+
+- [#12](https://github.com/reexec/re2DJ/issues/12) A launcher shown when run without arguments — PR [#13](https://github.com/reexec/re2DJ/pull/13)
+
+#### 1. The launcher (#12)
+- A port of rePIU's launcher (designs 500 and 502), drawn with Dear ImGui (SDL3 and OpenGL3 backends) in an SDL3 window with an OpenGL 2.1 context, driven by keyboard, mouse and gamepads.
+- Each built-in profile shows `Ready`, `No CHD`, `Several CHDs` or `No directory` and the reason, judged by the command-line shortcut's default-path rules; the CHD rule `FindChdImage` moved to `hdd/chd_image_locator` for both to share.
+- The chosen profile runs as a new process of the program's own executable (Linux `posix_spawn("/proc/self/exe")`, Windows `CreateProcessA`), so the GPU driver the launcher loaded never takes guest address space and the Windows x86 start-up reservation still holds. During the game the launcher's window and GL context are closed; afterwards they reopen with the last exit code.
+- Settings live in `cfg/re2dj.ini`: `[Launcher] last_profile`, `[Video] fullscreen`, `color_depth` and `post_shader`, `[Audio] gain_db`. Only chosen values are passed, as `--fullscreen`/`--windowed`, `--color-depth`, `--post-shader=` and `--audio-gain-db`, so unchosen options keep their defaults and precedence; bad values are warned about and ignored.
+- With arguments nothing changes. With `RE2DJ_LAUNCHER=0`, or when no window can open (no display, a GL failure), a warning and the usage are printed.
+
+#### 2. Verification
+- Unit test `launcher_test`: five CHD lookups, catalog states and reasons, settings parsing, round trip and bad values, and the child argument order. Linux x64 and x86 Debug (warnings as errors), Release and clang: 5 CTest tests each, 6,268 unit checks, 0 failures.
+- Real runs (Linux x64 and x86, Wayland, RTX 4090): eight profiles `Ready`, 6th run and the launcher back afterwards (exit code 0), 32-bit, `scanline` and −6 dB applied in the child's logs and saved, the cursor starting on the last profile; `RE2DJ_LAUNCHER=0`, `SDL_VIDEO_DRIVER=dummy` and x86 with NVIDIA on native Wayland by default (task 459's `egl-wayland2` problem) print the usage.
+- CI: Windows x86, Linux x64 gcc and clang, and Linux x86 pass. A real Windows run is still to be checked.
+
+---
+
 ## v0.0.68 (2026-10-09)
 
 ### 한국어

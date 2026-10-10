@@ -186,6 +186,21 @@ targets:
     plzpoweroff            PlzPowerOff.exe          detected
 ```
 
+### 런처 / Launcher
+
+인자 없이 `re2dj`를 실행하면 런처 창이 뜹니다. 현재 디렉터리의 `roms/` 아래에서 내장 프로필마다 실행할 수 있는지와 그 이유를 보여 주고, 고른 게임을 실행합니다. 게임이 끝나면 런처로 돌아옵니다. 전체 화면, 색 깊이, 화면 셰이더, 소리 크기를 고를 수 있고, 바꾼 값과 마지막 프로필은 `cfg/re2dj.ini`에 남습니다. 키보드·마우스·게임패드로 조작합니다(Enter 또는 더블클릭으로 시작, Esc로 종료).
+
+*Run without arguments, `re2dj` opens a launcher window. It shows, for each built-in profile, whether it can run from `roms/` under the current directory and why not, starts the chosen game, and comes back when the game ends. Fullscreen, colour depth, screen shader and sound gain can be chosen; changed values and the last profile are kept in `cfg/re2dj.ini`. Keyboard, mouse and gamepads drive it (Enter or a double click starts, Esc quits).*
+
+```bash
+cd /path/to/re2DJ          # roms/ and cfg/ are looked up here
+build/linux-x64-release/bin/re2dj
+```
+
+인자를 준 실행은 지금과 같습니다. 인자 없이 사용법만 보려면 `RE2DJ_LAUNCHER=0`을 줍니다. 창을 열 수 없는 환경에서도 사용법을 출력합니다. 근거: [#12 설계](docs/design/20261010-i012-launcher.md).
+
+*Runs with arguments are unchanged. `RE2DJ_LAUNCHER=0` prints the usage instead, as does a run that cannot open a window. See the [#12 design](docs/design/20261010-i012-launcher.md).*
+
 ### 6. 경로 해석 확인 / Check path resolution
 
 ```bash
@@ -233,6 +248,7 @@ build/windows-x86/bin/Debug/re2dj_port_helper_scan dump.image.bin 0x00400000
 ## 명령행 / Command line
 
 ```text
+re2dj                         런처(인자 없음, RE2DJ_LAUNCHER=0이면 사용법)
 re2dj <profile-id> [options]
 re2dj --hdd <directory> [options]
 

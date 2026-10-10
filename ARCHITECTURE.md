@@ -93,6 +93,7 @@ flowchart LR
 | SDL host | `src/platform/sdl/` | in-process 러너의 창·OSD·키보드·게임패드·소리. SDL만 쓰며 두 OS 공용(작업 447) | **[구현됨: Linux, Windows]** |
 | in-process 러너 | `src/platform/native/` | 원본 PE32를 re2dj 프로세스 안에서 실행하는 OS 중립 러너. OS 헤더 없이 `native_host_services.h`와 backend 계약만 쓴다(작업 446). Windows x86 backend(`src/platform/windows/x86/`, 작업 448)는 VEH, 그림자 TEB, fs:0 동기화로 같은 계약을 구현하며 합성 PE32 probe를 통과한다 | **[구현됨: Linux, Windows]** |
 | 플랫폼 | `src/platform/{windows,linux}/` | OS 전용이며 host 비트 폭 중립 또는 x86/x64 공용인 구현. 비트 폭 전용 구현은 각 OS 아래 `x86/`·`x64/`로 분리 | **[부분 구현]** |
+| 런처 | `include/re2dj/launcher/`, `src/launcher/`, `src/ui/launcher_screen.cpp`, `src/platform/sdl/launcher_window.cpp`, `src/host/cli/launcher_session.cpp` | 인자 없이 실행했을 때의 프로필 선택 화면(#12). 내장 프로필의 가용 여부와 `cfg/re2dj.ini` 설정은 공용 코어, ImGui 화면과 SDL3 창은 SDL host. 고른 프로필은 자기 실행 파일을 새 프로세스로 실행하고(`platform/self_process.h`) 끝나면 목록으로 돌아온다 | **[구현됨: Linux, Windows]** |
 | 호스트 | `src/host/cli/` | 명령행 진입점 | **[구현됨]** |
 | 분석 | `include/re2dj/analysis/`, `src/analysis/` | 바이트 열 통계 판정. 파일도 프로세스도 모르는 순수 측정 | **[구현됨]** |
 | 도구 | `src/tools/{hdd_probe,chd_probe,pe_analyzer,code_score}/` | 비실행 HDD·CHD·PE·바이트 통계 분석 도구 | **[구현됨]** |
