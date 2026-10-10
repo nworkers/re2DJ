@@ -1,5 +1,59 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.70 (2026-10-10)
+
+### 한국어
+
+전체 화면과 비율 유지를 게임 OSD와 런처에서 바꾸고 `cfg/re2dj.ini`에 저장하며(#14), EZ2DJ 3rd가 창 모드 DirectDraw로 실행됩니다(#15).
+
+#### 해결된 이슈
+
+- [#14](https://github.com/reexec/re2DJ/issues/14) 전체 화면·비율 유지 옵션과 저장, 런처 게임패드 동작 (rePIU #45·#34) — PR [#16](https://github.com/reexec/re2DJ/pull/16)
+- [#15](https://github.com/reexec/re2DJ/issues/15) ez2dj3rd가 user32 GetClientRect에서 멈춤(창 모드 DirectDraw) — PR [#16](https://github.com/reexec/re2DJ/pull/16)
+
+#### 1. 전체 화면·비율 유지 (#14)
+- `window_policy.h`의 `ComputePresentRect`: 비율 유지면 기존 `FitPresentation`(4:3과 검은 띠), 아니면 창 전체. 백엔드 그리기(`SetKeepAspect`)와 마우스 좌표 변환이 함께 씁니다.
+- `SdlHostPresentation`: OSD 맨 앞의 "Fullscreen"(present가 끝난 뒤 적용)·"Keep aspect ratio" 토글, Alt+Enter(Enter는 EZ2DJ의 2P 턴테이블이라 게임에 넘기지 않음), 더블클릭. 사용자 조작으로 실제로 바뀐 때만 observer를 부르고, CLI가 `cfg/re2dj.ini`를 다시 읽어 `[Video] fullscreen`·`keep_aspect` 두 키만 바꿔 저장합니다.
+- 모든 실행의 시작 값은 명령줄(`--fullscreen`/`--windowed`, 새 `--keep-aspect`/`--stretch`) → `cfg/re2dj.ini` → 기본값(프로필의 전체 화면, 비율 유지 켬) 순입니다. 로그에 `display : …`로 남습니다.
+- 런처: Options 맨 위 두 체크박스, 창의 전체 화면(시작·체크박스·Alt+Enter, Alt+Enter는 ImGui로 넘기지 않음), 비율 유지 시 960×640 비율 영역을 가운데에 두고 바깥은 검게. 표에서 Space 시작을 없앴습니다(rePIU #34).
+- EZ2DJ 게임패드 기본값을 `config/ez2dj-io.example.ini`의 값으로 올렸습니다: 1P 키 `DPAD_LEFT` `DPAD_UP` `A` `Y` `B`, 페달 `X`, 이펙터 `LB` `RB` `LT` `RT`.
+
+#### 2. 3rd의 창 모드 DirectDraw (#15)
+- 3rd 덤프는 `"FullScreen" = 0`이라 `SetCooperativeLevel(hwnd, DDSCL_NORMAL | DDSCL_FPUSETUP)`로 창 모드를 쓰고, 매 프레임 오프스크린을 primary로 `Blt`합니다. resolve-only였던 `user32!GetClientRect`에서 멈췄습니다.
+- user32 `GetClientRect`·`ClientToScreen`, 새 `IDirectDrawClipper` facade(`ddraw_clipper.cpp`: `CreateClipper`(DX7·DX6), `SetHWnd`·`GetHWnd`), 서피스 `SetClipper`·`GetClipper`(참조를 잡고 서피스와 함께 놓음). clip list는 모델링하지 않습니다.
+
+#### 3. 검증
+- 단위 테스트: `ComputePresentRect`, 설정의 `keep_aspect`·시작 값 우선순위·`SaveDisplayPreferences`, 게임패드 기본값, `GetClientRect`·`ClientToScreen`, clipper와 참조 수. Linux x64·x86 Debug(경고를 오류로)·Release, clang: CTest 각 5개, 단위 테스트 6,351건 실패 0.
+- 실제 실행(Linux x64·x86): 시작 값 우선순위, 게임 중 8번의 전환이 모두 저장되고 런처의 다른 키를 지킴, 런처의 전체 화면·비율 유지 배치·Space·패드 A, 늘린 게임 화면과 Alt+Enter 때 턴테이블이 눌리지 않음을 사용자가 화면으로 확인. 3rd는 사용자가 곡(`redocean`) 플레이까지 확인했고, x86에서도 모드 선택까지 경고 없이 진행.
+- CI: Windows x86, Linux x64 gcc·clang, Linux x86 통과.
+
+### English
+
+Fullscreen and keep-aspect change in the game OSD and the launcher and are kept in `cfg/re2dj.ini` (#14), and EZ2DJ 3rd runs through windowed DirectDraw (#15).
+
+#### Resolved issues
+
+- [#14](https://github.com/reexec/re2DJ/issues/14) Fullscreen and keep-aspect options, kept in cfg, and launcher pad behaviour (rePIU #45, #34) — PR [#16](https://github.com/reexec/re2DJ/pull/16)
+- [#15](https://github.com/reexec/re2DJ/issues/15) ez2dj3rd stops at user32 GetClientRect (windowed DirectDraw) — PR [#16](https://github.com/reexec/re2DJ/pull/16)
+
+#### 1. Fullscreen and keep-aspect (#14)
+- `ComputePresentRect` in `window_policy.h`: the existing `FitPresentation` (4:3 with black bars) when keeping the shape, the whole window otherwise, shared by the backend's drawing (`SetKeepAspect`) and the mouse mapping.
+- `SdlHostPresentation`: "Fullscreen" (applied after the present) and "Keep aspect ratio" toggles first in the OSD, Alt+Enter (its Enter, EZ2DJ's 2P turntable, withheld from the game) and the double click. The observer is called only when a user action actually changed a value, and the CLI re-reads `cfg/re2dj.ini` and saves it with just `[Video] fullscreen` and `keep_aspect` changed.
+- Every run starts from the command line (`--fullscreen`/`--windowed`, the new `--keep-aspect`/`--stretch`), then `cfg/re2dj.ini`, then the defaults (the profile's fullscreen, keep-aspect on), logged as `display : …`.
+- Launcher: both checkboxes at the top of Options; its window follows fullscreen (at start, the checkbox and Alt+Enter, which never reaches ImGui) and with keep-aspect lays out a centred 960×640-shaped area with black outside; Space no longer starts a row (rePIU #34).
+- EZ2DJ's gamepad defaults became `config/ez2dj-io.example.ini`'s values: player 1's keys `DPAD_LEFT` `DPAD_UP` `A` `Y` `B`, the pedal `X`, the effectors `LB` `RB` `LT` `RT`.
+
+#### 2. 3rd's windowed DirectDraw (#15)
+- The 3rd dump has `"FullScreen" = 0`, so it runs windowed through `SetCooperativeLevel(hwnd, DDSCL_NORMAL | DDSCL_FPUSETUP)` and blits an offscreen surface onto the primary every frame; it stopped at the resolve-only `user32!GetClientRect`.
+- user32 `GetClientRect` and `ClientToScreen`, a new `IDirectDrawClipper` facade (`ddraw_clipper.cpp`: `CreateClipper` for DX7 and DX6, `SetHWnd`, `GetHWnd`), and surface `SetClipper` and `GetClipper` (holding the reference and releasing it with the surface); clip lists are not modelled.
+
+#### 3. Verification
+- Unit tests: `ComputePresentRect`; the settings' `keep_aspect`, start-up precedence and `SaveDisplayPreferences`; the gamepad defaults; `GetClientRect` and `ClientToScreen`; the clipper and its reference counts. Linux x64 and x86 Debug (warnings as errors), Release and clang: 5 CTest tests each, 6,351 unit checks, 0 failures.
+- Real runs (Linux x64 and x86): the start-up precedence; eight in-game switches all saved with the launcher's other keys kept; the launcher's fullscreen, keep-aspect layout, Space and pad A; and the stretched game picture with no turntable press on Alt+Enter, all checked on screen by the user. The user played 3rd through a song (`redocean`), and x86 reached mode select with no warning.
+- CI: Windows x86, Linux x64 gcc and clang, and Linux x86 pass.
+
+---
+
 ## v0.0.69 (2026-10-10)
 
 ### 한국어
