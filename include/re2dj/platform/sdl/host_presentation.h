@@ -12,6 +12,7 @@
 #include "re2dj/graphics/window_policy.h"
 #include "re2dj/hle/host_presentation.h"
 #include "re2dj/input/pad_exit_chord.h"
+#include "re2dj/input/pad_osd_chord.h"
 #include "re2dj/input/sdl3_gamepad_reader.h"
 
 namespace re2dj::graphics
@@ -40,8 +41,9 @@ namespace re2dj::platform::sdl
 // while focused.
 //
 // The window carries the same on-screen display as the Windows host's
-// (ui/osd.h): backtick shows and hides it and never reaches the guest, and
-// while it is shown the mouse buttons belong to it.
+// (ui/osd.h): backtick, or LT+RT+Y on a pad, shows and hides it, and neither
+// reaches the guest; while it is shown the mouse buttons and the pads belong
+// to it.
 class SdlHostPresentation final : public hle::HostPresentation
 {
 public:
@@ -164,6 +166,10 @@ private:
     bool close_requested_ = false;
     // LT+RT+L3+R3 held on one pad for a second (#20).
     input::PadExitChordTimer exit_chord_;
+    // LT+RT+Y on one pad toggles the OSD, and the gate keeps the pads from the
+    // guest while it shows (#22).
+    input::PadChordEdge osd_chord_;
+    input::PadGameGate pad_gate_;
     // Whether the backend's software pacing was already reported.
     bool pacing_reported_ = false;
     // The render target's colour depth last recorded, and whether the

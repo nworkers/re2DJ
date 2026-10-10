@@ -11,6 +11,7 @@
 #include "re2dj/graphics/sdl3_opengl_backend.h"
 #include "re2dj/input/gamepad.h"
 #include "re2dj/input/pad_exit_chord.h"
+#include "re2dj/input/pad_osd_chord.h"
 #include "re2dj/input/virtual_keys.h"
 #include "re2dj/logging/logging.h"
 #include "re2dj/ui/display_controls.h"
@@ -578,13 +579,31 @@ bool SdlHostPresentation::Present(std::string* error)
         fullscreen_request_pending_ = false;
         ChangeFullscreenByUser(requested_fullscreen_);
     }
-    // The pump inside Present brought SDL's pad state up to date. The pads
-    // reach the guest merged, the exit chord included.
+    // The pump inside Present brought SDL's pad state up to date.
     const std::vector<input::GamepadControls> pads = gamepads_.ReadEach();
-    input_.gamepad.reset();
+    input::GamepadControls held;
     for (const input::GamepadControls& pad : pads)
     {
-        input_.gamepad |= pad;
+        held |= pad;
+    }
+    // LT+RT+Y on one pad shows or hides the OSD (#22). While it shows, the
+    // pads drive it and the guest sees none of them; what is held as it
+    // closes stays hidden from the guest until let go.
+    if (osd_ != nullptr && osd_chord_.Update(input::IsPadOsdChordDown(pads)))
+    {
+        osd_->ToggleVisible();
+        const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+        if (logger != nullptr)
+        {
+            logger->info("input: gamepad OSD chord (LT+RT+Y): OSD {}", osd_->visible() ? "shown" : "hidden");
+        }
+    }
+    const bool osd_shown = osd_ != nullptr && osd_->visible();
+    pad_gate_.SetSuppressed(osd_shown, held);
+    input_.gamepad = pad_gate_.Apply(held);
+    if (osd_shown)
+    {
+        osd_->SetGamepad(held);
     }
     // LT+RT+L3+R3 held on one pad for a second closes the game as the
     // window's close button does (#20).

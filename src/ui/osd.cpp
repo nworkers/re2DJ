@@ -30,6 +30,34 @@ struct QueuedInput
     bool down = false;
 };
 
+// The pads' controls as ImGui's gamepad keys (#22). ImGui's navigation moves
+// with the d-pad or left stick, chooses with FaceDown (A) and cancels with
+// FaceRight (B).
+struct GamepadKey
+{
+    input::GamepadControl control;
+    ImGuiKey key;
+};
+
+constexpr GamepadKey kGamepadKeys[] = {
+    {input::GamepadControl::kSouth, ImGuiKey_GamepadFaceDown},
+    {input::GamepadControl::kEast, ImGuiKey_GamepadFaceRight},
+    {input::GamepadControl::kWest, ImGuiKey_GamepadFaceLeft},
+    {input::GamepadControl::kNorth, ImGuiKey_GamepadFaceUp},
+    {input::GamepadControl::kDpadUp, ImGuiKey_GamepadDpadUp},
+    {input::GamepadControl::kDpadDown, ImGuiKey_GamepadDpadDown},
+    {input::GamepadControl::kDpadLeft, ImGuiKey_GamepadDpadLeft},
+    {input::GamepadControl::kDpadRight, ImGuiKey_GamepadDpadRight},
+    {input::GamepadControl::kLeftShoulder, ImGuiKey_GamepadL1},
+    {input::GamepadControl::kRightShoulder, ImGuiKey_GamepadR1},
+    {input::GamepadControl::kStart, ImGuiKey_GamepadStart},
+    {input::GamepadControl::kBack, ImGuiKey_GamepadBack},
+    {input::GamepadControl::kLeftStickLeft, ImGuiKey_GamepadLStickLeft},
+    {input::GamepadControl::kLeftStickRight, ImGuiKey_GamepadLStickRight},
+    {input::GamepadControl::kLeftStickUp, ImGuiKey_GamepadLStickUp},
+    {input::GamepadControl::kLeftStickDown, ImGuiKey_GamepadLStickDown},
+};
+
 // The guest's logical frame is 480 pixels tall. Scaling the UI by how many of
 // those the window shows keeps its size proportional to the game at any window
 // scale, which a fixed pixel size would not.
@@ -124,6 +152,10 @@ struct Osd::Impl
 
     std::mutex mutex;
     std::vector<QueuedInput> input;
+    // The pads' latest state (#22), and whether the window should take focus
+    // on its next frame because the display has just opened.
+    input::GamepadControls gamepad;
+    bool focus_pending = false;
     std::vector<OsdToggle> toggles;
     std::vector<std::string> info_lines;
     bool has_renderer_identity = false;
@@ -137,6 +169,10 @@ struct Osd::Impl
     // on every present.
     bool renderer_failed = false;
     std::chrono::steady_clock::time_point last_frame;
+    // The pad state last handed to ImGui, and whether a menu was open at the
+    // end of the last frame, which decides what B does (#22).
+    input::GamepadControls gamepad_sent;
+    bool popup_open = false;
 
     bool EnsureRenderer()
     {
@@ -156,6 +192,9 @@ struct Osd::Impl
         // directory, and a UI library must not leave files there.
         io.IniFilename = nullptr;
         io.LogFilename = nullptr;
+        // The host hands the pads over (#22); the keyboard stays the game's.
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
         ImGui::StyleColorsDark();
         if (!ImGui_ImplOpenGL3_Init(kGlslVersion))
         {
@@ -215,12 +254,13 @@ void Osd::ToggleVisible()
 {
     const bool now_visible = !impl_->visible.load();
     impl_->visible.store(now_visible);
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!now_visible)
     {
         // Input queued while it was shown must not replay the next time it opens.
-        const std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->input.clear();
     }
+    impl_->focus_pending = now_visible;
 }
 
 bool Osd::visible() const
@@ -256,6 +296,12 @@ void Osd::QueueMouseButton(int button, bool down)
     impl_->input.push_back(event);
 }
 
+void Osd::SetGamepad(const input::GamepadControls& controls)
+{
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->gamepad = controls;
+}
+
 void Osd::DrawOverlay(int pixel_width, int pixel_height)
 {
     if (!visible() || pixel_width <= 0 || pixel_height <= 0 || !impl_->EnsureRenderer())
@@ -278,9 +324,14 @@ void Osd::DrawOverlay(int pixel_width, int pixel_height)
     bool has_renderer_identity = false;
     graphics::GlRendererIdentity renderer_identity;
     graphics::PostShaderControl* post_shader_control = nullptr;
+    input::GamepadControls gamepad;
+    bool take_focus = false;
     {
         const std::lock_guard<std::mutex> lock(impl_->mutex);
         input.swap(impl_->input);
+        gamepad = impl_->gamepad;
+        take_focus = impl_->focus_pending;
+        impl_->focus_pending = false;
         toggles = impl_->toggles;
         info_lines = impl_->info_lines;
         has_renderer_identity = impl_->has_renderer_identity;
@@ -301,12 +352,30 @@ void Osd::DrawOverlay(int pixel_width, int pixel_height)
             io.AddMouseButtonEvent(event.button, event.down);
         }
     }
+    // The pads as ImGui's gamepad keys, each change once (#22).
+    const input::GamepadControls changed = gamepad ^ impl_->gamepad_sent;
+    for (const GamepadKey& entry : kGamepadKeys)
+    {
+        const auto bit = static_cast<std::size_t>(entry.control);
+        if (changed.test(bit))
+        {
+            const bool down = gamepad.test(bit);
+            io.AddKeyAnalogEvent(entry.key, down, down ? 1.0f : 0.0f);
+        }
+    }
+    const auto east = static_cast<std::size_t>(input::GamepadControl::kEast);
+    const bool b_pressed = gamepad.test(east) && !impl_->gamepad_sent.test(east);
+    impl_->gamepad_sent = gamepad;
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui::NewFrame();
     // Pinned across the full width of the window, with its height following
     // the content. The width is held by a constraint because auto-resize would
     // otherwise shrink it to the content as well.
+    if (take_focus)
+    {
+        ImGui::SetNextWindowFocus();
+    }
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints(ImVec2(io.DisplaySize.x, 0.0f),
                                         ImVec2(io.DisplaySize.x, FLT_MAX));
@@ -348,9 +417,17 @@ void Osd::DrawOverlay(int pixel_width, int pixel_height)
         }
     }
     ImGui::End();
+    // B with no menu open the frame before closes the display; with one open,
+    // ImGui's own cancel closes just the menu (#22).
+    const bool close_requested = b_pressed && !impl_->popup_open;
+    impl_->popup_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     impl_->frames_drawn.fetch_add(1);
+    if (close_requested)
+    {
+        ToggleVisible();
+    }
 }
 
 Osd::RendererState Osd::renderer_state() const
