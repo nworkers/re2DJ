@@ -26,6 +26,7 @@
 #include <spdlog/logger.h>
 
 #include "re2dj/exe/pe_image.h"
+#include "re2dj/hdd/chd_image_locator.h"
 #include "re2dj/hdd/hdd_root.h"
 #include "re2dj/hdd/hdd_scan.h"
 #include "re2dj/storage/guest_path.h"
@@ -41,6 +42,7 @@
 // in-process runner (tasks 446 to 449).
 #if defined(__linux__) || defined(_WIN32)
 #define RE2DJ_IN_PROCESS_HOST 1
+#include "launcher_session.h"
 #include "re2dj/config/hardlock_secret_config.h"
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/hardlock/device_material.h"
@@ -185,72 +187,6 @@ struct Options
     bool show_version = false;
 };
 
-bool FindChdImage(const std::filesystem::path& input,
-                  std::filesystem::path* image,
-                  std::string* error)
-{
-    if (image == nullptr || error == nullptr || input.empty())
-    {
-        if (error != nullptr)
-        {
-            *error = "CHD path is empty";
-        }
-        return false;
-    }
-    std::error_code code;
-    if (std::filesystem::is_regular_file(input, code))
-    {
-        if (re2dj::storage::EqualsIgnoreAsciiCase(input.extension().string(), ".chd"))
-        {
-            *image = std::filesystem::weakly_canonical(input, code);
-            if (code)
-            {
-                *image = input;
-            }
-            return true;
-        }
-        *error = "CHD input is a regular file but does not have a .chd extension";
-        return false;
-    }
-    if (code || !std::filesystem::is_directory(input, code))
-    {
-        *error = "CHD input directory does not exist: " + input.string();
-        return false;
-    }
-    std::vector<std::filesystem::path> candidates;
-    for (std::filesystem::directory_iterator iterator(input, code), end;
-         !code && iterator != end;
-         iterator.increment(code))
-    {
-        if (!iterator->is_regular_file(code) || code)
-        {
-            continue;
-        }
-        const std::string extension = iterator->path().extension().string();
-        if (re2dj::storage::EqualsIgnoreAsciiCase(extension, ".chd"))
-        {
-            candidates.push_back(iterator->path());
-        }
-    }
-    if (code || candidates.empty())
-    {
-        *error = "no .chd image was found under " + input.string();
-        return false;
-    }
-    std::sort(candidates.begin(), candidates.end());
-    if (candidates.size() > 1)
-    {
-        *error = "more than one .chd image was found under " + input.string();
-        return false;
-    }
-    *image = std::filesystem::weakly_canonical(candidates.front(), code);
-    if (code)
-    {
-        *image = candidates.front();
-    }
-    return true;
-}
-
 // Stages the profile's executable and its launcher's children out of the CHD
 // into the temporary directory a run starts them from: the Windows product's
 // real CreateProcessA finds a child, and its current directory, on disk.
@@ -357,6 +293,9 @@ void PrintUsage()
         "%s - run the original EZ2DJ executable on modern hosts\n"
         "\n"
         "Usage:\n"
+        "  re2dj                 Open the launcher: pick a profile and options\n"
+        "                        (kept in cfg/re2dj.ini). RE2DJ_LAUNCHER=0 prints\n"
+        "                        this text instead.\n"
         "  re2dj <profile-id> [options]\n"
         "  re2dj --hdd <directory> [options]\n"
         "\n"
@@ -1690,6 +1629,18 @@ int RunMain(int argc, char** argv)
         std::printf("%s\n", re2dj::VersionBanner("re2DJ", re2dj::VersionString()).c_str());
         return kExitOk;
     }
+#if defined(RE2DJ_IN_PROCESS_HOST)
+    // A bare run opens the launcher (#12); without a window it falls through
+    // to the usage text, as before.
+    if (re2dj::host::LauncherRequested(argc, std::getenv("RE2DJ_LAUNCHER")))
+    {
+        const re2dj::host::LauncherSessionResult launched = re2dj::host::RunLauncherSession();
+        if (launched.ran)
+        {
+            return launched.exit_code;
+        }
+    }
+#endif
     if (options.show_help || argc == 1)
     {
         PrintUsage();
@@ -1710,7 +1661,7 @@ int RunMain(int argc, char** argv)
                 : options.hdd_directory;
         std::filesystem::path chd_path;
         std::string chd_error;
-        if (!FindChdImage(input, &chd_path, &chd_error))
+        if (!re2dj::hdd::FindChdImage(input, &chd_path, &chd_error))
         {
             LogError("%s", chd_error.c_str());
             return kExitHddError;

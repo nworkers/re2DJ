@@ -128,6 +128,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/sdl/host_keyboard.cpp
         src/platform/linux/host_process_launcher.cpp
         src/platform/linux/native_host_services.cpp
+        src/platform/linux/self_process.cpp
     )
     if(CMAKE_SIZEOF_VOID_P EQUAL 4)
         target_sources(re2dj_linux_native_backend PRIVATE
@@ -192,6 +193,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/x86/native_process_bootstrap.cpp
         src/platform/windows/x86/native_guest_reservation.cpp
         src/platform/windows/host_process_launcher.cpp
+        src/platform/windows/self_process.cpp
         src/platform/sdl/host_presentation.cpp
         src/platform/sdl/host_keyboard.cpp
     )
@@ -439,6 +441,26 @@ target_link_libraries(re2dj_osd
     PRIVATE re2dj_imgui re2dj_warnings
 )
 
+# ImGui's SDL3 platform backend, for the launcher window only (#12). The OSD
+# keeps feeding its own input, so nothing else depends on SDL through ImGui.
+add_library(re2dj_imgui_sdl3 STATIC
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+)
+target_link_libraries(re2dj_imgui_sdl3 PUBLIC re2dj_imgui PRIVATE SDL3::SDL3-static)
+
+# The launcher shown when re2dj runs without arguments (#12): the ImGui screen
+# and the SDL3 window that hosts it. The catalog and settings it shows live in
+# the core.
+add_library(re2dj_launcher_ui STATIC
+    src/ui/launcher_screen.cpp
+    src/platform/sdl/launcher_window.cpp
+)
+target_include_directories(re2dj_launcher_ui PUBLIC include)
+target_link_libraries(re2dj_launcher_ui
+    PUBLIC re2dj_core
+    PRIVATE re2dj_imgui_sdl3 re2dj_imgui SDL3::SDL3-static re2dj_warnings
+)
+
 # Platform-neutral core. Nothing here may include a host OS header; see the
 # portability rules in docs/CODING_STYLE.md.
 add_library(re2dj_core STATIC
@@ -515,7 +537,10 @@ add_library(re2dj_core STATIC
     src/exe/immediate_scan.cpp
     src/exe/pe_image.cpp
     src/hdd/hdd_root.cpp
+    src/hdd/chd_image_locator.cpp
     src/hdd/hdd_scan.cpp
+    src/launcher/launcher_catalog.cpp
+    src/launcher/launcher_settings.cpp
     src/runtime/address_space.cpp
     src/runtime/pe_loader.cpp
     src/storage/vfs_roots.cpp
@@ -602,17 +627,18 @@ endif()
 # Command-line host.
 add_executable(re2dj
     src/host/cli/main.cpp
+    src/host/cli/launcher_session.cpp
 )
 target_link_libraries(re2dj PRIVATE re2dj_core re2dj_logging re2dj_warnings)
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     # The guest image goes at its own base (0x400000 for EZ2DJ), so this
     # program sits elsewhere at a fixed base; it reserves the guest's range
     # and runs on a thread whose stack is the guest's (design 448, task 449).
-    target_link_libraries(re2dj PRIVATE re2dj_windows_native_backend)
+    target_link_libraries(re2dj PRIVATE re2dj_windows_native_backend re2dj_launcher_ui)
     target_link_options(re2dj PRIVATE /BASE:0x60000000 /DYNAMICBASE:NO /LARGEADDRESSAWARE)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_libraries(re2dj PRIVATE re2dj_linux_native_backend)
+    target_link_libraries(re2dj PRIVATE re2dj_linux_native_backend re2dj_launcher_ui)
 endif()
 
 # Non-executing analysis tools.
@@ -669,6 +695,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/directx_input_test.cpp
         tests/unit/directx_surface_test.cpp
         tests/unit/version_test.cpp
+        tests/unit/launcher_test.cpp
         tests/unit/guest_process_test.cpp
         tests/unit/kernel32_crt_test.cpp
         tests/unit/api_call_record_test.cpp
