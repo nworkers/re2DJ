@@ -38,12 +38,23 @@ int InitialSelection(const std::vector<launcher::LauncherEntry>& catalog, const 
 }
 
 // A press that should start the row, not just select it: a double click, or
-// Enter, Space or the gamepad's confirm button on the focused row.
+// Enter or the pad's South (A) button on the focused row. Space only selects,
+// as a list is expected to (rePIU #34).
 bool StartRequested()
 {
     return ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
-           ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) || ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
-           ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false);
+           ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false);
+}
+
+void HelpMarker(const char* text)
+{
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::BeginItemTooltip())
+    {
+        ImGui::TextUnformatted(text);
+        ImGui::EndTooltip();
+    }
 }
 
 // The profile list. True when a row asked to start.
@@ -121,11 +132,23 @@ void DrawOptions(const LauncherScreenModel& model,
 {
     ImGui::SeparatorText("Options");
 
+    // #14: windowed and keeping the shape when nothing is stored. The game
+    // keeps these two as well when they are changed in it, and this window
+    // follows them too.
     bool fullscreen = settings->fullscreen.value_or(false);
     if (ImGui::Checkbox("Fullscreen", &fullscreen))
     {
         settings->fullscreen = fullscreen;
     }
+    HelpMarker("Borderless at the desktop resolution, for this launcher and the game. Alt+Enter switches it "
+               "here; in game Alt+Enter, a double click or the OSD does, and that choice is kept too.");
+    bool keep_aspect = settings->keep_aspect.value_or(true);
+    if (ImGui::Checkbox("Keep aspect ratio", &keep_aspect))
+    {
+        settings->keep_aspect = keep_aspect;
+    }
+    HelpMarker("On keeps the game's 4:3 picture, and this launcher's layout, with black bars. Off stretches "
+               "them over the whole window or screen. The OSD switches it in game too.");
 
     const graphics::ColorDepth depth = settings->color_depth.value_or(graphics::ColorDepth::k16);
     if (ImGui::BeginCombo("Colour depth", ColorDepthLabel(depth)))
@@ -176,7 +199,9 @@ void DrawOptions(const LauncherScreenModel& model,
 
 }  // namespace
 
-LauncherScreenAction DrawLauncherScreen(const LauncherScreenModel& model, LauncherScreenState* state)
+LauncherScreenAction DrawLauncherScreen(const LauncherScreenModel& model,
+                                        const LauncherScreenArea& area,
+                                        LauncherScreenState* state)
 {
     if (state->selected < 0 || state->selected >= static_cast<int>(model.catalog.size()))
     {
@@ -184,8 +209,8 @@ LauncherScreenAction DrawLauncherScreen(const LauncherScreenModel& model, Launch
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + area.x, viewport->WorkPos.y + area.y));
+    ImGui::SetNextWindowSize(ImVec2(area.width, area.height));
     constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                               ImGuiWindowFlags_NoSavedSettings |
                                               ImGuiWindowFlags_NoBringToFrontOnFocus;
@@ -193,13 +218,13 @@ LauncherScreenAction DrawLauncherScreen(const LauncherScreenModel& model, Launch
     if (ImGui::Begin("re2DJ launcher", nullptr, kWindowFlags))
     {
         ImGui::TextUnformatted(model.title.c_str());
-        ImGui::TextDisabled("Choose a game and start it. Enter or a double click starts the row; Esc quits.");
+        ImGui::TextDisabled("Choose a game and start it: Enter, A on a pad or a double click. Alt+Enter: fullscreen. Esc quits.");
         ImGui::Spacing();
 
         // Room under the list for the detail line, the options, the status
         // and the buttons.
         const float style_lines = ImGui::GetTextLineHeightWithSpacing() * 4.0f;
-        const float frame_lines = ImGui::GetFrameHeightWithSpacing() * 6.0f;
+        const float frame_lines = ImGui::GetFrameHeightWithSpacing() * 7.0f;
         if (DrawProfileTable(model, state, ImVec2(0.0f, -(style_lines + frame_lines))))
         {
             action = LauncherScreenAction::kStart;

@@ -112,6 +112,10 @@ public:
     bool ResizeWindow(std::uint32_t width, std::uint32_t height, std::string* error);
     bool SetFullscreen(bool fullscreen, std::string* error);
     void SetTitle(const char* title);
+    // Whether the display keeps its shape with black bars (the default) or
+    // is stretched over the whole window (#14), from the next present on.
+    void SetKeepAspect(bool keep_aspect);
+    bool keep_aspect() const;
     // The swap interval the driver actually applied, read back after the
     // policy was requested: 1 for vertical sync, 0 for immediate, -1 for
     // adaptive. A driver can refuse a request, so this is the value to report

@@ -2,6 +2,7 @@
 #define RE2DJ_PLATFORM_SDL_HOST_PRESENTATION_H_
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -30,7 +31,8 @@ namespace re2dj::platform::sdl
 // the guest's frames are drawn into through the shared render backend. The
 // window follows the shared window policy (graphics/window_policy.h): twice
 // the display's size to begin with, Alt+1..3 for the scale, a double click
-// for fullscreen, and the frame rate in the title. Keys, mouse buttons and the
+// or Alt+Enter for fullscreen, the shape kept or stretched (#14), and the
+// frame rate in the title. Keys, mouse buttons and the
 // pointer over the window become the guest's input state, and so do the
 // gamepads SDL finds, read after every frame's event pump (task 444); leaving
 // the window lets go of everything held, since this host sees keys only
@@ -51,6 +53,17 @@ public:
     // Whether the window opens in fullscreen, as --fullscreen or the profile
     // asks; set before the guest takes the display.
     void SetStartFullscreen(bool fullscreen) { fullscreen_ = fullscreen; }
+    // Whether the display keeps its shape with bars or fills the window
+    // (#14); set before the guest takes the display.
+    void SetStartKeepAspect(bool keep_aspect) { keep_aspect_ = keep_aspect; }
+    // Called with the fullscreen and keep-aspect state whenever the user
+    // changes either in the window (the OSD, Alt+Enter, a double click), and
+    // only then: not for the state the window opens with, nor for a change
+    // the window refused. The CLI keeps them in cfg/re2dj.ini.
+    void SetDisplayPreferencesObserver(std::function<void(bool fullscreen, bool keep_aspect)> observer)
+    {
+        display_observer_ = std::move(observer);
+    }
     // The OSD's information lines, as the Windows host shows them; set before
     // the guest takes the display.
     void SetOsdInfoLines(std::vector<std::string> lines) { osd_info_lines_ = std::move(lines); }
@@ -98,6 +111,7 @@ public:
     std::uint32_t guest_window() const { return guest_window_; }
     std::uint32_t scale() const { return scale_; }
     bool fullscreen() const { return fullscreen_; }
+    bool keep_aspect() const { return keep_aspect_; }
 
     // Keeps the window on screen until the user closes it, so a run that has
     // stopped can still be looked at; returns at once when it was closed.
@@ -108,8 +122,16 @@ private:
     void HandleEvent(const void* sdl_event);
     // Sizes the window for the current scale, or makes it fullscreen.
     bool ApplyWindowMode(std::string* error);
-    // A new scale or fullscreen state, kept only when the window takes it.
-    void ChangeWindowMode(std::uint32_t scale, bool fullscreen);
+    // A new scale or fullscreen state, kept only when the window takes it;
+    // false when it was undone.
+    bool ChangeWindowMode(std::uint32_t scale, bool fullscreen);
+    // A user's fullscreen or keep-aspect change, reported to the observer
+    // when it took effect (#14).
+    void ChangeFullscreenByUser(bool fullscreen);
+    void ChangeKeepAspectByUser(bool keep_aspect);
+    void NotifyDisplayPreferences();
+    // The OSD's Fullscreen and Keep aspect ratio toggles, first in its list.
+    void AddDisplayToggles();
     // Routes an event to the OSD; true when it belongs to the OSD and must
     // not reach the guest.
     bool HandleOsdEvent(const void* sdl_event);
@@ -132,6 +154,12 @@ private:
     std::uint32_t logical_height_ = 0;
     std::uint32_t scale_ = graphics::kDefaultWindowScale;
     bool fullscreen_ = false;
+    bool keep_aspect_ = true;
+    // The OSD draws during the present, so its fullscreen choice waits here
+    // until the present is over.
+    bool fullscreen_request_pending_ = false;
+    bool requested_fullscreen_ = false;
+    std::function<void(bool fullscreen, bool keep_aspect)> display_observer_;
     bool close_requested_ = false;
     // Whether the backend's software pacing was already reported.
     bool pacing_reported_ = false;

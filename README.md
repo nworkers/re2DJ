@@ -70,9 +70,9 @@ flowchart LR
     HLE --> PLAT["Platform backend<br/>windows / linux"]
 ```
 
-두 OS 모두 `re2dj --run`이 원본 PE32를 re2dj **자기 프로세스 안에** 매핑해 실행합니다(작업 446~449). 예를 들어 `re2dj ez2dj4th`는 `roms/ez2dj4th`의 CHD에서 `EZ2DJ/EZ2DJ.EXE`를 선택합니다. Linux는 x86·x86-64 제품이 있고 x86-64는 CPU compatibility mode를 씁니다. Windows는 64비트 Windows에서 도는 Win32 x86 제품이며, 시작할 때 자기 자신을 한 번 다시 띄워 게스트 이미지 주소(0x400000)를 확보합니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, 6th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 두 호스트 모두 실행 중 백틱(`` ` ``) 키로 OSD를 열 수 있습니다. OSD의 "32-bit color"는 24비트 이미지와 반투명 합성을 채널당 8비트로 보여 주는 표시 모드를 켜고 끕니다(`--color-depth`). 화면 후처리 셰이더(내장 `crt`·`scanline`, `shaders/*.glsl`)는 `--post-shader`나 OSD로 고릅니다([가이드](docs/guides/post-process-shaders.md)). 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
+두 OS 모두 `re2dj --run`이 원본 PE32를 re2dj **자기 프로세스 안에** 매핑해 실행합니다(작업 446~449). 예를 들어 `re2dj ez2dj4th`는 `roms/ez2dj4th`의 CHD에서 `EZ2DJ/EZ2DJ.EXE`를 선택합니다. Linux는 x86·x86-64 제품이 있고 x86-64는 CPU compatibility mode를 씁니다. Windows는 64비트 Windows에서 도는 Win32 x86 제품이며, 시작할 때 자기 자신을 한 번 다시 띄워 게스트 이미지 주소(0x400000)를 확보합니다. 실행은 `kernel32`·`user32`·`gdi32`·DirectX facade와 게스트 SEH를 거칩니다. 4th, 1st SE, 5th, 6th, EZ2Dancer 2nd MOVE CHD는 창을 닫을 때까지 실행됩니다. 다른 타깃은 아직 모형이 없는 첫 import·lookup·fault에서 멈출 수 있습니다. 두 호스트 모두 실행 중 백틱(`` ` ``) 키로 OSD를 열 수 있습니다. OSD 맨 위의 "Fullscreen"과 "Keep aspect ratio"는 전체 화면과 원본 4:3 비율 유지(끄면 창 전체로 늘림)를 바꾸며, Alt+Enter나 더블클릭으로 바꾼 전체 화면과 함께 `cfg/re2dj.ini`에 저장돼 다음 실행에 쓰입니다(#14). OSD의 "32-bit color"는 24비트 이미지와 반투명 합성을 채널당 8비트로 보여 주는 표시 모드를 켜고 끕니다(`--color-depth`). 화면 후처리 셰이더(내장 `crt`·`scanline`, `shaders/*.glsl`)는 `--post-shader`나 OSD로 고릅니다([가이드](docs/guides/post-process-shaders.md)). 자세한 내용은 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하십시오.
 
-*On both OSes `re2dj --run` maps the original PE32 into re2dj's **own process** and runs it there (tasks 446 to 449); for example, `re2dj ez2dj4th` selects `EZ2DJ/EZ2DJ.EXE` in the CHD under `roms/ez2dj4th`. Linux has x86 and x86-64 products, x86-64 using CPU compatibility mode; Windows has the Win32 x86 product on 64-bit Windows, which starts itself once more at launch to secure the guest image address (0x400000). Runs go through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, 6th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. On both hosts, backtick (`` ` ``) opens the OSD while running; its "32-bit color" switches a display mode that shows 24-bit images and translucent compositing at 8 bits per channel (`--color-depth`). Screen post-processing shaders (the built-in `crt` and `scanline`, and `shaders/*.glsl`) are chosen with `--post-shader` or in the OSD ([guide](docs/guides/post-process-shaders.md)). See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
+*On both OSes `re2dj --run` maps the original PE32 into re2dj's **own process** and runs it there (tasks 446 to 449); for example, `re2dj ez2dj4th` selects `EZ2DJ/EZ2DJ.EXE` in the CHD under `roms/ez2dj4th`. Linux has x86 and x86-64 products, x86-64 using CPU compatibility mode; Windows has the Win32 x86 product on 64-bit Windows, which starts itself once more at launch to secure the guest image address (0x400000). Runs go through the `kernel32`, `user32`, `gdi32`, and DirectX facades and guest SEH. the 4th, 1st SE, 5th, 6th, and EZ2Dancer 2nd MOVE CHDs run until their window is closed; other targets may still stop at the first import, lookup, or fault not yet modelled. On both hosts, backtick (`` ` ``) opens the OSD while running. Its "Fullscreen" and "Keep aspect ratio" at the top switch fullscreen and keeping the original 4:3 shape (off stretches over the window); they, and fullscreen switched with Alt+Enter or a double click, are kept in `cfg/re2dj.ini` for the next run (#14). Its "32-bit color" switches a display mode that shows 24-bit images and translucent compositing at 8 bits per channel (`--color-depth`). Screen post-processing shaders (the built-in `crt` and `scanline`, and `shaders/*.glsl`) are chosen with `--post-shader` or in the OSD ([guide](docs/guides/post-process-shaders.md)). See [ARCHITECTURE.md](ARCHITECTURE.md) for details.*
 
 ---
 
@@ -188,9 +188,9 @@ targets:
 
 ### 런처 / Launcher
 
-인자 없이 `re2dj`를 실행하면 런처 창이 뜹니다. 현재 디렉터리의 `roms/` 아래에서 내장 프로필마다 실행할 수 있는지와 그 이유를 보여 주고, 고른 게임을 실행합니다. 게임이 끝나면 런처로 돌아옵니다. 전체 화면, 색 깊이, 화면 셰이더, 소리 크기를 고를 수 있고, 바꾼 값과 마지막 프로필은 `cfg/re2dj.ini`에 남습니다. 키보드·마우스·게임패드로 조작합니다(Enter 또는 더블클릭으로 시작, Esc로 종료).
+인자 없이 `re2dj`를 실행하면 런처 창이 뜹니다. 현재 디렉터리의 `roms/` 아래에서 내장 프로필마다 실행할 수 있는지와 그 이유를 보여 주고, 고른 게임을 실행합니다. 게임이 끝나면 런처로 돌아옵니다. 전체 화면, 비율 유지, 색 깊이, 화면 셰이더, 소리 크기를 고를 수 있고, 바꾼 값과 마지막 프로필은 `cfg/re2dj.ini`에 남습니다. 런처 창도 전체 화면과 비율 유지를 따릅니다. 키보드·마우스·게임패드로 조작합니다(Enter·패드 A·더블클릭으로 시작, Alt+Enter로 전체 화면, Esc로 종료).
 
-*Run without arguments, `re2dj` opens a launcher window. It shows, for each built-in profile, whether it can run from `roms/` under the current directory and why not, starts the chosen game, and comes back when the game ends. Fullscreen, colour depth, screen shader and sound gain can be chosen; changed values and the last profile are kept in `cfg/re2dj.ini`. Keyboard, mouse and gamepads drive it (Enter or a double click starts, Esc quits).*
+*Run without arguments, `re2dj` opens a launcher window. It shows, for each built-in profile, whether it can run from `roms/` under the current directory and why not, starts the chosen game, and comes back when the game ends. Fullscreen, keep-aspect, colour depth, screen shader and sound gain can be chosen; changed values and the last profile are kept in `cfg/re2dj.ini`, and the launcher window follows fullscreen and keep-aspect too. Keyboard, mouse and gamepads drive it (Enter, the pad's A or a double click starts, Alt+Enter switches fullscreen, Esc quits).*
 
 ```bash
 cd /path/to/re2DJ          # roms/ and cfg/ are looked up here
@@ -261,7 +261,12 @@ re2dj --hdd <directory> [options]
   --hold-window       실행이 멈춘 뒤에도 게임 창을 닫을 때까지 유지.
   --audio-gain-db     출력 보정(-24..+18 dB, 기본값 0).
   --fullscreen        monitor 크기 borderless fullscreen 사용.
-  --windowed          프로파일의 fullscreen 기본값을 끄기.
+  --windowed          프로파일의 fullscreen 기본값을 끄기. 둘 다 없으면
+                      cfg/re2dj.ini의 [Video] fullscreen, 그다음 프로파일.
+                      실행 중 Alt+Enter·더블클릭·OSD로 바꾼 값은 저장됩니다.
+  --keep-aspect       원본 4:3 비율을 지키고 남는 곳은 검은 띠(기본값, 또는
+                      cfg/re2dj.ini의 [Video] keep_aspect).
+  --stretch           그림을 창 전체로 늘림. OSD로 바꾼 값은 저장됩니다.
   --image-dump        매핑된 주 이미지를 진입 전과 지연 뒤에 저장(진단).
   --image-dump-delay <ms>
                       두 번째 덤프까지의 지연(기본값 5000).

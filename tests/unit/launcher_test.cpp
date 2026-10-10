@@ -142,19 +142,22 @@ void TestLauncherSettingsParse(re2dj::test::Context& context)
     RE2DJ_CHECK(context, empty.settings == launcher::LauncherSettings{});
 
     const launcher::LauncherSettingsLoad full = launcher::ParseLauncherSettings(
-        "[launcher]\r\nlast_profile = ez2dj6th\r\n[VIDEO]\r\nfullscreen=1\r\ncolor_depth=32\r\n"
+        "[launcher]\r\nlast_profile = ez2dj6th\r\n[VIDEO]\r\nfullscreen=1\r\nkeep_aspect=0\r\ncolor_depth=32\r\n"
         "post_shader=\"crt\"\r\n[Audio]\r\ngain_db=-7.5\r\n");
     RE2DJ_CHECK(context, full.warnings.empty());
     RE2DJ_CHECK_EQ(context, full.settings.last_profile, std::string("ez2dj6th"));
     RE2DJ_CHECK(context, full.settings.fullscreen == std::optional<bool>(true));
+    RE2DJ_CHECK(context, full.settings.keep_aspect == std::optional<bool>(false));
     RE2DJ_CHECK(context, full.settings.color_depth == std::optional<ColorDepth>(ColorDepth::k32));
     RE2DJ_CHECK(context, full.settings.post_shader == std::optional<std::string>("crt"));
     RE2DJ_CHECK(context, full.settings.audio_gain_db == std::optional<float>(-7.5F));
 
     // Bad values are reported and read as never chosen; the rest still load.
     const launcher::LauncherSettingsLoad bad = launcher::ParseLauncherSettings(
-        "[Video]\nfullscreen=yes\ncolor_depth=24\npost_shader=\n[Audio]\ngain_db=30\n[Launcher]\nlast_profile=x\n");
-    RE2DJ_CHECK_EQ(context, bad.warnings.size(), std::size_t{3});
+        "[Video]\nfullscreen=yes\nkeep_aspect=2\ncolor_depth=24\npost_shader=\n[Audio]\ngain_db=30\n"
+        "[Launcher]\nlast_profile=x\n");
+    RE2DJ_CHECK_EQ(context, bad.warnings.size(), std::size_t{4});
+    RE2DJ_CHECK(context, !bad.settings.keep_aspect.has_value());
     RE2DJ_CHECK(context, !bad.settings.fullscreen.has_value());
     RE2DJ_CHECK(context, !bad.settings.color_depth.has_value());
     RE2DJ_CHECK(context, !bad.settings.post_shader.has_value());
@@ -178,6 +181,7 @@ void TestLauncherSettingsFile(re2dj::test::Context& context)
     launcher::LauncherSettings settings;
     settings.last_profile = "ez2dj4th";
     settings.fullscreen = false;
+    settings.keep_aspect = false;
     settings.color_depth = ColorDepth::k16;
     settings.post_shader = "my shader.glsl";
     settings.audio_gain_db = 2.3F;
@@ -206,16 +210,65 @@ void TestLaunchArguments(re2dj::test::Context& context)
     RE2DJ_CHECK(context, launcher::BuildLaunchArguments("ez2dj6th", settings) == std::vector<std::string>{"ez2dj6th"});
 
     settings.fullscreen = true;
+    settings.keep_aspect = false;
     settings.color_depth = ColorDepth::k32;
     settings.post_shader = "scanline";
     settings.audio_gain_db = -6.0F;
-    const std::vector<std::string> expected = {"ez2dj6th",      "--fullscreen", "--color-depth",   "32",
+    const std::vector<std::string> expected = {"ez2dj6th",      "--fullscreen", "--stretch", "--color-depth", "32",
                                                "--post-shader=scanline",        "--audio-gain-db", "-6"};
     RE2DJ_CHECK(context, launcher::BuildLaunchArguments("ez2dj6th", settings) == expected);
 
     settings.fullscreen = false;
+    settings.keep_aspect = true;
     const std::vector<std::string> windowed = launcher::BuildLaunchArguments("ez2dj4th", settings);
     RE2DJ_CHECK_EQ(context, windowed[1], std::string("--windowed"));
+    RE2DJ_CHECK_EQ(context, windowed[2], std::string("--keep-aspect"));
+}
+
+// The command line first, then the file, then the defaults (#14).
+void TestDisplayPreferences(re2dj::test::Context& context)
+{
+    launcher::LauncherSettings stored;
+    launcher::DisplayPreferences resolved = launcher::ResolveDisplayPreferences(std::nullopt, std::nullopt, stored, false);
+    RE2DJ_CHECK(context, !resolved.fullscreen);
+    RE2DJ_CHECK(context, resolved.keep_aspect);
+    RE2DJ_CHECK(context, launcher::ResolveDisplayPreferences(std::nullopt, std::nullopt, stored, true).fullscreen);
+
+    stored.fullscreen = true;
+    stored.keep_aspect = false;
+    resolved = launcher::ResolveDisplayPreferences(std::nullopt, std::nullopt, stored, false);
+    RE2DJ_CHECK(context, resolved.fullscreen);
+    RE2DJ_CHECK(context, !resolved.keep_aspect);
+    resolved = launcher::ResolveDisplayPreferences(false, true, stored, true);
+    RE2DJ_CHECK(context, !resolved.fullscreen);
+    RE2DJ_CHECK(context, resolved.keep_aspect);
+
+    // A change made in game rewrites only the two keys.
+    re2dj::test::TemporaryTree tree;
+    const std::filesystem::path config = tree.root() / "cfg";
+    launcher::LauncherSettings launcher_choice;
+    launcher_choice.last_profile = "ez2dj6th";
+    launcher_choice.color_depth = ColorDepth::k32;
+    launcher_choice.post_shader = "crt";
+    launcher_choice.audio_gain_db = -3.0F;
+    std::string error;
+    RE2DJ_CHECK(context, launcher::SaveLauncherSettings(config, launcher_choice, &error));
+    launcher::DisplayPreferences changed;
+    changed.fullscreen = true;
+    changed.keep_aspect = false;
+    RE2DJ_CHECK(context, launcher::SaveDisplayPreferences(config, changed, &error));
+    launcher::LauncherSettings expected = launcher_choice;
+    expected.fullscreen = true;
+    expected.keep_aspect = false;
+    RE2DJ_CHECK(context, launcher::LoadLauncherSettings(config).settings == expected);
+
+    // With no file yet, one is made holding just the two keys.
+    const std::filesystem::path fresh = tree.root() / "fresh";
+    RE2DJ_CHECK(context, launcher::SaveDisplayPreferences(fresh, changed, &error));
+    launcher::LauncherSettings only_display;
+    only_display.fullscreen = true;
+    only_display.keep_aspect = false;
+    RE2DJ_CHECK(context, launcher::LoadLauncherSettings(fresh).settings == only_display);
 }
 
 }  // namespace
@@ -227,4 +280,5 @@ void RunLauncherTests(re2dj::test::Context& context)
     TestLauncherSettingsParse(context);
     TestLauncherSettingsFile(context);
     TestLaunchArguments(context);
+    TestDisplayPreferences(context);
 }

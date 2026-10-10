@@ -35,6 +35,26 @@ std::string Invalid(const char* section, const char* key, const std::string& val
     return std::string("re2dj.ini [") + section + "] " + key + "=" + value + " is not " + expected + "; ignored";
 }
 
+// A 0/1 key; anything else is reported and left unchosen.
+void ParseSwitch(std::string_view text,
+                 const char* section,
+                 const char* key,
+                 std::optional<bool>* value,
+                 std::vector<std::string>* warnings)
+{
+    const std::optional<std::string> found = FindValue(text, section, key);
+    if (!found.has_value())
+    {
+        return;
+    }
+    if (*found == "0" || *found == "1")
+    {
+        *value = *found == "1";
+        return;
+    }
+    warnings->push_back(Invalid(section, key, *found, "0 or 1"));
+}
+
 // The shortest text that reads back as the same float, so a stored gain
 // round-trips through the file unchanged.
 std::string FormatGain(float value)
@@ -56,7 +76,7 @@ std::string FormatGain(float value)
 bool operator==(const LauncherSettings& left, const LauncherSettings& right)
 {
     return left.last_profile == right.last_profile && left.fullscreen == right.fullscreen &&
-           left.color_depth == right.color_depth && left.post_shader == right.post_shader &&
+           left.keep_aspect == right.keep_aspect && left.color_depth == right.color_depth && left.post_shader == right.post_shader &&
            left.audio_gain_db == right.audio_gain_db;
 }
 
@@ -74,17 +94,8 @@ LauncherSettingsLoad ParseLauncherSettings(std::string_view text)
     {
         settings.last_profile = *value;
     }
-    if (const auto value = FindValue(text, kVideoSection, "fullscreen"))
-    {
-        if (*value == "0" || *value == "1")
-        {
-            settings.fullscreen = *value == "1";
-        }
-        else
-        {
-            load.warnings.push_back(Invalid(kVideoSection, "fullscreen", *value, "0 or 1"));
-        }
-    }
+    ParseSwitch(text, kVideoSection, "fullscreen", &settings.fullscreen, &load.warnings);
+    ParseSwitch(text, kVideoSection, "keep_aspect", &settings.keep_aspect, &load.warnings);
     if (const auto value = FindValue(text, kVideoSection, "color_depth"))
     {
         graphics::ColorDepth depth = graphics::ColorDepth::k16;
@@ -151,6 +162,10 @@ std::string FormatLauncherSettings(const LauncherSettings& settings)
     {
         text << "fullscreen=" << (*settings.fullscreen ? "1" : "0") << "\n";
     }
+    if (settings.keep_aspect.has_value())
+    {
+        text << "keep_aspect=" << (*settings.keep_aspect ? "1" : "0") << "\n";
+    }
     if (settings.color_depth.has_value())
     {
         text << "color_depth=" << graphics::ColorDepthName(*settings.color_depth) << "\n";
@@ -189,6 +204,27 @@ bool SaveLauncherSettings(const std::filesystem::path& config_directory,
     return true;
 }
 
+DisplayPreferences ResolveDisplayPreferences(std::optional<bool> command_line_fullscreen,
+                                             std::optional<bool> command_line_keep_aspect,
+                                             const LauncherSettings& stored,
+                                             bool profile_fullscreen)
+{
+    DisplayPreferences preferences;
+    preferences.fullscreen = command_line_fullscreen.value_or(stored.fullscreen.value_or(profile_fullscreen));
+    preferences.keep_aspect = command_line_keep_aspect.value_or(stored.keep_aspect.value_or(true));
+    return preferences;
+}
+
+bool SaveDisplayPreferences(const std::filesystem::path& config_directory,
+                            const DisplayPreferences& preferences,
+                            std::string* error)
+{
+    LauncherSettings settings = LoadLauncherSettings(config_directory).settings;
+    settings.fullscreen = preferences.fullscreen;
+    settings.keep_aspect = preferences.keep_aspect;
+    return SaveLauncherSettings(config_directory, settings, error);
+}
+
 std::vector<std::string> BuildLaunchArguments(const std::string& profile_id, const LauncherSettings& settings)
 {
     std::vector<std::string> arguments;
@@ -196,6 +232,10 @@ std::vector<std::string> BuildLaunchArguments(const std::string& profile_id, con
     if (settings.fullscreen.has_value())
     {
         arguments.emplace_back(*settings.fullscreen ? "--fullscreen" : "--windowed");
+    }
+    if (settings.keep_aspect.has_value())
+    {
+        arguments.emplace_back(*settings.keep_aspect ? "--keep-aspect" : "--stretch");
     }
     if (settings.color_depth.has_value())
     {

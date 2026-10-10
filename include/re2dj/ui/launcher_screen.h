@@ -35,6 +35,17 @@ struct LauncherScreenState
     bool focus_placed = false;
 };
 
+// Where on the display the screen is laid out, in ImGui's coordinates: the
+// whole display, or with keep-aspect the default window's shape centred in it
+// (#14).
+struct LauncherScreenArea
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+};
+
 enum class LauncherScreenAction
 {
     kNone,
@@ -42,10 +53,11 @@ enum class LauncherScreenAction
     kQuit,
 };
 
-// Draws one frame of the launcher over the whole display. kStart is returned
-// only for a runnable profile; the chosen id is then in
-// state->settings.last_profile.
-LauncherScreenAction DrawLauncherScreen(const LauncherScreenModel& model, LauncherScreenState* state);
+// Draws one frame of the launcher over `area`. kStart is returned only for a
+// runnable profile; the chosen id is then in state->settings.last_profile.
+LauncherScreenAction DrawLauncherScreen(const LauncherScreenModel& model,
+                                        const LauncherScreenArea& area,
+                                        LauncherScreenState* state);
 
 }  // namespace re2dj::ui
 

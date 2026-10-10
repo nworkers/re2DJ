@@ -10,6 +10,7 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
 #include "re2dj/graphics/post_shader_catalog.h"
+#include "re2dj/graphics/window_policy.h"
 
 namespace re2dj::platform::sdl
 {
@@ -22,8 +23,15 @@ constexpr int kWindowHeight = 640;
 // GLSL is 1.20, so the launcher opens wherever a game can.
 constexpr char kGlslVersion[] = "#version 120";
 // ImGui's default font is small for a full-window menu; it grows with the
-// window beyond its first size.
+// laid-out area beyond the first window's size.
 constexpr float kFontScale = 1.4f;
+
+// Alt+Enter, which switches fullscreen as in the game window (#14).
+bool IsAltEnter(const SDL_Event& event)
+{
+    return (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
+           (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) && (event.key.mod & SDL_KMOD_ALT) != 0;
+}
 
 using ViewportFunction = void(APIENTRY*)(GLint, GLint, GLsizei, GLsizei);
 using ClearColorFunction = void(APIENTRY*)(GLfloat, GLfloat, GLfloat, GLfloat);
@@ -146,12 +154,27 @@ LauncherWindowResult RunLauncherWindow(const ui::LauncherScreenModel& model,
     ui::LauncherScreenState state;
     state.settings = initial_settings;
     const SDL_WindowID window_id = SDL_GetWindowID(session.window);
+    // What the window was last set to; it opens windowed. The applied value
+    // is tracked rather than read back, as the change lands asynchronously
+    // on X11 and Wayland.
+    bool window_fullscreen = false;
     ui::LauncherScreenAction action = ui::LauncherScreenAction::kNone;
     while (action == ui::LauncherScreenAction::kNone)
     {
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
+            // Alt+Enter never reaches ImGui, whose Enter would start the
+            // selected profile. A double click starts one too, so it is no
+            // toggle here.
+            if (IsAltEnter(event))
+            {
+                if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
+                {
+                    state.settings.fullscreen = !state.settings.fullscreen.value_or(false);
+                }
+                continue;
+            }
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT ||
                 (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == window_id))
@@ -165,16 +188,36 @@ LauncherWindowResult RunLauncherWindow(const ui::LauncherScreenModel& model,
             continue;
         }
 
+        // The window follows the fullscreen option however it changed: the
+        // stored value at start, the checkbox, Alt+Enter.
+        const bool wanted_fullscreen = state.settings.fullscreen.value_or(false);
+        if (wanted_fullscreen != window_fullscreen)
+        {
+            SDL_SetWindowFullscreenMode(session.window, nullptr);
+            SDL_SetWindowFullscreen(session.window, wanted_fullscreen);
+            window_fullscreen = wanted_fullscreen;
+        }
+
+        // With keep-aspect the screen is laid out in the largest area of the
+        // first window's shape, centred, the rest left black; off, it fills
+        // the window. The text follows the area's height.
         int width = 0;
         int height = 0;
         SDL_GetWindowSize(session.window, &width, &height);
+        const graphics::PresentRect fit = graphics::ComputePresentRect(
+            width, height, kWindowWidth, kWindowHeight, state.settings.keep_aspect.value_or(true));
+        ui::LauncherScreenArea area;
+        area.x = static_cast<float>(fit.x);
+        area.y = static_cast<float>(fit.y);
+        area.width = static_cast<float>(fit.width);
+        area.height = static_cast<float>(fit.height);
         ImGui::GetStyle().FontScaleMain =
-            kFontScale * std::max(1.0f, static_cast<float>(height) / static_cast<float>(kWindowHeight));
+            kFontScale * std::max(1.0f, area.height / static_cast<float>(kWindowHeight));
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-        const ui::LauncherScreenAction drawn = ui::DrawLauncherScreen(model, &state);
+        const ui::LauncherScreenAction drawn = ui::DrawLauncherScreen(model, area, &state);
         if (action == ui::LauncherScreenAction::kNone)
         {
             action = drawn;
@@ -185,7 +228,8 @@ LauncherWindowResult RunLauncherWindow(const ui::LauncherScreenModel& model,
         int pixel_height = 0;
         SDL_GetWindowSizeInPixels(session.window, &pixel_width, &pixel_height);
         viewport(0, 0, pixel_width, pixel_height);
-        clear_color(0.06f, 0.06f, 0.08f, 1.0f);
+        // Black for the bars; the screen paints its own background.
+        clear_color(0.0f, 0.0f, 0.0f, 1.0f);
         clear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(session.window);

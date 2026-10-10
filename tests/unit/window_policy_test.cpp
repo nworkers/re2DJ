@@ -46,10 +46,35 @@ void CheckFrameRate(re2dj::test::Context& context)
     RE2DJ_CHECK(context, !meter.Present(9000, 0).has_value());
 }
 
+// Keeping the aspect is the 4:3 fit with bars; not keeping it fills the
+// window whatever its shape (#14).
+void CheckPresentRect(re2dj::test::Context& context)
+{
+    const graphics::PresentRect kept = graphics::ComputePresentRect(1920, 1080, 640, 480, true);
+    const graphics::PresentRect fit = graphics::FitPresentation(1920, 1080, 640, 480);
+    RE2DJ_CHECK_EQ(context, kept.x, fit.x);
+    RE2DJ_CHECK_EQ(context, kept.width, fit.width);
+    RE2DJ_CHECK_EQ(context, kept.x, 240);
+    RE2DJ_CHECK_EQ(context, kept.width, 1440);
+    RE2DJ_CHECK_EQ(context, kept.height, 1080);
+
+    const graphics::PresentRect stretched = graphics::ComputePresentRect(1920, 1080, 640, 480, false);
+    RE2DJ_CHECK_EQ(context, stretched.x, 0);
+    RE2DJ_CHECK_EQ(context, stretched.y, 0);
+    RE2DJ_CHECK_EQ(context, stretched.width, 1920);
+    RE2DJ_CHECK_EQ(context, stretched.height, 1080);
+
+    const graphics::PresentRect tall = graphics::ComputePresentRect(640, 1000, 640, 480, true);
+    RE2DJ_CHECK_EQ(context, tall.y, 260);
+    RE2DJ_CHECK_EQ(context, tall.height, 480);
+    RE2DJ_CHECK_EQ(context, graphics::ComputePresentRect(640, 1000, 640, 480, false).height, 1000);
+}
+
 }  // namespace
 
 void RunWindowPolicyTests(re2dj::test::Context& context)
 {
     CheckScales(context);
     CheckFrameRate(context);
+    CheckPresentRect(context);
 }

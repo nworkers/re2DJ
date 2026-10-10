@@ -203,6 +203,8 @@ struct Sdl3OpenGlBackend::Impl
     std::unique_ptr<OpenGlPostProcess> post_process;
     bool frame_started = false;
     std::uint32_t logical_width = 0;
+    // #14: off stretches the display over the whole window.
+    bool keep_aspect = true;
     std::uint32_t logical_height = 0;
     // This backend is the only OpenGL consumer in the process, so once the
     // context is current it stays current and the per-draw call is redundant.
@@ -1562,6 +1564,19 @@ bool Sdl3OpenGlBackend::SetFullscreen(bool fullscreen, std::string* error)
     return true;
 }
 
+void Sdl3OpenGlBackend::SetKeepAspect(bool keep_aspect)
+{
+    if (impl_ != nullptr)
+    {
+        impl_->keep_aspect = keep_aspect;
+    }
+}
+
+bool Sdl3OpenGlBackend::keep_aspect() const
+{
+    return impl_ == nullptr || impl_->keep_aspect;
+}
+
 void Sdl3OpenGlBackend::SetTitle(const char* title)
 {
     if (impl_ != nullptr && impl_->window != nullptr && title != nullptr)
@@ -1631,8 +1646,8 @@ bool Sdl3OpenGlBackend::Present(std::string* error)
     impl_->viewport(0, 0, pixel_width, pixel_height);
     impl_->clear_color(0.0f, 0.0f, 0.0f, 1.0f);
     impl_->clear(GL_COLOR_BUFFER_BIT);
-    const PresentRect fit =
-        FitPresentation(pixel_width, pixel_height, impl_->logical_width, impl_->logical_height);
+    const PresentRect fit = ComputePresentRect(
+        pixel_width, pixel_height, impl_->logical_width, impl_->logical_height, impl_->keep_aspect);
     const int presentation_width = fit.width;
     const int presentation_height = fit.height;
     const int presentation_x = fit.x;
