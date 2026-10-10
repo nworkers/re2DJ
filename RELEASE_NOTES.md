@@ -1,5 +1,55 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.71 (2026-10-10)
+
+### 한국어
+
+런처가 GitHub의 새 릴리스를 알리고 Update 버튼으로 설치한 뒤 다시 시작하며, 릴리스 산출물 이름이 `re2DJ-v*`가 됩니다(#17).
+
+#### 해결된 이슈
+
+- [#17](https://github.com/reexec/re2DJ/issues/17) 런처 자동 업데이트와 산출물 이름 re2DJ-v* (rePIU #48) — PR [#18](https://github.com/reexec/re2DJ/pull/18)
+
+#### 1. 런처 자동 업데이트 (#17)
+- rePIU #48의 업데이트 계층을 `re2dj/update/`(공용 코어)로 옮겼습니다: `SemanticVersion`, 최신 릴리스 JSON 파서(`ReleaseInfo`), `Sha256`, tar.gz(`tinfl`)·zip(miniz 메모리 리더) 풀기와 위험한 경로 거부(`ReleaseArchive`), 설치 조건·교체·되돌림·`.re2dj-old` 정리(`UpdateInstall`), 백그라운드 상태 기계(`LauncherUpdater`).
+- 플랫폼: `platform/https_download.h`(Linux는 시스템 `curl`을 `posix_spawnp`로, https만 따름; Windows는 WinHTTP), `self_process.h`의 `SelfExecutablePath`·`ReplaceSelfProcess`(Linux `execve`)·`RunExecutableAndWait`·`ClearEnvironmentVariable`.
+- 런처: 제목 아래 알림 줄·Update/Retry·진행 막대, staged가 되면 창을 닫고 세션이 설치한 뒤 다시 시작(Linux는 같은 PID, Windows는 자식). 실행 파일 옆 `VERSION`이 빌드 버전과 같을 때만 설치하고, 남은 `.re2dj-old`는 다음 시작 때 지웁니다. 끄기는 `[Launcher] check_updates = 0`, `RE2DJ_UPDATE_CHECK=0`, 시험용 `RE2DJ_UPDATE_CURRENT_VERSION`.
+- rePIU와 다르게, 공용 코어가 OS 코드를 링크하지 않도록 다운로드 함수는 런처 세션이 넘기고, 자산 이름은 대소문자를 무시해 이전 릴리스의 `re2dj-v…`도 찾습니다. miniz의 ZIP 읽기를 켰습니다(`MINIZ_NO_ARCHIVE_APIS` 제거).
+
+#### 2. 산출물 이름 (#17)
+- `package_release.sh`·`.ps1`, `release.yml`의 workflow artifact, 사이트 안내 문구를 `re2DJ-v<ver>-<platform>`로 바꿨습니다. tar의 최상위 폴더도 같은 이름이고, 실행 파일은 `re2dj`(`re2dj.exe`) 그대로입니다.
+
+#### 3. 검증
+- 단위 테스트 `launcher_update_test`(rePIU probe 13개 묶음, 소문자 자산 이름 포함), `launcher_test`의 `check_updates`. Linux x64·x86 Debug(경고를 오류로)·Release, clang: CTest 각 5개, 단위 테스트 6,365건 실패 0. Release의 NEEDED는 그대로입니다.
+- 실제(Linux x64 Release): v0.0.70 릴리스로 알림 → Update → 9개 파일 교체 → 다시 시작, 같은 PID가 새 실행 파일로 바뀜. 빌드 트리에서는 버튼 없음, 남은 `.re2dj-old` 2개 정리, 확인 끄기. `package_release.sh`로 `re2DJ-v0.0.70-linux-x64.tar.gz` 생성.
+- CI: Windows x86, Linux x64 gcc·clang, Linux x86 통과. Windows의 실제 교체는 사용자 확인으로 남았습니다.
+- 가이드: [런처 업데이트와 스팀덱 설치](docs/guides/launcher-update.md).
+
+### English
+
+The launcher announces a new GitHub release, installs it with an Update button and restarts, and release artifacts are named `re2DJ-v*` (#17).
+
+#### Resolved issues
+
+- [#17](https://github.com/reexec/re2DJ/issues/17) Launcher self-update and re2DJ-v* artifact names (rePIU #48) — PR [#18](https://github.com/reexec/re2DJ/pull/18)
+
+#### 1. Launcher self-update (#17)
+- rePIU #48's update layer moved into `re2dj/update/` (shared core): `SemanticVersion`, the latest-release JSON parser (`ReleaseInfo`), `Sha256`, unpacking tar.gz (`tinfl`) and zip (miniz's memory reader) with dangerous paths refused (`ReleaseArchive`), the install condition, replacement, rollback and `.re2dj-old` removal (`UpdateInstall`), and the background state machine (`LauncherUpdater`).
+- Platform: `platform/https_download.h` (Linux runs the system `curl` through `posix_spawnp`, following https only; Windows uses WinHTTP), and `SelfExecutablePath`, `ReplaceSelfProcess` (Linux `execve`), `RunExecutableAndWait` and `ClearEnvironmentVariable` in `self_process.h`.
+- Launcher: a notice under the title with Update/Retry and a progress bar; once staged the window closes and the session installs and restarts (the same PID on Linux, a child on Windows). Only a release install whose `VERSION` next to the executable matches the build is replaced, and leftover `.re2dj-old` files go at the next start. Off with `[Launcher] check_updates = 0` or `RE2DJ_UPDATE_CHECK=0`; `RE2DJ_UPDATE_CURRENT_VERSION` for testing.
+- Unlike rePIU, the launcher session passes the download function so the shared core links no OS code, and asset names are matched ignoring case, finding earlier releases' `re2dj-v…`. miniz's ZIP reading is switched on (`MINIZ_NO_ARCHIVE_APIS` dropped).
+
+#### 2. Artifact names (#17)
+- `package_release.sh` and `.ps1`, `release.yml`'s workflow artifacts and the site text now say `re2DJ-v<ver>-<platform>`; the tar's top folder has the same name, and the executable stays `re2dj` (`re2dj.exe`).
+
+#### 3. Verification
+- Unit test `launcher_update_test` (rePIU's probe, 13 groups, a lower-case asset name included) and `check_updates` in `launcher_test`. Linux x64 and x86 Debug (warnings as errors), Release and clang: 5 CTest tests each, 6,365 unit checks, 0 failures; the Release NEEDED lists are unchanged.
+- Real (Linux x64 Release): against the v0.0.70 release, notice, Update, nine files replaced and a restart, the same PID turning into the new executable; a build tree shows no button, two leftover `.re2dj-old` files were removed, the check turns off; `package_release.sh` wrote `re2DJ-v0.0.70-linux-x64.tar.gz`.
+- CI: Windows x86, Linux x64 gcc and clang, and Linux x86 pass. A real replacement on Windows is left for the user to check.
+- Guide: [launcher updates and a Steam Deck install](docs/guides/launcher-update.md).
+
+---
+
 ## v0.0.70 (2026-10-10)
 
 ### 한국어

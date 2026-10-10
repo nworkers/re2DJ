@@ -6,6 +6,7 @@
 
 #include "re2dj/launcher/launcher_catalog.h"
 #include "re2dj/launcher/launcher_settings.h"
+#include "re2dj/update/launcher_updater.h"
 
 namespace re2dj::ui
 {
@@ -24,6 +25,8 @@ struct LauncherScreenModel
     std::string default_post_shader;
     // How the previous run ended, or empty.
     std::string status;
+    // The update check of this session (#17), or null when it is off.
+    update::LauncherUpdater* updater = nullptr;
 };
 
 // What the user has chosen so far, kept across frames.
@@ -51,6 +54,8 @@ enum class LauncherScreenAction
     kNone,
     kStart,
     kQuit,
+    // A newer release is staged; the caller installs it and restarts (#17).
+    kInstallUpdate,
 };
 
 // Draws one frame of the launcher over `area`. kStart is returned only for a

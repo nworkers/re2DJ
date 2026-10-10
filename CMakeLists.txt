@@ -129,6 +129,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/linux/host_process_launcher.cpp
         src/platform/linux/native_host_services.cpp
         src/platform/linux/self_process.cpp
+        src/platform/linux/https_download.cpp
     )
     if(CMAKE_SIZEOF_VOID_P EQUAL 4)
         target_sources(re2dj_linux_native_backend PRIVATE
@@ -194,12 +195,15 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
         src/platform/windows/x86/native_guest_reservation.cpp
         src/platform/windows/host_process_launcher.cpp
         src/platform/windows/self_process.cpp
+        src/platform/windows/https_download.cpp
         src/platform/sdl/host_presentation.cpp
         src/platform/sdl/host_keyboard.cpp
     )
     target_link_libraries(re2dj_windows_native_backend
         PUBLIC re2dj_core
         PRIVATE re2dj_sdl3_opengl_backend re2dj_sdl3_gamepad re2dj_osd SDL3::SDL3-static re2dj_logging re2dj_warnings
+                # The launcher's update download (#17).
+                winhttp
     )
     if(RE2DJ_BUILD_TESTS)
         add_executable(re2dj_windows_native_in_process_probe
@@ -274,8 +278,9 @@ add_library(re2dj_chdr_miniz STATIC
 target_include_directories(re2dj_chdr_miniz PRIVATE
     third_party/libchdr/deps/miniz-3.1.2
 )
+# The ZIP reader stays on for the launcher's update (#17), which unpacks the
+# Windows release zip from memory; the file-based and writing APIs stay off.
 target_compile_definitions(re2dj_chdr_miniz PUBLIC
-    MINIZ_NO_ARCHIVE_APIS
     MINIZ_NO_DEFLATE_APIS
     MINIZ_NO_STDIO
     MINIZ_NO_TIME
@@ -542,6 +547,13 @@ add_library(re2dj_core STATIC
     src/hdd/hdd_scan.cpp
     src/launcher/launcher_catalog.cpp
     src/launcher/launcher_settings.cpp
+    # The launcher's update check and in-place install (#17).
+    src/update/launcher_updater.cpp
+    src/update/release_archive.cpp
+    src/update/release_info.cpp
+    src/update/semantic_version.cpp
+    src/update/sha256.cpp
+    src/update/update_install.cpp
     src/runtime/address_space.cpp
     src/runtime/pe_loader.cpp
     src/storage/vfs_roots.cpp
@@ -564,8 +576,10 @@ target_compile_definitions(re2dj_core
 
 target_link_libraries(re2dj_core
     PUBLIC re2dj_directx re2dj_legacy_graphics re2dj_chd_storage
-    PRIVATE re2dj_logging re2dj_warnings
+    PRIVATE re2dj_logging re2dj_warnings re2dj_chdr_miniz
 )
+# The update's archive reader (#17) uses libchdr's miniz directly.
+target_include_directories(re2dj_core SYSTEM PRIVATE third_party/libchdr/deps/miniz-3.1.2)
 
 if(RE2DJ_SDL3_AUDIO_ACTIVE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -697,6 +711,7 @@ if(RE2DJ_BUILD_TESTS)
         tests/unit/directx_surface_test.cpp
         tests/unit/version_test.cpp
         tests/unit/launcher_test.cpp
+        tests/unit/launcher_update_test.cpp
         tests/unit/guest_process_test.cpp
         tests/unit/kernel32_crt_test.cpp
         tests/unit/api_call_record_test.cpp

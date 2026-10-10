@@ -50,9 +50,9 @@ GitHub Actions의 `release.yml`은 Windows x86, Linux x86-64, Linux x86 패키�
 
 ### Windows x86
 
-`package_release.ps1`은 Release `re2dj.exe`(작업 450부터 DLL 없이 실행 파일 하나), 예제 `config/`, 사용자용 저장소 문서(`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`)를 Windows x86 zip으로 묶고 SHA256 파일을 씁니다. `package_release.bat`는 command prompt용 wrapper입니다.
+`package_release.ps1`은 Release `re2dj.exe`(작업 450부터 DLL 없이 실행 파일 하나), 예제 `config/`, 사용자용 저장소 문서(`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`)를 Windows x86 zip(`re2DJ-v<version>-windows-x86.zip`, 안의 실행 파일은 `re2dj.exe` 그대로)으로 묶고 SHA256 파일을 씁니다. `package_release.bat`는 command prompt용 wrapper입니다.
 
-*`package_release.ps1` collects the Release `re2dj.exe` (one executable with no DLL from task 450), the example `config/` and the user-facing repository documents (`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`) into a Windows x86 zip and writes a SHA256 file. `package_release.bat` is the command-prompt wrapper.*
+*`package_release.ps1` collects the Release `re2dj.exe` (one executable with no DLL from task 450), the example `config/` and the user-facing repository documents (`README.md`, `LICENSE`, `VERSION`, `RELEASE_NOTES.md`, `THIRD_PARTY_NOTICES.md`, `CREDITS.md`) into a Windows x86 zip (`re2DJ-v<version>-windows-x86.zip`, the executable inside still `re2dj.exe`) and writes a SHA256 file. `package_release.bat` is the command-prompt wrapper.*
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Configuration Release -Version 0.0.40
@@ -60,9 +60,9 @@ powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1 -Configurat
 
 ### Linux x86-64 / x86
 
-`build_release_linux.sh`가 `linux-x64-release` 또는 `linux-x86-release` preset을 경고를 오류로 하여 빌드하고, CTest를 돌린 뒤 `package_release.sh`를 부릅니다. release preset은 libstdc++와 libgcc를 정적으로 링크합니다. `package_release.sh`는 strip한 `re2dj`와 Windows와 같은 문서·`config/`를 `build/package/re2dj-v<version>-linux-<arch>.tar.gz`로 묶고 `.sha256`을 씁니다. tar.gz는 실행 권한을 보존하고, 같은 이름의 최상위 디렉터리를 담습니다.
+`build_release_linux.sh`가 `linux-x64-release` 또는 `linux-x86-release` preset을 경고를 오류로 하여 빌드하고, CTest를 돌린 뒤 `package_release.sh`를 부릅니다. release preset은 libstdc++와 libgcc를 정적으로 링크합니다. `package_release.sh`는 strip한 `re2dj`와 Windows와 같은 문서·`config/`를 `build/package/re2DJ-v<version>-linux-<arch>.tar.gz`로 묶고 `.sha256`을 씁니다. tar.gz는 실행 권한을 보존하고, 같은 이름의 최상위 디렉터리를 담습니다.
 
-*`build_release_linux.sh` builds the `linux-x64-release` or `linux-x86-release` preset with warnings as errors, runs CTest, then calls `package_release.sh`; the release presets link libstdc++ and libgcc statically. `package_release.sh` bundles the stripped `re2dj` with the Windows package's documents and `config/` into `build/package/re2dj-v<version>-linux-<arch>.tar.gz` and writes `.sha256`; the tar.gz keeps the executable bit and holds a top-level directory of the same name.*
+*`build_release_linux.sh` builds the `linux-x64-release` or `linux-x86-release` preset with warnings as errors, runs CTest, then calls `package_release.sh`; the release presets link libstdc++ and libgcc statically. `package_release.sh` bundles the stripped `re2dj` with the Windows package's documents and `config/` into `build/package/re2DJ-v<version>-linux-<arch>.tar.gz` and writes `.sha256`; the tar.gz keeps the executable bit and holds a top-level directory of the same name.*
 
 패키징 전에 이식성을 검사하고, 어긋나면 실패합니다.
 

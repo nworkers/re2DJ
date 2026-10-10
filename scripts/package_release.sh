@@ -5,7 +5,8 @@
 #   scripts/package_release.sh <linux-x64|linux-x86> [version]
 #
 # Reads build/<platform>-release/bin/re2dj and writes
-# build/package/re2dj-v<version>-<platform>.tar.gz with a matching .sha256.
+# build/package/re2DJ-v<version>-<platform>.tar.gz with a matching .sha256.
+# The archive carries the project's name; the executable inside stays re2dj.
 # The executable must stay portable: it may link only the C runtime's own
 # libraries, and its highest GLIBC_ symbol version may not pass the release
 # build image's glibc (RE2DJ_MAX_GLIBC, 2.36 for Debian 12 by default).
@@ -33,7 +34,7 @@ fi
 max_glibc="${RE2DJ_MAX_GLIBC:-2.36}"
 
 binary="build/${platform}-release/bin/re2dj"
-name="re2dj-v${version}-${platform}"
+name="re2DJ-v${version}-${platform}"
 package_directory="build/package"
 staging="${package_directory}/staging/${name}"
 archive="${package_directory}/${name}.tar.gz"

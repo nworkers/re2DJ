@@ -142,10 +142,11 @@ void TestLauncherSettingsParse(re2dj::test::Context& context)
     RE2DJ_CHECK(context, empty.settings == launcher::LauncherSettings{});
 
     const launcher::LauncherSettingsLoad full = launcher::ParseLauncherSettings(
-        "[launcher]\r\nlast_profile = ez2dj6th\r\n[VIDEO]\r\nfullscreen=1\r\nkeep_aspect=0\r\ncolor_depth=32\r\n"
+        "[launcher]\r\nlast_profile = ez2dj6th\r\ncheck_updates=0\r\n[VIDEO]\r\nfullscreen=1\r\nkeep_aspect=0\r\ncolor_depth=32\r\n"
         "post_shader=\"crt\"\r\n[Audio]\r\ngain_db=-7.5\r\n");
     RE2DJ_CHECK(context, full.warnings.empty());
     RE2DJ_CHECK_EQ(context, full.settings.last_profile, std::string("ez2dj6th"));
+    RE2DJ_CHECK(context, full.settings.check_updates == std::optional<bool>(false));
     RE2DJ_CHECK(context, full.settings.fullscreen == std::optional<bool>(true));
     RE2DJ_CHECK(context, full.settings.keep_aspect == std::optional<bool>(false));
     RE2DJ_CHECK(context, full.settings.color_depth == std::optional<ColorDepth>(ColorDepth::k32));
@@ -180,6 +181,7 @@ void TestLauncherSettingsFile(re2dj::test::Context& context)
 
     launcher::LauncherSettings settings;
     settings.last_profile = "ez2dj4th";
+    settings.check_updates = true;
     settings.fullscreen = false;
     settings.keep_aspect = false;
     settings.color_depth = ColorDepth::k16;

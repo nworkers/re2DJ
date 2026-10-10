@@ -197,7 +197,11 @@ cd /path/to/re2DJ          # roms/ and cfg/ are looked up here
 build/linux-x64-release/bin/re2dj
 ```
 
+릴리스 아카이브로 설치했다면 런처가 GitHub의 새 버전을 알리고, **Update** 버튼으로 받아 검증하고 바꾼 뒤 다시 시작합니다(#17). 스팀덱 설치와 끄는 방법은 [런처 업데이트 가이드](docs/guides/launcher-update.md)에 있습니다.
+
 인자를 준 실행은 지금과 같습니다. 인자 없이 사용법만 보려면 `RE2DJ_LAUNCHER=0`을 줍니다. 창을 열 수 없는 환경에서도 사용법을 출력합니다. 근거: [#12 설계](docs/design/20261010-i012-launcher.md).
+
+*Installed from a release archive, the launcher announces a newer GitHub release and its **Update** button downloads, checks and replaces it, then restarts (#17); a Steam Deck install and turning it off are in the [launcher update guide](docs/guides/launcher-update.md).*
 
 *Runs with arguments are unchanged. `RE2DJ_LAUNCHER=0` prints the usage instead, as does a run that cannot open a window. See the [#12 design](docs/design/20261010-i012-launcher.md).*
 
