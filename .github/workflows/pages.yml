@@ -44,7 +44,7 @@ jobs:
     name: Build site
     # A failed or manual-without-tag Release run has nothing new to show.
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
@@ -84,7 +84,7 @@ jobs:
     name: Deploy
     needs: build
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       pages: write
       id-token: write

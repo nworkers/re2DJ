@@ -23,7 +23,7 @@ jobs:
     # developer command prompt. Letting CMake pick the runner's default
     # generator keeps this job working as the runner image moves.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure
         run: cmake -S . -B build/ci -A Win32 -DRE2DJ_WARNINGS_AS_ERRORS=ON
       - name: Build
@@ -33,12 +33,12 @@ jobs:
 
   linux-x64:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         compiler: [gcc, clang]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y
@@ -65,9 +65,9 @@ jobs:
   # modify_ldt the guest runtime needs.
   linux-x86:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build and test in an i386 container
         run: >-
           docker run --rm --security-opt seccomp=unconfined
