@@ -1,5 +1,45 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.73 (2026-10-11)
+
+### 한국어
+
+패드의 LT+RT+Y로 OSD를 열고 패드로 조작합니다(#22).
+
+#### 해결된 이슈
+
+- [#22](https://github.com/reexec/re2DJ/issues/22) 게임패드로 OSD 열기와 조작 LT+RT+Y (rePIU #55) — PR [#23](https://github.com/reexec/re2DJ/pull/23)
+
+#### 1. 게임패드 OSD (#22)
+- rePIU #55와 같습니다: 한 패드에서 LT+RT+Y가 눌리는 순간 OSD를 토글합니다(유지 시간 없음, 여러 패드에 나눈 것은 아님). 열려 있는 동안 패드는 OSD 탐색에만 쓰이고 게임에는 가지 않으며, 닫힐 때 누르고 있던 입력은 뗄 때까지 게임에 숨깁니다. 키보드는 그대로 게임에 갑니다.
+- `re2dj/input/pad_osd_chord.h`(`IsPadOsdChordDown`, `PadChordEdge`, `PadGameGate`). OSD는 `SetGamepad`로 받은 상태를 ImGui 게임패드 키로 넘기고(`NavEnableGamepad`), 열릴 때 포커스를 주며, 직전 프레임에 열린 메뉴가 없을 때 B로 닫습니다. `SdlHostPresentation::Present`가 토글, 관문, OSD 전달을 맡고, 종료 조합(#20)은 관문 앞 상태로 봅니다.
+- re2DJ EZ2DJ 기본 배치에서는 LT·RT·Y가 게임 입력이라 조합을 이루는 동안은 게임에도 들어갑니다(설계에 기록).
+
+#### 2. 검증
+- 단위 테스트 `CheckOsdChord`(조합, 가장자리, 관문). Linux x64·x86 Debug(경고를 오류로), clang: CTest 각 5개, 단위 테스트 6,401건 실패 0.
+- 실제(Linux, Xbox Series X Controller): LT+RT+Y마다 `OSD shown`/`hidden`, D-pad·A 조작, B로 메뉴와 OSD 닫기, 그동안 게임에 패드 입력 없음을 사용자가 확인.
+- CI: Windows x86, Linux x64 gcc·clang, Linux x86 통과.
+
+### English
+
+LT+RT+Y on a pad opens the OSD and the pad drives it (#22).
+
+#### Resolved issues
+
+- [#22](https://github.com/reexec/re2DJ/issues/22) Open and drive the OSD with a gamepad, LT+RT+Y (rePIU #55) — PR [#23](https://github.com/reexec/re2DJ/pull/23)
+
+#### 1. The gamepad OSD (#22)
+- As rePIU #55: LT+RT+Y going down on one pad toggles the OSD (no hold time, not split across pads); while it is open the pad only navigates it and none of it reaches the game, input held as it closes staying hidden until released; the keyboard still reaches the game.
+- `re2dj/input/pad_osd_chord.h` (`IsPadOsdChordDown`, `PadChordEdge`, `PadGameGate`). The OSD passes the state `SetGamepad` gives it to ImGui's gamepad keys (`NavEnableGamepad`), takes focus as it opens, and closes on B when no menu was open the frame before. `SdlHostPresentation::Present` handles the toggle, the gate and handing the pads to the OSD; the exit chord (#20) reads the state ahead of the gate.
+- In re2DJ's EZ2DJ default layout LT, RT and Y are game inputs, so they reach the game while the chord is being formed (recorded in the design).
+
+#### 2. Verification
+- Unit test `CheckOsdChord` (the chord, the edge, the gate). Linux x64 and x86 Debug (warnings as errors) and clang: 5 CTest tests each, 6,401 unit checks, 0 failures.
+- Real (Linux, an Xbox Series X Controller): `OSD shown`/`hidden` with each LT+RT+Y, the d-pad and A, B closing a menu and the OSD, and no pad input reaching the game meanwhile, confirmed by the user.
+- CI: Windows x86, Linux x64 gcc and clang, and Linux x86 pass.
+
+---
+
 ## v0.0.72 (2026-10-10)
 
 ### 한국어
