@@ -196,8 +196,20 @@ bool Sdl3GamepadReader::HandleEvent(const void* sdl_event, std::string* name, bo
 GamepadControls Sdl3GamepadReader::Read() const
 {
     GamepadControls controls;
+    for (const GamepadControls& pad : ReadEach())
+    {
+        controls |= pad;
+    }
+    return controls;
+}
+
+std::vector<GamepadControls> Sdl3GamepadReader::ReadEach() const
+{
+    std::vector<GamepadControls> pads;
+    pads.reserve(pads_.size());
     for (const Pad& pad : pads_)
     {
+        GamepadControls controls;
         auto* const gamepad = static_cast<SDL_Gamepad*>(pad.gamepad);
         for (const ButtonControl& entry : kButtons)
         {
@@ -218,8 +230,9 @@ GamepadControls Sdl3GamepadReader::Read() const
                 Hold(&controls, entry.negative);
             }
         }
+        pads.push_back(controls);
     }
-    return controls;
+    return pads;
 }
 
 }  // namespace re2dj::input

@@ -29,6 +29,8 @@ Update 버튼은 **릴리스 아카이브를 푼 폴더**(실행 파일 옆 `VER
 
 이후로는 런처에 알림이 뜨면 Update를 누르기만 하면 됩니다(D-pad로 버튼까지 올라가 `A`). Linux에서는 같은 프로세스가 새 실행 파일로 바뀌므로 Steam은 게임이 계속 실행 중인 것으로 봅니다.
 
+게임을 끝내려면 `L2`(LT)+`R2`(RT)+왼쪽 스틱 클릭+오른쪽 스틱 클릭을 1초 동안 함께 누르고 있습니다. 게임이 끝나 런처로 돌아오고, 런처에서 같은 조합을 누르면 re2DJ가 끝납니다(#20).
+
 ## 3. 끄기
 
 | 방법 | 범위 |
@@ -98,6 +100,8 @@ The Update button appears only in **a folder a release archive was unpacked into
 4. Run it in game mode and the launcher opens; pick a profile with the pad and start it with `A`.
 
 From then on, press Update when the launcher shows the notice (up to the button with the d-pad, then `A`). On Linux the same process becomes the new executable, so Steam sees the game as still running.
+
+To end a game, hold `L2` (LT) + `R2` (RT) + left stick click + right stick click together for a second: the game ends back to the launcher, and the same chord in the launcher ends re2DJ (#20).
 
 ## 3. Turning it off
 

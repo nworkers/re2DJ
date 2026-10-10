@@ -5,12 +5,18 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
+
+#include <spdlog/logger.h>
 
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
 #include "re2dj/graphics/post_shader_catalog.h"
 #include "re2dj/graphics/window_policy.h"
+#include "re2dj/input/pad_exit_chord.h"
+#include "re2dj/input/sdl3_gamepad_reader.h"
+#include "re2dj/logging/logging.h"
 
 namespace re2dj::platform::sdl
 {
@@ -151,6 +157,14 @@ LauncherWindowResult RunLauncherWindow(const ui::LauncherScreenModel& model,
     }
     result.opened = true;
 
+    // The pads, read for the exit chord (#20): LT+RT+L3+R3 held on one pad
+    // for a second closes the launcher as Quit does. ImGui's backend opens
+    // the same pads for navigation; SDL counts the opens.
+    input::Sdl3GamepadReader gamepads;
+    std::string gamepad_error;
+    gamepads.Initialize(&gamepad_error);
+    input::PadExitChordTimer exit_chord;
+
     ui::LauncherScreenState state;
     state.settings = initial_settings;
     const SDL_WindowID window_id = SDL_GetWindowID(session.window);
@@ -175,12 +189,26 @@ LauncherWindowResult RunLauncherWindow(const ui::LauncherScreenModel& model,
                 }
                 continue;
             }
+            std::string pad_name;
+            bool pad_added = false;
+            gamepads.HandleEvent(&event, &pad_name, &pad_added);
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT ||
                 (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == window_id))
             {
                 action = ui::LauncherScreenAction::kQuit;
             }
+        }
+        if (exit_chord.Update(input::IsPadExitChordDown(gamepads.ReadEach()), SDL_GetTicks()) &&
+            action == ui::LauncherScreenAction::kNone)
+        {
+            const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+            if (logger != nullptr)
+            {
+                logger->info("launcher: gamepad exit chord (LT+RT+L3+R3) held for 1 s");
+            }
+            action = ui::LauncherScreenAction::kQuit;
+            break;
         }
         if ((SDL_GetWindowFlags(session.window) & SDL_WINDOW_MINIMIZED) != 0)
         {

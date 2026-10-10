@@ -9,6 +9,8 @@
 #include "../native/game_controls.h"
 #include "host_keyboard.h"
 #include "re2dj/graphics/sdl3_opengl_backend.h"
+#include "re2dj/input/gamepad.h"
+#include "re2dj/input/pad_exit_chord.h"
 #include "re2dj/input/virtual_keys.h"
 #include "re2dj/logging/logging.h"
 #include "re2dj/ui/display_controls.h"
@@ -576,8 +578,25 @@ bool SdlHostPresentation::Present(std::string* error)
         fullscreen_request_pending_ = false;
         ChangeFullscreenByUser(requested_fullscreen_);
     }
-    // The pump inside Present brought SDL's pad state up to date.
-    input_.gamepad = gamepads_.Read();
+    // The pump inside Present brought SDL's pad state up to date. The pads
+    // reach the guest merged, the exit chord included.
+    const std::vector<input::GamepadControls> pads = gamepads_.ReadEach();
+    input_.gamepad.reset();
+    for (const input::GamepadControls& pad : pads)
+    {
+        input_.gamepad |= pad;
+    }
+    // LT+RT+L3+R3 held on one pad for a second closes the game as the
+    // window's close button does (#20).
+    if (exit_chord_.Update(input::IsPadExitChordDown(pads), SDL_GetTicks()) && !close_requested_)
+    {
+        close_requested_ = true;
+        const std::shared_ptr<spdlog::logger> logger = logging::GetLogger();
+        if (logger != nullptr)
+        {
+            logger->info("input: gamepad exit chord (LT+RT+L3+R3) held for 1 s");
+        }
+    }
     ReportColorDepth();
     if (!pacing_reported_ && backend_->software_pacing_engaged())
     {

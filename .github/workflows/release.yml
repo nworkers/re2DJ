@@ -21,12 +21,12 @@ concurrency:
 jobs:
   version:
     name: Version gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Compare VERSION with the tag
         id: version
@@ -58,12 +58,12 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Restore FetchContent dependency cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/windows-x86/_deps
           key: deps-windows-2022-${{ hashFiles('CMakeLists.txt') }}
@@ -92,7 +92,7 @@ jobs:
         run: .\scripts\package_release.ps1 -Configuration Release -Version ${{ needs.version.outputs.version }}
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: re2DJ-v${{ needs.version.outputs.version }}-windows-x86
           path: |
@@ -104,7 +104,7 @@ jobs:
   linux:
     name: Linux ${{ matrix.arch }} Release build and package
     needs: version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -125,10 +125,10 @@ jobs:
             personality: setarch i686
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Restore FetchContent dependency cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/${{ matrix.platform }}-release/_deps
           key: deps-${{ matrix.platform }}-bookworm-${{ hashFiles('CMakeLists.txt') }}
@@ -157,7 +157,7 @@ jobs:
           chown -R '"$(id -u):$(id -g)"' build'
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: re2DJ-v${{ needs.version.outputs.version }}-${{ matrix.platform }}
           path: |
@@ -170,16 +170,16 @@ jobs:
     name: Create or update the GitHub Release
     needs: [version, windows-x86, linux]
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # The resolved issues and commits come from the history between tags.
           fetch-depth: 0
 
       - name: Gather the packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: build/release
           merge-multiple: true
