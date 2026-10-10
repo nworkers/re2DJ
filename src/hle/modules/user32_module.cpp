@@ -1176,6 +1176,92 @@ bool ScreenToClient(const ImportCall& call, ImportReturn* result, std::string* e
     return Succeed(error);
 }
 
+// ClientToScreen(hWnd, lpPoint): the point plus the window's client origin on
+// the screen, the inverse of ScreenToClient, with the same failures assumed
+// (not measured): an unknown window or a null point is FALSE with
+// ERROR_INVALID_WINDOW_HANDLE. Windowed DirectDraw (3rd, #15) turns its client
+// rectangle into the primary surface's destination with it every frame.
+bool ClientToScreen(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 2)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null"
+                                             : "user32 ClientToScreen argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "user32 ClientToScreen needs the guest process");
+    }
+    const GuestWindow* window = process->user().LookupWindow(call.arguments[0]);
+    if (window == nullptr || call.arguments[1] == 0)
+    {
+        call.services->SetLastError(kWin32ErrorInvalidWindowHandle);
+        return Succeed(error);
+    }
+    std::array<std::uint8_t, 8> bytes{};
+    std::string access_error;
+    if (!call.services->ReadGuestBytes(runtime::GuestAddress(call.arguments[1]), bytes, &access_error))
+    {
+        return Fail(error, "user32 ClientToScreen cannot read the POINT: " + access_error);
+    }
+    std::array<std::int32_t, 2> point{};
+    std::memcpy(point.data(), bytes.data(), bytes.size());
+    point[0] += window->x + window->client_left;
+    point[1] += window->y + window->client_top;
+    std::memcpy(bytes.data(), point.data(), bytes.size());
+    if (!call.services->WriteGuestBytes(runtime::GuestAddress(call.arguments[1]), bytes, &access_error))
+    {
+        return Fail(error, "user32 ClientToScreen cannot write the POINT: " + access_error);
+    }
+    result->eax = 1;
+    return Succeed(error);
+}
+
+// GetClientRect(hWnd, lpRect): the client area from its own origin, so left
+// and top are 0 and right and bottom its size. An unknown window is FALSE
+// with ERROR_INVALID_WINDOW_HANDLE and a null rectangle FALSE with
+// ERROR_NOACCESS, as GetCursorPos answers a null point (not measured for this
+// call). The window model keeps the client area the guest asked for, which the
+// host window shows scaled, so this is the guest's own 640x480 (#15).
+bool GetClientRect(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    if (result == nullptr || call.arguments.size() != 2)
+    {
+        return Fail(error, result == nullptr ? "user32 result is null"
+                                             : "user32 GetClientRect argument shape is invalid");
+    }
+    *result = {};
+    GuestProcess* process = call.services == nullptr ? nullptr : call.services->Process();
+    if (process == nullptr)
+    {
+        return Fail(error, "user32 GetClientRect needs the guest process");
+    }
+    const GuestWindow* window = process->user().LookupWindow(call.arguments[0]);
+    if (window == nullptr)
+    {
+        call.services->SetLastError(kWin32ErrorInvalidWindowHandle);
+        return Succeed(error);
+    }
+    if (call.arguments[1] == 0)
+    {
+        call.services->SetLastError(kWin32ErrorNoAccess);
+        return Succeed(error);
+    }
+    const std::array<std::int32_t, 4> rect = {0, 0, window->client_right - window->client_left,
+                                              window->client_bottom - window->client_top};
+    std::array<std::uint8_t, 16> bytes{};
+    std::memcpy(bytes.data(), rect.data(), bytes.size());
+    std::string write_error;
+    if (!call.services->WriteGuestBytes(runtime::GuestAddress(call.arguments[1]), bytes, &write_error))
+    {
+        return Fail(error, "user32 GetClientRect cannot write the RECT: " + write_error);
+    }
+    result->eax = 1;
+    return Succeed(error);
+}
+
 constexpr std::uint32_t kWmTimer = 0x0113;
 constexpr std::uint32_t kWmQuit = 0x0012;
 constexpr std::uint32_t kPmRemove = 0x0001;
@@ -1688,7 +1774,7 @@ bool WsprintfA(const ImportCall& call, ImportReturn* result, std::string* error)
 constexpr ResolveOnlyExport kUser32ResolveOnly[] = {
     {"CreateCursor", 7}, {"DestroyCursor", 1}, {"SetCursor", 1}, {"KillTimer", 2},
     {"ExitWindowsEx", 2}, {"DestroyWindow", 1},
-    {"ClientToScreen", 2}, {"DrawMenuBar", 1}, {"GetClientRect", 2}, {"RedrawWindow", 4},
+    {"DrawMenuBar", 1}, {"RedrawWindow", 4},
     {"GetDesktopWindow", 0},
 };
 
@@ -1749,6 +1835,8 @@ GuestModuleDescriptor MakeUser32ModuleDescriptor()
     descriptor.exports.push_back(MakeExport("GetKeyState", 1, &GetKeyState));
     descriptor.exports.push_back(MakeExport("GetCursorPos", 1, &GetCursorPos));
     descriptor.exports.push_back(MakeExport("ScreenToClient", 2, &ScreenToClient));
+    descriptor.exports.push_back(MakeExport("ClientToScreen", 2, &ClientToScreen));
+    descriptor.exports.push_back(MakeExport("GetClientRect", 2, &GetClientRect));
     descriptor.exports.push_back(MakeExport("PeekMessageA", 5, &PeekMessageA));
     descriptor.exports.push_back(MakeExport("TranslateMessage", 1, &TranslateMessage));
     descriptor.exports.push_back(MakeExport("DispatchMessageA", 1, &DispatchMessageA));

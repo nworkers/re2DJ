@@ -48,6 +48,8 @@ struct SurfaceState final : GuestComState
     std::uint32_t pixels = 0;
     std::uint32_t back_buffer = 0;
     std::uint32_t depth_buffer = 0;
+    // The clipper SetClipper attached, whose reference the surface holds (#15).
+    std::uint32_t clipper = 0;
     // The surface's GDI device context, made at the first GetDC with a bitmap
     // over the surface's own pixels selected, and whether the guest holds it.
     std::uint32_t dc = 0;
@@ -83,7 +85,7 @@ struct SurfaceState final : GuestComState
     // the guest's references on it count on the surface.
     std::uint32_t texture = 0;
 
-    std::vector<std::uint32_t> HeldReferences() const override { return {back_buffer, depth_buffer, texture}; }
+    std::vector<std::uint32_t> HeldReferences() const override { return {back_buffer, depth_buffer, texture, clipper}; }
     void ReleaseResources(GuestProcess& process) override
     {
         if (dc != 0)
@@ -997,6 +999,65 @@ bool IsLost(const ImportCall& call, ImportReturn* result, std::string* error)
     return MethodProcess(call, result, 1, kSurfaceObject, error) != nullptr && Succeed(result, dx::kDdOk, error);
 }
 
+// SetClipper(this, lpDDClipper): attaches a clipper, holding a reference to
+// it and letting go of the one before; null detaches. Another object is
+// DDERR_INVALIDOBJECT (#15).
+bool SetClipper(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 2, kSurfaceObject, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    const std::uint32_t clipper = call.arguments[1];
+    if (clipper != 0 && !IsClipper(*process, clipper))
+    {
+        return Succeed(result, dx::kDdErrInvalidObject, error);
+    }
+    SurfaceState* state = StateOf(*process, call.arguments[0]);
+    if (state == nullptr)
+    {
+        return Succeed(result, dx::kDdErrInvalidObject, error);
+    }
+    if (clipper != 0)
+    {
+        process->com().AddRef(clipper);
+    }
+    const std::uint32_t previous = state->clipper;
+    state->clipper = clipper;
+    if (previous != 0)
+    {
+        process->com().Release(*process, previous);
+    }
+    return Succeed(result, dx::kDdOk, error);
+}
+
+// GetClipper(this, lplpDDClipper): the attached clipper with a new reference,
+// or DDERR_NOCLIPPERATTACHED.
+bool GetClipper(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    GuestProcess* process = MethodProcess(call, result, 2, kSurfaceObject, error);
+    if (process == nullptr)
+    {
+        return false;
+    }
+    if (call.arguments[1] == 0)
+    {
+        return Succeed(result, dx::kDdErrInvalidParams, error);
+    }
+    const SurfaceState* state = StateOf(*process, call.arguments[0]);
+    if (state == nullptr || state->clipper == 0)
+    {
+        return Succeed(result, dx::kDdErrNoClipperAttached, error);
+    }
+    if (!com::WriteWord(call, call.arguments[1], state->clipper, error))
+    {
+        return false;
+    }
+    process->com().AddRef(state->clipper);
+    return Succeed(result, dx::kDdOk, error);
+}
+
 // IDirectDrawSurface7 in vtable order (ddraw.h).
 constexpr com::Method kMethods[] = {
     {"QueryInterface", 3, &QueryInterface},
@@ -1014,7 +1075,7 @@ constexpr com::Method kMethods[] = {
     {"GetAttachedSurface", 3, &GetAttachedSurface},
     {"GetBltStatus", 2, &UnimplementedExport},
     {"GetCaps", 2, &GetCaps},
-    {"GetClipper", 2, &UnimplementedExport},
+    {"GetClipper", 2, &GetClipper},
     {"GetColorKey", 3, &UnimplementedExport},
     {"GetDC", 2, &GetDC},
     {"GetFlipStatus", 2, &UnimplementedExport},
@@ -1027,7 +1088,7 @@ constexpr com::Method kMethods[] = {
     {"Lock", 5, &Lock},
     {"ReleaseDC", 2, &ReleaseDC},
     {"Restore", 1, &UnimplementedExport},
-    {"SetClipper", 2, &UnimplementedExport},
+    {"SetClipper", 2, &SetClipper},
     {"SetColorKey", 3, &SetColorKey},
     {"SetOverlayPosition", 3, &UnimplementedExport},
     {"SetPalette", 2, &UnimplementedExport},

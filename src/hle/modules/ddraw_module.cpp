@@ -429,6 +429,12 @@ bool DirectDraw7GetDisplayMode(const ImportCall& call, ImportReturn* result, std
 // Windows policy does, and then shows it through the host's presentation
 // when there is one. A host that cannot show the window stops the run rather
 // than tell the guest DDERR_GENERIC for a failure of the host's own.
+// IDirectDraw7::CreateClipper(this, dwFlags, lplpDDClipper, pUnkOuter) (#15).
+bool DirectDraw7CreateClipper(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return ddraw::CreateClipperOf(call, result, kDirectDrawObject, error);
+}
+
 bool DirectDraw7SetCooperativeLevel(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     return ddraw::SetCooperativeLevelOf(call, result, kDirectDrawObject, error);
@@ -536,7 +542,7 @@ constexpr com::Method kDirectDraw7Methods[] = {
     {"AddRef", 1, &com::AddRef},
     {"Release", 1, &com::Release},
     {"Compact", 1, &UnimplementedExport},
-    {"CreateClipper", 4, &UnimplementedExport},
+    {"CreateClipper", 4, &DirectDraw7CreateClipper},
     {"CreatePalette", 5, &UnimplementedExport},
     {"CreateSurface", 4, &DirectDraw7CreateSurface},
     {"DuplicateSurface", 3, &UnimplementedExport},
@@ -692,6 +698,7 @@ GuestModuleDescriptor MakeDdrawModuleDescriptor()
     com::AddMethods(&descriptor, ddraw::kDirect3DDevice3, ddraw::Direct3DDevice3Methods());
     com::AddMethods(&descriptor, ddraw::kDirect3DViewport3, ddraw::Direct3DViewport3Methods());
     com::AddMethods(&descriptor, ddraw::kDirect3DTexture2, ddraw::Direct3DTexture2Methods());
+    com::AddMethods(&descriptor, ddraw::kDirectDrawClipper, ddraw::DirectDrawClipperMethods());
     return descriptor;
 }
 

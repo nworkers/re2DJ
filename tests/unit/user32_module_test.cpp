@@ -544,6 +544,25 @@ void CheckCreateWindow(re2dj::test::Context& context)
                    0U);
     RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidWindowHandle);
 
+    // ClientToScreen undoes ScreenToClient; GetClientRect is the client area
+    // from its own origin (#15).
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ClientToScreen", {window, kPoint}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kPoint), 0U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "ClientToScreen", {window + 4, kPoint}).eax,
+                   0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidWindowHandle);
+    constexpr std::uint32_t kRect = MemoryServices::kBase + 0x2A0;
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetClientRect", {window, kRect}).eax, 1U);
+    RE2DJ_CHECK_EQ(context, services.U32(kRect), 0U);
+    RE2DJ_CHECK_EQ(context, services.U32(kRect + 4), 0U);
+    RE2DJ_CHECK_EQ(context, services.U32(kRect + 8), 640U);
+    RE2DJ_CHECK_EQ(context, services.U32(kRect + 12), 480U);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetClientRect", {window + 4, kRect}).eax,
+                   0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorInvalidWindowHandle);
+    RE2DJ_CHECK_EQ(context, CallModuleExport(context, services, descriptor, "GetClientRect", {window, 0}).eax, 0U);
+    RE2DJ_CHECK_EQ(context, services.LastError(), re2dj::hle::kWin32ErrorNoAccess);
+
     // GetAsyncKeyState: every key up, the last error untouched inside 0..255
     // and ERROR_INVALID_PARAMETER outside it.
     services.SetLastError(12345);

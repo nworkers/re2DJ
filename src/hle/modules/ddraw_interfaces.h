@@ -36,6 +36,8 @@ inline constexpr std::uint32_t kDirectDraw4Object = 6;
 inline constexpr std::uint32_t kDirect3D3Object = 7;
 inline constexpr std::uint32_t kViewportObject = 8;
 inline constexpr std::uint32_t kTexture2Object = 9;
+// A windowed title's clipper (ddraw_clipper.cpp, #15).
+inline constexpr std::uint32_t kClipperObject = 10;
 
 inline constexpr std::string_view kDirectDraw7 = "IDirectDraw7";
 inline constexpr std::string_view kDirect3D7 = "IDirect3D7";
@@ -49,6 +51,7 @@ inline constexpr std::string_view kDirectDrawSurface4 = "IDirectDrawSurface4";
 inline constexpr std::string_view kDirect3DDevice3 = "IDirect3DDevice3";
 inline constexpr std::string_view kDirect3DViewport3 = "IDirect3DViewport3";
 inline constexpr std::string_view kDirect3DTexture2 = "IDirect3DTexture2";
+inline constexpr std::string_view kDirectDrawClipper = "IDirectDrawClipper";
 
 // A DirectDraw object's state: the display it drives, and the surface the
 // guest presents from (its device's render target), which a full target
@@ -69,6 +72,12 @@ bool SetDisplayModeOf(const ImportCall& call, ImportReturn* result, std::uint32_
 // shared core's plan; a DirectDraw4 object's surfaces are DirectX 6 ones.
 bool CreateSurfaceOf(const ImportCall& call, ImportReturn* result, std::uint32_t kind, std::string* error);
 
+// IDirectDrawClipper in vtable order (ddraw_clipper.cpp); CreateClipper(this,
+// dwFlags, lplpDDClipper, pUnkOuter) on a DirectDraw object of the given kind;
+// and whether an address is one of its clippers.
+std::span<const com::Method> DirectDrawClipperMethods();
+bool CreateClipperOf(const ImportCall& call, ImportReturn* result, std::uint32_t kind, std::string* error);
+bool IsClipper(GuestProcess& process, std::uint32_t address);
 // IDirectDraw4 and IDirect3D3 in vtable order (ddraw_direct_draw4.cpp).
 std::span<const com::Method> DirectDraw4Methods();
 std::span<const com::Method> Direct3D3Methods();
