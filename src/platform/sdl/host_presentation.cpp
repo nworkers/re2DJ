@@ -89,6 +89,7 @@ bool SdlHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
         return false;
     }
     backend_ = std::move(backend);
+    backend_->SetKeepAspect(keep_aspect_);
     guest_window_ = guest_window;
     logical_width_ = width;
     logical_height_ = height;
@@ -97,8 +98,10 @@ bool SdlHostPresentation::ShowGuestWindow(std::uint32_t guest_window,
     {
         osd_ = std::make_unique<ui::Osd>();
         osd_->SetInfoLines(osd_info_lines_);
-        // In the Windows host's order: the game's own controls, then the
-        // colour depth every run offers.
+        // The window's own controls first (#14), then, in the Windows
+        // host's order, the game's own controls and the colour depth every
+        // run offers.
+        AddDisplayToggles();
         native::AddGameControls(osd_.get());
         ui::AddColorDepthToggle(osd_.get());
     }
@@ -265,7 +268,7 @@ bool SdlHostPresentation::ApplyWindowMode(std::string* error)
            backend_->ResizeWindow(logical_width_ * scale_, logical_height_ * scale_, error);
 }
 
-void SdlHostPresentation::ChangeWindowMode(std::uint32_t scale, bool fullscreen)
+bool SdlHostPresentation::ChangeWindowMode(std::uint32_t scale, bool fullscreen)
 {
     const std::uint32_t previous_scale = scale_;
     const bool previous_fullscreen = fullscreen_;
@@ -278,7 +281,73 @@ void SdlHostPresentation::ChangeWindowMode(std::uint32_t scale, bool fullscreen)
         scale_ = previous_scale;
         fullscreen_ = previous_fullscreen;
         ApplyWindowMode(&error);
+        return false;
     }
+    return true;
+}
+
+void SdlHostPresentation::ChangeFullscreenByUser(bool fullscreen)
+{
+    if (fullscreen != fullscreen_ && ChangeWindowMode(scale_, fullscreen))
+    {
+        NotifyDisplayPreferences();
+    }
+}
+
+void SdlHostPresentation::ChangeKeepAspectByUser(bool keep_aspect)
+{
+    if (keep_aspect == keep_aspect_)
+    {
+        return;
+    }
+    keep_aspect_ = keep_aspect;
+    if (backend_ != nullptr)
+    {
+        backend_->SetKeepAspect(keep_aspect);
+    }
+    NotifyDisplayPreferences();
+}
+
+void SdlHostPresentation::NotifyDisplayPreferences()
+{
+    if (display_observer_)
+    {
+        display_observer_(fullscreen_, keep_aspect_);
+    }
+}
+
+void SdlHostPresentation::AddDisplayToggles()
+{
+    ui::OsdToggle fullscreen;
+    fullscreen.label = "Fullscreen";
+    fullscreen.context = this;
+    fullscreen.read = [](void* context, bool* value) {
+        const auto* self = static_cast<const SdlHostPresentation*>(context);
+        *value = self->fullscreen_request_pending_ ? self->requested_fullscreen_ : self->fullscreen_;
+        return true;
+    };
+    // The OSD draws inside the present, where the window must not change;
+    // Present applies the request once it is over.
+    fullscreen.write = [](void* context, bool value) {
+        auto* self = static_cast<SdlHostPresentation*>(context);
+        self->fullscreen_request_pending_ = true;
+        self->requested_fullscreen_ = value;
+        return true;
+    };
+    osd_->AddToggle(fullscreen);
+
+    ui::OsdToggle keep_aspect;
+    keep_aspect.label = "Keep aspect ratio";
+    keep_aspect.context = this;
+    keep_aspect.read = [](void* context, bool* value) {
+        *value = static_cast<const SdlHostPresentation*>(context)->keep_aspect_;
+        return true;
+    };
+    keep_aspect.write = [](void* context, bool value) {
+        static_cast<SdlHostPresentation*>(context)->ChangeKeepAspectByUser(value);
+        return true;
+    };
+    osd_->AddToggle(keep_aspect);
 }
 
 void SdlHostPresentation::HandleEvent(const void* sdl_event)
@@ -314,6 +383,17 @@ void SdlHostPresentation::HandleEvent(const void* sdl_event)
         break;
     case SDL_EVENT_KEY_DOWN:
     {
+        // Alt+Enter switches fullscreen (#14). Its Enter is kept from the
+        // guest: EZ2DJ's default mapping makes Enter the 2P turntable.
+        if ((event->key.key == SDLK_RETURN || event->key.key == SDLK_KP_ENTER) &&
+            (event->key.mod & SDL_KMOD_ALT) != 0)
+        {
+            if (!event->key.repeat)
+            {
+                ChangeFullscreenByUser(!fullscreen_);
+            }
+            break;
+        }
         // Held for the guest whatever else the key does, as Windows'
         // GetAsyncKeyState also sees the keys of a window shortcut.
         SetHostKey(&input_, event->key.scancode, true);
@@ -359,7 +439,7 @@ void SdlHostPresentation::HandleEvent(const void* sdl_event)
         // WM_LBUTTONDBLCLK.
         if (event->button.button == SDL_BUTTON_LEFT && event->button.clicks >= 2 && event->button.clicks % 2 == 0)
         {
-            ChangeWindowMode(scale_, !fullscreen_);
+            ChangeFullscreenByUser(!fullscreen_);
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -374,8 +454,8 @@ void SdlHostPresentation::HandleEvent(const void* sdl_event)
         {
             // The pointer over the drawn display, in the display's own units;
             // over the bars it lies outside it, as over a window's frame.
-            const graphics::PresentRect fit =
-                graphics::FitPresentation(window_width, window_height, logical_width_, logical_height_);
+            const graphics::PresentRect fit = graphics::ComputePresentRect(
+                window_width, window_height, logical_width_, logical_height_, keep_aspect_);
             if (fit.width > 0 && fit.height > 0)
             {
                 input_.cursor_window = guest_window_;
@@ -490,6 +570,11 @@ bool SdlHostPresentation::Present(std::string* error)
     if (!backend_->Present(error))
     {
         return false;
+    }
+    if (fullscreen_request_pending_)
+    {
+        fullscreen_request_pending_ = false;
+        ChangeFullscreenByUser(requested_fullscreen_);
     }
     // The pump inside Present brought SDL's pad state up to date.
     input_.gamepad = gamepads_.Read();

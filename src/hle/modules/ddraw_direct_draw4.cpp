@@ -396,6 +396,12 @@ bool DirectDraw4CreateSurface(const ImportCall& call, ImportReturn* result, std:
     return CreateSurfaceOf(call, result, kDirectDraw4Object, error);
 }
 
+// IDirectDraw4::CreateClipper, as IDirectDraw7's (#15).
+bool DirectDraw4CreateClipper(const ImportCall& call, ImportReturn* result, std::string* error)
+{
+    return CreateClipperOf(call, result, kDirectDraw4Object, error);
+}
+
 bool DirectDraw4SetCooperativeLevel(const ImportCall& call, ImportReturn* result, std::string* error)
 {
     return SetCooperativeLevelOf(call, result, kDirectDraw4Object, error);
@@ -429,7 +435,7 @@ constexpr com::Method kDirectDraw4Methods[] = {
     {"AddRef", 1, &com::AddRef},
     {"Release", 1, &com::Release},
     {"Compact", 1, &UnimplementedExport},
-    {"CreateClipper", 4, &UnimplementedExport},
+    {"CreateClipper", 4, &DirectDraw4CreateClipper},
     {"CreatePalette", 5, &UnimplementedExport},
     {"CreateSurface", 4, &DirectDraw4CreateSurface},
     {"DuplicateSurface", 3, &UnimplementedExport},

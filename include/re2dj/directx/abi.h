@@ -38,6 +38,9 @@ inline constexpr std::uint32_t kDdErrSurfaceBusy = 0x887601AEU;
 inline constexpr std::uint32_t kD3dErrTextureLoadFailed = 0x887602D5U;
 inline constexpr std::uint32_t kDdErrInvalidRect = 0x88760096U;
 inline constexpr std::uint32_t kDdErrNoColorKey = 0x887600D7U;
+inline constexpr std::uint32_t kDdErrNoClipperAttached = 0x887600CDU;
+// CLASS_E_NOAGGREGATION, for a creation given an outer unknown.
+inline constexpr std::uint32_t kClassENoAggregation = 0x80040110U;
 
 // Enumeration callback answers (ddraw.h, d3d.h): 0 stops, 1 continues.
 inline constexpr std::uint32_t kEnumCancel = 0;

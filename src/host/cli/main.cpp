@@ -43,6 +43,7 @@
 #if defined(__linux__) || defined(_WIN32)
 #define RE2DJ_IN_PROCESS_HOST 1
 #include "launcher_session.h"
+#include "re2dj/launcher/launcher_settings.h"
 #include "re2dj/config/hardlock_secret_config.h"
 #include "re2dj/hle/guest_devices.h"
 #include "re2dj/hle/hardlock/device_material.h"
@@ -72,6 +73,10 @@ constexpr int kExitUsage = 1;
 constexpr int kExitHddError = 2;
 constexpr int kExitNotImplemented = 3;
 constexpr int kExitLoggingError = 4;
+
+// Where cfg/re2dj.ini lives, relative to the current directory as the
+// launcher has it (#12, #14).
+constexpr const char* kSettingsDirectory = "cfg";
 
 struct LoggingLifetime
 {
@@ -175,6 +180,9 @@ struct Options
     bool image_dump = false;
     unsigned image_dump_delay_ms = 0;
     bool fullscreen = false;
+    // --keep-aspect / --stretch (#14); without them cfg/re2dj.ini, then on.
+    bool keep_aspect_explicit = false;
+    bool keep_aspect = true;
     re2dj::graphics::ColorDepth color_depth = re2dj::graphics::ColorDepth::k16;
     // --post-shader (task 455); without it RE2DJ_POST_SHADER, then none.
     bool post_shader_explicit = false;
@@ -345,6 +353,13 @@ void PrintUsage()
         "                      Wait before the second image dump (default 5000).\n"
         "  --fullscreen        Start in monitor-sized borderless fullscreen.\n"
         "  --windowed          Override a profile's fullscreen default.\n"
+        "                      Without either, cfg/re2dj.ini's [Video] fullscreen\n"
+        "                      decides, then the profile. Alt+Enter, a double\n"
+        "                      click or the OSD switches it; that choice is kept.\n"
+        "  --keep-aspect       Keep the display's 4:3 shape with black bars (the\n"
+        "                      default, or cfg/re2dj.ini's [Video] keep_aspect).\n"
+        "  --stretch           Stretch the display over the whole window instead.\n"
+        "                      The OSD switches it; that choice is kept.\n"
         "  --color-depth <16|32>\n"
         "                      How deep the host keeps colours. '16' shows the\n"
         "                      original's 16-bit picture (default); '32' keeps\n"
@@ -844,10 +859,43 @@ bool RunInProcessOriginal(const Options& options,
         {
             g_presentation = std::make_unique<sdl_platform::SdlHostPresentation>();
         }
-        // The window starts as the Windows host's does: fullscreen when asked
-        // or when the profile defaults to it, windowed otherwise.
-        g_presentation->SetStartFullscreen(options.fullscreen_explicit ? options.fullscreen
-                                                                             : profile.run_defaults.fullscreen);
+        // The window starts fullscreen and keeps the display's shape as the
+        // command line asks, else as cfg/re2dj.ini keeps from the last change
+        // (#14), else as the profile and the default say. A change the user
+        // makes in the window is kept there for the next run.
+        {
+            const re2dj::launcher::LauncherSettingsLoad stored =
+                re2dj::launcher::LoadLauncherSettings(kSettingsDirectory);
+            for (const std::string& warning : stored.warnings)
+            {
+                re2dj::logging::GetLogger()->warn("settings: {}", warning);
+            }
+            const re2dj::launcher::DisplayPreferences display = re2dj::launcher::ResolveDisplayPreferences(
+                options.fullscreen_explicit ? std::optional<bool>(options.fullscreen) : std::nullopt,
+                options.keep_aspect_explicit ? std::optional<bool>(options.keep_aspect) : std::nullopt,
+                stored.settings,
+                profile.run_defaults.fullscreen);
+            g_presentation->SetStartFullscreen(display.fullscreen);
+            g_presentation->SetStartKeepAspect(display.keep_aspect);
+            LogInfo("display         : %s, %s", display.fullscreen ? "fullscreen" : "windowed",
+                    display.keep_aspect ? "keep aspect" : "stretched");
+            g_presentation->SetDisplayPreferencesObserver([](bool fullscreen, bool keep_aspect) {
+                re2dj::launcher::DisplayPreferences changed;
+                changed.fullscreen = fullscreen;
+                changed.keep_aspect = keep_aspect;
+                std::string error;
+                if (re2dj::launcher::SaveDisplayPreferences(kSettingsDirectory, changed, &error))
+                {
+                    LogInfo("display         : %s, %s (kept in %s)", fullscreen ? "fullscreen" : "windowed",
+                            keep_aspect ? "keep aspect" : "stretched",
+                            re2dj::launcher::LauncherSettingsPath(kSettingsDirectory).string().c_str());
+                }
+                else
+                {
+                    re2dj::logging::GetLogger()->warn("display: {}", error);
+                }
+            });
+        }
         // The OSD shows what the Windows host's shows.
         g_presentation->SetOsdInfoLines(
             {re2dj::VersionBanner("re2DJ", re2dj::VersionString()) + " - Build " + __DATE__,
@@ -1212,6 +1260,11 @@ bool ParseOptions(int argc, char** argv, Options* options)
         {
             options->fullscreen = false;
             options->fullscreen_explicit = true;
+        }
+        else if (argument == "--keep-aspect" || argument == "--stretch")
+        {
+            options->keep_aspect = argument == "--keep-aspect";
+            options->keep_aspect_explicit = true;
         }
         else if (argument == "--color-depth")
         {

@@ -510,6 +510,7 @@ add_library(re2dj_core STATIC
     src/hle/modules/ddraw_vertex_buffer7.cpp
     src/hle/modules/ddraw_direct_draw4.cpp
     src/hle/modules/ddraw_module.cpp
+    src/hle/modules/ddraw_clipper.cpp
     src/hle/modules/ddraw_surface7.cpp
     src/hle/modules/ddraw_texture2.cpp
     src/hle/modules/dinput_module.cpp

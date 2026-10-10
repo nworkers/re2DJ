@@ -58,6 +58,25 @@ constexpr PresentRect FitPresentation(int window_width,
     return rect;
 }
 
+// Where the display is drawn with the keep-aspect choice (#14): the largest
+// rectangle of its shape when keeping it, otherwise the whole window, so the
+// picture is stretched to fill it.
+constexpr PresentRect ComputePresentRect(int window_width,
+                                         int window_height,
+                                         std::uint32_t logical_width,
+                                         std::uint32_t logical_height,
+                                         bool keep_aspect)
+{
+    if (keep_aspect)
+    {
+        return FitPresentation(window_width, window_height, logical_width, logical_height);
+    }
+    PresentRect rect;
+    rect.width = window_width;
+    rect.height = window_height;
+    return rect;
+}
+
 // Counts presents and, once at least a second has passed since the interval
 // began, returns the rate over it and starts the next one.
 class FrameRateMeter

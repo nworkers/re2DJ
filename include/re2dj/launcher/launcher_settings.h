@@ -21,6 +21,8 @@ struct LauncherSettings
     // Where the list cursor starts next time; not passed to the run.
     std::string last_profile;
     std::optional<bool> fullscreen;
+    // Off stretches the picture over the whole window (#14); on by default.
+    std::optional<bool> keep_aspect;
     std::optional<graphics::ColorDepth> color_depth;
     std::optional<std::string> post_shader;
     std::optional<float> audio_gain_db;
@@ -49,8 +51,9 @@ struct LauncherSettingsLoad
 [[nodiscard]] std::filesystem::path LauncherSettingsPath(const std::filesystem::path& config_directory);
 
 // The INI text's settings: [Launcher] last_profile, [Video] fullscreen (0/1),
-// color_depth (16/32) and post_shader, [Audio] gain_db (-24..+18). Keys are
-// found by the same rules the guest's private profiles follow.
+// keep_aspect (0/1), color_depth (16/32) and post_shader, [Audio] gain_db
+// (-24..+18). Keys are found by the same rules the guest's private profiles
+// follow.
 [[nodiscard]] LauncherSettingsLoad ParseLauncherSettings(std::string_view text);
 [[nodiscard]] LauncherSettingsLoad LoadLauncherSettings(const std::filesystem::path& config_directory);
 
@@ -61,6 +64,27 @@ struct LauncherSettingsLoad
 bool SaveLauncherSettings(const std::filesystem::path& config_directory,
                           const LauncherSettings& settings,
                           std::string* error);
+
+// The two display values a run starts with (#14). Every run reads them, not
+// only the launcher's: the command line's choice first, then the stored
+// value, then the default (the profile's fullscreen, keep-aspect on).
+struct DisplayPreferences
+{
+    bool fullscreen = false;
+    bool keep_aspect = true;
+};
+
+[[nodiscard]] DisplayPreferences ResolveDisplayPreferences(std::optional<bool> command_line_fullscreen,
+                                                           std::optional<bool> command_line_keep_aspect,
+                                                           const LauncherSettings& stored,
+                                                           bool profile_fullscreen);
+
+// Saves a change the user made in game (the OSD, Alt+Enter, a double click):
+// the file is read again and written with only these two keys changed, so the
+// launcher's other choices stay as they are.
+bool SaveDisplayPreferences(const std::filesystem::path& config_directory,
+                            const DisplayPreferences& preferences,
+                            std::string* error);
 
 // The arguments, after the program name, of the run that starts `profile_id`:
 // the profile id, then one option per chosen setting.

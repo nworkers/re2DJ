@@ -130,8 +130,9 @@ void CheckCreate(re2dj::test::Context& context)
     // IDirectDraw7's 30 methods, IDirect3D7's 8, IDirectDrawSurface7's 49,
     // IDirect3DDevice7's 49, IDirect3DVertexBuffer7's 9, IDirectDraw4's 28,
     // IDirect3D3's 12, IDirectDrawSurface4's 45, IDirect3DDevice3's 42,
-    // IDirect3DViewport3's 21, IDirect3DTexture2's 6, and IDirect3DVertexBuffer's 8.
-    RE2DJ_CHECK_EQ(context, method_count, std::size_t{307});
+    // IDirect3DViewport3's 21, IDirect3DTexture2's 6, IDirect3DVertexBuffer's 8,
+    // and IDirectDrawClipper's 9.
+    RE2DJ_CHECK_EQ(context, method_count, std::size_t{316});
 
     constexpr std::uint32_t kIid = MemoryServices::kBase + 0x40;
     constexpr std::uint32_t kOut = MemoryServices::kBase + 0x60;
@@ -2385,8 +2386,63 @@ void CheckTrueColorSurfaces(re2dj::test::Context& context)
 
 }  // namespace
 
+// A windowed title's clipper (#15): CreateClipper, SetHWnd and GetHWnd, and a
+// surface holding it through SetClipper until it is detached.
+void CheckClipper(re2dj::test::Context& context)
+{
+    namespace dx = re2dj::directx;
+    const auto descriptor = modules::MakeDdrawModuleDescriptor();
+    MemoryServices services;
+    const std::uint32_t direct_draw = CreateDirectDraw(context, services, descriptor);
+    const auto call = [&](const char* name, std::initializer_list<std::uint32_t> arguments) {
+        return CallModuleExport(context, services, descriptor, name, arguments).eax;
+    };
+    constexpr std::uint32_t kOut = MemoryServices::kBase + 0x40;
+    RE2DJ_CHECK_EQ(context, call("IDirectDraw7::CreateClipper", {direct_draw, 0, kOut, 0}), dx::kDdOk);
+    const std::uint32_t clipper = services.U32(kOut);
+    RE2DJ_CHECK(context, clipper != 0);
+    RE2DJ_CHECK_EQ(context, call("IDirectDraw7::CreateClipper", {direct_draw, 0, 0, 0}), dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, call("IDirectDraw7::CreateClipper", {direct_draw, 0, kOut, 4}), dx::kClassENoAggregation);
+
+    constexpr std::uint32_t kWindow = 0x00010014U;
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawClipper::SetHWnd", {clipper, 1, kWindow}), dx::kDdErrInvalidParams);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawClipper::SetHWnd", {clipper, 0, kWindow}), dx::kDdOk);
+    services.PutU32(kOut, 0);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawClipper::GetHWnd", {clipper, kOut}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), kWindow);
+
+    // A primary without back buffers, as a windowed title makes it.
+    constexpr std::uint32_t kDesc = MemoryServices::kBase + 0x100;
+    dx::DdSurfaceDesc2 primary;
+    primary.size = sizeof(primary);
+    primary.flags = dx::kDdsdCaps;
+    primary.caps.caps = dx::kDdsCapsPrimarySurface;
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(&primary);
+    for (std::uint32_t index = 0; index < sizeof(primary); ++index)
+    {
+        services.Byte(kDesc + index) = bytes[index];
+    }
+    RE2DJ_CHECK_EQ(context, call("IDirectDraw7::CreateSurface", {direct_draw, kDesc, kOut, 0}), dx::kDdOk);
+    const std::uint32_t surface = services.U32(kOut);
+    RE2DJ_CHECK(context, surface != 0);
+
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::GetClipper", {surface, kOut}), dx::kDdErrNoClipperAttached);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::SetClipper", {surface, direct_draw}), dx::kDdErrInvalidObject);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::SetClipper", {surface, clipper}), dx::kDdOk);
+    // The guest lets go of its own reference; the surface still holds one.
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawClipper::Release", {clipper}), 1U);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::GetClipper", {surface, kOut}), dx::kDdOk);
+    RE2DJ_CHECK_EQ(context, services.U32(kOut), clipper);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawClipper::Release", {clipper}), 1U);
+    // Detaching drops the last reference and the clipper goes.
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::SetClipper", {surface, 0}), dx::kDdOk);
+    RE2DJ_CHECK(context, services.Process()->com().Find(clipper) == nullptr);
+    RE2DJ_CHECK_EQ(context, call("IDirectDrawSurface7::GetClipper", {surface, kOut}), dx::kDdErrNoClipperAttached);
+}
+
 void RunDdrawModuleTests(re2dj::test::Context& context)
 {
+    CheckClipper(context);
     CheckSurfaceGdiDrawing(context);
     CheckVertexBuffers(context);
     CheckEnumSurfaces(context);
