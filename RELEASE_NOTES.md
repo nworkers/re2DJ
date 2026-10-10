@@ -1,5 +1,55 @@
 # 릴리즈 노트 / Release Notes
 
+## v0.0.72 (2026-10-10)
+
+### 한국어
+
+패드 조합 LT+RT+L3+R3을 1초 누르면 게임과 런처가 끝나고(#20), GitHub Actions를 Node 24 액션과 Ubuntu 26.04 runner로 옮겼습니다(#19).
+
+#### 해결된 이슈
+
+- [#19](https://github.com/reexec/re2DJ/issues/19) GitHub Actions의 Node.js 20 경고와 Ubuntu 26 runner — PR [#21](https://github.com/reexec/re2DJ/pull/21)
+- [#20](https://github.com/reexec/re2DJ/issues/20) 패드 조합 LT+RT+L3+R3으로 게임 종료(스팀덱) — PR [#21](https://github.com/reexec/re2DJ/pull/21)
+
+#### 1. 패드 종료 조합 (#20)
+- rePIU #52와 같은 조건입니다: 한 패드에서 두 트리거(절반 이상)와 두 스틱 클릭을 1초 이어서 누르면 한 번 발동하고, 떼야 다시 준비됩니다. 여러 패드에 나눈 것은 세지 않습니다.
+- 게임은 창 닫기와 같은 `close_requested_` 경로로 끝나 런처로 돌아오고, 런처는 Quit과 같이 닫힙니다. 조합 중에도 입력은 게임에 그대로 전달됩니다.
+- `re2dj/input/pad_exit_chord.h`(`IsPadExitChordDown`, `PadExitChordTimer`), `Sdl3GamepadReader::ReadEach()`, 게임(`SdlHostPresentation::Present`)과 런처 창의 타이머.
+
+#### 2. GitHub Actions (#19)
+- checkout v7, cache v6, upload-artifact v7, download-artifact v8(Node 24, rePIU #50과 같음). Node.js 20 경고가 없어졌습니다.
+- Linux runner를 `ubuntu-26.04`로 고정했습니다(`ci.yml`, `release.yml`, `pages.yml`). Linux 릴리스 바이너리는 Debian 12 컨테이너와 glibc 2.36 상한 그대로이며, 새 runner의 x64 바이너리가 v0.0.71의 것과 바이트 단위로 같았습니다.
+
+#### 3. 검증
+- 단위 테스트 `CheckExitChord`. Linux x64·x86 Debug(경고를 오류로), clang: CTest 각 5개, 단위 테스트 6,386건 실패 0.
+- CI와 릴리스 수동 실행이 `ubuntu-26.04`에서 annotation 없이 통과, Linux 패키지 `GLIBC_2.36`.
+- 실제(Linux, Xbox Series X Controller): 게임 중 1초 유지 → `host window closed` → 런처 복귀(종료 코드 0), 런처에서 1초 유지 → 종료.
+
+### English
+
+LT+RT+L3+R3 held for a second ends the game and the launcher (#20), and GitHub Actions moved to Node 24 actions and Ubuntu 26.04 runners (#19).
+
+#### Resolved issues
+
+- [#19](https://github.com/reexec/re2DJ/issues/19) GitHub Actions Node.js 20 warnings and Ubuntu 26 runners — PR [#21](https://github.com/reexec/re2DJ/pull/21)
+- [#20](https://github.com/reexec/re2DJ/issues/20) End the game with the pad combination LT+RT+L3+R3 (Steam Deck) — PR [#21](https://github.com/reexec/re2DJ/pull/21)
+
+#### 1. The pad exit chord (#20)
+- As rePIU #52 has it: both triggers (past half) and both stick clicks held on one pad for an unbroken second fire once, re-armed only by a release; the four split across pads do not count.
+- The game ends through `close_requested_`, as closing its window does, back to the launcher; the launcher closes as Quit does. The controls still reach the game while held.
+- `re2dj/input/pad_exit_chord.h` (`IsPadExitChordDown`, `PadExitChordTimer`), `Sdl3GamepadReader::ReadEach()`, and the timer in the game (`SdlHostPresentation::Present`) and the launcher window.
+
+#### 2. GitHub Actions (#19)
+- checkout v7, cache v6, upload-artifact v7 and download-artifact v8 (Node 24, as rePIU #50); the Node.js 20 warnings are gone.
+- The Linux runners are pinned to `ubuntu-26.04` (`ci.yml`, `release.yml`, `pages.yml`). The Linux release binaries keep the Debian 12 containers and the glibc 2.36 limit, and the new runner's x64 binary was byte-identical to v0.0.71's.
+
+#### 3. Verification
+- Unit test `CheckExitChord`. Linux x64 and x86 Debug (warnings as errors) and clang: 5 CTest tests each, 6,386 unit checks, 0 failures.
+- CI and a manual release run passed on `ubuntu-26.04` with no annotation, the Linux packages at `GLIBC_2.36`.
+- Real (Linux, an Xbox Series X Controller): a second's hold in game gave `host window closed` and the launcher back (exit code 0); in the launcher it quit.
+
+---
+
 ## v0.0.71 (2026-10-10)
 
 ### 한국어
